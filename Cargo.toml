@@ -1,0 +1,30 @@
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes = "0.8"
+# DEFLATE/zlib 解码：PDF 的 FlateDecode 过滤器（XRef 流 / 对象流等）必需。
+# 仅启用纯 Rust 的 miniz_oxide 后端（rust_backend），不引入 C 版 zlib。
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+md-5 = "0.10"
+rc4 = "0.1"
+subtle = "2"
+zeroize = "1"
+# JPEG 解码：PDF 的 DCTDecode 过滤器（zune-jpeg）及其基础类型
+# ZCursor / ColorSpace（zune-core），两者为配套的 0.5 系列。
+zune-core = "0.5"
+zune-jpeg = "0.5.15"
+
+[lib]
+name = "demo"
+path = "src/lib.rs"
+crate-type = ["cdylib","lib"]
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
+
+[dev-dependencies]
+jpeg-encoder = "0.7.1"
