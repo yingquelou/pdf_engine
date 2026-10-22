@@ -11,14 +11,18 @@
 mod date;
 mod document;
 mod features;
+mod rect;
 #[cfg(test)]
 mod tests;
+mod text_string;
 mod value;
 mod version;
 
 pub use date::{PdfDate, PdfDateError, PdfDateTimezone};
 pub use document::Document;
 pub use features::FeatureProfile;
+pub use rect::{PdfRect, PdfRectError};
+pub use text_string::{PdfTextString, PdfTextStringError};
 pub use value::{
     Array, Dict, Object, StartXref, StreamData, SubXref, Trailer, Value, Xref, XrefEntry, XrefKind,
 };

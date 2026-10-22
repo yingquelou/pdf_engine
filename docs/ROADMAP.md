@@ -100,10 +100,10 @@
 
 **包含条目**：
 
-- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标；字体嵌入、标准 14 内建宽度表与写端嵌入路径仍待实现）
+- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标、简单字体编码，并为 Courier 四种样式提供 600 单位内建宽度；其余标准 14 宽度表、字体嵌入与写端嵌入路径仍待实现）
 - [ ] `9.6.3` TrueType 字体
 - [ ] `9.6.4` 字体子集化（随字体嵌入一并实现）
-- [ ] `9.6.6` 字符编码补全（MacRoman/Standard/Symbol/ZapfDingbats 等预定义 Encoding）
+- [ ] `9.6.6` 字符编码补全（进行中：Type 1 读端识别 Standard/WinAnsi/MacRoman/Symbol/ZapfDingbats 基础编码并解析 `/Differences`；完整编码字形名表与 Unicode 映射仍待实现）
 - [ ] `9.7.6` Type 0 复合字体 / CIDFontType0（解决 CJK 文本表达）
 - [ ] `9.7.4` CIDFontType2（TrueType 轮廓 CID 字体）
 - [ ] `9.7.5` CMap（预定义/嵌入，含 CIDSystemInfo）
@@ -111,9 +111,24 @@
 - [ ] `9.8` 字体描述符（FontDescriptor、Flags、CIDFont 描述符）
 - [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）
 - [ ] `9.10` 文本内容提取（字符码→Unicode 映射）
-- [ ] `7.9` 公共数据结构（进行中：`PdfDate` 已实现日期解析/序列化；PDFDocEncoding 文本串、矩形、名称树、数值树待实现）
+- [ ] `7.9` 公共数据结构（进行中：`PdfDate`、`PdfRect` 已实现；`PdfTextString` 支持 PDFDocEncoding 与带 BOM 的 UTF-16BE 编解码；名称树、数值树待实现）
 
 **依赖**：A（过滤器解码能力是字体程序/嵌入流读取的硬依赖；`7.10` Functions 对文本非硬依赖，为软依赖，可并行）。
+
+**执行顺序与并行边界**：
+
+1. **简单字体基础（进行中）**：完成 Type 1 字体字典、宽度读取和 Encoding 字典结构解析；WinAnsi CP1252 与 MacRoman 的 Unicode 码值映射已实现，StandardEncoding 已覆盖 ASCII 和已定义高位字形槽位，可查询 glyph name 和已知 glyph name 的 Unicode。下一步补 Symbol/ZapfDingbats 映射及更完整的 Adobe glyph name 表；各表与查询逻辑分离，便于后续增加编码。
+2. **标准字体度量**：依赖 glyph name 映射，逐族补齐 Standard 14 内建宽度表；Courier 固定 600 单位已覆盖，新增数据需有规范样例或独立表测试，不得用近似值填充。
+3. **字体程序与 TrueType**：完善 FontDescriptor、FontFile/FontFile2/FontFile3 流读取后，再实现 TrueType 字体解析及子集嵌入；第三方字体解析依赖如有需要，必须通过 PDF 语义适配层隔离。
+4. **CID 与复合字体**：在字体程序基础设施后实现 CIDFontType2/Type 0、CMap 与 CIDSystemInfo，先读端再写端。
+5. **Unicode 与文本提取**：实现 ToUnicode CMap，再串联简单字体编码、CID CMap 与内容操作符，完成字符码到 Unicode 的提取；写入/提取往返作为阶段验收。
+6. **独立工作并行**：`7.9` 的 PDFDocEncoding 文本串、名称树/数值树等公共类型不阻塞字体解析，可异步实现并单独更新矩阵证据。
+
+**范围边界**：
+
+- 每次只将有数据表、负向用例及公开 API 验证的子项标为已实现；识别 Encoding 名称不等于完成码值映射，码值映射也不等于完成 Unicode 文本提取。
+- 标准 14 字体表不得以 `/MissingWidth` 代替逐字符度量；显式 `/Widths` 优先，其次适用的字体描述符默认宽度，再使用准确的内建字宽。
+- 依赖关系按上面顺序推进；独立的 `7.9` 公共类型可并行，但不提前勾选阶段 B 整体完成。
 
 **验收标准**：
 

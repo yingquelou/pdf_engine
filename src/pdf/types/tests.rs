@@ -149,3 +149,130 @@ fn pdf_date_rejects_invalid_components_and_syntax() {
         assert!(PdfDate::parse(input).is_err(), "accepted {input:?}");
     }
 }
+
+#[test]
+fn pdf_rect_parses_and_serializes_pdf_arrays() {
+    let value = Value::Array(Array(vec![
+        Value::Integer(10),
+        Value::Float(20.5),
+        Value::Integer(30),
+        Value::Float(40.25),
+    ]));
+    let rect = PdfRect::from_value(&value).unwrap();
+
+    assert_eq!(rect.llx(), 10.0);
+    assert_eq!(rect.lly(), 20.5);
+    assert_eq!(rect.urx(), 30.0);
+    assert_eq!(rect.ury(), 40.25);
+    assert_eq!(
+        rect.to_value(),
+        Value::Array(Array(vec![
+            Value::Float(10.0),
+            Value::Float(20.5),
+            Value::Float(30.0),
+            Value::Float(40.25),
+        ]))
+    );
+}
+
+#[test]
+fn pdf_rect_preserves_reversed_coordinates() {
+    let rect = PdfRect::from_array(&Array(vec![
+        Value::Integer(30),
+        Value::Integer(40),
+        Value::Integer(10),
+        Value::Integer(20),
+    ]))
+    .unwrap();
+
+    assert_eq!(
+        (rect.llx(), rect.lly(), rect.urx(), rect.ury()),
+        (30.0, 40.0, 10.0, 20.0)
+    );
+}
+
+#[test]
+fn pdf_rect_rejects_wrong_array_length() {
+    let error = PdfRect::from_array(&Array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]))
+    .unwrap_err();
+
+    assert_eq!(error, PdfRectError::InvalidArrayLength);
+}
+
+#[test]
+fn pdf_rect_rejects_non_numeric_coordinates() {
+    let error = PdfRect::from_array(&Array(vec![
+        Value::Integer(1),
+        Value::Name("not-a-number".to_owned()),
+        Value::Integer(3),
+        Value::Integer(4),
+    ]))
+    .unwrap_err();
+
+    assert_eq!(error, PdfRectError::NonNumericCoordinate { index: 1 });
+}
+
+#[test]
+fn pdf_text_string_decodes_ascii_and_pdf_doc_encoding() {
+    assert_eq!(
+        PdfTextString::decode(b"Hello PDF").unwrap().as_str(),
+        "Hello PDF"
+    );
+
+    let special = PdfTextString::decode(&[0xA0, 0x80, 0x93, 0x18]).unwrap();
+    assert_eq!(special.as_str(), "\u{20AC}\u{2022}\u{FB01}\u{02D8}");
+    assert_eq!(special.encode(), [0xA0, 0x80, 0x93, 0x18]);
+}
+
+#[test]
+fn pdf_text_string_uses_utf16be_for_unrepresentable_characters() {
+    let text = PdfTextString::from("A🦀B");
+    let encoded = text.encode();
+    assert_eq!(
+        encoded,
+        [0xFE, 0xFF, 0x00, 0x41, 0xD8, 0x3E, 0xDD, 0x80, 0x00, 0x42]
+    );
+    assert_eq!(PdfTextString::decode(&encoded).unwrap(), text);
+}
+
+#[test]
+fn pdf_text_string_avoids_pdfdocencoding_bom_prefix_ambiguity() {
+    let text = PdfTextString::from("þÿ");
+    let encoded = text.encode();
+
+    assert_eq!(encoded, [0xFE, 0xFF, 0x00, 0xFE, 0x00, 0xFF]);
+    assert_eq!(PdfTextString::decode(&encoded).unwrap(), text);
+}
+
+#[test]
+fn pdf_text_string_rejects_undefined_pdf_doc_encoding_bytes() {
+    for byte in [0x7F, 0x9F] {
+        assert_eq!(
+            PdfTextString::decode(&[byte]).unwrap_err(),
+            PdfTextStringError::UndefinedPdfDocEncodingByte { byte }
+        );
+    }
+}
+
+#[test]
+fn pdf_text_string_rejects_malformed_utf16be() {
+    assert_eq!(
+        PdfTextString::decode(&[0xFE, 0xFF, 0x00]).unwrap_err(),
+        PdfTextStringError::InvalidUtf16ByteLength { length: 1 }
+    );
+
+    for (encoded, byte_index, unit) in [
+        (&[0xFE, 0xFF, 0xD8, 0x00][..], 2, 0xD800),
+        (&[0xFE, 0xFF, 0xDC, 0x00][..], 2, 0xDC00),
+        (&[0xFE, 0xFF, 0xD8, 0x00, 0x00, 0x41][..], 4, 0x0041),
+    ] {
+        assert_eq!(
+            PdfTextString::decode(encoded).unwrap_err(),
+            PdfTextStringError::InvalidUtf16Surrogate { byte_index, unit }
+        );
+    }
+}

@@ -83,7 +83,7 @@
 | 7.7.3 | 页面树 / Page 对象 / 属性继承 | 1.0 | 🟡 | 🟡 | ✅ | P0 | builder.rs `assemble_document` 生成 Catalog/Pages/Page；读端仅经通用对象模型解析，无专用页面遍历/继承解析 API |
 | 7.7.4 | Name Dictionary | 1.1（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码（按通用字典透传，无语义封装） |
 | 7.8 | 内容流与资源字典（/Contents、/Resources） | 1.0 | ✅ | 🟡 | ✅ | P0 | builder.rs `assemble_document` 生成内容流对象；content.rs `ContentStream::to_bytes`；测试 `builds_minimal_text_pdf`。缺口：读端按流对象透传（操作符不解析）；不生成多内容流数组 /Contents [..] |
-| 7.9 | 公共数据结构（文本串/日期/矩形/名称树/数值树） | 1.0–1.2（待核） | 🟡 | 🟡 | 🟡 | P1 | `types::PdfDate` 支持 PDF 日期字符串的解析与规范化序列化，含部分日期、UTC/本地时区与有符号时差；测试 `pdf_date_parses_partial_fields_and_timezone_forms`、`pdf_date_rejects_invalid_components_and_syntax`。缺口：PDFDocEncoding 文本串、矩形、名称树与数值树语义类型尚未实现 |
+| 7.9 | 公共数据结构（文本串/日期/矩形/名称树/数值树） | 1.0–1.2（待核） | 🟡 | 🟡 | 🟡 | P1 | `types::PdfTextString` 支持 PDFDocEncoding 与 UTF-16BE（含 BOM）的编码/解码；未定义 PDFDocEncoding 字节及非法 UTF-16 显式报错，并避免 PDFDocEncoding 字节恰以 `FE FF` 开头时与 UTF-16BE BOM 混淆。`PdfDate` 支持日期解析/序列化，`PdfRect` 支持四坐标数组解析/序列化并保留反向坐标；测试 `pdf_text_string_decodes_ascii_and_pdf_doc_encoding`、`pdf_text_string_uses_utf16be_for_unrepresentable_characters`、`pdf_text_string_avoids_pdfdocencoding_bom_prefix_ambiguity`、`pdf_text_string_rejects_undefined_pdf_doc_encoding_bytes`、`pdf_text_string_rejects_malformed_utf16be` 及日期/矩形测试。缺口：名称树与数值树语义类型尚未实现 |
 | 7.10 | Functions（Type 0/2/3/4） | 1.2–1.3（待核） | ✅ | ✅ | ⬜ | P0 | `functions/{mod,sampled,exponential,stitching,calculator}.rs` + `functions/tests/{mod,type0,type2,type3,type4}.rs`，纯 Rust 语义层求值 API（`Function::from_value` → `eval`）：Type 0 采样（MSB-first 多位打包 1/2/4/8/12/16/24/32、/Size /Encode /Decode、多线性插值；`/Order 3` 三次插值暂不支持并明确报错）、Type 2 指数插值（m=1 校验、C0/C1 补齐）、Type 3 拼接（区间左闭右开、/Bounds 递增校验、嵌套限深 64、`/Encode [1 0]` 反向映射）、Type 4 PostScript 计算器子集（算术/关系/布尔/栈操作/if/ifelse/常量，栈深上限 512）。测试 37 项（`type0_sample_values_and_interpolation`、`type0_two_dimensional`、`type2_basic_exponential`、`type3_spec_example_inverted_encode`、`type3_interval_half_open`、`type3_nesting_depth_guard`、`type4_arithmetic`、`type4_stack_operations`、`type4_conditionals_and_constants` 等）。缺口：写端随阶段 C Shading 生成落地；子函数携带 `StreamData::Ref` 时需调用方先经 `Document` 解引用 |
 | 7.11 | 文件规格与嵌入文件流（Filespec、/EmbeddedFiles） | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
 | 7.12 | Extensions 字典（/Extensions、BaseVersion、ExtensionLevel） | 1.7（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
@@ -125,12 +125,12 @@
 | 9.3 | 文本状态参数操作符（`Tc Tw Tz TL Tf Tr`） | 1.0 | 🟡 | ⬜ | ✅ | P1 | content.rs 6 变体；测试 `text_state_operators_individual`。缺口：缺 `Ts`（text rise，9.3.7）与 `Tk`（text knockout，9.3.8，需经 ExtGState） |
 | 9.4 | 文本对象与定位/显示（`BT ET Td TD Tm T* Tj TJ`） | 1.0 | 🟡 | ⬜ | ✅ | P0 | content.rs 12 变体；测试 `begin_end_text_roundtrip`、`show_text_at_format`、`show_text_array_mixed`。缺口：缺 `'` 与 `"` 显示文本操作符 |
 | 9.5 | 字体数据结构总述 | — | — | — | — | — | 无独立实现项（结构实现见 9.6–9.9 各行） |
-| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，缺失时回退 `/MissingWidth`）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`。builder.rs 输出标准 14 BaseFont 引用；缺口：不嵌入字体、标准 14 内建宽度表及完整字体程序支持未实现 |
+| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`。builder.rs 输出标准 14 BaseFont 引用；缺口：其余标准 14 内建宽度表、字体嵌入及完整字体程序支持未实现 |
 | 9.6.2.3 | Multiple Master 字体（MMType1） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
 | 9.6.3 | TrueType 字体 | 1.1 | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |
 | 9.6.5 | Type 3 字体 | 1.0 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | 编码固定 WinAnsiEncoding 仅写入（builder.rs）；MacRoman/Standard/Symbol/ZapfDingbats 等其余预定义编码未支持 |
+| 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252 码值→Unicode，MacRoman 支持完整 0x80–0xFF 码值→Unicode，StandardEncoding 支持 ASCII 及规范表定义的高位 glyph name，部分名称可映射 Unicode；`/Differences` 的常见 glyph name 子集可映射 Unicode；测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`。完整 Adobe glyph list、Symbol/ZapfDingbats 码值映射待实现；builder.rs 写端仍输出 WinAnsiEncoding |
 | 9.7.6 | Type 0 复合字体 / CIDFontType0（CID-Keyed） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码；中文/CJK 文本无法正确表达（字符串按 Latin-1 假设） |
 | 9.7.4 | CIDFontType2（TrueType 轮廓 CID 字体） | 1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.7.5 | CMap（预定义 CMap / 嵌入 CMap 文件） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（含 CIDSystemInfo 字典） |
