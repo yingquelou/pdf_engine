@@ -2111,6 +2111,56 @@ fn type1_font_encoding_resolves_predefined_encodings_and_differences() {
         );
     }
 
+    let symbol_encoding = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("Symbol".into())),
+    );
+    let symbol = doc.type1_font_encoding(&symbol_encoding).unwrap().unwrap();
+    assert_eq!(symbol.glyph_name_for(0x21).as_deref(), Some("exclam"));
+    assert_eq!(symbol.glyph_name_for(0x41).as_deref(), Some("Alpha"));
+    assert_eq!(symbol.glyph_name_for(0x61).as_deref(), Some("alpha"));
+    assert_eq!(symbol.glyph_name_for(0xA0).as_deref(), Some("Euro"));
+    assert_eq!(symbol.glyph_name_for(0xFF), None);
+    assert_eq!(symbol.unicode_for(0x41), Some('\u{0391}'));
+    assert_eq!(symbol.unicode_for(0x61), Some('\u{03b1}'));
+    assert_eq!(symbol.unicode_for(0xA0), Some('\u{20ac}'));
+    assert_eq!(symbol.unicode_for(0x44), Some('\u{2206}'));
+    assert_eq!(symbol.unicode_for(0x57), Some('\u{2126}'));
+    assert_eq!(symbol.unicode_for(0xA1), Some('\u{03d2}'));
+    assert_eq!(symbol.unicode_for(0xFF), None);
+
+    let dingbats_encoding = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("ZapfDingbats".into())),
+    );
+    let dingbats = doc
+        .type1_font_encoding(&dingbats_encoding)
+        .unwrap()
+        .unwrap();
+    assert_eq!(dingbats.glyph_name_for(0x20).as_deref(), Some("space"));
+    assert_eq!(dingbats.glyph_name_for(0x21).as_deref(), Some("a1"));
+    assert_eq!(dingbats.glyph_name_for(0x23).as_deref(), Some("a202"));
+    assert_eq!(dingbats.glyph_name_for(0x7F), None);
+    let glyph_code = |name| {
+        (0..=u8::MAX)
+            .find(|code| dingbats.glyph_name_for(*code).as_deref() == Some(name))
+            .unwrap()
+    };
+    for (glyph, expected) in [
+        ("a1", '\u{2701}'),
+        ("a4", '\u{260e}'),
+        ("a104", '\u{2764}'),
+        ("a109", '\u{2660}'),
+        ("a120", '\u{2460}'),
+        ("a161", '\u{2192}'),
+        ("a191", '\u{27be}'),
+    ] {
+        assert_eq!(dingbats.unicode_for(glyph_code(glyph)), Some(expected));
+    }
+    assert_eq!(dingbats.unicode_for(0xFF), None);
+
     let win_ansi_font = Value::Dict(
         Dict::new()
             .insert("Subtype", Value::Name("Type1".into()))
@@ -2197,6 +2247,8 @@ fn type1_font_encoding_resolves_predefined_encodings_and_differences() {
                         Value::Name("quoteright".into()),
                         Value::Integer(66),
                         Value::Name("unmappedGlyph".into()),
+                        Value::Integer(67),
+                        Value::Name("a1".into()),
                     ])),
                 )),
             ),
@@ -2207,6 +2259,7 @@ fn type1_font_encoding_resolves_predefined_encodings_and_differences() {
         .unwrap();
     assert_eq!(standard.unicode_for(65), Some('\u{2019}'));
     assert_eq!(standard.unicode_for(66), None);
+    assert_eq!(standard.unicode_for(67), Some('\u{2701}'));
 
     let unsupported = Value::Dict(
         Dict::new()

@@ -130,7 +130,7 @@
 | 9.6.3 | TrueType 字体 | 1.1 | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |
 | 9.6.5 | Type 3 字体 | 1.0 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252 码值→Unicode，MacRoman 支持完整 0x80–0xFF 码值→Unicode，StandardEncoding 支持 ASCII 及规范表定义的高位 glyph name，部分名称可映射 Unicode；`/Differences` 的常见 glyph name 子集可映射 Unicode；测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`。完整 Adobe glyph list、Symbol/ZapfDingbats 码值映射待实现；builder.rs 写端仍输出 WinAnsiEncoding |
+| 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252→Unicode、MacRoman 支持 0x80–0xFF→Unicode、StandardEncoding 支持已定义字形槽位；Symbol 支持 glyph name 表及常见数学/希腊符号 Unicode，ZapfDingbats 支持 glyph name 表及 Adobe Zapf AGL 已列名称的 Unicode 映射；`/Differences` 的常见 glyph name 子集可映射 Unicode。测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`；完整 Adobe Glyph List 覆盖待补；builder.rs 写端仍输出 WinAnsiEncoding |
 | 9.7.6 | Type 0 复合字体 / CIDFontType0（CID-Keyed） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码；中文/CJK 文本无法正确表达（字符串按 Latin-1 假设） |
 | 9.7.4 | CIDFontType2（TrueType 轮廓 CID 字体） | 1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.7.5 | CMap（预定义 CMap / 嵌入 CMap 文件） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（含 CIDSystemInfo 字典） |
