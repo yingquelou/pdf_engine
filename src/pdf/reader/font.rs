@@ -6,9 +6,12 @@ use crate::pdf::types::{Array, Dict, Document, Value};
 
 use super::ParseError;
 
+mod embedded_program;
 mod encoding_data;
 mod encoding_unicode;
 mod standard14_metrics;
+
+pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 
 type FontResult<T> = std::result::Result<T, FontError>;
 
@@ -482,6 +485,8 @@ fn standard14_width(base_font: &str, code: u8) -> Option<f64> {
         "Times-Bold" => standard14_metrics::times_width(code, true, false),
         "Times-Italic" => standard14_metrics::times_width(code, false, true),
         "Times-BoldItalic" => standard14_metrics::times_width(code, true, true),
+        "Symbol" => standard14_metrics::symbol_width(code),
+        "ZapfDingbats" => standard14_metrics::zapf_dingbats_width(code),
         _ => None,
     }
 }

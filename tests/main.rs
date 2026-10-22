@@ -4,7 +4,7 @@ use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
 use demo::pdf;
 use demo::pdf::reader::Parser;
-use demo::pdf::reader::font::{EncodingMapping, PredefinedEncoding};
+use demo::pdf::reader::font::{EncodingMapping, FontProgramSource, PredefinedEncoding};
 use demo::pdf::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value, XrefKind,
 };
@@ -1983,6 +1983,130 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
 }
 
 #[test]
+fn type1_font_program_resolves_and_decodes_descriptor_streams() {
+    let doc = Document::new();
+    doc.set_object(Object::new(
+        40,
+        0,
+        Value::Stream(
+            Dict::new().insert("Filter", Value::Name("ASCIIHexDecode".into())),
+            StreamData::Owned(b"414243>".to_vec()),
+        ),
+    ));
+    doc.set_object(Object::new(
+        41,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("FontDescriptor".into()))
+                .insert("FontFile2", Value::Ref(40, 0)),
+        ),
+    ));
+    let font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("ExampleSans".into()))
+            .insert("FontDescriptor", Value::Ref(41, 0)),
+    );
+
+    let program = doc.type1_font_program(&font).unwrap().unwrap();
+    assert_eq!(program.source, FontProgramSource::FontFile2);
+    assert_eq!(program.subtype, None);
+    assert_eq!(program.data, b"ABC");
+
+    let type1c_font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("ExampleSans".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert(
+                            "FontFile3",
+                            Value::Stream(
+                                Dict::new().insert("Subtype", Value::Name("Type1C".into())),
+                                StreamData::Owned(b"CFF".to_vec()),
+                            ),
+                        ),
+                ),
+            ),
+    );
+    let type1c_program = doc.type1_font_program(&type1c_font).unwrap().unwrap();
+    assert_eq!(type1c_program.source, FontProgramSource::FontFile3);
+    assert_eq!(type1c_program.subtype.as_deref(), Some("Type1C"));
+    assert_eq!(type1c_program.data, b"CFF");
+
+    let no_program = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("Helvetica".into())),
+    );
+    assert!(doc.type1_font_program(&no_program).unwrap().is_none());
+
+    let unsupported_font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("TrueType".into()))
+            .insert("BaseFont", Value::Name("ExampleSans".into())),
+    );
+    assert!(doc.type1_font_program(&unsupported_font).unwrap().is_none());
+}
+
+#[test]
+fn type1_font_program_reports_malformed_descriptor_entries() {
+    let doc = Document::new();
+    let make_font = |descriptor| {
+        Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("BaseFont", Value::Name("ExampleSans".into()))
+                .insert("FontDescriptor", descriptor),
+        )
+    };
+    let invalid_stream = Value::Stream(
+        Dict::new().insert("Filter", Value::Name("FlateDecode".into())),
+        StreamData::Owned(b"not deflate data".to_vec()),
+    );
+    let invalid_descriptor = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("FontDescriptor".into()))
+            .insert("FontFile", invalid_stream),
+    );
+    assert!(
+        doc.type1_font_program(&make_font(invalid_descriptor))
+            .is_err()
+    );
+
+    let multiple_entries = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("FontDescriptor".into()))
+            .insert(
+                "FontFile",
+                Value::Stream(Dict::new(), StreamData::Owned(Vec::new())),
+            )
+            .insert(
+                "FontFile2",
+                Value::Stream(Dict::new(), StreamData::Owned(Vec::new())),
+            ),
+    );
+    assert!(
+        doc.type1_font_program(&make_font(multiple_entries))
+            .is_err()
+    );
+
+    let missing_subtype = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("FontDescriptor".into()))
+            .insert(
+                "FontFile3",
+                Value::Stream(Dict::new(), StreamData::Owned(b"CFF".to_vec())),
+            ),
+    );
+    assert!(doc.type1_font_program(&make_font(missing_subtype)).is_err());
+}
+
+#[test]
 fn type1_font_uses_builtin_courier_widths_when_no_override_exists() {
     let doc = Document::new();
     for font_name in [
@@ -2036,6 +2160,39 @@ fn type1_font_uses_builtin_courier_widths_when_no_override_exists() {
         assert_eq!(font.width_for(65), Some(expected_a), "{font_name} A");
         assert_eq!(font.width_for(174), Some(expected_fi), "{font_name} fi");
         assert_eq!(font.width_for(0), None, "{font_name} undefined code");
+    }
+
+    for (font_name, code, expected_width) in [
+        ("Symbol", 0x20, 250.0),
+        ("Symbol", 0x41, 722.0),
+        ("Symbol", 0xA0, 750.0),
+        ("ZapfDingbats", 0x20, 278.0),
+        ("ZapfDingbats", 0x21, 974.0),
+        ("ZapfDingbats", 0xFE, 918.0),
+    ] {
+        let font = Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("BaseFont", Value::Name(font_name.into())),
+        );
+        assert_eq!(
+            doc.type1_font(&font).unwrap().unwrap().width_for(code),
+            Some(expected_width),
+            "{font_name} code {code:#04x}"
+        );
+    }
+
+    for font_name in ["Symbol", "ZapfDingbats"] {
+        let font = Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("BaseFont", Value::Name(font_name.into())),
+        );
+        assert_eq!(
+            doc.type1_font(&font).unwrap().unwrap().width_for(0xFF),
+            None,
+            "{font_name} undefined code"
+        );
     }
 
     let explicit_width = Value::Dict(

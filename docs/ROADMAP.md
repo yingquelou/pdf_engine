@@ -100,7 +100,7 @@
 
 **包含条目**：
 
-- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标、简单字体编码，并为 Courier 及 Helvetica/Times 各四种样式提供 StandardEncoding 内建宽度；Symbol、ZapfDingbats 度量及字体嵌入仍待实现）
+- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标，并为 Courier、Helvetica/Times 四种样式、Symbol、ZapfDingbats 提供对应内建编码宽度；字体嵌入仍待实现）
 - [ ] `9.6.3` TrueType 字体
 - [ ] `9.6.4` 字体子集化（随字体嵌入一并实现）
 - [ ] `9.6.6` 字符编码补全（进行中：Type 1 读端识别 Standard/WinAnsi/MacRoman/Symbol/ZapfDingbats，支持 CP1252/MacRoman Unicode 映射、Standard/Symbol/ZapfDingbats glyph name 查询及完整 Adobe Glyph List 2.0→Unicode 映射；写端编码配置仍待实现）
@@ -108,8 +108,8 @@
 - [ ] `9.7.4` CIDFontType2（TrueType 轮廓 CID 字体）
 - [ ] `9.7.5` CMap（预定义/嵌入，含 CIDSystemInfo）
 - [ ] `9.10.3` ToUnicode CMap
-- [ ] `9.8` 字体描述符（FontDescriptor、Flags、CIDFont 描述符）
-- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）
+- [ ] `9.8` 字体描述符（进行中：简单 Type 1 的 FontDescriptor 元数据已实现；CIDFont 描述符待实现）
+- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 字体读端可解析并解码 FontDescriptor 中的 FontFile* 流；格式解析、TrueType 支持与写入仍待实现）
 - [ ] `9.10` 文本内容提取（字符码→Unicode 映射）
 - [ ] `7.9` 公共数据结构（进行中：`PdfDate`、`PdfRect` 已实现；`PdfTextString` 支持 PDFDocEncoding 与带 BOM 的 UTF-16BE 编解码；名称树、数值树待实现）
 
@@ -118,8 +118,8 @@
 **执行顺序与并行边界**：
 
 1. **简单字体基础（进行中）**：完成 Type 1 字体字典、宽度读取和 Encoding 字典结构解析；WinAnsi CP1252 与 MacRoman 的 Unicode 码值映射已实现，StandardEncoding 已覆盖已定义字形槽位，Symbol 与 ZapfDingbats 可查询预定义 glyph name 表；Adobe Glyph List 2.0 的 4,281 个映射已覆盖，含多标量 glyph name 序列。下一步补齐标准字体度量；映射数据独立存放，便于维护。
-2. **标准字体度量**：依赖 glyph name 映射，逐族补齐 Standard 14 内建宽度表；Courier 固定 600 单位以及 Helvetica、Times 各四种样式的 StandardEncoding 宽度已覆盖，下一步实现 Symbol 与 ZapfDingbats；新增数据需有规范样例或独立表测试，不得用近似值填充。
-3. **字体程序与 TrueType**：完善 FontDescriptor、FontFile/FontFile2/FontFile3 流读取后，再实现 TrueType 字体解析及子集嵌入；第三方字体解析依赖如有需要，必须通过 PDF 语义适配层隔离。
+2. **标准字体度量**：依赖 glyph name 映射，逐族补齐 Standard 14 内建宽度表；Courier 固定 600 单位、Helvetica/Times 各四种样式的 StandardEncoding 宽度，以及 Symbol/ZapfDingbats 预定义编码宽度已覆盖；新增数据需有规范样例或独立表测试，不得用近似值填充。
+3. **字体程序与 TrueType（进行中）**：Type 1 字体可读取并解码 FontDescriptor 中的 FontFile/FontFile2/FontFile3 流；下一步校验具体字体程序格式，再实现 TrueType 字体解析及子集嵌入。第三方字体解析依赖如有需要，必须通过 PDF 语义适配层隔离。
 4. **CID 与复合字体**：在字体程序基础设施后实现 CIDFontType2/Type 0、CMap 与 CIDSystemInfo，先读端再写端。
 5. **Unicode 与文本提取**：实现 ToUnicode CMap，再串联简单字体编码、CID CMap 与内容操作符，完成字符码到 Unicode 的提取；写入/提取往返作为阶段验收。
 6. **独立工作并行**：`7.9` 的 PDFDocEncoding 文本串、名称树/数值树等公共类型不阻塞字体解析，可异步实现并单独更新矩阵证据。

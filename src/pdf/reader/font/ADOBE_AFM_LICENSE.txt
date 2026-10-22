@@ -15,7 +15,15 @@ Times-Roman.afm, Times-Bold.afm, Times-Italic.afm, and Times-BoldItalic.afm:
 Copyright (c) 1985, 1987, 1989, 1990, 1993, 1997 Adobe Systems Incorporated.
 All Rights Reserved.
 
-The width tables in standard14_metrics.rs are derived from the eight AFM files
+Symbol.afm:
+Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated.
+All rights reserved.
+
+ZapfDingbats.afm:
+Copyright (c) 1985, 1987, 1988, 1989, 1997 Adobe Systems Incorporated.
+All Rights Reserved.
+
+The width data in standard14_metrics.csv is derived from the ten AFM files
 listed above. The AFM files themselves are not included. The extracted widths
-were reindexed by StandardEncoding byte code. The table representation is
+were reindexed by each font's predefined encoding. The table representation is
 modified from the original AFM metrics.
