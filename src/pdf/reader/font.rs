@@ -13,7 +13,7 @@ mod standard14_metrics;
 mod truetype;
 
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
-pub use truetype::{SfntFlavor, TrueTypeFont};
+pub use truetype::{CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph};
 
 type FontResult<T> = std::result::Result<T, FontError>;
 

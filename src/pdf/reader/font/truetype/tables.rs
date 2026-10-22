@@ -5,6 +5,7 @@ pub(super) struct TrueTypeMetadata {
     pub units_per_em: u16,
     pub glyph_count: u16,
     pub horizontal_metric_count: u16,
+    pub index_to_loc_format: i16,
 }
 
 impl TrueTypeMetadata {
@@ -75,6 +76,7 @@ impl TrueTypeMetadata {
             units_per_em,
             glyph_count,
             horizontal_metric_count,
+            index_to_loc_format,
         })
     }
 }

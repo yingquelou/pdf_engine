@@ -1,6 +1,11 @@
 use std::{collections::BTreeMap, ops::Range};
 
-use super::{super::FontError, tables::TrueTypeMetadata};
+use super::{
+    super::FontError,
+    cmap::{Cmap, CmapFormat},
+    glyph::{GlyphLocations, TrueTypeGlyph},
+    tables::TrueTypeMetadata,
+};
 
 /// Recognized SFNT signatures for TrueType-outline fonts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,14 +23,17 @@ pub struct TrueTypeFont {
     flavor: SfntFlavor,
     tables: BTreeMap<[u8; 4], Range<usize>>,
     metadata: TrueTypeMetadata,
+    cmap: Cmap,
+    glyph_locations: GlyphLocations,
 }
 
 impl TrueTypeFont {
     /// Parse an SFNT directory from decoded font program bytes.
     ///
     /// This validates the signature, directory boundaries, table tags,
-    /// alignment, payload ranges, and the required `head`/`maxp` metadata.
-    /// It does not validate table checksums or parse other tables.
+    /// alignment, payload ranges, and required metadata tables. Unicode
+    /// character mapping supports cmap formats 4 and 12.
+    /// It does not validate table checksums or parse glyph outlines.
     pub fn parse(data: Vec<u8>) -> Result<Self, FontError> {
         if data.len() < 12 {
             return Err(invalid_sfnt("header is truncated"));
@@ -98,12 +106,33 @@ impl TrueTypeFont {
             tables.get(b"hhea").map(|range| &data[range.clone()]),
             tables.get(b"hmtx").map(|range| &data[range.clone()]),
         )?;
+        let cmap_data = tables
+            .get(b"cmap")
+            .map(|range| &data[range.clone()])
+            .ok_or_else(|| invalid_sfnt("missing required `cmap` table"))?;
+        let cmap = Cmap::parse(cmap_data, metadata.glyph_count)?;
+        let loca = tables
+            .get(b"loca")
+            .map(|range| &data[range.clone()])
+            .ok_or_else(|| invalid_sfnt("missing required `loca` table"))?;
+        let glyf = tables
+            .get(b"glyf")
+            .map(|range| &data[range.clone()])
+            .ok_or_else(|| invalid_sfnt("missing required `glyf` table"))?;
+        let glyph_locations = GlyphLocations::parse(
+            loca,
+            glyf,
+            metadata.glyph_count,
+            metadata.index_to_loc_format,
+        )?;
 
         Ok(Self {
             data,
             flavor,
             tables,
             metadata,
+            cmap,
+            glyph_locations,
         })
     }
 
@@ -140,6 +169,38 @@ impl TrueTypeFont {
         ))
     }
 
+    /// Return the selected Unicode character-map subtable format.
+    pub fn cmap_format(&self) -> CmapFormat {
+        self.cmap.format()
+    }
+
+    /// Map a Unicode codepoint to a glyph ID.
+    ///
+    /// Format 4 supports BMP codepoints; format 12 also supports supplementary
+    /// Unicode planes. A codepoint absent from the selected map returns `None`.
+    pub fn glyph_id_for_unicode(&self, codepoint: u32) -> Result<Option<u16>, FontError> {
+        if char::from_u32(codepoint).is_none() {
+            return Ok(None);
+        }
+        let cmap_data = self
+            .table(b"cmap")
+            .ok_or_else(|| invalid_sfnt("missing required `cmap` table"))?;
+        self.cmap
+            .glyph_id(cmap_data, codepoint, self.metadata.glyph_count)
+    }
+
+    /// Return a glyph record and its header bounds by glyph ID.
+    ///
+    /// Empty glyphs and IDs outside the font's glyph range return `None`.
+    /// Composite glyph components are left encoded in `data` and are not
+    /// recursively expanded.
+    pub fn glyph(&self, glyph_id: u16) -> Result<Option<TrueTypeGlyph<'_>>, FontError> {
+        let glyf = self
+            .table(b"glyf")
+            .ok_or_else(|| invalid_sfnt("missing required `glyf` table"))?;
+        self.glyph_locations.glyph(glyf, glyph_id)
+    }
+
     /// Return the tags present in the validated table directory.
     pub fn table_tags(&self) -> impl Iterator<Item = &[u8; 4]> {
         self.tables.keys()
@@ -157,7 +218,28 @@ fn invalid_sfnt(message: &str) -> FontError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SfntFlavor, TrueTypeFont};
+    use super::{CmapFormat, SfntFlavor, TrueTypeFont};
+
+    fn simple_format4_cmap() -> Vec<u8> {
+        let mut cmap = vec![0; 44];
+        cmap[2..4].copy_from_slice(&1u16.to_be_bytes());
+        cmap[4..6].copy_from_slice(&3u16.to_be_bytes());
+        cmap[6..8].copy_from_slice(&1u16.to_be_bytes());
+        cmap[8..12].copy_from_slice(&12u32.to_be_bytes());
+        let subtable = &mut cmap[12..];
+        subtable[0..2].copy_from_slice(&4u16.to_be_bytes());
+        subtable[2..4].copy_from_slice(&32u16.to_be_bytes());
+        subtable[6..8].copy_from_slice(&4u16.to_be_bytes());
+        subtable[8..10].copy_from_slice(&4u16.to_be_bytes());
+        subtable[10..12].copy_from_slice(&1u16.to_be_bytes());
+        subtable[14..16].copy_from_slice(&0x41u16.to_be_bytes());
+        subtable[16..18].copy_from_slice(&u16::MAX.to_be_bytes());
+        subtable[20..22].copy_from_slice(&0x41u16.to_be_bytes());
+        subtable[22..24].copy_from_slice(&u16::MAX.to_be_bytes());
+        subtable[24..26].copy_from_slice(&(-63i16).to_be_bytes());
+        subtable[26..28].copy_from_slice(&1i16.to_be_bytes());
+        cmap
+    }
 
     fn font_with_tables(signature: [u8; 4], records: &[([u8; 4], u32, u32)]) -> Vec<u8> {
         let directory_end = 12 + records.len() * 16;
@@ -184,20 +266,40 @@ mod tests {
         let mut bytes = font_with_tables(
             [0, 1, 0, 0],
             &[
-                (*b"head", 76, 54),
-                (*b"maxp", 132, 32),
-                (*b"hhea", 164, 36),
-                (*b"hmtx", 200, 10),
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 10),
+                (*b"cmap", 260, 44),
+                (*b"loca", 304, 8),
+                (*b"glyf", 312, 30),
             ],
         );
-        bytes[76 + 12..76 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
-        bytes[76 + 18..76 + 20].copy_from_slice(&2048u16.to_be_bytes());
-        bytes[132..136].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        bytes[136..138].copy_from_slice(&3u16.to_be_bytes());
-        bytes[164..168].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        bytes[198..200].copy_from_slice(&2u16.to_be_bytes());
-        bytes[200..202].copy_from_slice(&500u16.to_be_bytes());
-        bytes[204..206].copy_from_slice(&600u16.to_be_bytes());
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&2048u16.to_be_bytes());
+        bytes[124 + 50..124 + 52].copy_from_slice(&0i16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&2u16.to_be_bytes());
+        bytes[248..250].copy_from_slice(&500u16.to_be_bytes());
+        bytes[252..254].copy_from_slice(&600u16.to_be_bytes());
+        let cmap = simple_format4_cmap();
+        bytes[260..304].copy_from_slice(&cmap);
+        bytes[304..306].copy_from_slice(&0u16.to_be_bytes());
+        bytes[306..308].copy_from_slice(&9u16.to_be_bytes());
+        bytes[308..310].copy_from_slice(&9u16.to_be_bytes());
+        bytes[310..312].copy_from_slice(&15u16.to_be_bytes());
+        bytes[312..314].copy_from_slice(&1i16.to_be_bytes());
+        bytes[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+        bytes[322..324].copy_from_slice(&0u16.to_be_bytes());
+        bytes[324..326].copy_from_slice(&0u16.to_be_bytes());
+        bytes[326] = 0x37;
+        bytes[327] = 1;
+        bytes[328] = 2;
+        bytes[330..332].copy_from_slice(&(-1i16).to_be_bytes());
+        bytes[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        bytes[340..342].fill(0);
         let font = TrueTypeFont::parse(bytes).unwrap();
 
         assert_eq!(font.flavor(), SfntFlavor::TrueType);
@@ -207,12 +309,23 @@ mod tests {
         assert_eq!(font.horizontal_advance_width(1), Some(600));
         assert_eq!(font.horizontal_advance_width(2), Some(600));
         assert_eq!(font.horizontal_advance_width(3), None);
+        assert_eq!(font.cmap_format(), CmapFormat::Format4);
+        assert_eq!(font.glyph_id_for_unicode(0x41).unwrap(), Some(2));
+        assert_eq!(font.glyph_id_for_unicode(0x42).unwrap(), None);
+        let glyph = font.glyph(0).unwrap().unwrap();
+        assert_eq!(glyph.bounds, [1, 2, 5, 8]);
+        assert_eq!(glyph.points.len(), 1);
+        assert!(font.glyph(1).unwrap().is_none());
+        assert_eq!(font.glyph(2).unwrap().unwrap().number_of_contours, -1);
         assert_eq!(font.table(b"head").unwrap().len(), 54);
         assert_eq!(font.table(b"maxp").unwrap().len(), 32);
         assert_eq!(font.table(b"hhea").unwrap().len(), 36);
         assert_eq!(font.table(b"hmtx").unwrap().len(), 10);
+        assert_eq!(font.table(b"cmap").unwrap().len(), 44);
+        assert_eq!(font.table(b"loca").unwrap().len(), 8);
+        assert_eq!(font.table(b"glyf").unwrap().len(), 30);
         assert_eq!(font.table(b"name"), None);
-        assert_eq!(font.table_tags().count(), 4);
+        assert_eq!(font.table_tags().count(), 7);
     }
 
     #[test]
@@ -220,18 +333,26 @@ mod tests {
         let mut bytes = font_with_tables(
             *b"true",
             &[
-                (*b"head", 76, 54),
-                (*b"maxp", 132, 32),
-                (*b"hhea", 164, 36),
-                (*b"hmtx", 200, 4),
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 4),
+                (*b"cmap", 252, 44),
+                (*b"loca", 296, 4),
+                (*b"glyf", 300, 10),
             ],
         );
-        bytes[76 + 12..76 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
-        bytes[76 + 18..76 + 20].copy_from_slice(&1000u16.to_be_bytes());
-        bytes[132..136].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        bytes[136..138].copy_from_slice(&1u16.to_be_bytes());
-        bytes[164..168].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        bytes[198..200].copy_from_slice(&1u16.to_be_bytes());
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&1000u16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&1u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&1u16.to_be_bytes());
+        bytes[252..296].copy_from_slice(&simple_format4_cmap());
+        bytes[296..298].copy_from_slice(&0u16.to_be_bytes());
+        bytes[298..300].copy_from_slice(&5u16.to_be_bytes());
+        bytes[300..302].copy_from_slice(&1i16.to_be_bytes());
+        bytes[302..310].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
         assert_eq!(
             TrueTypeFont::parse(bytes).unwrap().flavor(),
             SfntFlavor::AppleTrue
