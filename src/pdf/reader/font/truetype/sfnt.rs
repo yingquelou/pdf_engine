@@ -33,7 +33,7 @@ impl TrueTypeFont {
     /// This validates the signature, directory boundaries, table tags,
     /// alignment, payload ranges, and required metadata tables. Unicode
     /// character mapping supports cmap formats 4 and 12.
-    /// It does not validate table checksums or parse glyph outlines.
+    /// It does not validate table checksums or render glyph outlines.
     pub fn parse(data: Vec<u8>) -> Result<Self, FontError> {
         if data.len() < 12 {
             return Err(invalid_sfnt("header is truncated"));
@@ -192,8 +192,8 @@ impl TrueTypeFont {
     /// Return a glyph record and its header bounds by glyph ID.
     ///
     /// Empty glyphs and IDs outside the font's glyph range return `None`.
-    /// Composite glyph components are left encoded in `data` and are not
-    /// recursively expanded.
+    /// Composite glyph components are recursively expanded into the returned
+    /// contour points; `data` retains the original encoded record.
     pub fn glyph(&self, glyph_id: u16) -> Result<Option<TrueTypeGlyph<'_>>, FontError> {
         let glyf = self
             .table(b"glyf")
@@ -272,7 +272,7 @@ mod tests {
                 (*b"hmtx", 248, 10),
                 (*b"cmap", 260, 44),
                 (*b"loca", 304, 8),
-                (*b"glyf", 312, 30),
+                (*b"glyf", 312, 34),
             ],
         );
         bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
@@ -289,7 +289,7 @@ mod tests {
         bytes[304..306].copy_from_slice(&0u16.to_be_bytes());
         bytes[306..308].copy_from_slice(&9u16.to_be_bytes());
         bytes[308..310].copy_from_slice(&9u16.to_be_bytes());
-        bytes[310..312].copy_from_slice(&15u16.to_be_bytes());
+        bytes[310..312].copy_from_slice(&17u16.to_be_bytes());
         bytes[312..314].copy_from_slice(&1i16.to_be_bytes());
         bytes[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
         bytes[322..324].copy_from_slice(&0u16.to_be_bytes());
@@ -299,7 +299,8 @@ mod tests {
         bytes[328] = 2;
         bytes[330..332].copy_from_slice(&(-1i16).to_be_bytes());
         bytes[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
-        bytes[340..342].fill(0);
+        bytes[340..342].copy_from_slice(&0x0002u16.to_be_bytes());
+        bytes[342..344].copy_from_slice(&0u16.to_be_bytes());
         let font = TrueTypeFont::parse(bytes).unwrap();
 
         assert_eq!(font.flavor(), SfntFlavor::TrueType);
@@ -316,14 +317,16 @@ mod tests {
         assert_eq!(glyph.bounds, [1, 2, 5, 8]);
         assert_eq!(glyph.points.len(), 1);
         assert!(font.glyph(1).unwrap().is_none());
-        assert_eq!(font.glyph(2).unwrap().unwrap().number_of_contours, -1);
+        let composite = font.glyph(2).unwrap().unwrap();
+        assert_eq!(composite.number_of_contours, -1);
+        assert_eq!(composite.points.len(), 1);
         assert_eq!(font.table(b"head").unwrap().len(), 54);
         assert_eq!(font.table(b"maxp").unwrap().len(), 32);
         assert_eq!(font.table(b"hhea").unwrap().len(), 36);
         assert_eq!(font.table(b"hmtx").unwrap().len(), 10);
         assert_eq!(font.table(b"cmap").unwrap().len(), 44);
         assert_eq!(font.table(b"loca").unwrap().len(), 8);
-        assert_eq!(font.table(b"glyf").unwrap().len(), 30);
+        assert_eq!(font.table(b"glyf").unwrap().len(), 34);
         assert_eq!(font.table(b"name"), None);
         assert_eq!(font.table_tags().count(), 7);
     }

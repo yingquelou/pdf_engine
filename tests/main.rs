@@ -2126,7 +2126,7 @@ fn type1_font_program_reports_malformed_descriptor_entries() {
 #[test]
 fn truetype_font_program_resolves_and_parses_fontfile2() {
     let doc = Document::new();
-    let mut sfnt = vec![0; 342];
+    let mut sfnt = vec![0; 346];
     sfnt[..4].copy_from_slice(&[0, 1, 0, 0]);
     sfnt[4..6].copy_from_slice(&7u16.to_be_bytes());
     sfnt[12..16].copy_from_slice(b"head");
@@ -2149,7 +2149,7 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
     sfnt[104..108].copy_from_slice(&8u32.to_be_bytes());
     sfnt[108..112].copy_from_slice(b"glyf");
     sfnt[116..120].copy_from_slice(&312u32.to_be_bytes());
-    sfnt[120..124].copy_from_slice(&30u32.to_be_bytes());
+    sfnt[120..124].copy_from_slice(&34u32.to_be_bytes());
     sfnt[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
     sfnt[124 + 18..124 + 20].copy_from_slice(&1000u16.to_be_bytes());
     sfnt[124 + 50..124 + 52].copy_from_slice(&0i16.to_be_bytes());
@@ -2177,7 +2177,7 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
     sfnt[304..306].copy_from_slice(&0u16.to_be_bytes());
     sfnt[306..308].copy_from_slice(&9u16.to_be_bytes());
     sfnt[308..310].copy_from_slice(&9u16.to_be_bytes());
-    sfnt[310..312].copy_from_slice(&15u16.to_be_bytes());
+    sfnt[310..312].copy_from_slice(&17u16.to_be_bytes());
     sfnt[312..314].copy_from_slice(&1i16.to_be_bytes());
     sfnt[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
     sfnt[322..324].copy_from_slice(&0u16.to_be_bytes());
@@ -2187,7 +2187,8 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
     sfnt[328] = 2;
     sfnt[330..332].copy_from_slice(&(-1i16).to_be_bytes());
     sfnt[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
-    sfnt[340..342].fill(0);
+    sfnt[340..342].copy_from_slice(&0x0002u16.to_be_bytes());
+    sfnt[342..344].copy_from_slice(&0u16.to_be_bytes());
     let font = Value::Dict(
         Dict::new()
             .insert("Subtype", Value::Name("TrueType".into()))
@@ -2214,6 +2215,7 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
     let glyph = font.glyph(0).unwrap().unwrap();
     assert_eq!(glyph.bounds, [1, 2, 5, 8]);
     assert_eq!(glyph.points.len(), 1);
+    assert_eq!(font.glyph(2).unwrap().unwrap().points.len(), 1);
     assert_eq!(font.table(b"head").unwrap().len(), 54);
 
     let no_program = Value::Dict(Dict::new().insert("Subtype", Value::Name("TrueType".into())));
