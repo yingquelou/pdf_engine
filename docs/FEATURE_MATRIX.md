@@ -26,13 +26,13 @@
 |---|---|---|---|---|---|---|
 | 第 7 章 语法 | 31 | 5 | 8 | 1 | 4 | 49 |
 | 第 8 章 图形 | 6 | 4 | 11 | 0 | 2 | 23 |
-| 第 9 章 文本 | 0 | 7 | 10 | 0 | 2 | 19 |
+| 第 9 章 文本 | 0 | 8 | 9 | 0 | 2 | 19 |
 | 第 10 章 渲染 | 0 | 0 | 5 | 0 | 1 | 6 |
 | 第 11 章 透明度 | 0 | 2 | 4 | 0 | 2 | 8 |
 | 第 12 章 交互特性 | 0 | 0 | 40 | 0 | 1 | 41 |
 | 第 13 章 多媒体 | 0 | 0 | 5 | 0 | 1 | 6 |
 | 第 14 章 文档交换 | 0 | 1 | 10 | 0 | 1 | 12 |
-| **总计** | **37** | **19** | **93** | **1** | **14** | **164** |
+| **总计** | **37** | **20** | **92** | **1** | **14** | **164** |
 
 ## 第 7 章 语法（Syntax）
 
@@ -125,9 +125,9 @@
 | 9.3 | 文本状态参数操作符（`Tc Tw Tz TL Tf Tr`） | 1.0 | 🟡 | ⬜ | ✅ | P1 | content.rs 6 变体；测试 `text_state_operators_individual`。缺口：缺 `Ts`（text rise，9.3.7）与 `Tk`（text knockout，9.3.8，需经 ExtGState） |
 | 9.4 | 文本对象与定位/显示（`BT ET Td TD Tm T* Tj TJ`） | 1.0 | 🟡 | ⬜ | ✅ | P0 | content.rs 12 变体；测试 `begin_end_text_roundtrip`、`show_text_at_format`、`show_text_array_mixed`。缺口：缺 `'` 与 `"` 显示文本操作符 |
 | 9.5 | 字体数据结构总述 | — | — | — | — | — | 无独立实现项（结构实现见 9.6–9.9 各行） |
-| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位、Helvetica 与 Times 各四种样式按 StandardEncoding、Symbol 和 ZapfDingbats 按其预定义编码查询 Adobe AFM 宽度）；10 套静态 AFM 字宽保存在 `reader/font/standard14_metrics.csv` 并由目录模块解析后缓存。`Document::type1_font_program` 可解析 FontFile/FontFile2/FontFile3 并经常规过滤器/解密路径返回解码字节，但不解析字体格式。测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`、`type1_font_program_resolves_and_decodes_descriptor_streams`。builder.rs 输出标准 14 BaseFont 引用；字体程序解析与写入未实现 |
+| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位、Helvetica 与 Times 各四种样式按 StandardEncoding、Symbol 和 ZapfDingbats 按其预定义编码查询 Adobe AFM 宽度）；10 套静态 AFM 字宽保存在 `reader/font/standard14_metrics.csv` 并由目录模块解析后缓存。`Document::type1_font_program` 可解析 Type 1 适用的 FontFile/FontFile3，并经常规过滤器/解密路径返回解码字节，但不解析字体格式。测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`、`type1_font_program_resolves_and_decodes_descriptor_streams`。builder.rs 输出标准 14 BaseFont 引用；字体程序解析与写入未实现 |
 | 9.6.2.3 | Multiple Master 字体（MMType1） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| 9.6.3 | TrueType 字体 | 1.1 | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
+| 9.6.3 | TrueType 字体 | 1.1 | 🟡 | 🟡 | ⬜ | P1 | `reader::font::TrueTypeFont` 通过 `Document::truetype_font` 解码 TrueType `/FontFile2` 并校验 SFNT 目录及 `head`/`maxp`/`hhea`/`hmtx` 表的关键字段；可查询 unitsPerEm、glyph count、按 glyph ID 查询水平 advance width（涵盖重复末尾 advance 规则），以及读取表 tag/字节。暂不校验 table checksum、不解析轮廓/cmap/垂直度量、不支持 CID 映射、渲染或写入。测试 `truetype_font_program_resolves_and_parses_fontfile2`、SFNT 畸形目录与度量表边界单测 |
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |
 | 9.6.5 | Type 3 字体 | 1.0 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
 | 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252→Unicode、MacRoman 支持 0x80–0xFF→Unicode、StandardEncoding 支持已定义字形槽位；Symbol 支持 glyph name 表及 Adobe Glyph List Unicode 映射，ZapfDingbats 支持 glyph name 表及 Zapf AGL 映射；完整 Adobe Glyph List 2.0 的 4,281 个映射由 `SimpleFontEncoding::unicode_sequence_for` 提供（多标量名称在 `unicode_for` 中返回 `None`）。测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`；builder.rs 写端仍输出 WinAnsiEncoding |
@@ -136,7 +136,7 @@
 | 9.7.5 | CMap（预定义 CMap / 嵌入 CMap 文件） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（含 CIDSystemInfo 字典） |
 | 9.6–9.9 | OpenType 字体（FontFile3 /Subtype /OpenType） | 1.6 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
 | 9.8 | 字体描述符（FontDescriptor、Flags、CIDFont 描述符） | 1.1（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Type1Font` 解析简单 Type 1 字体的 FontDescriptor 数值元数据；CIDFont 描述符与其他字体种类仍未实现。测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics` |
-| 9.9 | 嵌入字体程序（FontFile/FontFile2/FontFile3） | 1.1–1.6（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Document::type1_font_program` 解析 Type 1 FontDescriptor 中的 FontFile/FontFile2/FontFile3 流，通过标准过滤器/解密路径返回解码字节；不解析字体程序格式，不支持其他字体类型与写入。测试 `type1_font_program_resolves_and_decodes_descriptor_streams`、`type1_font_program_reports_malformed_descriptor_entries` |
+| 9.9 | 嵌入字体程序（FontFile/FontFile2/FontFile3） | 1.1–1.6（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Document::type1_font_program` 只接受 Type 1 适用的 FontFile/FontFile3；`Document::truetype_font` 只接受 TrueType 的 `/FontFile2` 并解析 SFNT 目录。两者均经标准过滤器/解密路径；其他字体格式读取、写入仍未实现。测试 `type1_font_program_resolves_and_decodes_descriptor_streams`、`type1_font_program_reports_malformed_descriptor_entries`、`truetype_font_program_resolves_and_parses_fontfile2` |
 | 9.10 | 文本内容提取（字符码→Unicode 映射） | 1.0–1.4（待核） | ⬜ | ⬜ | — | P1 | 无对应代码 |
 | 9.10.3 | ToUnicode CMap | 1.4（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（文本提取与可复制文本的前提） |
 

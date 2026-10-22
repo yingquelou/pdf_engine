@@ -1,4 +1,4 @@
-//! Semantic access to simple Type 1 font dictionaries.
+//! Semantic access to PDF font dictionaries and embedded font programs.
 
 use std::{collections::BTreeMap, fmt};
 
@@ -10,8 +10,10 @@ mod embedded_program;
 mod encoding_data;
 mod encoding_unicode;
 mod standard14_metrics;
+mod truetype;
 
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
+pub use truetype::{SfntFlavor, TrueTypeFont};
 
 type FontResult<T> = std::result::Result<T, FontError>;
 
@@ -218,7 +220,7 @@ impl fmt::Display for FontError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => write!(f, "{error}"),
-            Self::Invalid(message) => write!(f, "invalid Type 1 font: {message}"),
+            Self::Invalid(message) => write!(f, "invalid font: {message}"),
         }
     }
 }

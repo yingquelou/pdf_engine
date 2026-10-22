@@ -10,7 +10,7 @@ pub enum FontProgramSource {
     FontFile3,
 }
 
-/// A decoded font program stream from a Type 1 font descriptor.
+/// A decoded font program stream from a font descriptor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbeddedFontProgram {
     /// The descriptor key that references this stream.
@@ -32,11 +32,31 @@ impl Document {
     /// no `/FontFile*` entry. Malformed references, non-stream values, multiple
     /// font program entries, and decode failures are reported as errors.
     pub fn type1_font_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
+        self.font_program(
+            value,
+            "Type1",
+            &[FontProgramSource::FontFile, FontProgramSource::FontFile3],
+        )
+    }
+
+    /// Resolve and decode the embedded `/FontFile2` stream in a TrueType font.
+    ///
+    /// The returned bytes are decoded but not parsed as an SFNT font program.
+    pub fn truetype_font_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
+        self.font_program(value, "TrueType", &[FontProgramSource::FontFile2])
+    }
+
+    fn font_program(
+        &self,
+        value: &Value,
+        expected_subtype: &str,
+        allowed_sources: &[FontProgramSource],
+    ) -> FontResult<Option<EmbeddedFontProgram>> {
         let value = self.resolve_value(value)?;
         let dict = value
             .as_dict()
             .ok_or_else(|| FontError::Invalid("font value is not a dictionary".to_string()))?;
-        if dict.get("Subtype").and_then(Value::as_name) != Some("Type1") {
+        if dict.get("Subtype").and_then(Value::as_name) != Some(expected_subtype) {
             return Ok(None);
         }
         let Some(descriptor_value) = dict.get("FontDescriptor") else {
@@ -70,6 +90,11 @@ impl Document {
         let Some((program_value, source, key)) = program_entry else {
             return Ok(None);
         };
+        if !allowed_sources.contains(&source) {
+            return Err(FontError::Invalid(format!(
+                "/Subtype /{expected_subtype} does not use /{key}"
+            )));
+        }
         let program_value = self.resolve_value(program_value)?;
         let Value::Stream(stream_dict, _) = &program_value else {
             return Err(FontError::Invalid(format!(

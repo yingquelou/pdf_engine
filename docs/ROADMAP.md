@@ -101,7 +101,7 @@
 **包含条目**：
 
 - [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标，并为 Courier、Helvetica/Times 四种样式、Symbol、ZapfDingbats 提供对应内建编码宽度；字体嵌入仍待实现）
-- [ ] `9.6.3` TrueType 字体
+- [ ] `9.6.3` TrueType 字体（进行中：读端解析 SFNT 目录及 `head`/`maxp`/`hhea`/`hmtx` 基础信息，可按 glyph ID 查询水平 advance width；轮廓/cmap 表、CID 映射和渲染仍待实现）
 - [ ] `9.6.4` 字体子集化（随字体嵌入一并实现）
 - [ ] `9.6.6` 字符编码补全（进行中：Type 1 读端识别 Standard/WinAnsi/MacRoman/Symbol/ZapfDingbats，支持 CP1252/MacRoman Unicode 映射、Standard/Symbol/ZapfDingbats glyph name 查询及完整 Adobe Glyph List 2.0→Unicode 映射；写端编码配置仍待实现）
 - [ ] `9.7.6` Type 0 复合字体 / CIDFontType0（解决 CJK 文本表达）
@@ -109,7 +109,7 @@
 - [ ] `9.7.5` CMap（预定义/嵌入，含 CIDSystemInfo）
 - [ ] `9.10.3` ToUnicode CMap
 - [ ] `9.8` 字体描述符（进行中：简单 Type 1 的 FontDescriptor 元数据已实现；CIDFont 描述符待实现）
-- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 字体读端可解析并解码 FontDescriptor 中的 FontFile* 流；格式解析、TrueType 支持与写入仍待实现）
+- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 读端解析 FontFile/FontFile3 流，TrueType 读端解析 FontFile2 的 SFNT 目录及基础元数据；其他字体格式和写入仍待实现）
 - [ ] `9.10` 文本内容提取（字符码→Unicode 映射）
 - [ ] `7.9` 公共数据结构（进行中：`PdfDate`、`PdfRect` 已实现；`PdfTextString` 支持 PDFDocEncoding 与带 BOM 的 UTF-16BE 编解码；名称树、数值树待实现）
 
@@ -117,18 +117,16 @@
 
 **执行顺序与并行边界**：
 
-1. **简单字体基础（进行中）**：完成 Type 1 字体字典、宽度读取和 Encoding 字典结构解析；WinAnsi CP1252 与 MacRoman 的 Unicode 码值映射已实现，StandardEncoding 已覆盖已定义字形槽位，Symbol 与 ZapfDingbats 可查询预定义 glyph name 表；Adobe Glyph List 2.0 的 4,281 个映射已覆盖，含多标量 glyph name 序列。下一步补齐标准字体度量；映射数据独立存放，便于维护。
-2. **标准字体度量**：依赖 glyph name 映射，逐族补齐 Standard 14 内建宽度表；Courier 固定 600 单位、Helvetica/Times 各四种样式的 StandardEncoding 宽度，以及 Symbol/ZapfDingbats 预定义编码宽度已覆盖；新增数据需有规范样例或独立表测试，不得用近似值填充。
-3. **字体程序与 TrueType（进行中）**：Type 1 字体可读取并解码 FontDescriptor 中的 FontFile/FontFile2/FontFile3 流；下一步校验具体字体程序格式，再实现 TrueType 字体解析及子集嵌入。第三方字体解析依赖如有需要，必须通过 PDF 语义适配层隔离。
-4. **CID 与复合字体**：在字体程序基础设施后实现 CIDFontType2/Type 0、CMap 与 CIDSystemInfo，先读端再写端。
-5. **Unicode 与文本提取**：实现 ToUnicode CMap，再串联简单字体编码、CID CMap 与内容操作符，完成字符码到 Unicode 的提取；写入/提取往返作为阶段验收。
-6. **独立工作并行**：`7.9` 的 PDFDocEncoding 文本串、名称树/数值树等公共类型不阻塞字体解析，可异步实现并单独更新矩阵证据。
+1. **简单字体与度量（进行中）**：Type 1 字体字典、宽度读取、Encoding 字典、WinAnsi/MacRoman 映射、Standard/Symbol/ZapfDingbats glyph name 查询及 AGL 2.0 的 4,281 个 Unicode 序列映射已覆盖。Standard 14 内建字宽已按 AFM 数据整理为结构化 CSV，Courier 四种样式为固定 600 单位；需继续补足写端编码配置、Type 1 字体程序格式解析及嵌入。
+2. **TrueType 程序读取（进行中）**：TrueType 的 `/FontFile2` 解码后校验 SFNT 目录，并解析 `head`/`maxp` 的 unitsPerEm/glyph count、`hhea`/`hmtx` 水平度量；可按 glyph ID 查询 advance width，包括 `numberOfHMetrics` 后复用最后一个 advance 的规范规则。下一步解析 `loca`/`glyf` 与 `cmap`，再与 CIDFontType2 映射衔接；当前不支持轮廓渲染、子集化或嵌入写出。
+3. **CID/复合字体与文本提取（未开始）**：依次实现 CIDFontType2、Type 0/CIDFontType0、CMap/CIDSystemInfo 与 ToUnicode，再将字体映射串联到内容流文本操作符；写入/提取往返是阶段验收门槛。
+4. **独立公共类型（部分完成）**：`7.9` 的 `PdfDate`、`PdfRect` 与 `PdfTextString` 已实现；名称树/数值树语义类型仍缺失，可与字体解析并行推进并单独更新矩阵证据。
 
 **范围边界**：
 
 - 每次只将有数据表、负向用例及公开 API 验证的子项标为已实现；识别 Encoding 名称不等于完成码值映射，码值映射也不等于完成 Unicode 文本提取。
 - 标准 14 字体表不得以 `/MissingWidth` 代替逐字符度量；显式 `/Widths` 优先，其次适用的字体描述符默认宽度，再使用准确的内建字宽。
-- 依赖关系按上面顺序推进；独立的 `7.9` 公共类型可并行，但不提前勾选阶段 B 整体完成。
+- 依赖关系按上面顺序推进；独立的 `7.9` 名称树/数值树可并行，但不提前勾选阶段 B 整体完成。
 
 **验收标准**：
 

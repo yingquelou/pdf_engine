@@ -4,7 +4,7 @@ use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
 use demo::pdf;
 use demo::pdf::reader::Parser;
-use demo::pdf::reader::font::{EncodingMapping, FontProgramSource, PredefinedEncoding};
+use demo::pdf::reader::font::{EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor};
 use demo::pdf::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value, XrefKind,
 };
@@ -1999,7 +1999,7 @@ fn type1_font_program_resolves_and_decodes_descriptor_streams() {
         Value::Dict(
             Dict::new()
                 .insert("Type", Value::Name("FontDescriptor".into()))
-                .insert("FontFile2", Value::Ref(40, 0)),
+                .insert("FontFile", Value::Ref(40, 0)),
         ),
     ));
     let font = Value::Dict(
@@ -2010,7 +2010,7 @@ fn type1_font_program_resolves_and_decodes_descriptor_streams() {
     );
 
     let program = doc.type1_font_program(&font).unwrap().unwrap();
-    assert_eq!(program.source, FontProgramSource::FontFile2);
+    assert_eq!(program.source, FontProgramSource::FontFile);
     assert_eq!(program.subtype, None);
     assert_eq!(program.data, b"ABC");
 
@@ -2051,6 +2051,23 @@ fn type1_font_program_resolves_and_decodes_descriptor_streams() {
             .insert("BaseFont", Value::Name("ExampleSans".into())),
     );
     assert!(doc.type1_font_program(&unsupported_font).unwrap().is_none());
+
+    let invalid_file2 = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert(
+                            "FontFile2",
+                            Value::Stream(Dict::new(), StreamData::Owned(b"font".to_vec())),
+                        ),
+                ),
+            ),
+    );
+    assert!(doc.type1_font_program(&invalid_file2).is_err());
 }
 
 #[test]
@@ -2104,6 +2121,77 @@ fn type1_font_program_reports_malformed_descriptor_entries() {
             ),
     );
     assert!(doc.type1_font_program(&make_font(missing_subtype)).is_err());
+}
+
+#[test]
+fn truetype_font_program_resolves_and_parses_fontfile2() {
+    let doc = Document::new();
+    let mut sfnt = vec![0; 210];
+    sfnt[..4].copy_from_slice(&[0, 1, 0, 0]);
+    sfnt[4..6].copy_from_slice(&4u16.to_be_bytes());
+    sfnt[12..16].copy_from_slice(b"head");
+    sfnt[20..24].copy_from_slice(&76u32.to_be_bytes());
+    sfnt[24..28].copy_from_slice(&54u32.to_be_bytes());
+    sfnt[28..32].copy_from_slice(b"maxp");
+    sfnt[36..40].copy_from_slice(&132u32.to_be_bytes());
+    sfnt[40..44].copy_from_slice(&32u32.to_be_bytes());
+    sfnt[44..48].copy_from_slice(b"hhea");
+    sfnt[52..56].copy_from_slice(&164u32.to_be_bytes());
+    sfnt[56..60].copy_from_slice(&36u32.to_be_bytes());
+    sfnt[60..64].copy_from_slice(b"hmtx");
+    sfnt[68..72].copy_from_slice(&200u32.to_be_bytes());
+    sfnt[72..76].copy_from_slice(&10u32.to_be_bytes());
+    sfnt[76 + 12..76 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+    sfnt[76 + 18..76 + 20].copy_from_slice(&1000u16.to_be_bytes());
+    sfnt[132..136].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    sfnt[136..138].copy_from_slice(&3u16.to_be_bytes());
+    sfnt[164..168].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    sfnt[198..200].copy_from_slice(&2u16.to_be_bytes());
+    sfnt[200..202].copy_from_slice(&500u16.to_be_bytes());
+    sfnt[204..206].copy_from_slice(&600u16.to_be_bytes());
+    let font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("TrueType".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert(
+                            "FontFile2",
+                            Value::Stream(Dict::new(), StreamData::Owned(sfnt)),
+                        ),
+                ),
+            ),
+    );
+
+    let font = doc.truetype_font(&font).unwrap().unwrap();
+    assert_eq!(font.flavor(), SfntFlavor::TrueType);
+    assert_eq!(font.units_per_em(), 1000);
+    assert_eq!(font.glyph_count(), 3);
+    assert_eq!(font.horizontal_advance_width(0), Some(500));
+    assert_eq!(font.horizontal_advance_width(2), Some(600));
+    assert_eq!(font.table(b"head").unwrap().len(), 54);
+
+    let no_program = Value::Dict(Dict::new().insert("Subtype", Value::Name("TrueType".into())));
+    assert!(doc.truetype_font(&no_program).unwrap().is_none());
+
+    let wrong_program = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("TrueType".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert(
+                            "FontFile",
+                            Value::Stream(Dict::new(), StreamData::Owned(vec![0; 32])),
+                        ),
+                ),
+            ),
+    );
+    assert!(doc.truetype_font(&wrong_program).is_err());
 }
 
 #[test]
