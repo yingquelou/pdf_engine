@@ -8,6 +8,7 @@ use super::ParseError;
 
 mod encoding_data;
 mod encoding_unicode;
+mod standard14_metrics;
 
 type FontResult<T> = std::result::Result<T, FontError>;
 
@@ -120,7 +121,7 @@ impl SimpleFontEncoding {
 
     /// Resolve a character code to Unicode when its encoding provides a known
     /// mapping. `/Differences` glyph names are resolved for the supported
-    /// Adobe glyph-name subset.
+    /// Adobe glyph names with a single Unicode scalar.
     pub fn unicode_for(&self, code: u8) -> Option<char> {
         match self.mapping_for(code) {
             EncodingMapping::GlyphName(name) => encoding_unicode::unicode_for_glyph_name(name),
@@ -147,6 +148,41 @@ impl SimpleFontEncoding {
                 encoding: PredefinedEncoding::ZapfDingbats,
                 code,
             } => encoding_unicode::zapf_dingbats_unicode(code),
+        }
+    }
+
+    /// Resolve a character code to its Unicode sequence when its encoding
+    /// provides a known mapping.
+    ///
+    /// Adobe Glyph List mappings with multiple Unicode scalars are available
+    /// here, while [`Self::unicode_for`] returns only single-scalar mappings.
+    pub fn unicode_sequence_for(&self, code: u8) -> Option<String> {
+        match self.mapping_for(code) {
+            EncodingMapping::GlyphName(name) => {
+                encoding_unicode::unicode_sequence_for_glyph_name(name)
+            }
+            EncodingMapping::Predefined {
+                encoding: PredefinedEncoding::WinAnsi,
+                code,
+            } => encoding_data::win_ansi_unicode(code).map(String::from),
+            EncodingMapping::Predefined {
+                encoding: PredefinedEncoding::Standard,
+                code,
+            } => encoding_data::standard_glyph_name(code)
+                .and_then(|name| encoding_unicode::unicode_sequence_for_glyph_name(&name)),
+            EncodingMapping::Predefined {
+                encoding: PredefinedEncoding::MacRoman,
+                code,
+            } => encoding_data::mac_roman_unicode(code).map(String::from),
+            EncodingMapping::Predefined {
+                encoding: PredefinedEncoding::Symbol,
+                code,
+            } => encoding_data::symbol_name(code)
+                .and_then(encoding_unicode::unicode_sequence_for_glyph_name),
+            EncodingMapping::Predefined {
+                encoding: PredefinedEncoding::ZapfDingbats,
+                code,
+            } => encoding_unicode::zapf_dingbats_unicode(code).map(String::from),
         }
     }
 }
@@ -204,8 +240,8 @@ impl Document {
     ///
     /// Returns `Ok(None)` for non-Type-1 font dictionaries. Malformed font data,
     /// dangling references, and object-generation mismatches are reported.
-    /// Standard 14 fonts may omit `/Widths`; built-in width tables and embedded
-    /// font programs are not loaded by this API.
+    /// Standard 14 fonts may omit `/Widths`; available built-in metrics provide
+    /// fallback widths, but embedded font programs are not loaded by this API.
     pub fn type1_font(&self, value: &Value) -> FontResult<Option<Type1Font>> {
         let value = self.resolve_value(value)?;
         let dict = value
@@ -435,9 +471,13 @@ fn default_encoding(base_font: &str) -> PredefinedEncoding {
     }
 }
 
-fn standard14_width(base_font: &str, _code: u8) -> Option<f64> {
+fn standard14_width(base_font: &str, code: u8) -> Option<f64> {
     match base_font {
         "Courier" | "Courier-Bold" | "Courier-Oblique" | "Courier-BoldOblique" => Some(600.0),
+        "Helvetica" => standard14_metrics::helvetica_width(code, false, false),
+        "Helvetica-Bold" => standard14_metrics::helvetica_width(code, true, false),
+        "Helvetica-Oblique" => standard14_metrics::helvetica_width(code, false, true),
+        "Helvetica-BoldOblique" => standard14_metrics::helvetica_width(code, true, true),
         _ => None,
     }
 }

@@ -1,0 +1,16 @@
+This file and the 14 PostScript(R) AFM files it accompanies may be used,
+copied, and distributed for any purpose and without charge, with or without
+modification, provided that all copyright notices are retained; that the AFM
+files are not distributed without this file; that all modifications to this
+file or any of the AFM files are prominently noted in the modified file(s);
+and that this paragraph is not modified. Adobe Systems has no responsibility
+or obligation to support the use of the AFM files.
+
+Helvetica.afm, Helvetica-Bold.afm, Helvetica-Oblique.afm, and
+Helvetica-BoldOblique.afm:
+Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated.
+All Rights Reserved.
+
+The width tables in standard14_metrics.rs are derived from the four AFM files
+listed above. The AFM files themselves are not included. The extracted widths
+were reindexed by StandardEncoding byte code.

@@ -1973,12 +1973,9 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
             .insert("Subtype", Value::Name("Type1".into()))
             .insert("BaseFont", Value::Name("Helvetica".into())),
     );
-    assert!(
-        doc.type1_font(&standard_14)
-            .unwrap()
-            .unwrap()
-            .width_for(65)
-            .is_none()
+    assert_eq!(
+        doc.type1_font(&standard_14).unwrap().unwrap().width_for(65),
+        Some(667.0)
     );
 
     let unsupported = Value::Dict(Dict::new().insert("Subtype", Value::Name("TrueType".into())));
@@ -2003,6 +2000,24 @@ fn type1_font_uses_builtin_courier_widths_when_no_override_exists() {
         assert_eq!(font.width_for(0), Some(600.0), "{font_name}");
         assert_eq!(font.width_for(65), Some(600.0), "{font_name}");
         assert_eq!(font.width_for(255), Some(600.0), "{font_name}");
+    }
+
+    for (font_name, expected_a, expected_fi) in [
+        ("Helvetica", 667.0, 500.0),
+        ("Helvetica-Bold", 722.0, 611.0),
+        ("Helvetica-Oblique", 667.0, 500.0),
+        ("Helvetica-BoldOblique", 722.0, 611.0),
+    ] {
+        let font = Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("BaseFont", Value::Name(font_name.into())),
+        );
+        let font = doc.type1_font(&font).unwrap().unwrap();
+        assert_eq!(font.width_for(32), Some(278.0), "{font_name} space");
+        assert_eq!(font.width_for(65), Some(expected_a), "{font_name} A");
+        assert_eq!(font.width_for(174), Some(expected_fi), "{font_name} fi");
+        assert_eq!(font.width_for(0), None, "{font_name} undefined code");
     }
 
     let explicit_width = Value::Dict(
@@ -2031,7 +2046,7 @@ fn type1_font_uses_builtin_courier_widths_when_no_override_exists() {
             .unwrap()
             .unwrap()
             .width_for(65)
-            .is_none()
+            .is_some()
     );
 }
 
@@ -2045,6 +2060,9 @@ fn type1_font_encoding_resolves_predefined_encodings_and_differences() {
             Value::Integer(65),
             Value::Name("A.alt".into()),
             Value::Name("Aacute.alt".into()),
+            Value::Name("dalethatafpatah".into()),
+            Value::Name("ffi".into()),
+            Value::Name("Aacute".into()),
             Value::Integer(255),
             Value::Name("lastcode".into()),
         ])),
@@ -2072,6 +2090,14 @@ fn type1_font_encoding_resolves_predefined_encodings_and_differences() {
         EncodingMapping::GlyphName("A.alt")
     );
     assert_eq!(encoding.unicode_for(65), None);
+    assert_eq!(
+        encoding.unicode_sequence_for(67),
+        Some("\u{05d3}\u{05b2}".into())
+    );
+    assert_eq!(encoding.unicode_for(67), None);
+    assert_eq!(encoding.unicode_for(68), Some('\u{fb03}'));
+    assert_eq!(encoding.unicode_sequence_for(68), Some("\u{fb03}".into()));
+    assert_eq!(encoding.unicode_for(69), Some('\u{00c1}'));
     assert_eq!(
         encoding.mapping_for(66),
         EncodingMapping::GlyphName("Aacute.alt")

@@ -1,10 +1,51 @@
 // Unicode values for glyph names follow Adobe's AGL and Zapf Dingbats glyph
 // lists (Copyright 2002-2019 Adobe, BSD-3-Clause).
+use std::sync::OnceLock;
+
 use super::encoding_data;
+
+static AGL_ENTRIES: OnceLock<Vec<&str>> = OnceLock::new();
+
+fn agl_unicode_values(name: &str) -> Option<&'static str> {
+    let entries = AGL_ENTRIES.get_or_init(|| {
+        include_str!("encoding_agl.txt")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect()
+    });
+    let index = entries
+        .binary_search_by(|entry| match entry.split_once(';') {
+            Some((glyph_name, _)) => glyph_name.cmp(name),
+            None => std::cmp::Ordering::Less,
+        })
+        .ok()?;
+    entries[index].split_once(';').map(|(_, values)| values)
+}
+
+pub(super) fn unicode_sequence_for_glyph_name(name: &str) -> Option<String> {
+    if let Some(unicode) = zapf_dingbats_unicode_for_name(name) {
+        return Some(unicode.to_string());
+    }
+    if let Some(values) = agl_unicode_values(name) {
+        return values
+            .split_ascii_whitespace()
+            .map(|value| u32::from_str_radix(value, 16).ok().and_then(char::from_u32))
+            .collect();
+    }
+    unicode_for_glyph_name(name).map(String::from)
+}
 
 pub(super) fn unicode_for_glyph_name(name: &str) -> Option<char> {
     if let Some(unicode) = zapf_dingbats_unicode_for_name(name) {
         return Some(unicode);
+    }
+    if let Some(values) = agl_unicode_values(name) {
+        let mut values = values.split_ascii_whitespace();
+        let scalar = u32::from_str_radix(values.next()?, 16).ok()?;
+        if values.next().is_some() {
+            return None;
+        }
+        return char::from_u32(scalar);
     }
     let scalar = match name {
         "space" => 0x0020,
@@ -416,4 +457,40 @@ pub(super) fn zapf_dingbats_unicode_for_name(name: &str) -> Option<char> {
         _ => return None,
     };
     char::from_u32(scalar)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AGL_ENTRIES, agl_unicode_values};
+
+    #[test]
+    fn adobe_glyph_list_entries_are_sorted_and_complete() {
+        let entries = AGL_ENTRIES.get_or_init(|| {
+            include_str!("encoding_agl.txt")
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .collect()
+        });
+        assert_eq!(entries.len(), 4_281);
+
+        let mut previous_name = None;
+        for entry in entries {
+            let (name, values) = entry.split_once(';').expect("AGL entry has two fields");
+            assert!(
+                previous_name.is_none_or(|previous| previous < name),
+                "AGL glyph names are not strictly sorted at {name}"
+            );
+            assert_eq!(agl_unicode_values(name), Some(values));
+            assert!(
+                values.split_ascii_whitespace().all(|value| {
+                    u32::from_str_radix(value, 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                        .is_some()
+                }),
+                "AGL entry has an invalid Unicode sequence: {entry}"
+            );
+            previous_name = Some(name);
+        }
+    }
 }

@@ -125,12 +125,12 @@
 | 9.3 | 文本状态参数操作符（`Tc Tw Tz TL Tf Tr`） | 1.0 | 🟡 | ⬜ | ✅ | P1 | content.rs 6 变体；测试 `text_state_operators_individual`。缺口：缺 `Ts`（text rise，9.3.7）与 `Tk`（text knockout，9.3.8，需经 ExtGState） |
 | 9.4 | 文本对象与定位/显示（`BT ET Td TD Tm T* Tj TJ`） | 1.0 | 🟡 | ⬜ | ✅ | P0 | content.rs 12 变体；测试 `begin_end_text_roundtrip`、`show_text_at_format`、`show_text_array_mixed`。缺口：缺 `'` 与 `"` 显示文本操作符 |
 | 9.5 | 字体数据结构总述 | — | — | — | — | — | 无独立实现项（结构实现见 9.6–9.9 各行） |
-| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`。builder.rs 输出标准 14 BaseFont 引用；缺口：其余标准 14 内建宽度表、字体嵌入及完整字体程序支持未实现 |
+| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位、Helvetica 四种样式按 StandardEncoding 查询 Adobe AFM 宽度）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`。builder.rs 输出标准 14 BaseFont 引用；缺口：Times、Symbol、ZapfDingbats 内建宽度表、字体嵌入及完整字体程序支持未实现 |
 | 9.6.2.3 | Multiple Master 字体（MMType1） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
 | 9.6.3 | TrueType 字体 | 1.1 | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |
 | 9.6.5 | Type 3 字体 | 1.0 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252→Unicode、MacRoman 支持 0x80–0xFF→Unicode、StandardEncoding 支持已定义字形槽位；Symbol 支持 glyph name 表及常见数学/希腊符号 Unicode，ZapfDingbats 支持 glyph name 表及 Adobe Zapf AGL 已列名称的 Unicode 映射；`/Differences` 的常见 glyph name 子集可映射 Unicode。测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`；完整 Adobe Glyph List 覆盖待补；builder.rs 写端仍输出 WinAnsiEncoding |
+| 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252→Unicode、MacRoman 支持 0x80–0xFF→Unicode、StandardEncoding 支持已定义字形槽位；Symbol 支持 glyph name 表及 Adobe Glyph List Unicode 映射，ZapfDingbats 支持 glyph name 表及 Zapf AGL 映射；完整 Adobe Glyph List 2.0 的 4,281 个映射由 `SimpleFontEncoding::unicode_sequence_for` 提供（多标量名称在 `unicode_for` 中返回 `None`）。测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`；builder.rs 写端仍输出 WinAnsiEncoding |
 | 9.7.6 | Type 0 复合字体 / CIDFontType0（CID-Keyed） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码；中文/CJK 文本无法正确表达（字符串按 Latin-1 假设） |
 | 9.7.4 | CIDFontType2（TrueType 轮廓 CID 字体） | 1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.7.5 | CMap（预定义 CMap / 嵌入 CMap 文件） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（含 CIDSystemInfo 字典） |
