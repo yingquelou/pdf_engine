@@ -11,6 +11,11 @@ Helvetica-BoldOblique.afm:
 Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated.
 All Rights Reserved.
 
-The width tables in standard14_metrics.rs are derived from the four AFM files
+Times-Roman.afm, Times-Bold.afm, Times-Italic.afm, and Times-BoldItalic.afm:
+Copyright (c) 1985, 1987, 1989, 1990, 1993, 1997 Adobe Systems Incorporated.
+All Rights Reserved.
+
+The width tables in standard14_metrics.rs are derived from the eight AFM files
 listed above. The AFM files themselves are not included. The extracted widths
-were reindexed by StandardEncoding byte code.
+were reindexed by StandardEncoding byte code. The table representation is
+modified from the original AFM metrics.

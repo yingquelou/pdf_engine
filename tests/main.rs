@@ -2020,6 +2020,24 @@ fn type1_font_uses_builtin_courier_widths_when_no_override_exists() {
         assert_eq!(font.width_for(0), None, "{font_name} undefined code");
     }
 
+    for (font_name, expected_a, expected_fi) in [
+        ("Times-Roman", 722.0, 556.0),
+        ("Times-Bold", 722.0, 556.0),
+        ("Times-Italic", 611.0, 500.0),
+        ("Times-BoldItalic", 667.0, 556.0),
+    ] {
+        let font = Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("BaseFont", Value::Name(font_name.into())),
+        );
+        let font = doc.type1_font(&font).unwrap().unwrap();
+        assert_eq!(font.width_for(32), Some(250.0), "{font_name} space");
+        assert_eq!(font.width_for(65), Some(expected_a), "{font_name} A");
+        assert_eq!(font.width_for(174), Some(expected_fi), "{font_name} fi");
+        assert_eq!(font.width_for(0), None, "{font_name} undefined code");
+    }
+
     let explicit_width = Value::Dict(
         Dict::new()
             .insert("Subtype", Value::Name("Type1".into()))

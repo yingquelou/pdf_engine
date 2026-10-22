@@ -478,6 +478,10 @@ fn standard14_width(base_font: &str, code: u8) -> Option<f64> {
         "Helvetica-Bold" => standard14_metrics::helvetica_width(code, true, false),
         "Helvetica-Oblique" => standard14_metrics::helvetica_width(code, false, true),
         "Helvetica-BoldOblique" => standard14_metrics::helvetica_width(code, true, true),
+        "Times-Roman" => standard14_metrics::times_width(code, false, false),
+        "Times-Bold" => standard14_metrics::times_width(code, true, false),
+        "Times-Italic" => standard14_metrics::times_width(code, false, true),
+        "Times-BoldItalic" => standard14_metrics::times_width(code, true, true),
         _ => None,
     }
 }

@@ -125,7 +125,7 @@
 | 9.3 | 文本状态参数操作符（`Tc Tw Tz TL Tf Tr`） | 1.0 | 🟡 | ⬜ | ✅ | P1 | content.rs 6 变体；测试 `text_state_operators_individual`。缺口：缺 `Ts`（text rise，9.3.7）与 `Tk`（text knockout，9.3.8，需经 ExtGState） |
 | 9.4 | 文本对象与定位/显示（`BT ET Td TD Tm T* Tj TJ`） | 1.0 | 🟡 | ⬜ | ✅ | P0 | content.rs 12 变体；测试 `begin_end_text_roundtrip`、`show_text_at_format`、`show_text_array_mixed`。缺口：缺 `'` 与 `"` 显示文本操作符 |
 | 9.5 | 字体数据结构总述 | — | — | — | — | — | 无独立实现项（结构实现见 9.6–9.9 各行） |
-| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位、Helvetica 四种样式按 StandardEncoding 查询 Adobe AFM 宽度）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`。builder.rs 输出标准 14 BaseFont 引用；缺口：Times、Symbol、ZapfDingbats 内建宽度表、字体嵌入及完整字体程序支持未实现 |
+| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，其次 `/MissingWidth`，无二者时 Courier 四种样式回退 600 单位、Helvetica 与 Times 各四种样式按 StandardEncoding 查询 Adobe AFM 宽度）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、`type1_font_uses_builtin_courier_widths_when_no_override_exists`。builder.rs 输出标准 14 BaseFont 引用；缺口：Symbol、ZapfDingbats 内建宽度表、字体嵌入及完整字体程序支持未实现 |
 | 9.6.2.3 | Multiple Master 字体（MMType1） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
 | 9.6.3 | TrueType 字体 | 1.1 | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |
