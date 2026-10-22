@@ -209,6 +209,13 @@ fn try_peek_is_number(lex: &mut Lexer<'_>) -> Result<Token> {
 /// **绝对偏移 + 长度**，构造 `Value::Stream(d, StreamData::Ref{offset,len})`。
 /// 流字节不读入内存。
 pub(crate) fn parse_indirect_object(lex: &mut Lexer<'_>) -> Result<Object> {
+    parse_indirect_object_with_length_resolver(lex, |_, _| Ok(None))
+}
+
+pub(crate) fn parse_indirect_object_with_length_resolver(
+    lex: &mut Lexer<'_>,
+    mut resolve_length: impl FnMut(i64, i64) -> Result<Option<u64>>,
+) -> Result<Object> {
     let num = parse_int_token(lex, "object number")?;
     let generation = parse_int_token(lex, "generation")?;
     let kw = lex.next_token()?;
@@ -230,7 +237,18 @@ pub(crate) fn parse_indirect_object(lex: &mut Lexer<'_>) -> Result<Object> {
         if lex.peek() == Some(b'\n') {
             lex.pos += 1;
         }
-        let (offset, len) = lex.compute_stream_range()?;
+        let declared_length = match d.get("Length") {
+            Some(Value::Integer(length)) => Some(
+                u64::try_from(*length)
+                    .map_err(|_| err(lex.pos(), "invalid negative stream /Length"))?,
+            ),
+            Some(Value::Ref(length_num, length_generation)) => {
+                resolve_length(*length_num, *length_generation)?
+            }
+            Some(_) => return Err(err(lex.pos(), "invalid stream /Length")),
+            None => None,
+        };
+        let (offset, len) = lex.compute_stream_range(declared_length)?;
         // 消费 endstream
         lex.skip_ws();
         let end = lex.next_token()?;

@@ -150,6 +150,26 @@ fn parse_indirect_object_stream_ref() {
 }
 
 #[test]
+fn stream_length_prevents_embedded_endstream_truncation() {
+    let payload = b"before endstream after";
+    let raw = [
+        format!("2 0 obj\n<< /Length {} >>\nstream\n", payload.len()).as_bytes(),
+        payload,
+        b"\nendstream\nendobj",
+    ]
+    .concat();
+    let mut lex = Lexer::new(&raw);
+    let object = parse_indirect_object(&mut lex).unwrap();
+    match object.value {
+        Value::Stream(_, StreamData::Ref { offset, len }) => {
+            assert_eq!(len as usize, payload.len());
+            assert_eq!(&raw[offset as usize..(offset + len) as usize], payload);
+        }
+        other => panic!("expected stream ref, got {other:?}"),
+    }
+}
+
+#[test]
 fn parse_xref_and_trailer() {
     let raw =
         b"xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Size 2 /Root 1 0 R >>";

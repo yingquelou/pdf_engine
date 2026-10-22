@@ -4,7 +4,7 @@ use crate::pdf::filters::decode_stream;
 use crate::pdf::types::{Document, Object, Value, XrefKind, scan_value_features};
 
 use super::lexer::Lexer;
-use super::object::{parse_indirect_object, parse_int_token, parse_object};
+use super::object::{parse_indirect_object_with_length_resolver, parse_int_token, parse_object};
 use super::{DEFAULT_WINDOW, Result, err};
 
 impl Document {
@@ -50,7 +50,10 @@ impl Document {
                     return Err(err(offset, "empty read at object offset"));
                 }
                 let mut lex = Lexer::at(&win, offset);
-                let mut obj = parse_indirect_object(&mut lex)?;
+                let mut obj = parse_indirect_object_with_length_resolver(
+                    &mut lex,
+                    |length_num, generation| self.resolve_stream_length(length_num, generation),
+                )?;
                 if let Some(security) = &self.security {
                     security.decrypt_object(&mut obj).map_err(|message| {
                         err(offset, format!("object decryption failed: {message}"))
@@ -67,6 +70,39 @@ impl Document {
                 self.get_object_from_obj_stream(num, *stream_num, *index)
             }
         }
+    }
+
+    fn resolve_stream_length(&self, num: i64, generation: i64) -> Result<Option<u64>> {
+        {
+            let mut stack = self.stream_length_stack.borrow_mut();
+            if !stack.insert((num, generation)) {
+                return Err(err(
+                    0,
+                    format!("cyclic indirect stream /Length reference {num} {generation} R"),
+                ));
+            }
+        }
+
+        let result = (|| {
+            self.get_object(num)?
+                .filter(|object| object.generation == generation)
+                .ok_or_else(|| {
+                    err(
+                        0,
+                        format!("invalid indirect stream /Length {num} {generation} R"),
+                    )
+                })
+                .and_then(|object| match object.value {
+                    Value::Integer(length) => u64::try_from(length)
+                        .map(Some)
+                        .map_err(|_| err(0, "invalid negative indirect stream /Length")),
+                    _ => Err(err(0, "indirect stream /Length object is not an integer")),
+                })
+        })();
+        self.stream_length_stack
+            .borrow_mut()
+            .remove(&(num, generation));
+        result
     }
 
     /// Read and decode a stream, including the document's standard `/Crypt`

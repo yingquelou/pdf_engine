@@ -47,7 +47,7 @@
 | 7.3.5 | Name 对象（`#xx` 转义双向） | 1.0 | ✅ | ✅ | ✅ | P0 | `Lexer::read_name` / writer.rs `write_name`；测试 `name_escaping_roundtrips`。缺口：>0xFF 字符按 UTF-8 字节转义，无法精确回读 |
 | 7.3.6 | 数组对象 | 1.0 | ✅ | ✅ | ✅ | P0 | `parse_object` 显式栈迭代；测试 `parse_array_and_dict`、`deep_nesting_hits_limit_gracefully`（嵌套上限 64） |
 | 7.3.7 | 字典对象 | 1.0 | ✅ | ✅ | ✅ | P0 | `parse_object` 显式栈迭代（`Frame::Dict`）；测试 `parse_array_and_dict`、`deep_nesting_hits_limit_gracefully` |
-| 7.3.8 | 流对象（stream/endstream） | 1.0 | ✅ | ✅ | ✅ | P0 | `parse_indirect_object` + `Lexer::compute_stream_range`；`StreamData::Ref` 懒加载；测试 `parse_indirect_object_stream_ref`。缺口：`/Length` 间接引用不解引用（按窗口 endstream 定位） |
+| 7.3.8 | 流对象（stream/endstream） | 1.0 | ✅ | ✅ | ✅ | P0 | `parse_indirect_object` + `Lexer::compute_stream_range`；普通懒加载路径按直接/间接 `/Length` 确定字节范围，再验证 `endstream`，`StreamData::Ref` 懒加载；测试 `parse_indirect_object_stream_ref`、`stream_length_prevents_embedded_endstream_truncation`、`indirect_stream_length_handles_embedded_endstream_and_cycles`。缺少 `/Length` 或调用方没有长度解析器时保留标记扫描兼容路径 |
 | 7.3.9 | null 对象 | 1.0 | ✅ | ✅ | ✅ | P0 | `Value::Null`；测试 `parse_bool_null_ref` |
 | 7.3.10 | 间接对象与引用 `n g R` | 1.0 | ✅ | ✅ | ✅ | P0 | `parse_indirect_object` + `try_peek_is_number` 试探回退；测试 `parse_indirect_object_simple`、`xref_generation_mismatch_defers_to_object_header` |
 | 7.4.1 | 过滤器通则（/Filter 名或数组、/DecodeParms、缩写名） | 1.0 | ✅ | ✅ | 🟡 | P0 | `filters/mod.rs` `StreamFilter`/`decode_stream`/`decode_stream_with`/`builtin_filters`/`filter_names`/`decode_params`/`canonical_filter`；内建 Flate/LZW/CCITT/ASCII/RunLength 均经 trait 调度，第三方实现经 `filters/flate.rs` 的 `InflateBackend` 隔离；测试 `multiple_filters_decode_in_sequence`、`custom_filter_can_be_registered`。缺口：`/Filter` 为间接引用时按不支持处理；写端不编码过滤器，仅透传/剥离 |
@@ -125,7 +125,7 @@
 | 9.3 | 文本状态参数操作符（`Tc Tw Tz TL Tf Tr`） | 1.0 | 🟡 | ⬜ | ✅ | P1 | content.rs 6 变体；测试 `text_state_operators_individual`。缺口：缺 `Ts`（text rise，9.3.7）与 `Tk`（text knockout，9.3.8，需经 ExtGState） |
 | 9.4 | 文本对象与定位/显示（`BT ET Td TD Tm T* Tj TJ`） | 1.0 | 🟡 | ⬜ | ✅ | P0 | content.rs 12 变体；测试 `begin_end_text_roundtrip`、`show_text_at_format`、`show_text_array_mixed`。缺口：缺 `'` 与 `"` 显示文本操作符 |
 | 9.5 | 字体数据结构总述 | — | — | — | — | — | 无独立实现项（结构实现见 9.6–9.9 各行） |
-| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`。builder.rs 输出标准 14 BaseFont 引用；缺口：不嵌入字体、标准 14 内建宽度表及完整字体程序支持未实现 |
+| 9.6.2 | Type 1 简单字体（标准 14，BaseFont 引用） | 1.0 | 🟡 | 🟡 | 🟡 | P1 | `reader::font::Type1Font` 读取直接/间接 `/Widths` 与 `/FontDescriptor` 数值元数据，并提供按字节码查询宽度（显式宽度优先，缺失时回退 `/MissingWidth`）；测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`。builder.rs 输出标准 14 BaseFont 引用；缺口：不嵌入字体、标准 14 内建宽度表及完整字体程序支持未实现 |
 | 9.6.2.3 | Multiple Master 字体（MMType1） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
 | 9.6.3 | TrueType 字体 | 1.1 | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |

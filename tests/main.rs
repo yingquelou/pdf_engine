@@ -1950,7 +1950,8 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
     assert_eq!(font.base_font, "ExampleSans");
     assert_eq!(font.width_for(65), Some(500.0));
     assert_eq!(font.width_for(66), Some(611.5));
-    assert_eq!(font.width_for(64), None);
+    assert_eq!(font.width_for(64), Some(400.0));
+    assert_eq!(font.width_for(67), Some(400.0));
     let descriptor = font.descriptor.unwrap();
     assert_eq!(descriptor.font_name.as_deref(), Some("ExampleSans"));
     assert_eq!(descriptor.flags, Some(32));
@@ -1981,6 +1982,48 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
 
     let unsupported = Value::Dict(Dict::new().insert("Subtype", Value::Name("TrueType".into())));
     assert!(doc.type1_font(&unsupported).unwrap().is_none());
+}
+
+#[test]
+fn indirect_stream_length_handles_embedded_endstream_and_cycles() {
+    let payload = b"before endstream after";
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let offset1 = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+    let offset2 = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Length 3 0 R >>\nstream\n");
+    pdf.extend_from_slice(payload);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let offset3 = pdf.len();
+    pdf.extend_from_slice(format!("3 0 obj\n{}\nendobj\n", payload.len()).as_bytes());
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    pdf.extend_from_slice(format!("{offset1:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(format!("{offset2:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(format!("{offset3:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes(),
+    );
+
+    let document = parse_buf(&pdf);
+    let stream = document.get_object(2).unwrap().unwrap();
+    assert_eq!(document.try_stream_bytes(&stream.value).unwrap(), payload);
+
+    let mut cyclic = b"%PDF-1.7\n".to_vec();
+    let offset1 = cyclic.len();
+    cyclic.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+    let offset2 = cyclic.len();
+    cyclic.extend_from_slice(b"2 0 obj\n<< /Length 2 0 R >>\nstream\ncycle\nendstream\nendobj\n");
+    let xref_offset = cyclic.len();
+    cyclic.extend_from_slice(b"xref\n0 3\n0000000000 65535 f \n");
+    cyclic.extend_from_slice(format!("{offset1:010} 00000 n \n").as_bytes());
+    cyclic.extend_from_slice(format!("{offset2:010} 00000 n \n").as_bytes());
+    cyclic.extend_from_slice(
+        format!("trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes(),
+    );
+    let document = parse_buf(&cyclic);
+    let error = document.get_object(2).unwrap_err();
+    assert!(error.message.contains("cyclic indirect stream /Length"));
 }
 
 fn encrypt_r4_fixture() -> Vec<u8> {

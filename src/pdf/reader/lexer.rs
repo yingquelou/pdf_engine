@@ -322,15 +322,29 @@ impl<'a> Lexer<'a> {
     /// 计算流字节在文件中的**绝对偏移 + 长度**（不读字节，只算范围）。
     ///
     /// 前置条件：当前 `pos` 已指向 `stream` 关键字之后、流字节起始处
-    /// （调用方已消费 `stream` 并剥掉一个 EOL）。本方法从 `pos` 起在
-    /// 窗口内查找 `endstream`，剥掉末尾一个 EOL（`\r\n` 或 `\n`），
-    /// 返回 `(base + stream_start_pos, len)`。`pos` 推进到 `endstream`
-    /// 起始处（不消费 `endstream` 本身）。
+    /// （调用方已消费 `stream` 并剥掉一个 EOL）。若提供 `/Length`，按
+    /// 声明长度定位并让调用方验证其后是 `endstream`；这可避免把流内容
+    /// 中偶然出现的 `endstream` 字节序列当作结束标记。缺少长度时才回退
+    /// 到扫描标记并剥掉之前的一个 EOL。
     ///
     /// 若窗口内找不到 `endstream`，返回 `Err`——这通常意味着对象跨过
     /// 了读取窗口边界，调用方应扩大窗口重试。
-    pub(super) fn compute_stream_range(&mut self) -> Result<(u64, u64)> {
+    pub(super) fn compute_stream_range(
+        &mut self,
+        declared_length: Option<u64>,
+    ) -> Result<(u64, u64)> {
         let start = self.pos;
+        if let Some(length) = declared_length {
+            let length = usize::try_from(length)
+                .map_err(|_| err(self.pos(), "stream /Length exceeds addressable size"))?;
+            let end = start
+                .checked_add(length)
+                .filter(|end| *end <= self.input.len())
+                .ok_or_else(|| err(self.pos(), "stream /Length exceeds available window"))?;
+            self.pos = end;
+            return Ok((self.base + start as u64, length as u64));
+        }
+
         let end = find_subslice(self.input, b"endstream", start)
             .ok_or_else(|| err(self.pos(), "endstream not found in window"))?;
         let mut len = end - start;

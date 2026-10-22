@@ -1,7 +1,7 @@
 //! 懒加载 `Document` 与源文件读取。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
@@ -71,6 +71,7 @@ pub struct Document {
     /// 查找（同样只认最新条目）保持一致。
     pub(crate) cache: RefCell<HashMap<i64, Object>>,
     pub(crate) security: Option<Arc<dyn ObjectSecurity>>,
+    pub(crate) stream_length_stack: RefCell<HashSet<(i64, i64)>>,
 }
 
 impl Document {
@@ -108,6 +109,7 @@ impl Document {
             warnings: RefCell::new(Vec::new()),
             cache: RefCell::new(cache),
             security: None,
+            stream_length_stack: RefCell::new(HashSet::new()),
         }
     }
 
@@ -138,6 +140,7 @@ impl Document {
             warnings: RefCell::new(warnings),
             cache: RefCell::new(HashMap::new()),
             security,
+            stream_length_stack: RefCell::new(HashSet::new()),
         }
     }
 

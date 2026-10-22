@@ -48,8 +48,13 @@ pub struct Type1Font {
 impl Type1Font {
     /// Return the glyph width for a one-byte character code when available.
     pub fn width_for(&self, code: u8) -> Option<f64> {
-        let index = usize::from(code).checked_sub(usize::from(self.first_char?))?;
-        self.widths.get(index).copied()
+        if let Some(first_char) = self.first_char
+            && let Some(index) = usize::from(code).checked_sub(usize::from(first_char))
+            && let Some(width) = self.widths.get(index)
+        {
+            return Some(*width);
+        }
+        self.descriptor.as_ref()?.missing_width
     }
 }
 
