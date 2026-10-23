@@ -135,8 +135,11 @@ impl FontEncoding {
 ///
 /// 对应 PDF 标准 9.8 节的字体描述符字典，包含字体的度量与属性信息。
 /// 标准 14 字体通常可省略描述符，但嵌入字体或需要精确度量时必须提供。
+/// CIDFont 描述符额外支持 `/FontName`、`/CharSet` 与 `/CIDSet`。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FontDescriptor {
+    /// `/FontName` 字体名称。
+    pub font_name: Option<String>,
     /// `/FontFamily` 字体族名。
     pub font_family: Option<String>,
     /// `/FontStretch` 字体stretch 名称（如 Normal、Condensed）。
@@ -169,6 +172,11 @@ pub struct FontDescriptor {
     pub max_width: Option<f64>,
     /// `/MissingWidth` 缺失字形宽度。
     pub missing_width: Option<f64>,
+    /// `/CharSet` 字符集名称字符串（简单字体）。
+    pub char_set: Option<String>,
+    /// `/CIDSet` 位数组（MSB first），按 CID 索引标记哪些 CID 存在。
+    /// 仅用于 CIDFont 描述符。
+    pub cid_set: Option<Vec<u8>>,
 }
 
 impl Default for FontDescriptor {
@@ -181,6 +189,7 @@ impl FontDescriptor {
     /// 创建空的字体描述符。
     pub fn new() -> Self {
         Self {
+            font_name: None,
             font_family: None,
             font_stretch: None,
             font_weight: None,
@@ -197,7 +206,15 @@ impl FontDescriptor {
             avg_width: None,
             max_width: None,
             missing_width: None,
+            char_set: None,
+            cid_set: None,
         }
+    }
+
+    /// 设置字体名称。
+    pub fn with_font_name(mut self, name: impl Into<String>) -> Self {
+        self.font_name = Some(name.into());
+        self
     }
 
     /// 设置字体族名。
@@ -296,9 +313,26 @@ impl FontDescriptor {
         self
     }
 
+    /// 设置字符集名称（简单字体 `/CharSet`）。
+    pub fn with_char_set(mut self, char_set: impl Into<String>) -> Self {
+        self.char_set = Some(char_set.into());
+        self
+    }
+
+    /// 设置 CIDSet 位数组（CIDFont `/CIDSet`）。
+    ///
+    /// 位数组按 MSB-first 编码，第 `cid` 位表示 CID `cid` 是否存在。
+    pub fn with_cid_set(mut self, cid_set: Vec<u8>) -> Self {
+        self.cid_set = Some(cid_set);
+        self
+    }
+
     /// 转换为 PDF 字典值。
     pub(super) fn to_value(&self) -> Value {
         let mut dict = Dict::new().insert("Type", Value::Name("FontDescriptor".into()));
+        if let Some(name) = &self.font_name {
+            dict = dict.insert("FontName", Value::Name(name.clone()));
+        }
         if let Some(family) = &self.font_family {
             dict = dict.insert("FontFamily", Value::String(family.clone()));
         }
@@ -356,18 +390,57 @@ impl FontDescriptor {
         if let Some(missing_width) = self.missing_width {
             dict = dict.insert("MissingWidth", Value::Float(missing_width));
         }
+        if let Some(char_set) = &self.char_set {
+            dict = dict.insert("CharSet", Value::String(char_set.clone()));
+        }
+        // /CIDSet 作为流对象写出（此处仅返回字典项，流由 assemble 单独处理）
+        // 注意：CIDSet 是流，不能直接嵌入字典值，由 assemble.rs 单独构造
         Value::Dict(dict)
+    }
+
+    /// 返回 `/CIDSet` 数据（如果存在）。
+    pub(super) fn cid_set_data(&self) -> Option<&[u8]> {
+        self.cid_set.as_deref()
+    }
+}
+
+/// 嵌入的字体程序数据。
+///
+/// 对应 PDF 标准 5.8 节的字体程序嵌入，支持三种格式：
+/// - Type 1（`/FontFile`）：PostScript Type 1 字体程序
+/// - TrueType（`/FontFile2`）：TrueType 轮廓的 SFNT 字体程序
+/// - CFF（`/FontFile3`）：Compact Font Format 字体程序
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontProgram {
+    /// Type 1 字体程序（PostScript Type 1，存储为 `/FontFile` 流）。
+    Type1(Vec<u8>),
+    /// TrueType 字体程序（SFNT 格式，存储为 `/FontFile2` 流）。
+    TrueType(Vec<u8>),
+    /// CFF 字体程序（Compact Font Format，存储为 `/FontFile3` 流）。
+    CFF(Vec<u8>),
+}
+
+impl FontProgram {
+    /// 返回字体程序的原始字节数据。
+    pub(super) fn data(&self) -> &[u8] {
+        match self {
+            FontProgram::Type1(data) => data,
+            FontProgram::TrueType(data) => data,
+            FontProgram::CFF(data) => data,
+        }
     }
 }
 
 /// 逻辑字体描述。
 ///
-/// 本层仅支持 PDF 标准内置 Type1 字体（如 Helvetica），无需子集嵌入。
+/// 本层支持 PDF 标准内置 Type1 字体（如 Helvetica）与嵌入字体程序。
 /// 字段 [`Font::name`] 指定 BaseFont 名，[`Font::size`] 指定字号 pt，
 /// [`Font::encoding`] 控制字体字典的 `/Encoding`（默认 WinAnsiEncoding），
-/// [`Font::descriptor`] 可选地提供字体描述符度量。
+/// [`Font::descriptor`] 可选地提供字体描述符度量，
+/// [`Font::font_program`] 可选地嵌入字体程序数据。
 /// 可通过 [`Font::helvetica`] 便捷构造常用 Helvetica、用
-/// [`Font::with_encoding`] 替换编码配置、[`Font::with_descriptor`] 添加描述符。
+/// [`Font::with_encoding`] 替换编码配置、[`Font::with_descriptor`] 添加描述符、
+/// [`Font::with_font_program`] 嵌入字体程序。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Font {
     /// BaseFont 名（不含前导 `/`），如 `Helvetica`。
@@ -378,6 +451,8 @@ pub struct Font {
     pub encoding: FontEncoding,
     /// 可选的字体描述符。
     pub descriptor: Option<FontDescriptor>,
+    /// 可选的嵌入字体程序。
+    pub font_program: Option<FontProgram>,
 }
 
 impl Font {
@@ -388,6 +463,7 @@ impl Font {
             size,
             encoding: FontEncoding::default(),
             descriptor: None,
+            font_program: None,
         }
     }
 
@@ -401,6 +477,151 @@ impl Font {
     pub fn with_descriptor(mut self, descriptor: FontDescriptor) -> Self {
         self.descriptor = Some(descriptor);
         self
+    }
+
+    /// 嵌入字体程序（链式构造）。
+    pub fn with_font_program(mut self, program: FontProgram) -> Self {
+        self.font_program = Some(program);
+        self
+    }
+}
+
+/// CID 字符集合信息（`/CIDSystemInfo`）。
+///
+/// 标识 CIDFont 的字符集合：注册机构、排序与补充版本号。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CidSystemInfo {
+    /// `/Registry`（如 `"Adobe"`）。
+    pub registry: String,
+    /// `/Ordering`（如 `"Identity"`、`"GB1"`）。
+    pub ordering: String,
+    /// `/Supplement` 补充版本号。
+    pub supplement: i64,
+}
+
+impl CidSystemInfo {
+    /// 创建 `/CIDSystemInfo`。
+    pub fn new(registry: impl Into<String>, ordering: impl Into<String>, supplement: i64) -> Self {
+        Self {
+            registry: registry.into(),
+            ordering: ordering.into(),
+            supplement,
+        }
+    }
+
+    /// 转换为 PDF 字典值。
+    pub(super) fn to_value(&self) -> Value {
+        Value::Dict(
+            Dict::new()
+                .insert("Registry", Value::String(self.registry.clone()))
+                .insert("Ordering", Value::String(self.ordering.clone()))
+                .insert("Supplement", Value::Integer(self.supplement)),
+        )
+    }
+}
+
+/// CIDFont 子类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CidFontSubtype {
+    /// CIDFontType0（CFF 轮廓）。
+    CIDFontType0,
+    /// CIDFontType2（TrueType 轮廓）。
+    CIDFontType2,
+}
+
+impl CidFontSubtype {
+    /// 返回 PDF 子类型名。
+    pub(super) fn as_name(&self) -> &'static str {
+        match self {
+            CidFontSubtype::CIDFontType0 => "CIDFontType0",
+            CidFontSubtype::CIDFontType2 => "CIDFontType2",
+        }
+    }
+}
+
+/// CIDFont 宽度条目：单个 CID 或 CID 区间共用一个宽度。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CidWidth {
+    /// 单个 CID 的宽度。
+    Single(u16, f64),
+    /// CID 区间 `[first, last]` 共用同一宽度。
+    Range(u16, u16, f64),
+}
+
+/// CIDFont 逻辑字体描述。
+///
+/// 对应 PDF 标准 Type 0 复合字体中的 CIDFont 后代字体字典。
+/// 包含 `/CIDSystemInfo`、`/FontDescriptor`（含 `/CIDSet`）、`/DW`/`/W` 宽度信息。
+/// 通过 [`PdfBuilder::cid_font`] 注册到页面资源。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CidFont {
+    /// `/BaseFont` 名称。
+    pub name: String,
+    /// `/Subtype`（CIDFontType0 或 CIDFontType2）。
+    pub subtype: CidFontSubtype,
+    /// `/CIDSystemInfo`。
+    pub system_info: CidSystemInfo,
+    /// 字体描述符（含 `/CIDSet`）。
+    pub descriptor: FontDescriptor,
+    /// `/DW` 默认宽度（默认 1000）。
+    pub default_width: f64,
+    /// `/W` 宽度条目。
+    pub widths: Vec<CidWidth>,
+    /// 字号（pt），用于内容流 `Tf` 操作符。
+    pub size: f64,
+}
+
+impl CidFont {
+    /// 创建 CIDFont。
+    pub fn new(
+        name: impl Into<String>,
+        subtype: CidFontSubtype,
+        system_info: CidSystemInfo,
+        descriptor: FontDescriptor,
+        size: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            subtype,
+            system_info,
+            descriptor,
+            default_width: 1000.0,
+            widths: Vec::new(),
+            size,
+        }
+    }
+
+    /// 设置默认宽度 `/DW`。
+    pub fn with_default_width(mut self, width: f64) -> Self {
+        self.default_width = width;
+        self
+    }
+
+    /// 添加宽度条目。
+    pub fn with_widths(mut self, widths: Vec<CidWidth>) -> Self {
+        self.widths = widths;
+        self
+    }
+
+    /// 构建 `/W` 数组值。
+    pub(super) fn widths_to_value(&self) -> Value {
+        let mut arr = Array::new();
+        for entry in &self.widths {
+            match entry {
+                CidWidth::Single(cid, width) => {
+                    arr = arr
+                        .push(Value::Integer(i64::from(*cid)))
+                        .push(Value::Array(Array::new().push(Value::Float(*width))));
+                }
+                CidWidth::Range(first, last, width) => {
+                    arr = arr
+                        .push(Value::Integer(i64::from(*first)))
+                        .push(Value::Integer(i64::from(*last)))
+                        .push(Value::Float(*width));
+                }
+            }
+        }
+        Value::Array(arr)
     }
 }
 

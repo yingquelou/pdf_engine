@@ -105,6 +105,8 @@ impl TrueTypeFont {
             tables.get(b"maxp").map(|range| &data[range.clone()]),
             tables.get(b"hhea").map(|range| &data[range.clone()]),
             tables.get(b"hmtx").map(|range| &data[range.clone()]),
+            tables.get(b"vhea").map(|range| &data[range.clone()]),
+            tables.get(b"vmtx").map(|range| &data[range.clone()]),
         )?;
         let cmap_data = tables
             .get(b"cmap")
@@ -169,6 +171,50 @@ impl TrueTypeFont {
         ))
     }
 
+    /// Return the vertical advance height for a glyph ID.
+    ///
+    /// Returns `None` when the font lacks `vhea`/`vmtx` tables or the glyph
+    /// ID is out of range. Like horizontal metrics, TrueType reuses the last
+    /// long vertical metric's advance height for glyphs beyond
+    /// `vhea.numberOfVMetrics`.
+    pub fn vertical_advance(&self, glyph_id: u16) -> Option<u16> {
+        if self.metadata.vertical_metric_count == 0 || glyph_id >= self.metadata.glyph_count {
+            return None;
+        }
+        let vmtx = self.table(b"vmtx")?;
+        let metric_index = usize::from(glyph_id.min(self.metadata.vertical_metric_count - 1));
+        let offset = metric_index * 4;
+        Some(u16::from_be_bytes(
+            vmtx[offset..offset + 2]
+                .try_into()
+                .expect("validated vmtx metric slice"),
+        ))
+    }
+
+    /// Return the top side bearing for a glyph ID.
+    ///
+    /// Returns `None` when the font lacks `vhea`/`vmtx` tables or the glyph
+    /// ID is out of range. For glyph IDs at or beyond `vhea.numberOfVMetrics`,
+    /// the value is read from the trailing top-side-bearing array.
+    pub fn top_side_bearing(&self, glyph_id: u16) -> Option<i16> {
+        if self.metadata.vertical_metric_count == 0 || glyph_id >= self.metadata.glyph_count {
+            return None;
+        }
+        let vmtx = self.table(b"vmtx")?;
+        let vmetric_count = usize::from(self.metadata.vertical_metric_count);
+        let metric_index = usize::from(glyph_id.min(self.metadata.vertical_metric_count - 1));
+        let offset = if glyph_id < self.metadata.vertical_metric_count {
+            metric_index * 4 + 2
+        } else {
+            vmetric_count * 4 + (usize::from(glyph_id) - vmetric_count) * 2
+        };
+        Some(i16::from_be_bytes(
+            vmtx[offset..offset + 2]
+                .try_into()
+                .expect("validated vmtx bearing slice"),
+        ))
+    }
+
     /// Return the selected Unicode character-map subtable format.
     pub fn cmap_format(&self) -> CmapFormat {
         self.cmap.format()
@@ -187,6 +233,24 @@ impl TrueTypeFont {
             .ok_or_else(|| invalid_sfnt("missing required `cmap` table"))?;
         self.cmap
             .glyph_id(cmap_data, codepoint, self.metadata.glyph_count)
+    }
+
+    /// Map a glyph ID to its Unicode codepoint using the font's built-in encoding.
+    ///
+    /// Reverses the cmap to find which Unicode character a glyph represents.
+    /// When multiple codepoints map to the same glyph, returns the first encountered.
+    /// Returns `None` for glyph ID 0 (the .notdef glyph) or unmapped glyphs.
+    pub fn unicode_for_glyph(&self, glyph_id: u16) -> Result<Option<u32>, FontError> {
+        if glyph_id == 0 {
+            return Ok(None);
+        }
+        let cmap_data = self
+            .table(b"cmap")
+            .ok_or_else(|| invalid_sfnt("missing required `cmap` table"))?;
+        let reverse = self
+            .cmap
+            .reverse_cmap(cmap_data, self.metadata.glyph_count)?;
+        Ok(reverse.get(&glyph_id).copied())
     }
 
     /// Return a glyph record and its header bounds by glyph ID.
@@ -384,5 +448,267 @@ mod tests {
 
         let overlap = font_with_tables([0, 1, 0, 0], &[(*b"head", 44, 8), (*b"maxp", 48, 4)]);
         assert!(TrueTypeFont::parse(overlap).is_err());
+    }
+
+    #[test]
+    fn reverse_cmap_maps_glyphs_to_unicode() {
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 10),
+                (*b"cmap", 260, 44),
+                (*b"loca", 304, 8),
+                (*b"glyf", 312, 34),
+            ],
+        );
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&2048u16.to_be_bytes());
+        bytes[124 + 50..124 + 52].copy_from_slice(&0i16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&2u16.to_be_bytes());
+        bytes[248..250].copy_from_slice(&500u16.to_be_bytes());
+        bytes[252..254].copy_from_slice(&600u16.to_be_bytes());
+        let cmap = simple_format4_cmap();
+        bytes[260..304].copy_from_slice(&cmap);
+        bytes[304..306].copy_from_slice(&0u16.to_be_bytes());
+        bytes[306..308].copy_from_slice(&9u16.to_be_bytes());
+        bytes[308..310].copy_from_slice(&9u16.to_be_bytes());
+        bytes[310..312].copy_from_slice(&17u16.to_be_bytes());
+        bytes[312..314].copy_from_slice(&1i16.to_be_bytes());
+        bytes[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+        bytes[322..324].copy_from_slice(&0u16.to_be_bytes());
+        bytes[324..326].copy_from_slice(&0u16.to_be_bytes());
+        bytes[326] = 0x37;
+        bytes[327] = 1;
+        bytes[328] = 2;
+        bytes[330..332].copy_from_slice(&(-1i16).to_be_bytes());
+        bytes[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        bytes[340..342].copy_from_slice(&0x0002u16.to_be_bytes());
+        bytes[342..344].copy_from_slice(&0u16.to_be_bytes());
+
+        let font = TrueTypeFont::parse(bytes).unwrap();
+
+        // The simple_format4_cmap maps 0x41 ('A') to glyph 2
+        // So reverse should map glyph 2 back to 0x41
+        let reverse = font
+            .cmap
+            .reverse_cmap(font.table(b"cmap").unwrap(), font.metadata.glyph_count)
+            .unwrap();
+
+        assert_eq!(reverse.get(&2), Some(&0x41));
+    }
+
+    #[test]
+    fn unicode_for_glyph_returns_codepoint() {
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 10),
+                (*b"cmap", 260, 44),
+                (*b"loca", 304, 8),
+                (*b"glyf", 312, 34),
+            ],
+        );
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&2048u16.to_be_bytes());
+        bytes[124 + 50..124 + 52].copy_from_slice(&0i16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&2u16.to_be_bytes());
+        bytes[248..250].copy_from_slice(&500u16.to_be_bytes());
+        bytes[252..254].copy_from_slice(&600u16.to_be_bytes());
+        let cmap = simple_format4_cmap();
+        bytes[260..304].copy_from_slice(&cmap);
+        bytes[304..306].copy_from_slice(&0u16.to_be_bytes());
+        bytes[306..308].copy_from_slice(&9u16.to_be_bytes());
+        bytes[308..310].copy_from_slice(&9u16.to_be_bytes());
+        bytes[310..312].copy_from_slice(&17u16.to_be_bytes());
+        bytes[312..314].copy_from_slice(&1i16.to_be_bytes());
+        bytes[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+        bytes[322..324].copy_from_slice(&0u16.to_be_bytes());
+        bytes[324..326].copy_from_slice(&0u16.to_be_bytes());
+        bytes[326] = 0x37;
+        bytes[327] = 1;
+        bytes[328] = 2;
+        bytes[330..332].copy_from_slice(&(-1i16).to_be_bytes());
+        bytes[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        bytes[340..342].copy_from_slice(&0x0002u16.to_be_bytes());
+        bytes[342..344].copy_from_slice(&0u16.to_be_bytes());
+
+        let font = TrueTypeFont::parse(bytes).unwrap();
+
+        // Glyph 0 should return None (.notdef)
+        assert_eq!(font.unicode_for_glyph(0).unwrap(), None);
+
+        // Glyph 2 should map back to 'A' (0x41)
+        assert_eq!(font.unicode_for_glyph(2).unwrap(), Some(0x41));
+
+        // Unmapped glyph should return None
+        assert_eq!(font.unicode_for_glyph(99).unwrap(), None);
+    }
+
+    fn font_with_vertical_metrics() -> Vec<u8> {
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 156, 54),
+                (*b"maxp", 212, 32),
+                (*b"hhea", 244, 36),
+                (*b"hmtx", 280, 10),
+                (*b"cmap", 292, 44),
+                (*b"loca", 336, 8),
+                (*b"glyf", 344, 34),
+                (*b"vhea", 380, 36),
+                (*b"vmtx", 416, 10),
+            ],
+        );
+        // head
+        bytes[156 + 12..156 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[156 + 18..156 + 20].copy_from_slice(&2048u16.to_be_bytes());
+        bytes[156 + 50..156 + 52].copy_from_slice(&0i16.to_be_bytes());
+        // maxp: 3 glyphs
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[216..218].copy_from_slice(&3u16.to_be_bytes());
+        // hhea + hmtx (horizontal: 2 long metrics for 3 glyphs)
+        bytes[244..248].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[278..280].copy_from_slice(&2u16.to_be_bytes());
+        bytes[280..282].copy_from_slice(&500u16.to_be_bytes());
+        bytes[284..286].copy_from_slice(&600u16.to_be_bytes());
+        // cmap
+        let cmap = simple_format4_cmap();
+        bytes[292..336].copy_from_slice(&cmap);
+        // loca + glyf
+        bytes[336..338].copy_from_slice(&0u16.to_be_bytes());
+        bytes[338..340].copy_from_slice(&9u16.to_be_bytes());
+        bytes[340..342].copy_from_slice(&9u16.to_be_bytes());
+        bytes[342..344].copy_from_slice(&17u16.to_be_bytes());
+        bytes[344..346].copy_from_slice(&1i16.to_be_bytes());
+        bytes[346..354].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+        bytes[354..356].copy_from_slice(&0u16.to_be_bytes());
+        bytes[356..358].copy_from_slice(&0u16.to_be_bytes());
+        bytes[358] = 0x37;
+        bytes[359] = 1;
+        bytes[360] = 2;
+        bytes[362..364].copy_from_slice(&(-1i16).to_be_bytes());
+        bytes[364..372].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        bytes[372..374].copy_from_slice(&0x0002u16.to_be_bytes());
+        bytes[374..376].copy_from_slice(&0u16.to_be_bytes());
+        // vhea: version 1.0, numberOfVMetrics = 2
+        bytes[380..384].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[384..386].copy_from_slice(&800i16.to_be_bytes());
+        bytes[386..388].copy_from_slice(&(-200i16).to_be_bytes());
+        bytes[388..390].copy_from_slice(&0i16.to_be_bytes());
+        bytes[390..392].copy_from_slice(&1000u16.to_be_bytes());
+        bytes[414..416].copy_from_slice(&2u16.to_be_bytes());
+        // vmtx: 2 long metrics (advance=4 bytes each) + 1 trailing tsb (2 bytes)
+        //   glyph 0: advance=800, tsb=50
+        //   glyph 1: advance=900, tsb=60
+        //   glyph 2: trailing tsb=70
+        bytes[416..418].copy_from_slice(&800u16.to_be_bytes());
+        bytes[418..420].copy_from_slice(&50i16.to_be_bytes());
+        bytes[420..422].copy_from_slice(&900u16.to_be_bytes());
+        bytes[422..424].copy_from_slice(&60i16.to_be_bytes());
+        bytes[424..426].copy_from_slice(&70i16.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn parses_vertical_metrics_from_vhea_vmtx() {
+        let bytes = font_with_vertical_metrics();
+        let font = TrueTypeFont::parse(bytes).unwrap();
+
+        assert_eq!(font.vertical_advance(0), Some(800));
+        assert_eq!(font.vertical_advance(1), Some(900));
+        assert_eq!(font.top_side_bearing(0), Some(50));
+        assert_eq!(font.top_side_bearing(1), Some(60));
+        assert_eq!(font.top_side_bearing(2), Some(70));
+        assert_eq!(font.vertical_advance(3), None);
+        assert_eq!(font.top_side_bearing(3), None);
+    }
+
+    #[test]
+    fn vertical_advance_reuses_last_metric_for_overflow() {
+        let bytes = font_with_vertical_metrics();
+        let font = TrueTypeFont::parse(bytes).unwrap();
+
+        // numberOfVMetrics=2, glyph 2 >= 2, so advance reuses glyph 1's value (900)
+        assert_eq!(font.vertical_advance(2), Some(900));
+    }
+
+    #[test]
+    fn missing_vhea_returns_none() {
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 4),
+                (*b"cmap", 252, 44),
+                (*b"loca", 296, 4),
+                (*b"glyf", 300, 10),
+            ],
+        );
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&1000u16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&1u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&1u16.to_be_bytes());
+        bytes[252..296].copy_from_slice(&simple_format4_cmap());
+        bytes[296..298].copy_from_slice(&0u16.to_be_bytes());
+        bytes[298..300].copy_from_slice(&5u16.to_be_bytes());
+        bytes[300..302].copy_from_slice(&1i16.to_be_bytes());
+        bytes[302..310].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        let font = TrueTypeFont::parse(bytes).unwrap();
+
+        assert_eq!(font.vertical_advance(0), None);
+        assert_eq!(font.top_side_bearing(0), None);
+    }
+
+    #[test]
+    fn truncated_vmtx_returns_error() {
+        // vhea declares numberOfVMetrics=2 (needs 10 bytes of vmtx for 3 glyphs)
+        // but the vmtx table data is only 5 bytes.
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 4),
+                (*b"cmap", 252, 44),
+                (*b"loca", 296, 4),
+                (*b"glyf", 300, 10),
+                (*b"vhea", 312, 36),
+                (*b"vmtx", 348, 12),
+            ],
+        );
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&1000u16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&1u16.to_be_bytes());
+        bytes[252..296].copy_from_slice(&simple_format4_cmap());
+        bytes[296..298].copy_from_slice(&0u16.to_be_bytes());
+        bytes[298..300].copy_from_slice(&5u16.to_be_bytes());
+        bytes[300..302].copy_from_slice(&1i16.to_be_bytes());
+        bytes[302..310].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        // vhea: numberOfVMetrics=2 at offset 312+34=346
+        bytes[312..316].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[346..348].copy_from_slice(&2u16.to_be_bytes());
+        // vmtx: only write 5 bytes (need 2*4 + 1*2 = 10)
+        bytes[348..353].copy_from_slice(&[0; 5]);
+        assert!(TrueTypeFont::parse(bytes).is_err());
     }
 }

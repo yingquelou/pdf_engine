@@ -16,6 +16,9 @@ zeroize = "1"
 # ZCursor / ColorSpace（zune-core），两者为配套的 0.5 系列。
 zune-core = "0.5"
 zune-jpeg = "0.5.15"
+# CFF/OpenType 字体轮廓解析：PDF 的 CIDFontType0 与 FontFile3 CFF 程序。
+# 经 `CffOutlineBackend` trait 适配器隔离，避免直接依赖第三方 API。
+ttf-parser = "0.25"
 
 [lib]
 name = "pdf_engine"

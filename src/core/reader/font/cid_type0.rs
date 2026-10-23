@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::core::types::{Document, Value};
 
 use super::{
-    CidSystemInfo, FontDescriptorMetrics, FontError, FontResult, cid::parse_cid_metrics,
-    embedded_program::EmbeddedFontProgram,
+    CffOutlineParser, CidSystemInfo, FontDescriptorMetrics, FontError, FontResult,
+    TtfParserCffBackend, cid::parse_cid_metrics, embedded_program::EmbeddedFontProgram,
 };
 
 /// Parsed metrics and embedded program for a PDF CIDFontType0 descendant.
@@ -54,6 +54,17 @@ impl CidFontType0 {
     /// The program `/Subtype` is `/CIDFontType0C` or `/OpenType`.
     pub fn font_program(&self) -> Option<&EmbeddedFontProgram> {
         self.font_program.as_ref()
+    }
+
+    /// Create a CFF outline parser from the embedded font program.
+    ///
+    /// Returns `None` if no font program is embedded. The parser uses the
+    /// `ttf-parser` backend by default; alternative backends can be constructed
+    /// from [`Self::font_program`] bytes directly.
+    pub fn cff_outline_parser(&self) -> Option<Box<dyn CffOutlineParser>> {
+        self.font_program.as_ref().map(|prog| {
+            Box::new(TtfParserCffBackend::new(prog.data.clone())) as Box<dyn CffOutlineParser>
+        })
     }
 }
 

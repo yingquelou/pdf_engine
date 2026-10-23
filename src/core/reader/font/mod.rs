@@ -6,6 +6,7 @@ use crate::core::types::{Document, Value};
 
 use super::ParseError;
 
+mod cff;
 mod cid;
 mod cid_cmap;
 mod cid_type0;
@@ -14,12 +15,14 @@ mod embedded_program;
 mod encoding;
 mod encoding_data;
 mod encoding_unicode;
+mod predefined_cmaps;
 mod simple;
 mod standard14_metrics;
 mod truetype;
 mod type0;
 mod type1_program;
 
+pub use cff::{CffGlyphOutline, CffOutlineParser, CffPathSegment, TtfParserCffBackend};
 pub use cid::{CidFontType2, CidSystemInfo};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;

@@ -149,9 +149,14 @@ impl Document {
                 CidCMap::parse_inheriting(&bytes, |name| match name {
                     "Identity-H" => Ok(identity_cmap(0)),
                     "Identity-V" => Ok(identity_cmap(1)),
-                    _ => Err(FontError::Invalid(format!(
-                        "unsupported predefined CMap /{name} in usecmap"
-                    ))),
+                    _ => {
+                        let predefined = super::predefined_cmaps::resolve_predefined_cmap(name)?;
+                        Ok(CidCMap::from_predefined(
+                            &predefined.codespace_ranges,
+                            &predefined.cid_mappings,
+                            predefined.writing_mode,
+                        ))
+                    }
                 })?
             }
             _ => {

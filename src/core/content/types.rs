@@ -132,6 +132,10 @@ pub enum Op {
         phase: f64,
     },
     SetRenderingIntent(String),
+    /// 应用图形状态参数字典（`gs`，PDF 8.4.4）：参数为资源字典中的 ExtGState 名。
+    SetExtGState(String),
+    /// 设置平坦度容差（`i`，PDF 8.4.5）：值域 0–100，0 表示使用设备默认值。
+    SetFlatness(f64),
 
     // ── 路径构造（PDF 1.0） ──────────────────────────
     MoveTo {

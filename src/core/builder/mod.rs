@@ -27,7 +27,10 @@ mod assemble;
 mod tests;
 mod types;
 
-pub use types::{ColorSpace, Font, FontDescriptor, FontEncoding, ImageData, PageSize};
+pub use types::{
+    CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, Font, FontDescriptor,
+    FontEncoding, FontProgram, ImageData, PageSize,
+};
 
 use crate::core::content::ContentStream;
 use crate::core::types::PdfVersion;
@@ -40,8 +43,10 @@ struct PageBuild {
     size: PageSize,
     /// 累积的内容流操作符序列（类型化引擎）。`text`/`image` 调用追加于此。
     content: ContentStream,
-    /// 该页用到的字体（按首次出现顺序）。
+    /// 该页用到的简单字体（按首次出现顺序）。
     fonts: Vec<Font>,
+    /// 该页用到的 CIDFont（按首次出现顺序）。
+    cid_fonts: Vec<CidFont>,
     /// 该页用到的图片（按添加顺序）。
     images: Vec<ImageData>,
 }
@@ -104,6 +109,7 @@ impl PdfBuilder {
             size,
             content: ContentStream::new(),
             fonts: Vec::new(),
+            cid_fonts: Vec::new(),
             images: Vec::new(),
         });
         idx
@@ -184,6 +190,62 @@ impl PdfBuilder {
             .concat_matrix([w, 0.0, 0.0, h, x, y])
             .draw_xobject(format!("Im{}", iidx + 1))
             .restore_state();
+        self
+    }
+
+    /// 在指定页上注册一个 CIDFont 并返回该页内的字体索引（0-based）。
+    ///
+    /// 索引供 [`PdfBuilder::text_cid`] 使用。同一 CIDFont（按名称、子类型、
+    /// 系统信息、描述符、宽度全部相等判定）在同一页内去重。
+    pub fn cid_font(&mut self, page: usize, cid_font: &CidFont) -> usize {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return 0,
+        };
+        match p.cid_fonts.iter().position(|f| f == cid_font) {
+            Some(i) => i,
+            None => {
+                p.cid_fonts.push(cid_font.clone());
+                p.cid_fonts.len() - 1
+            }
+        }
+    }
+
+    /// 在指定页上用 CIDFont 写一段文字。
+    ///
+    /// `cids` 为 CID 序列（16-bit），按 Identity-H 编码为 2 字节大端序
+    /// 十六进制字符串输出。坐标原点在页面左下角，单位 pt。
+    pub fn text_cid(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        cids: &[u16],
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let cid_font = match p.cid_fonts.get(cid_font_idx) {
+            Some(f) => f,
+            None => return self,
+        };
+        let size = cid_font.size;
+        // 简单字体用 /F1..，CIDFont 用 /CF1.. 避免命名冲突。
+        let font_name = format!("CF{}", cid_font_idx + 1);
+        // Identity-H 编码：每个 CID 为 2 字节大端序。
+        let mut bytes = Vec::with_capacity(cids.len() * 2);
+        for &cid in cids {
+            bytes.push((cid >> 8) as u8);
+            bytes.push((cid & 0xFF) as u8);
+        }
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
         self
     }
 

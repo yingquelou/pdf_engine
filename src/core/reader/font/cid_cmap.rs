@@ -41,6 +41,57 @@ enum Token {
 }
 
 impl CidCMap {
+    /// Create a CidCMap from predefined CMap data.
+    pub fn from_predefined(
+        codespace_ranges: &[(u32, u32, usize)],
+        cid_mappings: &BTreeMap<u32, u16>,
+        writing_mode: u8,
+    ) -> Self {
+        let code_spaces = codespace_ranges
+            .iter()
+            .map(|&(low, high, length)| CodeSpace { length, low, high })
+            .collect();
+
+        let mut ranges = Vec::new();
+        let mut sorted_codes: Vec<_> = cid_mappings.iter().collect();
+        sorted_codes.sort_by_key(|entry| entry.0);
+
+        let mut i = 0;
+        while i < sorted_codes.len() {
+            let start_code = *sorted_codes[i].0;
+            let start_cid = *sorted_codes[i].1;
+            let mut j = i + 1;
+
+            while j < sorted_codes.len() {
+                let expected_code = start_code + (j - i) as u32;
+                let expected_cid = start_cid + (j - i) as u16;
+                if *sorted_codes[j].0 == expected_code && *sorted_codes[j].1 == expected_cid {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let end_code = *sorted_codes[j - 1].0;
+            let length = if start_code <= 0xFF { 1 } else { 2 };
+
+            ranges.push(CidRange {
+                length,
+                low: start_code,
+                high: end_code,
+                first_cid: start_cid,
+            });
+
+            i = j;
+        }
+
+        Self {
+            code_spaces,
+            ranges,
+            writing_mode,
+        }
+    }
+
     /// Parse a standalone CMap; a `/usecmap` base is rejected because there is
     /// no resolver available. Production paths use [`Self::parse_inheriting`].
     #[cfg(test)]

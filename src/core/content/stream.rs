@@ -282,6 +282,18 @@ impl ContentStream {
         self
     }
 
+    /// 应用图形状态参数字典：`/name gs`（PDF 8.4.4）。
+    pub fn set_ext_g_state(&mut self, name: impl Into<String>) -> &mut Self {
+        self.push(Op::SetExtGState(name.into()));
+        self
+    }
+
+    /// 设置平坦度容差：`i flatness`（PDF 8.4.5），值域 0–100。
+    pub fn set_flatness(&mut self, flatness: f64) -> &mut Self {
+        self.push(Op::SetFlatness(flatness));
+        self
+    }
+
     /// 设置填充不透明度（`ca`）；自动记录 `PdfFeature::Transparency`。
     pub fn set_fill_alpha(&mut self, a: f64) -> &mut Self {
         self.push(Op::SetFillAlpha(a));

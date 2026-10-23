@@ -298,3 +298,14 @@ fn graphics_state_individual() {
     assert!(text.contains("5.0 M\n"));
     assert!(text.contains("/Default ri\n"));
 }
+
+#[test]
+fn ext_g_state_and_flatness_operators() {
+    let mut s = ContentStream::new();
+    s.set_ext_g_state("GS1");
+    s.set_flatness(0.5);
+    let bytes = s.to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/GS1 gs\n"));
+    assert!(text.contains("0.5 i\n"));
+}

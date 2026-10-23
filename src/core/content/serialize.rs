@@ -149,6 +149,15 @@ impl ContentStream {
                 w.emit(name.as_bytes());
                 w.emit_op_space(b"ri");
             }
+            Op::SetExtGState(name) => {
+                w.emit_byte(b'/');
+                w.emit(name.as_bytes());
+                w.emit_op_space(b"gs");
+            }
+            Op::SetFlatness(v) => {
+                w.emit_float(*v);
+                w.emit_op_space(b"i");
+            }
 
             Op::MoveTo { x, y } => {
                 w.emit_float(*x);

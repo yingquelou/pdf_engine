@@ -3441,3 +3441,168 @@ fn builder_font_descriptor_roundtrips_through_parser() {
     }
     panic!("Font with FontDescriptor not found");
 }
+
+/// 在重解析后的文档中查找指定 `/Subtype` 的字体字典。
+fn find_font_dict(doc: &Document, subtype: &str) -> Value {
+    for num in 1..=64 {
+        if let Ok(Some(obj)) = doc.get_object(num)
+            && let Value::Dict(dict) = &obj.value
+            && dict.get("Type").and_then(Value::as_name) == Some("Font")
+            && dict.get("Subtype").and_then(Value::as_name) == Some(subtype)
+        {
+            return Value::Dict(dict.clone());
+        }
+    }
+    panic!("font dict with subtype {subtype} not found");
+}
+
+/// 写入 → 重新解析： builder 嵌入的 Type 1 程序应作为 `/FontFile`
+/// 保存原始字节，并可继续按 Type 1 格式解析。
+#[test]
+fn builder_embeds_type1_font_program_roundtrip() {
+    use pdf_engine::core::builder::{Font, FontDescriptor, FontProgram, PageSize, PdfBuilder};
+
+    let program = sample_type1_program();
+    let font = Font::helvetica(12.0)
+        .with_descriptor(FontDescriptor::new().with_font_name("Helvetica"))
+        .with_font_program(FontProgram::Type1(program.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Test");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type1");
+    let embedded = reparsed
+        .type1_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile);
+    assert_eq!(embedded.data, program);
+
+    let parsed = reparsed
+        .type1_program(&font_dict)
+        .expect("should parse program")
+        .expect("should have program");
+    assert!(parsed.glyph("A").expect("glyph lookup").is_some());
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Test"));
+}
+
+/// 写入 → 重新解析： builder 嵌入的 TrueType 程序应作为 `/FontFile2`
+/// 保存，并让字体字典使用 `/Subtype /TrueType`。
+#[test]
+fn builder_embeds_truetype_font_program_roundtrip() {
+    use pdf_engine::core::builder::{Font, FontProgram, PageSize, PdfBuilder};
+
+    let sfnt = sample_sfnt_font();
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::TrueType(sfnt.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Test");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "TrueType");
+    let embedded = reparsed
+        .truetype_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile2);
+    assert_eq!(embedded.data, sfnt);
+
+    let parsed = reparsed
+        .truetype_font(&font_dict)
+        .expect("should parse program")
+        .expect("should have program");
+    assert_eq!(parsed.units_per_em(), 1000);
+    assert_eq!(parsed.glyph_count(), 3);
+    assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
+}
+
+/// 写入 → 重新解析： builder 嵌入的 CFF 程序应作为 `/FontFile3`
+/// 保存，并带 `/Subtype /Type1C`。
+#[test]
+fn builder_embeds_cff_font_program_roundtrip() {
+    use pdf_engine::core::builder::{Font, FontProgram, PageSize, PdfBuilder};
+
+    let cff = vec![0x01, 0x00, 0x04, 0x05];
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::CFF(cff.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Test");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type1");
+    let embedded = reparsed
+        .type1_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile3);
+    assert_eq!(embedded.subtype.as_deref(), Some("Type1C"));
+    assert_eq!(embedded.data, cff);
+}
+
+/// 写入 → 重新解析： CIDFont 的系统信息、宽度与描述符（含 `/CIDSet`）
+/// 应可从生成的文档还原。
+#[test]
+fn builder_cid_font_descriptor_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, CidWidth, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let descriptor = FontDescriptor::new()
+        .with_font_name("ExampleCIDFont")
+        .with_family("Example Family")
+        .with_ascent(800.0)
+        .with_descent(-200.0)
+        .with_flags(4)
+        .with_cid_set(vec![0xA0, 0x01]);
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        descriptor,
+        12.0,
+    )
+    .with_widths(vec![
+        CidWidth::Single(2, 500.0),
+        CidWidth::Range(3, 5, 600.0),
+    ]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid(page, index, 72.0, 700.0, &[2, 3, 4]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType2");
+    let parsed = reparsed
+        .cid_font_type2(&descendant)
+        .expect("should parse CIDFontType2")
+        .expect("should be CIDFontType2");
+    assert_eq!(parsed.system_info().registry, "Adobe");
+    assert_eq!(parsed.system_info().ordering, "Identity");
+    assert_eq!(parsed.width_for_cid(2), 500.0);
+    assert_eq!(parsed.width_for_cid(3), 600.0);
+    assert_eq!(parsed.width_for_cid(6), 1000.0);
+    let metrics = parsed.descriptor();
+    assert_eq!(metrics.ascent, Some(800.0));
+    assert_eq!(metrics.descent, Some(-200.0));
+    assert_eq!(metrics.cid_is_present(0), Some(true));
+    assert_eq!(metrics.cid_is_present(1), Some(false));
+    assert_eq!(metrics.cid_is_present(2), Some(true));
+    assert_eq!(metrics.cid_is_present(15), Some(true));
+}

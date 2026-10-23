@@ -275,3 +275,152 @@ fn font_descriptor_is_written_when_provided() {
     // 字体字典应引用描述符
     assert!(s.contains("/FontDescriptor"), "字体字典应引用描述符: {s}");
 }
+
+#[test]
+fn type1_font_program_is_embedded() {
+    use super::FontProgram;
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    // Type 1 字体程序数据（简化的 PostScript 格式）
+    let type1_data = b"%!PS-AdobeFont-1.0: TestFont 001.000\n11 dict begin\n/TestFont def\n";
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::Type1(type1_data.to_vec()));
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 和 FontFile 流（builder 的 Owned 流按约定写明文）
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFile"), "应含 /FontFile 引用: {s}");
+    assert!(
+        s.contains("%!PS-AdobeFont-1.0: TestFont"),
+        "应含 Type 1 程序明文: {s}"
+    );
+    assert!(
+        !s.contains("/Filter /FlateDecode"),
+        "builder Owned 流不应声明 FlateDecode: {s}"
+    );
+}
+
+#[test]
+fn truetype_font_program_is_embedded() {
+    use super::FontProgram;
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    // TrueType 字体程序数据（简化的 SFNT 格式）
+    let truetype_data = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x0A]; // SFNT header
+    let font =
+        Font::helvetica(12.0).with_font_program(FontProgram::TrueType(truetype_data.clone()));
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 和 FontFile2 流
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFile2"), "应含 /FontFile2 引用: {s}");
+    assert!(
+        s.contains(&format!("/Length {}", truetype_data.len())),
+        "FontFile2 流长度应与程序字节一致: {s}"
+    );
+}
+
+#[test]
+fn cff_font_program_is_embedded() {
+    use super::FontProgram;
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    // CFF 字体程序数据（简化的 CFF 格式）
+    let cff_data = vec![0x01, 0x00, 0x04, 0x05]; // CFF header
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::CFF(cff_data.clone()));
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 和 FontFile3 流
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFile3"), "应含 /FontFile3 引用: {s}");
+    assert!(s.contains("/Subtype /Type1C"), "应含 /Subtype /Type1C: {s}");
+}
+
+#[test]
+fn cid_font_descriptor_is_written_when_provided() {
+    use super::{CidFont, CidFontSubtype, CidSystemInfo, CidWidth};
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+
+    // CIDSet：CID 0, 2, 15 存在 → 位数组 [0b10100000, 0b00000001] = [0xA0, 0x01]
+    let descriptor = FontDescriptor::new()
+        .with_font_name("ExampleCIDFont")
+        .with_family("Example Family")
+        .with_ascent(800.0)
+        .with_descent(-200.0)
+        .with_cap_height(700.0)
+        .with_stem_v(80.0)
+        .with_flags(4)
+        .with_bbox([-10.0, -200.0, 1000.0, 900.0])
+        .with_cid_set(vec![0xA0, 0x01]);
+
+    let system_info = CidSystemInfo::new("Adobe", "Identity", 0);
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        system_info,
+        descriptor,
+        12.0,
+    )
+    .with_default_width(1000.0)
+    .with_widths(vec![
+        CidWidth::Single(65, 500.0),
+        CidWidth::Range(100, 102, 600.0),
+    ]);
+
+    let cf_idx = b.cid_font(p, &cid_font);
+    b.text_cid(p, cf_idx, 10.0, 10.0, &[65, 66]);
+    let s = render(&mut b);
+
+    // Type 0 父字体
+    assert!(s.contains("/Subtype /Type0"), "应含 Type0 父字体: {s}");
+    assert!(
+        s.contains("/Encoding /Identity-H"),
+        "应含 Identity-H 编码: {s}"
+    );
+    assert!(s.contains("/DescendantFonts"), "应含 DescendantFonts: {s}");
+
+    // CIDFont 后代字典
+    assert!(
+        s.contains("/Subtype /CIDFontType2"),
+        "应含 CIDFontType2: {s}"
+    );
+    assert!(
+        s.contains("/BaseFont /ExampleCIDFont"),
+        "应含 BaseFont: {s}"
+    );
+    assert!(s.contains("/CIDSystemInfo"), "应含 CIDSystemInfo: {s}");
+    assert!(s.contains("/Registry (Adobe)"), "应含 Registry: {s}");
+    assert!(s.contains("/Ordering (Identity)"), "应含 Ordering: {s}");
+
+    // FontDescriptor
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(
+        s.contains("/FontName /ExampleCIDFont"),
+        "应含 FontName: {s}"
+    );
+    assert!(
+        s.contains("/FontFamily (Example Family)"),
+        "应含 FontFamily: {s}"
+    );
+    assert!(s.contains("/Ascent 800"), "应含 Ascent: {s}");
+    assert!(s.contains("/Descent -200"), "应含 Descent: {s}");
+    assert!(s.contains("/CapHeight 700"), "应含 CapHeight: {s}");
+    assert!(s.contains("/StemV 80"), "应含 StemV: {s}");
+    assert!(s.contains("/Flags 4"), "应含 Flags: {s}");
+
+    // CIDSet 流
+    assert!(s.contains("/CIDSet"), "应含 CIDSet 引用: {s}");
+}

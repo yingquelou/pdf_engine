@@ -1,6 +1,6 @@
 //! 逻辑态 → `Document`：对象号分配、资源字典与字体/图片对象组装。
 
-use super::{Font, ImageData, PdfBuilder, same_font};
+use super::{CidFont, Font, FontProgram, ImageData, PdfBuilder, same_font};
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Trailer, Value};
 
 impl PdfBuilder {
@@ -74,6 +74,27 @@ impl PdfBuilder {
             page_image_nums.push(v);
         }
 
+        // CIDFont 去重池：跨页合并同一 CidFont，复用同一 Type 0 父对象号。
+        let mut cid_font_pool: Vec<(CidFont, i64)> = Vec::new();
+        let mut page_cid_font_nums: Vec<Vec<i64>> = Vec::with_capacity(self.pages.len());
+        for p in &self.pages {
+            let mut v = Vec::with_capacity(p.cid_fonts.len());
+            for f in &p.cid_fonts {
+                let pos = cid_font_pool.iter().position(|(g, _)| g == f);
+                let obj_num = match pos {
+                    Some(i) => cid_font_pool[i].1,
+                    None => {
+                        let n = num;
+                        num += 1;
+                        cid_font_pool.push((f.clone(), n));
+                        n
+                    }
+                };
+                v.push(obj_num);
+            }
+            page_cid_font_nums.push(v);
+        }
+
         // —— 构造 Document ——
         let mut doc = Document::new();
 
@@ -115,10 +136,14 @@ impl PdfBuilder {
                 .push(Value::Float(w))
                 .push(Value::Float(h));
 
-            // 资源：Font 子字典（/F1 -> ref, ...）、XObject 子字典（/Im1 -> ref, ...）
+            // 资源：Font 子字典（/F1 -> ref, ..., /CF1 -> ref, ...）、XObject 子字典（/Im1 -> ref, ...）
             let mut font_dict = Dict::new();
             for (k, fnum) in page_font_nums[i].iter().enumerate() {
                 font_dict = font_dict.insert(format!("F{}", k + 1), Value::Ref(*fnum, 0));
+            }
+            // CIDFont 资源：/CF1 -> Type 0 父对象引用
+            for (k, type0_num) in page_cid_font_nums[i].iter().enumerate() {
+                font_dict = font_dict.insert(format!("CF{}", k + 1), Value::Ref(*type0_num, 0));
             }
             let mut xobj_dict = Dict::new();
             for (k, inum) in page_image_nums[i].iter().enumerate() {
@@ -165,21 +190,129 @@ impl PdfBuilder {
 
         // 字体对象
         for (f, fnum) in &font_pool {
+            // 嵌入 TrueType 程序时 `/Subtype` 必须是 TrueType；
+            // Type 1 与 CFF（FontFile3 /Type1C）都使用 Type1 子类型。
+            let subtype = match &f.font_program {
+                Some(FontProgram::TrueType(_)) => "TrueType",
+                _ => "Type1",
+            };
             let mut font_dict = Dict::new()
                 .insert("Type", Value::Name("Font".into()))
-                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("Subtype", Value::Name(subtype.into()))
                 .insert("BaseFont", Value::Name(f.name.clone()));
             if let Some(encoding) = f.encoding.to_value() {
                 font_dict = font_dict.insert("Encoding", encoding);
             }
-            // 写入字体描述符（如果提供）
-            if let Some(descriptor) = &f.descriptor {
+            // 写入字体描述符（如果提供或有字体程序）
+            if f.descriptor.is_some() || f.font_program.is_some() {
                 let descriptor_ref = num;
                 num += 1;
                 font_dict = font_dict.insert("FontDescriptor", Value::Ref(descriptor_ref, 0));
-                doc.set_object(Object::new(descriptor_ref, 0, descriptor.to_value()));
+
+                // 构建字体描述符字典
+                let mut descriptor_dict = if let Some(descriptor) = &f.descriptor {
+                    match descriptor.to_value() {
+                        Value::Dict(d) => d,
+                        _ => Dict::new().insert("Type", Value::Name("FontDescriptor".into())),
+                    }
+                } else {
+                    Dict::new().insert("Type", Value::Name("FontDescriptor".into()))
+                };
+
+                // 写入字体程序流（如果有）
+                if let Some(program) = &f.font_program {
+                    let program_ref = num;
+                    num += 1;
+
+                    // builder 构造的 Owned 流按 writer 约定写明文；writer 会把
+                    // 声明在 Owned 流上的 FlateDecode 视为读端已解压而移除。
+                    let stream_dict = match program {
+                        FontProgram::Type1(_) => {
+                            // /FontFile - Type 1 字体程序
+                            descriptor_dict =
+                                descriptor_dict.insert("FontFile", Value::Ref(program_ref, 0));
+                            Dict::new()
+                        }
+                        FontProgram::TrueType(_) => {
+                            // /FontFile2 - TrueType 字体程序
+                            descriptor_dict =
+                                descriptor_dict.insert("FontFile2", Value::Ref(program_ref, 0));
+                            Dict::new()
+                        }
+                        FontProgram::CFF(_) => {
+                            // /FontFile3 - CFF 字体程序
+                            descriptor_dict =
+                                descriptor_dict.insert("FontFile3", Value::Ref(program_ref, 0));
+                            Dict::new().insert("Subtype", Value::Name("Type1C".into()))
+                        }
+                    }
+                    .insert("Length", Value::Integer(program.data().len() as i64));
+
+                    doc.set_object(Object::new(
+                        program_ref,
+                        0,
+                        Value::Stream(stream_dict, StreamData::Owned(program.data().to_vec())),
+                    ));
+                }
+
+                doc.set_object(Object::new(descriptor_ref, 0, Value::Dict(descriptor_dict)));
             }
             doc.set_object(Object::new(*fnum, 0, Value::Dict(font_dict)));
+        }
+
+        // CIDFont 对象：Type 0 父 + CIDFont 后代 + FontDescriptor + CIDSet 流
+        for (cid_font, type0_num) in &cid_font_pool {
+            // 1. FontDescriptor 字典（/CIDSet 作为独立流对象引用）
+            let descriptor_num = num;
+            num += 1;
+            let mut descriptor_value = cid_font.descriptor.to_value();
+            if let Some(cid_set_data) = cid_font.descriptor.cid_set_data() {
+                let cid_set_num = num;
+                num += 1;
+                if let Value::Dict(ref d) = descriptor_value {
+                    descriptor_value =
+                        Value::Dict(d.clone().insert("CIDSet", Value::Ref(cid_set_num, 0)));
+                }
+                let cid_set_len = cid_set_data.len();
+                doc.set_object(Object::new(
+                    cid_set_num,
+                    0,
+                    Value::Stream(
+                        Dict::new().insert("Length", Value::Integer(cid_set_len as i64)),
+                        StreamData::Owned(cid_set_data.to_vec()),
+                    ),
+                ));
+            }
+            doc.set_object(Object::new(descriptor_num, 0, descriptor_value));
+
+            // 2. CIDFont 后代字典
+            let cid_font_num = num;
+            num += 1;
+            let mut cid_dict = Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name(cid_font.subtype.as_name().into()))
+                .insert("BaseFont", Value::Name(cid_font.name.clone()))
+                .insert("CIDSystemInfo", cid_font.system_info.to_value())
+                .insert("FontDescriptor", Value::Ref(descriptor_num, 0));
+            if (cid_font.default_width - 1000.0).abs() > f64::EPSILON {
+                cid_dict = cid_dict.insert("DW", Value::Float(cid_font.default_width));
+            }
+            if !cid_font.widths.is_empty() {
+                cid_dict = cid_dict.insert("W", cid_font.widths_to_value());
+            }
+            doc.set_object(Object::new(cid_font_num, 0, Value::Dict(cid_dict)));
+
+            // 3. Type 0 父字体字典
+            let type0_dict = Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name("Type0".into()))
+                .insert("BaseFont", Value::Name(cid_font.name.clone()))
+                .insert("Encoding", Value::Name("Identity-H".into()))
+                .insert(
+                    "DescendantFonts",
+                    Value::Array(Array::new().push(Value::Ref(cid_font_num, 0))),
+                );
+            doc.set_object(Object::new(*type0_num, 0, Value::Dict(type0_dict)));
         }
 
         // 图片 XObject 流对象

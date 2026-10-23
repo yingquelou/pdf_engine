@@ -5,6 +5,7 @@ pub(super) struct TrueTypeMetadata {
     pub units_per_em: u16,
     pub glyph_count: u16,
     pub horizontal_metric_count: u16,
+    pub vertical_metric_count: u16,
     pub index_to_loc_format: i16,
 }
 
@@ -14,6 +15,8 @@ impl TrueTypeMetadata {
         maxp: Option<&[u8]>,
         hhea: Option<&[u8]>,
         hmtx: Option<&[u8]>,
+        vhea: Option<&[u8]>,
+        vmtx: Option<&[u8]>,
     ) -> Result<Self, FontError> {
         let head = head.ok_or_else(|| invalid_table("missing required `head` table"))?;
         if head.len() < 54 {
@@ -72,10 +75,37 @@ impl TrueTypeMetadata {
             return Err(invalid_table("`hmtx` table is truncated"));
         }
 
+        let vertical_metric_count = if let Some(vhea) = vhea {
+            if vhea.len() < 36 {
+                return Err(invalid_table("`vhea` table is truncated"));
+            }
+            let vhea_version = u32::from_be_bytes(vhea[..4].try_into().expect("fixed-width slice"));
+            if vhea_version != 0x0001_0000 && vhea_version != 0x0001_1000 {
+                return Err(invalid_table("`vhea` table has an unsupported version"));
+            }
+            let count = u16::from_be_bytes(vhea[34..36].try_into().expect("fixed-width slice"));
+            if count == 0 || count > glyph_count {
+                return Err(invalid_table(
+                    "`vhea` table has an invalid numberOfVMetrics",
+                ));
+            }
+            let vmtx = vmtx.ok_or_else(|| invalid_table("missing `vmtx` table"))?;
+            let long_heights_length = usize::from(count) * 4;
+            let trailing_tsbs_length = usize::from(glyph_count - count) * 2;
+            let required_vmtx_length = long_heights_length + trailing_tsbs_length;
+            if vmtx.len() < required_vmtx_length {
+                return Err(invalid_table("`vmtx` table is truncated"));
+            }
+            count
+        } else {
+            0
+        };
+
         Ok(Self {
             units_per_em,
             glyph_count,
             horizontal_metric_count,
+            vertical_metric_count,
             index_to_loc_format,
         })
     }
@@ -101,8 +131,15 @@ mod tests {
         hhea[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
         hhea[34..36].copy_from_slice(&2u16.to_be_bytes());
         let hmtx = vec![0; 4 * 2 + 2 * 254];
-        let metadata =
-            TrueTypeMetadata::parse(Some(&head), Some(&maxp), Some(&hhea), Some(&hmtx)).unwrap();
+        let metadata = TrueTypeMetadata::parse(
+            Some(&head),
+            Some(&maxp),
+            Some(&hhea),
+            Some(&hmtx),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(metadata.units_per_em, 2048);
         assert_eq!(metadata.glyph_count, 256);
         assert_eq!(metadata.horizontal_metric_count, 2);
@@ -110,7 +147,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_invalid_required_tables() {
-        assert!(TrueTypeMetadata::parse(None, None, None, None).is_err());
+        assert!(TrueTypeMetadata::parse(None, None, None, None, None, None).is_err());
 
         let mut head = vec![0; 54];
         head[12..16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
@@ -126,32 +163,74 @@ mod tests {
         let mut invalid_head = head.clone();
         invalid_head[18..20].copy_from_slice(&15u16.to_be_bytes());
         assert!(
-            TrueTypeMetadata::parse(Some(&invalid_head), Some(&maxp), Some(&hhea), Some(&hmtx))
-                .is_err()
+            TrueTypeMetadata::parse(
+                Some(&invalid_head),
+                Some(&maxp),
+                Some(&hhea),
+                Some(&hmtx),
+                None,
+                None
+            )
+            .is_err()
         );
 
         let mut invalid_maxp = maxp.clone();
         invalid_maxp[4..6].copy_from_slice(&0u16.to_be_bytes());
         assert!(
-            TrueTypeMetadata::parse(Some(&head), Some(&invalid_maxp), Some(&hhea), Some(&hmtx))
-                .is_err()
+            TrueTypeMetadata::parse(
+                Some(&head),
+                Some(&invalid_maxp),
+                Some(&hhea),
+                Some(&hmtx),
+                None,
+                None
+            )
+            .is_err()
         );
 
         assert!(
-            TrueTypeMetadata::parse(Some(&head[..53]), Some(&maxp), Some(&hhea), Some(&hmtx))
-                .is_err()
+            TrueTypeMetadata::parse(
+                Some(&head[..53]),
+                Some(&maxp),
+                Some(&hhea),
+                Some(&hmtx),
+                None,
+                None
+            )
+            .is_err()
         );
         assert!(
-            TrueTypeMetadata::parse(Some(&head), Some(&maxp[..31]), Some(&hhea), Some(&hmtx))
-                .is_err()
+            TrueTypeMetadata::parse(
+                Some(&head),
+                Some(&maxp[..31]),
+                Some(&hhea),
+                Some(&hmtx),
+                None,
+                None
+            )
+            .is_err()
         );
         assert!(
-            TrueTypeMetadata::parse(Some(&head), Some(&maxp), Some(&hhea[..35]), Some(&hmtx))
-                .is_err()
+            TrueTypeMetadata::parse(
+                Some(&head),
+                Some(&maxp),
+                Some(&hhea[..35]),
+                Some(&hmtx),
+                None,
+                None
+            )
+            .is_err()
         );
         assert!(
-            TrueTypeMetadata::parse(Some(&head), Some(&maxp), Some(&hhea), Some(&hmtx[..3]))
-                .is_err()
+            TrueTypeMetadata::parse(
+                Some(&head),
+                Some(&maxp),
+                Some(&hhea),
+                Some(&hmtx[..3]),
+                None,
+                None
+            )
+            .is_err()
         );
     }
 
@@ -170,8 +249,15 @@ mod tests {
         for count in [0u16, 3] {
             hhea[34..36].copy_from_slice(&count.to_be_bytes());
             assert!(
-                TrueTypeMetadata::parse(Some(&head), Some(&maxp), Some(&hhea), Some(&hmtx))
-                    .is_err()
+                TrueTypeMetadata::parse(
+                    Some(&head),
+                    Some(&maxp),
+                    Some(&hhea),
+                    Some(&hmtx),
+                    None,
+                    None
+                )
+                .is_err()
             );
         }
     }
