@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::core::types::{Document, Value};
 
 use super::{
-    FontDescriptorMetrics, FontError, FontResult, cid::parse_cid_metrics,
+    CidSystemInfo, FontDescriptorMetrics, FontError, FontResult, cid::parse_cid_metrics,
     embedded_program::EmbeddedFontProgram,
 };
 
@@ -16,6 +16,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct CidFontType0 {
     base_font: String,
+    system_info: CidSystemInfo,
     default_width: f64,
     widths: BTreeMap<u16, f64>,
     descriptor: FontDescriptorMetrics,
@@ -26,6 +27,11 @@ impl CidFontType0 {
     /// Return the descendant font's `/BaseFont` name.
     pub fn base_font(&self) -> &str {
         &self.base_font
+    }
+
+    /// Return the parsed `/CIDSystemInfo` (Registry, Ordering, Supplement).
+    pub fn system_info(&self) -> &CidSystemInfo {
+        &self.system_info
     }
 
     /// Return `/DW`, defaulting to 1000 when omitted.
@@ -87,6 +93,7 @@ impl Document {
         };
         Ok(Some(CidFontType0 {
             base_font: metrics.base_font,
+            system_info: metrics.system_info,
             default_width: metrics.default_width,
             widths: metrics.widths,
             descriptor: metrics.descriptor,
@@ -255,5 +262,25 @@ mod tests {
         let document = Document::new();
         let value = Value::Dict(Dict::new().insert("Subtype", Value::Name("CIDFontType2".into())));
         assert!(document.cid_font_type0(&value).unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_cid_system_info() {
+        let document = Document::new();
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Registry", Value::String("Adobe".into()))
+                    .insert("Ordering", Value::String("Japan1".into()))
+                    .insert("Supplement", Value::Integer(7)),
+            ),
+        )]);
+
+        let font = document.cid_font_type0(&font).unwrap().unwrap();
+        let info = font.system_info();
+        assert_eq!(info.registry, "Adobe");
+        assert_eq!(info.ordering, "Japan1");
+        assert_eq!(info.supplement, 7);
     }
 }

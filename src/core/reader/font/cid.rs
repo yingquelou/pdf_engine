@@ -6,6 +6,20 @@ use super::{
     FontDescriptorMetrics, FontError, FontResult, number, parse_descriptor, truetype::TrueTypeFont,
 };
 
+/// Parsed `/CIDSystemInfo` dictionary for a CID-keyed font.
+///
+/// Identifies the character collection: `/Registry` (e.g. "Adobe"),
+/// `/Ordering` (e.g. "GB1"), and `/Supplement` (revision number).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CidSystemInfo {
+    /// `/Registry` string (e.g. "Adobe").
+    pub registry: String,
+    /// `/Ordering` string (e.g. "GB1", "Japan1", "Korea1").
+    pub ordering: String,
+    /// `/Supplement` non-negative integer.
+    pub supplement: i64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum CidToGidMap {
     Identity,
@@ -16,6 +30,7 @@ enum CidToGidMap {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CidFontType2 {
     base_font: String,
+    system_info: CidSystemInfo,
     default_width: f64,
     widths: BTreeMap<u16, f64>,
     descriptor: FontDescriptorMetrics,
@@ -27,6 +42,11 @@ impl CidFontType2 {
     /// Return the descendant font's `/BaseFont` name.
     pub fn base_font(&self) -> &str {
         &self.base_font
+    }
+
+    /// Return the parsed `/CIDSystemInfo` (Registry, Ordering, Supplement).
+    pub fn system_info(&self) -> &CidSystemInfo {
+        &self.system_info
     }
 
     /// Return `/DW`, defaulting to 1000 when omitted.
@@ -126,6 +146,7 @@ impl Document {
             .transpose()?;
         Ok(Some(CidFontType2 {
             base_font: metrics.base_font,
+            system_info: metrics.system_info,
             default_width: metrics.default_width,
             widths: metrics.widths,
             descriptor: metrics.descriptor,
@@ -138,6 +159,7 @@ impl Document {
 /// CID-keyed font metrics shared by CIDFontType0 and CIDFontType2.
 pub(super) struct CidMetrics {
     pub(super) base_font: String,
+    pub(super) system_info: CidSystemInfo,
     pub(super) default_width: f64,
     pub(super) widths: BTreeMap<u16, f64>,
     pub(super) descriptor: FontDescriptorMetrics,
@@ -150,7 +172,7 @@ pub(super) fn parse_cid_metrics(document: &Document, dict: &Dict) -> FontResult<
         .and_then(Value::as_name)
         .ok_or_else(|| FontError::Invalid("missing or invalid CID font /BaseFont".into()))?
         .to_owned();
-    validate_cid_system_info(document, dict)?;
+    let system_info = parse_cid_system_info(document, dict)?;
     let descriptor = dict
         .get("FontDescriptor")
         .ok_or_else(|| FontError::Invalid("CID font is missing /FontDescriptor".into()))?;
@@ -185,13 +207,14 @@ pub(super) fn parse_cid_metrics(document: &Document, dict: &Dict) -> FontResult<
     };
     Ok(CidMetrics {
         base_font,
+        system_info,
         default_width,
         widths,
         descriptor,
     })
 }
 
-fn validate_cid_system_info(document: &Document, dict: &Dict) -> FontResult<()> {
+fn parse_cid_system_info(document: &Document, dict: &Dict) -> FontResult<CidSystemInfo> {
     let value = dict
         .get("CIDSystemInfo")
         .ok_or_else(|| FontError::Invalid("CID font is missing /CIDSystemInfo".into()))?;
@@ -199,27 +222,51 @@ fn validate_cid_system_info(document: &Document, dict: &Dict) -> FontResult<()> 
     let info = value
         .as_dict()
         .ok_or_else(|| FontError::Invalid("CID font /CIDSystemInfo is not a dictionary".into()))?;
-    for key in ["Registry", "Ordering"] {
-        let value = info
-            .get(key)
-            .ok_or_else(|| FontError::Invalid(format!("CIDSystemInfo is missing /{key}")))?;
-        let value = document.resolve_value(value)?;
-        if !matches!(value, Value::String(_) | Value::HexString(_)) {
-            return Err(FontError::Invalid(format!(
-                "CIDSystemInfo /{key} is not a string"
-            )));
+
+    let registry = info
+        .get("Registry")
+        .ok_or_else(|| FontError::Invalid("CIDSystemInfo is missing /Registry".into()))?;
+    let registry = document.resolve_value(registry)?;
+    let registry = match registry {
+        Value::String(s) | Value::HexString(s) => s.clone(),
+        _ => {
+            return Err(FontError::Invalid(
+                "CIDSystemInfo /Registry is not a string".into(),
+            ));
         }
-    }
+    };
+
+    let ordering = info
+        .get("Ordering")
+        .ok_or_else(|| FontError::Invalid("CIDSystemInfo is missing /Ordering".into()))?;
+    let ordering = document.resolve_value(ordering)?;
+    let ordering = match ordering {
+        Value::String(s) | Value::HexString(s) => s.clone(),
+        _ => {
+            return Err(FontError::Invalid(
+                "CIDSystemInfo /Ordering is not a string".into(),
+            ));
+        }
+    };
+
     let supplement = info
         .get("Supplement")
         .ok_or_else(|| FontError::Invalid("CIDSystemInfo is missing /Supplement".into()))?;
     let supplement = document.resolve_value(supplement)?;
-    if !matches!(supplement, Value::Integer(value) if value >= 0) {
-        return Err(FontError::Invalid(
-            "CIDSystemInfo /Supplement is not a nonnegative integer".into(),
-        ));
-    }
-    Ok(())
+    let supplement = match supplement {
+        Value::Integer(value) if value >= 0 => value,
+        _ => {
+            return Err(FontError::Invalid(
+                "CIDSystemInfo /Supplement is not a nonnegative integer".into(),
+            ));
+        }
+    };
+
+    Ok(CidSystemInfo {
+        registry,
+        ordering,
+        supplement,
+    })
 }
 
 fn parse_widths(document: &Document, values: &Array) -> FontResult<BTreeMap<u16, f64>> {
@@ -575,5 +622,102 @@ mod tests {
         let document = Document::new();
         let value = Value::Dict(Dict::new().insert("Subtype", Value::Name("TrueType".into())));
         assert!(document.cid_font_type2(&value).unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_cid_system_info() {
+        let document = Document::new();
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Registry", Value::String("Adobe".into()))
+                    .insert("Ordering", Value::String("GB1".into()))
+                    .insert("Supplement", Value::Integer(5)),
+            ),
+        )]);
+
+        let font = document.cid_font_type2(&font).unwrap().unwrap();
+        let info = font.system_info();
+        assert_eq!(info.registry, "Adobe");
+        assert_eq!(info.ordering, "GB1");
+        assert_eq!(info.supplement, 5);
+    }
+
+    #[test]
+    fn rejects_missing_cid_system_info() {
+        let document = Document::new();
+        let dict = Dict::new()
+            .insert("Subtype", Value::Name("CIDFontType2".into()))
+            .insert("BaseFont", Value::Name("ExampleCIDFont".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(Dict::new().insert("Type", Value::Name("FontDescriptor".into()))),
+            );
+        // Missing CIDSystemInfo
+        let font = Value::Dict(dict);
+        assert!(document.cid_font_type2(&font).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_cid_system_info_fields() {
+        let document = Document::new();
+
+        // Missing Registry
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Ordering", Value::String("GB1".into()))
+                    .insert("Supplement", Value::Integer(0)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&font).is_err());
+
+        // Missing Ordering
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Registry", Value::String("Adobe".into()))
+                    .insert("Supplement", Value::Integer(0)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&font).is_err());
+
+        // Missing Supplement
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Registry", Value::String("Adobe".into()))
+                    .insert("Ordering", Value::String("GB1".into())),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&font).is_err());
+
+        // Negative Supplement
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Registry", Value::String("Adobe".into()))
+                    .insert("Ordering", Value::String("GB1".into()))
+                    .insert("Supplement", Value::Integer(-1)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&font).is_err());
+
+        // Non-string Registry
+        let font = cid_font(vec![(
+            "CIDSystemInfo",
+            Value::Dict(
+                Dict::new()
+                    .insert("Registry", Value::Integer(123))
+                    .insert("Ordering", Value::String("GB1".into()))
+                    .insert("Supplement", Value::Integer(0)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&font).is_err());
     }
 }

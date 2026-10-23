@@ -20,7 +20,7 @@ mod truetype;
 mod type0;
 mod type1_program;
 
-pub use cid::CidFontType2;
+pub use cid::{CidFontType2, CidSystemInfo};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};

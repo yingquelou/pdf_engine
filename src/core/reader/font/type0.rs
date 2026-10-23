@@ -173,7 +173,11 @@ impl Document {
                         "failed to decode Type 0 /ToUnicode CMap stream: {error}"
                     ))
                 })?;
-                Some(ToUnicodeMap::parse(&bytes)?)
+                Some(ToUnicodeMap::parse_inheriting(&bytes, |base| {
+                    Err(FontError::Invalid(format!(
+                        "ToUnicode CMap references unknown base /{base}"
+                    )))
+                })?)
             }
             None => None,
         };

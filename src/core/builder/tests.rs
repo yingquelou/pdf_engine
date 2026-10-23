@@ -246,3 +246,32 @@ fn text_with_unknown_encoding_name_falls_back_to_utf8() {
     let s = render(&mut b);
     assert!(s.contains("(é) Tj"), "未知编码名应保留 UTF-8 直写: {s}");
 }
+
+#[test]
+fn font_descriptor_is_written_when_provided() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let descriptor = FontDescriptor::new()
+        .with_family("Helvetica")
+        .with_ascent(718.0)
+        .with_descent(-207.0)
+        .with_cap_height(718.0)
+        .with_stem_v(80.0)
+        .with_flags(32);
+    let font = Font::helvetica(12.0).with_descriptor(descriptor);
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 对象
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFamily (Helvetica)"), "应含字体族名: {s}");
+    assert!(s.contains("/Ascent 718"), "应含上升高度: {s}");
+    assert!(s.contains("/Descent -207"), "应含下降深度: {s}");
+    assert!(s.contains("/CapHeight 718"), "应含大写字母高度: {s}");
+    assert!(s.contains("/StemV 80"), "应含竖笔宽度: {s}");
+    assert!(s.contains("/Flags 32"), "应含标志位: {s}");
+    // 字体字典应引用描述符
+    assert!(s.contains("/FontDescriptor"), "字体字典应引用描述符: {s}");
+}

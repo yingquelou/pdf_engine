@@ -27,7 +27,7 @@ mod assemble;
 mod tests;
 mod types;
 
-pub use types::{ColorSpace, Font, FontEncoding, ImageData, PageSize};
+pub use types::{ColorSpace, Font, FontDescriptor, FontEncoding, ImageData, PageSize};
 
 use crate::core::content::ContentStream;
 use crate::core::types::PdfVersion;

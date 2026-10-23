@@ -365,125 +365,31 @@ fn subtract_range(existing: &CidRange, cut: &CidRange) -> Vec<CidRange> {
 }
 
 impl ToUnicodeMap {
+    /// Parse a standalone ToUnicode CMap; a `/usecmap` base is rejected because
+    /// there is no resolver available. Production paths use [`Self::parse_inheriting`].
+    #[cfg(test)]
     pub fn parse(data: &[u8]) -> FontResult<Self> {
-        if data.len() > MAX_CMAP_BYTES {
-            return Err(invalid_cmap("ToUnicode stream exceeds the 16 MiB limit"));
+        let parsed = parse_to_unicode_sections(data)?;
+        if let Some(base) = &parsed.base {
+            return Err(FontError::Invalid(format!(
+                "invalid ToUnicode CMap: usecmap base /{base} cannot be resolved without a CMap resolver"
+            )));
         }
-        let tokens = tokenize(data)?;
-        let mut mappings = BTreeMap::new();
-        let mut index = 0;
-        while index < tokens.len() {
-            let Token::Word(operator) = &tokens[index] else {
-                index += 1;
-                continue;
-            };
-            match operator.as_str() {
-                "beginbfchar" => {
-                    let count = section_count(&tokens, index)?;
-                    if count > MAX_CMAP_ENTRIES {
-                        return Err(invalid_cmap("ToUnicode section contains too many entries"));
-                    }
-                    let mut cursor = index + 1;
-                    for _ in 0..count {
-                        let source = tokens
-                            .get(cursor)
-                            .ok_or_else(|| invalid_cmap("truncated bfchar source"))?;
-                        source_code(source)?;
-                        let Token::Hex(source_bytes) = source else {
-                            unreachable!();
-                        };
-                        let destination = tokens
-                            .get(cursor + 1)
-                            .ok_or_else(|| invalid_cmap("truncated bfchar destination"))?;
-                        let unicode = unicode_destination(destination)?;
-                        insert_unicode(&mut mappings, source_bytes.clone(), unicode)?;
-                        cursor += 2;
-                    }
-                    require_end_marker(&tokens, cursor, "endbfchar")?;
-                    index = cursor + 1;
-                }
-                "beginbfrange" => {
-                    let count = section_count(&tokens, index)?;
-                    if count > MAX_CMAP_ENTRIES {
-                        return Err(invalid_cmap("ToUnicode section contains too many entries"));
-                    }
-                    let mut cursor = index + 1;
-                    for _ in 0..count {
-                        let (source_length, low) = source_code(
-                            tokens
-                                .get(cursor)
-                                .ok_or_else(|| invalid_cmap("truncated bfrange source"))?,
-                        )?;
-                        let (high_length, high) = source_code(
-                            tokens
-                                .get(cursor + 1)
-                                .ok_or_else(|| invalid_cmap("truncated bfrange range"))?,
-                        )?;
-                        if source_length != high_length || low > high {
-                            return Err(invalid_cmap("invalid ToUnicode source range"));
-                        }
-                        let source_token = &tokens[cursor];
-                        let Token::Hex(source_bytes) = source_token else {
-                            unreachable!();
-                        };
-                        let span = high
-                            .checked_sub(low)
-                            .and_then(|span| span.checked_add(1))
-                            .and_then(|span| usize::try_from(span).ok())
-                            .ok_or_else(|| invalid_cmap("ToUnicode range length overflows"))?;
-                        if span > MAX_CMAP_ENTRIES
-                            || mappings.len().saturating_add(span) > MAX_CMAP_ENTRIES
-                        {
-                            return Err(invalid_cmap(
-                                "ToUnicode range expands to too many entries",
-                            ));
-                        }
-                        cursor += 2;
-                        match tokens.get(cursor) {
-                            Some(Token::Hex(first_destination)) => {
-                                unicode_destination(&tokens[cursor])?;
-                                for offset in 0..span {
-                                    let source = increment_source(source_bytes, offset)?;
-                                    let destination =
-                                        increment_destination(first_destination, offset)?;
-                                    let unicode = utf16be_to_string(&destination)?;
-                                    insert_unicode(&mut mappings, source, unicode)?;
-                                }
-                                cursor += 1;
-                            }
-                            Some(Token::Word(marker)) if marker == "[" => {
-                                cursor += 1;
-                                for offset in 0..span {
-                                    let destination = tokens.get(cursor).ok_or_else(|| {
-                                        invalid_cmap("truncated bfrange destination array")
-                                    })?;
-                                    let unicode = unicode_destination(destination)?;
-                                    let source = increment_source(source_bytes, offset)?;
-                                    insert_unicode(&mut mappings, source, unicode)?;
-                                    cursor += 1;
-                                }
-                                if !matches!(tokens.get(cursor), Some(Token::Word(marker)) if marker == "]")
-                                {
-                                    return Err(invalid_cmap(
-                                        "bfrange destination array has an invalid length",
-                                    ));
-                                }
-                                cursor += 1;
-                            }
-                            _ => {
-                                return Err(invalid_cmap(
-                                    "bfrange destination is neither a hex string nor an array",
-                                ));
-                            }
-                        }
-                    }
-                    require_end_marker(&tokens, cursor, "endbfrange")?;
-                    index = cursor + 1;
-                }
-                _ => index += 1,
-            }
+        parsed.finish()
+    }
+
+    /// Parse an embedded ToUnicode CMap that may inherit a base CMap through
+    /// `/BaseName usecmap`. Mappings defined here take precedence over
+    /// inherited ones.
+    pub fn parse_inheriting(
+        data: &[u8],
+        resolve: impl FnOnce(&str) -> FontResult<ToUnicodeMap>,
+    ) -> FontResult<Self> {
+        let parsed = parse_to_unicode_sections(data)?;
+        match parsed.base.clone() {
+            Some(name) => parsed.merge_into(resolve(&name)?),
+            None => parsed.finish(),
         }
-        Ok(Self { mappings })
     }
 
     pub fn unicode_for(&self, source_code: &[u8]) -> Option<&str> {
@@ -763,6 +669,161 @@ fn hex_value(byte: u8) -> u8 {
     }
 }
 
+/// Raw sections of an embedded ToUnicode CMap before a possible `usecmap` merge.
+struct ParsedToUnicodeMap {
+    mappings: BTreeMap<Vec<u8>, String>,
+    base: Option<String>,
+}
+
+impl ParsedToUnicodeMap {
+    fn finish(self) -> FontResult<ToUnicodeMap> {
+        Ok(ToUnicodeMap {
+            mappings: self.mappings,
+        })
+    }
+
+    fn merge_into(self, base: ToUnicodeMap) -> FontResult<ToUnicodeMap> {
+        // Local mappings take precedence over inherited ones.
+        let mut mappings = base.mappings;
+        for (source, unicode) in self.mappings {
+            mappings.insert(source, unicode);
+        }
+        Ok(ToUnicodeMap { mappings })
+    }
+}
+
+fn parse_to_unicode_sections(data: &[u8]) -> FontResult<ParsedToUnicodeMap> {
+    if data.len() > MAX_CMAP_BYTES {
+        return Err(invalid_cmap("ToUnicode stream exceeds the 16 MiB limit"));
+    }
+    let tokens = tokenize(data)?;
+    let mut mappings = BTreeMap::new();
+    let mut base = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        let Token::Word(operator) = &tokens[index] else {
+            index += 1;
+            continue;
+        };
+        match operator.as_str() {
+            "beginbfchar" => {
+                let count = section_count(&tokens, index)?;
+                if count > MAX_CMAP_ENTRIES {
+                    return Err(invalid_cmap("ToUnicode section contains too many entries"));
+                }
+                let mut cursor = index + 1;
+                for _ in 0..count {
+                    let source = tokens
+                        .get(cursor)
+                        .ok_or_else(|| invalid_cmap("truncated bfchar source"))?;
+                    source_code(source)?;
+                    let Token::Hex(source_bytes) = source else {
+                        unreachable!();
+                    };
+                    let destination = tokens
+                        .get(cursor + 1)
+                        .ok_or_else(|| invalid_cmap("truncated bfchar destination"))?;
+                    let unicode = unicode_destination(destination)?;
+                    insert_unicode(&mut mappings, source_bytes.clone(), unicode)?;
+                    cursor += 2;
+                }
+                require_end_marker(&tokens, cursor, "endbfchar")?;
+                index = cursor + 1;
+            }
+            "beginbfrange" => {
+                let count = section_count(&tokens, index)?;
+                if count > MAX_CMAP_ENTRIES {
+                    return Err(invalid_cmap("ToUnicode section contains too many entries"));
+                }
+                let mut cursor = index + 1;
+                for _ in 0..count {
+                    let (source_length, low) = source_code(
+                        tokens
+                            .get(cursor)
+                            .ok_or_else(|| invalid_cmap("truncated bfrange source"))?,
+                    )?;
+                    let (high_length, high) = source_code(
+                        tokens
+                            .get(cursor + 1)
+                            .ok_or_else(|| invalid_cmap("truncated bfrange range"))?,
+                    )?;
+                    if source_length != high_length || low > high {
+                        return Err(invalid_cmap("invalid ToUnicode source range"));
+                    }
+                    let source_token = &tokens[cursor];
+                    let Token::Hex(source_bytes) = source_token else {
+                        unreachable!();
+                    };
+                    let span = high
+                        .checked_sub(low)
+                        .and_then(|span| span.checked_add(1))
+                        .and_then(|span| usize::try_from(span).ok())
+                        .ok_or_else(|| invalid_cmap("ToUnicode range length overflows"))?;
+                    if span > MAX_CMAP_ENTRIES
+                        || mappings.len().saturating_add(span) > MAX_CMAP_ENTRIES
+                    {
+                        return Err(invalid_cmap("ToUnicode range expands to too many entries"));
+                    }
+                    cursor += 2;
+                    match tokens.get(cursor) {
+                        Some(Token::Hex(first_destination)) => {
+                            unicode_destination(&tokens[cursor])?;
+                            for offset in 0..span {
+                                let source = increment_source(source_bytes, offset)?;
+                                let destination = increment_destination(first_destination, offset)?;
+                                let unicode = utf16be_to_string(&destination)?;
+                                insert_unicode(&mut mappings, source, unicode)?;
+                            }
+                            cursor += 1;
+                        }
+                        Some(Token::Word(marker)) if marker == "[" => {
+                            cursor += 1;
+                            for offset in 0..span {
+                                let destination = tokens.get(cursor).ok_or_else(|| {
+                                    invalid_cmap("truncated bfrange destination array")
+                                })?;
+                                let unicode = unicode_destination(destination)?;
+                                let source = increment_source(source_bytes, offset)?;
+                                insert_unicode(&mut mappings, source, unicode)?;
+                                cursor += 1;
+                            }
+                            if !matches!(tokens.get(cursor), Some(Token::Word(marker)) if marker == "]")
+                            {
+                                return Err(invalid_cmap(
+                                    "bfrange destination array has an invalid length",
+                                ));
+                            }
+                            cursor += 1;
+                        }
+                        _ => {
+                            return Err(invalid_cmap(
+                                "bfrange destination is neither a hex string nor an array",
+                            ));
+                        }
+                    }
+                }
+                require_end_marker(&tokens, cursor, "endbfrange")?;
+                index = cursor + 1;
+            }
+            "usecmap" => {
+                if base.is_some() {
+                    return Err(invalid_cmap(
+                        "ToUnicode CMap contains more than one usecmap",
+                    ));
+                }
+                let base_name = match tokens.get(index.wrapping_sub(1)) {
+                    Some(Token::Word(name)) => name.clone(),
+                    _ => return Err(invalid_cmap("usecmap has no base CMap name")),
+                };
+                base = Some(base_name);
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    Ok(ParsedToUnicodeMap { mappings, base })
+}
+
 fn invalid_cmap(message: &str) -> FontError {
     FontError::Invalid(format!("invalid CID CMap: {message}"))
 }
@@ -914,5 +975,29 @@ mod tests {
         assert!(ToUnicodeMap::parse(b"2 beginbfchar <01> <0041> <01> <0042> endbfchar").is_err());
         assert!(ToUnicodeMap::parse(b"1 beginbfrange <FE> <FF> <FFFF> endbfrange").is_err());
         assert!(ToUnicodeMap::parse(b"1 beginbfrange <01> <02> [<0041>] endbfrange").is_err());
+    }
+
+    #[test]
+    fn tounicode_usecmap_inherits_and_overrides() {
+        let base_source = b"2 beginbfchar <01> <0041> <02> <0042> endbfchar";
+        let base = ToUnicodeMap::parse(base_source).unwrap();
+        let derived_source = b"/Base usecmap 1 beginbfchar <02> <0058> endbfchar";
+        let derived = ToUnicodeMap::parse_inheriting(derived_source, |name| match name {
+            "Base" => Ok(base.clone()),
+            other => panic!("unexpected base {other}"),
+        })
+        .unwrap();
+        assert_eq!(derived.unicode_for(&[0x01]), Some("A"));
+        assert_eq!(derived.unicode_for(&[0x02]), Some("X"));
+    }
+
+    #[test]
+    fn tounicode_usecmap_rejects_unknown_base() {
+        let source = b"/Unknown usecmap 1 beginbfchar <01> <0041> endbfchar";
+        assert!(ToUnicodeMap::parse(source).is_err());
+        assert!(
+            ToUnicodeMap::parse_inheriting(source, |_| { Err(invalid_cmap("unknown base")) })
+                .is_err()
+        );
     }
 }

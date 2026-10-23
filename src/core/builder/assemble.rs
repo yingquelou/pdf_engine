@@ -172,6 +172,13 @@ impl PdfBuilder {
             if let Some(encoding) = f.encoding.to_value() {
                 font_dict = font_dict.insert("Encoding", encoding);
             }
+            // 写入字体描述符（如果提供）
+            if let Some(descriptor) = &f.descriptor {
+                let descriptor_ref = num;
+                num += 1;
+                font_dict = font_dict.insert("FontDescriptor", Value::Ref(descriptor_ref, 0));
+                doc.set_object(Object::new(descriptor_ref, 0, descriptor.to_value()));
+            }
             doc.set_object(Object::new(*fnum, 0, Value::Dict(font_dict)));
         }
 
