@@ -23,6 +23,12 @@ impl ContentStream {
                 w.emit_literal(s);
                 w.emit_op_space(b"Tj");
             }
+            Op::ShowTextHex(bytes) => {
+                w.emit_byte(b'<');
+                w.emit_hex(bytes);
+                w.emit_byte(b'>');
+                w.emit_op_space(b"Tj");
+            }
             Op::ShowTextArray(items) => {
                 w.emit_byte(b'[');
                 for (i, item) in items.iter().enumerate() {
@@ -318,6 +324,13 @@ impl<'a> Writer<'a> {
     }
     fn emit_float(&mut self, v: f64) {
         self.0.extend_from_slice(format_float(v).as_bytes());
+    }
+    fn emit_hex(&mut self, bytes: &[u8]) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        for &byte in bytes {
+            self.0.push(HEX[usize::from(byte >> 4)]);
+            self.0.push(HEX[usize::from(byte & 0x0F)]);
+        }
     }
     fn emit_op(&mut self, kw: &[u8]) {
         self.0.extend_from_slice(kw);

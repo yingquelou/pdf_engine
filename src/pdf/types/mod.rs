@@ -15,6 +15,7 @@ mod rect;
 #[cfg(test)]
 mod tests;
 mod text_string;
+mod trees;
 mod value;
 mod version;
 
@@ -23,6 +24,7 @@ pub use document::Document;
 pub use features::FeatureProfile;
 pub use rect::{PdfRect, PdfRectError};
 pub use text_string::{PdfTextString, PdfTextStringError};
+pub use trees::{NameTree, NumberTree};
 pub use value::{
     Array, Dict, Object, StartXref, StreamData, SubXref, Trailer, Value, Xref, XrefEntry, XrefKind,
 };

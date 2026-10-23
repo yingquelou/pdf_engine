@@ -30,6 +30,14 @@ fn string_literal_escapes_parens_and_backslash() {
 }
 
 #[test]
+fn show_text_hex_writes_uppercase_hexadecimal_string() {
+    let mut s = ContentStream::new();
+    s.show_text_hex([0x00u8, 0x41, 0xab, 0x0f]);
+    let bytes = s.to_bytes();
+    assert_eq!(bytes, b"<0041AB0F> Tj\n");
+}
+
+#[test]
 fn save_concat_restore_chain() {
     let mut s = ContentStream::new();
     s.save_state()

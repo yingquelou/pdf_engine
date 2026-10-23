@@ -51,6 +51,14 @@ impl Document {
         self.font_program(value, "CIDFontType2", &[FontProgramSource::FontFile2])
     }
 
+    /// Resolve and decode the embedded `/FontFile3` stream in a CIDFontType0.
+    ///
+    /// The stream `/Subtype` (`/CIDFontType0C` or `/OpenType`) is returned
+    /// for the caller to validate.
+    pub fn cid_font_type0_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
+        self.font_program(value, "CIDFontType0", &[FontProgramSource::FontFile3])
+    }
+
     fn font_program(
         &self,
         value: &Value,

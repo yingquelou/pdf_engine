@@ -105,6 +105,14 @@ impl ContentStream {
         self
     }
 
+    /// 以十六进制字符串绘制文本：`<...> Tj`——**不包 BT/ET 或移动**。
+    ///
+    /// 用于 Type 0/CID 等复合字体的多字节字符码。
+    pub fn show_text_hex(&mut self, bytes: impl Into<Vec<u8>>) -> &mut Self {
+        self.push(Op::ShowTextHex(bytes.into()));
+        self
+    }
+
     /// 最常用一体式便捷方法：`BT /name size Tf x y Td (text) Tj ET`。
     ///
     /// 覆盖当前 `PdfBuilder::text` 的输出模式。

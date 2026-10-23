@@ -2123,9 +2123,9 @@ fn type1_font_program_reports_malformed_descriptor_entries() {
     assert!(doc.type1_font_program(&make_font(missing_subtype)).is_err());
 }
 
-#[test]
-fn truetype_font_program_resolves_and_parses_fontfile2() {
-    let doc = Document::new();
+/// 合成一个最小可解析的 TrueType 程序：head/maxp/hhea/hmtx/cmap/loca/glyf，
+/// 1000 upem、3 个字形、cmap format 4（A → glyph 2）。
+fn sample_sfnt_font() -> Vec<u8> {
     let mut sfnt = vec![0; 346];
     sfnt[..4].copy_from_slice(&[0, 1, 0, 0]);
     sfnt[4..6].copy_from_slice(&7u16.to_be_bytes());
@@ -2189,6 +2189,13 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
     sfnt[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
     sfnt[340..342].copy_from_slice(&0x0002u16.to_be_bytes());
     sfnt[342..344].copy_from_slice(&0u16.to_be_bytes());
+    sfnt
+}
+
+#[test]
+fn truetype_font_program_resolves_and_parses_fontfile2() {
+    let doc = Document::new();
+    let sfnt = sample_sfnt_font();
     let font = Value::Dict(
         Dict::new()
             .insert("Subtype", Value::Name("TrueType".into()))
@@ -2971,4 +2978,147 @@ fn xref_generation_mismatch_defers_to_object_header() {
         Some("Gen0")
     );
     assert_eq!(doc.cached_object_count(), 1, "解析结果应进入缓存");
+}
+
+/// 写入 → 重新解析 → 提取：Type 0 + CIDFontType2（合成 TrueType 程序、
+/// ToUnicode CMap）下的十六进制 CID 文本应原样还原为 Unicode。
+#[test]
+fn type0_text_roundtrips_through_writer_and_extractor() {
+    let mut content = pdf::content::ContentStream::new();
+    content
+        .begin_text()
+        .set_font("F1", 18.0)
+        .move_next_line(72.0, 700.0)
+        .show_text_hex([0x00u8, 0x41, 0x00, 0x42, 0x00, 0x43])
+        .end_text();
+
+    let to_unicode = b"/CIDInit /ProcSet findresource begin\n\
+12 dict begin\n\
+begincmap\n\
+/CMapName /Test-UCS2 def\n\
+/CMapType 2 def\n\
+1 begincodespacerange\n\
+<0000> <FFFF>\n\
+endcodespacerange\n\
+3 beginbfchar\n\
+<0041> <4E2D>\n\
+<0042> <6587>\n\
+<0043> <D83DDE00>\n\
+endbfchar\n\
+endcmap\n\
+CMapName currentdict /CMap defineresource pop\n\
+end\n\
+end"
+    .to_vec();
+
+    let mut doc = Document::new();
+    doc.set_object(Object::new(
+        1,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Catalog".into()))
+                .insert("Pages", Value::Ref(2, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        2,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Pages".into()))
+                .insert("Kids", Value::Array(Array::new().push(Value::Ref(3, 0))))
+                .insert("Count", Value::Integer(1)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        3,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Page".into()))
+                .insert("Parent", Value::Ref(2, 0))
+                .insert("Contents", Value::Ref(5, 0))
+                .insert(
+                    "Resources",
+                    Value::Dict(Dict::new().insert(
+                        "Font",
+                        Value::Dict(Dict::new().insert("F1", Value::Ref(4, 0))),
+                    )),
+                ),
+        ),
+    ));
+    doc.set_object(Object::new(
+        4,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name("Type0".into()))
+                .insert("BaseFont", Value::Name("ExampleCIDFont".into()))
+                .insert("Encoding", Value::Name("Identity-H".into()))
+                .insert(
+                    "DescendantFonts",
+                    Value::Array(Array::new().push(Value::Ref(6, 0))),
+                )
+                .insert("ToUnicode", Value::Ref(7, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        5,
+        0,
+        Value::Stream(Dict::new(), StreamData::Owned(content.to_bytes())),
+    ));
+    doc.set_object(Object::new(
+        6,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name("CIDFontType2".into()))
+                .insert("BaseFont", Value::Name("ExampleCIDFont".into()))
+                .insert(
+                    "CIDSystemInfo",
+                    Value::Dict(
+                        Dict::new()
+                            .insert("Registry", Value::String("Adobe".into()))
+                            .insert("Ordering", Value::String("Identity".into()))
+                            .insert("Supplement", Value::Integer(0)),
+                    ),
+                )
+                .insert("CIDToGIDMap", Value::Name("Identity".into()))
+                .insert("FontDescriptor", Value::Ref(8, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        7,
+        0,
+        Value::Stream(Dict::new(), StreamData::Owned(to_unicode)),
+    ));
+    doc.set_object(Object::new(
+        8,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("FontDescriptor".into()))
+                .insert("FontName", Value::Name("ExampleCIDFont".into()))
+                .insert("FontFile2", Value::Ref(9, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        9,
+        0,
+        Value::Stream(Dict::new(), StreamData::Owned(sample_sfnt_font())),
+    ));
+    doc.trailer = Trailer {
+        dict: Dict::new()
+            .insert("Root", Value::Ref(1, 0))
+            .insert("Size", Value::Integer(10)),
+    };
+
+    let mut buf = Vec::new();
+    pdf::writer::write_document(&doc, &mut buf).expect("write");
+
+    let reparsed = parse_buf(&buf);
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("中文😀"));
 }

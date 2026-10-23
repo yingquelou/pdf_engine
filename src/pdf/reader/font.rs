@@ -8,6 +8,7 @@ use super::ParseError;
 
 mod cid;
 mod cid_cmap;
+mod cid_type0;
 mod embedded_program;
 mod encoding_data;
 mod encoding_unicode;
@@ -16,9 +17,10 @@ mod truetype;
 mod type0;
 
 pub use cid::CidFontType2;
+pub use cid_type0::CidFontType0;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 pub use truetype::{CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph};
-pub use type0::{Type0DecodedCode, Type0Font};
+pub use type0::{CidDescendant, Type0DecodedCode, Type0Font};
 
 type FontResult<T> = std::result::Result<T, FontError>;
 

@@ -75,6 +75,7 @@ mod parser;
 mod security;
 #[cfg(test)]
 mod tests;
+pub mod text;
 mod xref;
 
 pub use lexer::Lexer;

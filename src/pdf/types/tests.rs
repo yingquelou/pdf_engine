@@ -276,3 +276,181 @@ fn pdf_text_string_rejects_malformed_utf16be() {
         );
     }
 }
+
+#[test]
+fn name_tree_parses_leaf_node() {
+    let doc = Document::new();
+    let dict = Dict::new().insert(
+        "Names",
+        Value::Array(
+            Array::new()
+                .push(Value::String("alpha".into()))
+                .push(Value::Integer(1))
+                .push(Value::String("beta".into()))
+                .push(Value::Integer(2)),
+        ),
+    );
+    let tree = NameTree::parse(&doc, &dict).unwrap();
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree.get("alpha"), Some(&Value::Integer(1)));
+    assert_eq!(tree.get("beta"), Some(&Value::Integer(2)));
+    assert_eq!(tree.get("gamma"), None);
+}
+
+#[test]
+fn name_tree_parses_intermediate_node_with_kids() {
+    let doc = Document::new();
+    let kid1 = Dict::new().insert(
+        "Names",
+        Value::Array(
+            Array::new()
+                .push(Value::String("a".into()))
+                .push(Value::Integer(10)),
+        ),
+    );
+    let kid2 = Dict::new().insert(
+        "Names",
+        Value::Array(
+            Array::new()
+                .push(Value::String("b".into()))
+                .push(Value::Integer(20)),
+        ),
+    );
+    doc.set_object(Object::new(1, 0, Value::Dict(kid1)));
+    doc.set_object(Object::new(2, 0, Value::Dict(kid2)));
+    let root = Dict::new().insert(
+        "Kids",
+        Value::Array(Array::new().push(Value::Ref(1, 0)).push(Value::Ref(2, 0))),
+    );
+    let tree = NameTree::parse(&doc, &root).unwrap();
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree.get("a"), Some(&Value::Integer(10)));
+    assert_eq!(tree.get("b"), Some(&Value::Integer(20)));
+}
+
+#[test]
+fn name_tree_insert_and_to_dict_roundtrip() {
+    let mut tree = NameTree::new();
+    tree.insert("x", Value::Integer(100));
+    tree.insert("y", Value::Integer(200));
+    let dict = tree.to_dict();
+    let doc = Document::new();
+    let parsed = NameTree::parse(&doc, &dict).unwrap();
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed.get("x"), Some(&Value::Integer(100)));
+    assert_eq!(parsed.get("y"), Some(&Value::Integer(200)));
+}
+
+#[test]
+fn name_tree_rejects_odd_names_array() {
+    let doc = Document::new();
+    let dict = Dict::new().insert(
+        "Names",
+        Value::Array(
+            Array::new()
+                .push(Value::String("key".into()))
+                .push(Value::Integer(1))
+                .push(Value::String("orphan".into())),
+        ),
+    );
+    assert!(NameTree::parse(&doc, &dict).is_err());
+}
+
+#[test]
+fn number_tree_parses_leaf_node() {
+    let doc = Document::new();
+    let dict = Dict::new().insert(
+        "Nums",
+        Value::Array(
+            Array::new()
+                .push(Value::Integer(0))
+                .push(Value::String("zero".into()))
+                .push(Value::Integer(5))
+                .push(Value::String("five".into())),
+        ),
+    );
+    let tree = NumberTree::parse(&doc, &dict).unwrap();
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree.get(0), Some(&Value::String("zero".into())));
+    assert_eq!(tree.get(5), Some(&Value::String("five".into())));
+    assert_eq!(tree.get(3), None);
+}
+
+#[test]
+fn number_tree_parses_intermediate_node_with_kids() {
+    let doc = Document::new();
+    let kid1 = Dict::new().insert(
+        "Nums",
+        Value::Array(
+            Array::new()
+                .push(Value::Integer(1))
+                .push(Value::Integer(100)),
+        ),
+    );
+    let kid2 = Dict::new().insert(
+        "Nums",
+        Value::Array(
+            Array::new()
+                .push(Value::Integer(2))
+                .push(Value::Integer(200)),
+        ),
+    );
+    doc.set_object(Object::new(1, 0, Value::Dict(kid1)));
+    doc.set_object(Object::new(2, 0, Value::Dict(kid2)));
+    let root = Dict::new().insert(
+        "Kids",
+        Value::Array(Array::new().push(Value::Ref(1, 0)).push(Value::Ref(2, 0))),
+    );
+    let tree = NumberTree::parse(&doc, &root).unwrap();
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree.get(1), Some(&Value::Integer(100)));
+    assert_eq!(tree.get(2), Some(&Value::Integer(200)));
+}
+
+#[test]
+fn number_tree_insert_and_to_dict_roundtrip() {
+    let mut tree = NumberTree::new();
+    tree.insert(10, Value::String("ten".into()));
+    tree.insert(20, Value::String("twenty".into()));
+    let dict = tree.to_dict();
+    let doc = Document::new();
+    let parsed = NumberTree::parse(&doc, &dict).unwrap();
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed.get(10), Some(&Value::String("ten".into())));
+    assert_eq!(parsed.get(20), Some(&Value::String("twenty".into())));
+}
+
+#[test]
+fn number_tree_rejects_odd_nums_array() {
+    let doc = Document::new();
+    let dict = Dict::new().insert(
+        "Nums",
+        Value::Array(
+            Array::new()
+                .push(Value::Integer(1))
+                .push(Value::String("val".into()))
+                .push(Value::Integer(2)),
+        ),
+    );
+    assert!(NumberTree::parse(&doc, &dict).is_err());
+}
+
+#[test]
+fn name_tree_iter_returns_sorted_entries() {
+    let mut tree = NameTree::new();
+    tree.insert("c", Value::Integer(3));
+    tree.insert("a", Value::Integer(1));
+    tree.insert("b", Value::Integer(2));
+    let keys: Vec<_> = tree.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn number_tree_iter_returns_sorted_entries() {
+    let mut tree = NumberTree::new();
+    tree.insert(30, Value::String("thirty".into()));
+    tree.insert(10, Value::String("ten".into()));
+    tree.insert(20, Value::String("twenty".into()));
+    let keys: Vec<_> = tree.iter().map(|(k, _)| *k).collect();
+    assert_eq!(keys, vec![10, 20, 30]);
+}

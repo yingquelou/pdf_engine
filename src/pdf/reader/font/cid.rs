@@ -77,44 +77,7 @@ impl Document {
             return Ok(None);
         }
 
-        let base_font = dict
-            .get("BaseFont")
-            .and_then(Value::as_name)
-            .ok_or_else(|| FontError::Invalid("missing or invalid CID font /BaseFont".into()))?
-            .to_owned();
-        validate_cid_system_info(self, dict)?;
-        let descriptor = dict
-            .get("FontDescriptor")
-            .ok_or_else(|| FontError::Invalid("CIDFontType2 is missing /FontDescriptor".into()))?;
-        let descriptor = self.resolve_value(descriptor)?;
-        let descriptor = descriptor.as_dict().ok_or_else(|| {
-            FontError::Invalid("CIDFontType2 /FontDescriptor is not a dictionary".into())
-        })?;
-        if descriptor.get("Type").and_then(Value::as_name) != Some("FontDescriptor") {
-            return Err(FontError::Invalid(
-                "CIDFontType2 /FontDescriptor has a missing or invalid /Type".into(),
-            ));
-        }
-
-        let default_width = match dict.get("DW") {
-            Some(value) => {
-                let value = self.resolve_value(value)?;
-                number(&value).ok_or_else(|| {
-                    FontError::Invalid("CID font /DW is not a finite number".into())
-                })?
-            }
-            None => 1000.0,
-        };
-        let widths = match dict.get("W") {
-            Some(value) => {
-                let value = self.resolve_value(value)?;
-                let array = value
-                    .as_array()
-                    .ok_or_else(|| FontError::Invalid("CID font /W is not an array".into()))?;
-                parse_widths(self, array)?
-            }
-            None => BTreeMap::new(),
-        };
+        let metrics = parse_cid_metrics(self, dict)?;
 
         let cid_to_gid = match dict.get("CIDToGIDMap") {
             None => CidToGidMap::Identity,
@@ -154,13 +117,66 @@ impl Document {
             .map(|program| TrueTypeFont::parse(program.data))
             .transpose()?;
         Ok(Some(CidFontType2 {
-            base_font,
-            default_width,
-            widths,
+            base_font: metrics.base_font,
+            default_width: metrics.default_width,
+            widths: metrics.widths,
             cid_to_gid,
             true_type_font,
         }))
     }
+}
+
+/// CID-keyed font metrics shared by CIDFontType0 and CIDFontType2.
+pub(super) struct CidMetrics {
+    pub(super) base_font: String,
+    pub(super) default_width: f64,
+    pub(super) widths: BTreeMap<u16, f64>,
+}
+
+/// Parse the metrics common to both CID-keyed descendant font types.
+pub(super) fn parse_cid_metrics(document: &Document, dict: &Dict) -> FontResult<CidMetrics> {
+    let base_font = dict
+        .get("BaseFont")
+        .and_then(Value::as_name)
+        .ok_or_else(|| FontError::Invalid("missing or invalid CID font /BaseFont".into()))?
+        .to_owned();
+    validate_cid_system_info(document, dict)?;
+    let descriptor = dict
+        .get("FontDescriptor")
+        .ok_or_else(|| FontError::Invalid("CID font is missing /FontDescriptor".into()))?;
+    let descriptor = document.resolve_value(descriptor)?;
+    let descriptor = descriptor
+        .as_dict()
+        .ok_or_else(|| FontError::Invalid("CID font /FontDescriptor is not a dictionary".into()))?;
+    if descriptor.get("Type").and_then(Value::as_name) != Some("FontDescriptor") {
+        return Err(FontError::Invalid(
+            "CID font /FontDescriptor has a missing or invalid /Type".into(),
+        ));
+    }
+
+    let default_width = match dict.get("DW") {
+        Some(value) => {
+            let value = document.resolve_value(value)?;
+            number(&value)
+                .ok_or_else(|| FontError::Invalid("CID font /DW is not a finite number".into()))?
+        }
+        None => 1000.0,
+    };
+    let widths = match dict.get("W") {
+        Some(value) => {
+            let value = document.resolve_value(value)?;
+            let array = value
+                .as_array()
+                .ok_or_else(|| FontError::Invalid("CID font /W is not an array".into()))?;
+            parse_widths(document, array)?
+        }
+        None => BTreeMap::new(),
+    };
+    Ok(CidMetrics {
+        base_font,
+        default_width,
+        widths,
+    })
 }
 
 fn validate_cid_system_info(document: &Document, dict: &Dict) -> FontResult<()> {

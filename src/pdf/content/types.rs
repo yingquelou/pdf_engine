@@ -83,6 +83,11 @@ pub enum Op {
         size: f64,
     },
     ShowText(String),
+    /// 以十六进制字符串绘制文本：`<...> Tj`。
+    ///
+    /// 复合字体（Type 0/CID）的字符码常为非 ASCII 的多字节值，
+    /// 按十六进制形式书写。
+    ShowTextHex(Vec<u8>),
     ShowTextArray(Vec<TextArrayItem>),
     MoveNextLine {
         tx: f64,

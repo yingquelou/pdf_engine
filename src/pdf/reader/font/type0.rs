@@ -1,7 +1,7 @@
 use crate::pdf::types::{Document, Value};
 
 use super::{
-    CidFontType2, FontError, FontResult,
+    CidFontType0, CidFontType2, FontError, FontResult,
     cid_cmap::{CidCMap, ToUnicodeMap, identity_cmap},
 };
 
@@ -20,13 +20,51 @@ pub struct Type0DecodedCode {
     pub unicode: Option<String>,
 }
 
-/// Parsed Type 0 parent font backed by a CIDFontType2 descendant.
+/// The supported descendant types behind a Type 0 parent font.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CidDescendant {
+    /// CIDFontType0 with CID-keyed Type 1/CFF outlines.
+    Type0(CidFontType0),
+    /// CIDFontType2 with TrueType outlines and `/CIDToGIDMap`.
+    Type2(CidFontType2),
+}
+
+impl CidDescendant {
+    /// Return the descendant font's `/BaseFont` name.
+    pub fn base_font(&self) -> &str {
+        match self {
+            Self::Type0(font) => font.base_font(),
+            Self::Type2(font) => font.base_font(),
+        }
+    }
+
+    /// Return the horizontal width for a CID using `/W` and `/DW`.
+    pub fn width_for_cid(&self, cid: u16) -> f64 {
+        match self {
+            Self::Type0(font) => font.width_for_cid(cid),
+            Self::Type2(font) => font.width_for_cid(cid),
+        }
+    }
+
+    /// Return the glyph ID selected by `/CIDToGIDMap`.
+    ///
+    /// CIDFontType0 selects glyphs by CID inside the font program, so this
+    /// returns `None` for that descendant type.
+    pub fn glyph_id_for_cid(&self, cid: u16) -> Option<u16> {
+        match self {
+            Self::Type0(_) => None,
+            Self::Type2(font) => font.glyph_id_for_cid(cid),
+        }
+    }
+}
+
+/// Parsed Type 0 parent font backed by a CIDFontType2 or CIDFontType0 descendant.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type0Font {
     base_font: String,
     encoding: CidCMap,
     to_unicode: Option<ToUnicodeMap>,
-    descendant: CidFontType2,
+    descendant: CidDescendant,
 }
 
 impl Type0Font {
@@ -40,8 +78,8 @@ impl Type0Font {
         self.encoding.writing_mode() == 1
     }
 
-    /// Return the parsed descendant CIDFontType2.
-    pub fn descendant(&self) -> &CidFontType2 {
+    /// Return the parsed descendant CID font.
+    pub fn descendant(&self) -> &CidDescendant {
         &self.descendant
     }
 
@@ -68,11 +106,13 @@ impl Type0Font {
 }
 
 impl Document {
-    /// Parse a Type 0 composite font with a CIDFontType2 descendant.
+    /// Parse a Type 0 composite font with a CIDFontType2 or CIDFontType0
+    /// descendant.
     ///
     /// The predefined `/Identity-H` and `/Identity-V` encodings and embedded
     /// CMaps with codespace, `cidchar`, and `cidrange` sections are supported.
-    /// CMap inheritance via `usecmap` is intentionally rejected.
+    /// Embedded CMaps may inherit `/Identity-H` or `/Identity-V` through
+    /// `usecmap`; other predefined base CMaps are not supported.
     ///
     /// Returns `Ok(None)` for values whose `/Subtype` is not `/Type0`.
     pub fn type0_font(&self, value: &Value) -> FontResult<Option<Type0Font>> {
@@ -106,7 +146,13 @@ impl Document {
                         "failed to decode Type 0 /Encoding CMap stream: {error}"
                     ))
                 })?;
-                CidCMap::parse(&bytes)?
+                CidCMap::parse_inheriting(&bytes, |name| match name {
+                    "Identity-H" => Ok(identity_cmap(0)),
+                    "Identity-V" => Ok(identity_cmap(1)),
+                    _ => Err(FontError::Invalid(format!(
+                        "unsupported predefined CMap /{name} in usecmap"
+                    ))),
+                })?
             }
             _ => {
                 return Err(FontError::Invalid(
@@ -145,9 +191,17 @@ impl Document {
             ));
         }
         let descendant_value = self.resolve_value(&descendants.0[0])?;
-        let descendant = self.cid_font_type2(&descendant_value)?.ok_or_else(|| {
-            FontError::Invalid("Type 0 descendant font is not a supported /CIDFontType2".into())
-        })?;
+        let descendant = match self.cid_font_type2(&descendant_value)? {
+            Some(font) => CidDescendant::Type2(font),
+            None => match self.cid_font_type0(&descendant_value)? {
+                Some(font) => CidDescendant::Type0(font),
+                None => {
+                    return Err(FontError::Invalid(
+                        "Type 0 descendant font is neither /CIDFontType2 nor /CIDFontType0".into(),
+                    ));
+                }
+            },
+        };
         Ok(Some(Type0Font {
             base_font,
             encoding,
@@ -160,6 +214,8 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use crate::pdf::types::{Array, Dict, Document, StreamData, Value};
+
+    use super::CidDescendant;
 
     fn cid_descendant() -> Value {
         Value::Dict(
@@ -250,6 +306,39 @@ mod tests {
     }
 
     #[test]
+    fn embedded_cmap_inherits_identity_usecmap() {
+        let document = Document::new();
+        let cmap = b"
+            /Identity-H usecmap
+            1 begincodespacerange <0000> <FFFF> endcodespacerange
+            1 begincidchar <0041> 7 endcidchar";
+        let font = document
+            .type0_font(&type0_font(Value::Stream(
+                Dict::new(),
+                StreamData::Owned(cmap.to_vec()),
+            )))
+            .unwrap()
+            .unwrap();
+        let decoded = font.decode_codes(&[0, 0x41, 0, 0x42]).unwrap();
+        assert_eq!(decoded[0].cid, 7);
+        assert_eq!(decoded[1].cid, 0x42);
+    }
+
+    #[test]
+    fn rejects_unsupported_usecmap_bases() {
+        let document = Document::new();
+        let cmap = b"/UniJIS-UCS2-H usecmap 1 begincodespacerange <0000> <FFFF> endcodespacerange";
+        assert!(
+            document
+                .type0_font(&type0_font(Value::Stream(
+                    Dict::new(),
+                    StreamData::Owned(cmap.to_vec()),
+                )))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn maps_decoded_codes_to_unicode_sequences() {
         let document = Document::new();
         let to_unicode = b"
@@ -323,5 +412,68 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    fn cid_type0_descendant() -> Value {
+        Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("CIDFontType0".into()))
+                .insert("BaseFont", Value::Name("ExampleCIDType0".into()))
+                .insert(
+                    "CIDSystemInfo",
+                    Value::Dict(
+                        Dict::new()
+                            .insert("Registry", Value::String("Adobe".into()))
+                            .insert("Ordering", Value::String("Identity".into()))
+                            .insert("Supplement", Value::Integer(0)),
+                    ),
+                )
+                .insert(
+                    "FontDescriptor",
+                    Value::Dict(
+                        Dict::new()
+                            .insert("Type", Value::Name("FontDescriptor".into()))
+                            .insert(
+                                "FontFile3",
+                                Value::Stream(
+                                    Dict::new()
+                                        .insert("Subtype", Value::Name("CIDFontType0C".into())),
+                                    StreamData::Owned(b"CFF ".to_vec()),
+                                ),
+                            ),
+                    ),
+                )
+                .insert(
+                    "W",
+                    Value::Array(
+                        Array::new()
+                            .push(Value::Integer(65))
+                            .push(Value::Array(Array::new().push(Value::Integer(500)))),
+                    ),
+                ),
+        )
+    }
+
+    #[test]
+    fn accepts_cid_font_type0_descendant_without_glyph_mapping() {
+        let document = Document::new();
+        let font = Value::Dict(
+            Dict::new()
+                .insert("Subtype", Value::Name("Type0".into()))
+                .insert("BaseFont", Value::Name("ExampleComposite".into()))
+                .insert("Encoding", Value::Name("Identity-H".into()))
+                .insert(
+                    "DescendantFonts",
+                    Value::Array(Array::new().push(cid_type0_descendant())),
+                ),
+        );
+        let font = document.type0_font(&font).unwrap().unwrap();
+        let decoded = font.decode_codes(&[0, 65, 0, 66]).unwrap();
+        assert_eq!(decoded[0].cid, 65);
+        assert_eq!(decoded[0].glyph_id, None);
+        assert_eq!(decoded[0].width, 500.0);
+        assert_eq!(decoded[1].width, 1000.0);
+        assert!(matches!(font.descendant(), CidDescendant::Type0(_)));
+        assert_eq!(font.descendant().base_font(), "ExampleCIDType0");
     }
 }
