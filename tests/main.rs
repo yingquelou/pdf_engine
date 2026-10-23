@@ -2,16 +2,16 @@
 
 use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
-use demo::pdf;
-use demo::pdf::reader::Parser;
-use demo::pdf::reader::font::{
+use md5::{Digest, Md5};
+use pdf_engine::core;
+use pdf_engine::core::reader::Parser;
+use pdf_engine::core::reader::font::{
     EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor, Type1BuiltinEncoding,
     Type1PathSegment,
 };
-use demo::pdf::types::{
+use pdf_engine::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value, XrefKind,
 };
-use md5::{Digest, Md5};
 use rc4::{
     Rc4, StreamCipher,
     consts::{U5, U10, U16},
@@ -31,7 +31,7 @@ fn parse_buf_with_password(buf: &[u8], password: &[u8]) -> Document {
 fn parse_buf_result(
     buf: &[u8],
     password: Option<&[u8]>,
-) -> Result<Document, demo::pdf::reader::ParseError> {
+) -> Result<Document, pdf_engine::core::reader::ParseError> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -110,7 +110,7 @@ fn sample_doc() -> Document {
 fn roundtrip_preserves_structure() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
 
     let doc2 = parse_buf(&buf);
 
@@ -144,7 +144,7 @@ fn roundtrip_preserves_structure() {
 fn xref_offsets_are_valid() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
 
     // 逐条目校验：
     // - 普通条目（type 1，按偏移定位）偏移处应能读到 "N G obj"；
@@ -200,7 +200,7 @@ fn xref_offsets_are_valid() {
 fn lazy_load_only_requested_objects() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
 
     let doc2 = parse_buf(&buf);
 
@@ -242,7 +242,7 @@ fn lazy_load_only_requested_objects() {
 fn render_one_page_walks_minimal_chain() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
 
     let doc2 = parse_buf(&buf);
 
@@ -286,7 +286,7 @@ fn render_one_page_walks_minimal_chain() {
 fn reader_parses_declared_version() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
 
     let doc2 = parse_buf(&buf);
     // writer 默认写 1.7（输出 XRef 流 + 对象流）
@@ -307,7 +307,7 @@ fn writer_defaults_to_1_7_not_doc_source_version() {
     // 设 source_version 为低版本（1.3），但 writer 应忽略
     doc.source_version = PdfVersion::V1_3;
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
     // 头部应是 "%PDF-1.7" 而非 "%PDF-1.3"
     assert!(
         buf.starts_with(b"%PDF-1.7\n"),
@@ -326,11 +326,11 @@ fn writer_defaults_to_1_7_not_doc_source_version() {
 fn writer_rejects_unsupported_version() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    let e = pdf::writer::DocumentWriter::new()
+    let e = core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V2_0)
         .build(&doc, &mut buf)
         .unwrap_err();
-    assert!(matches!(e, pdf::writer::WriteError::UnsupportedVersion(_)));
+    assert!(matches!(e, core::writer::WriteError::UnsupportedVersion(_)));
 }
 
 /// xref 损坏时回退到全文扫描，仍能取到对象。
@@ -339,7 +339,7 @@ fn writer_rejects_unsupported_version() {
 fn damaged_xref_falls_back_to_full_scan() {
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::DocumentWriter::new()
+    core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_4)
         .build(&doc, &mut buf)
         .expect("write");
@@ -370,7 +370,7 @@ fn missing_header_defaults_version_with_warning() {
     // 构造一个没有 %PDF 头的 PDF（仅对象 + xref + trailer + startxref）
     let doc = sample_doc();
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
     // 剥掉头部 "%PDF-x.y\n%....\n"
     let stripped = strip_pdf_header(&buf);
 
@@ -403,7 +403,7 @@ fn strip_pdf_header(buf: &[u8]) -> Vec<u8> {
 fn writer_builder_with_version() {
     let doc = sample_doc(); // 默认 1.7
     let mut buf = Vec::new();
-    pdf::writer::DocumentWriter::new()
+    core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_3)
         .build(&doc, &mut buf)
         .expect("build");
@@ -1114,9 +1114,9 @@ fn undecodable_filter_obj_stm_fails_gracefully() {
 }
 
 /// 用指定目标版本写出文档（供内容-版本校验类测试复用）。
-fn try_write(doc: &Document, version: PdfVersion) -> Result<Vec<u8>, pdf::writer::WriteError> {
+fn try_write(doc: &Document, version: PdfVersion) -> Result<Vec<u8>, core::writer::WriteError> {
     let mut buf = Vec::new();
-    pdf::writer::DocumentWriter::new()
+    core::writer::DocumentWriter::new()
         .with_version(version)
         .build(doc, &mut buf)?;
     Ok(buf)
@@ -1324,12 +1324,12 @@ fn filter_stream_doc(filter: &str) -> Document {
 fn content_version_check_rejects_jpx_below_1_5() {
     let doc = filter_stream_doc("JPXDecode");
     let mut buf = Vec::new();
-    let e = pdf::writer::DocumentWriter::new()
+    let e = core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_4)
         .build(&doc, &mut buf)
         .expect_err("1.4 目标下 JPXDecode 应被拒");
     let msg = match e {
-        pdf::writer::WriteError::UnsupportedVersion(m) => m,
+        core::writer::WriteError::UnsupportedVersion(m) => m,
         other => panic!("expected UnsupportedVersion, got {other:?}"),
     };
     assert!(msg.contains("JPXDecode"), "信息应含特性名：{msg}");
@@ -1351,7 +1351,7 @@ fn content_feature_checks_cover_jbig2_transparency_oc_and_encryption() {
     let jbig2 = filter_stream_doc("JBIG2Decode");
     assert!(matches!(
         try_write(&jbig2, PdfVersion::V1_3),
-        Err(pdf::writer::WriteError::UnsupportedVersion(_))
+        Err(core::writer::WriteError::UnsupportedVersion(_))
     ));
     assert!(try_write(&jbig2, PdfVersion::V1_4).is_ok());
 
@@ -1364,7 +1364,7 @@ fn content_feature_checks_cover_jbig2_transparency_oc_and_encryption() {
     ));
     assert!(matches!(
         try_write(&smask, PdfVersion::V1_3),
-        Err(pdf::writer::WriteError::UnsupportedVersion(_))
+        Err(core::writer::WriteError::UnsupportedVersion(_))
     ));
     assert!(try_write(&smask, PdfVersion::V1_4).is_ok());
 
@@ -1381,7 +1381,7 @@ fn content_feature_checks_cover_jbig2_transparency_oc_and_encryption() {
     ));
     assert!(matches!(
         try_write(&gstate, PdfVersion::V1_3),
-        Err(pdf::writer::WriteError::UnsupportedVersion(_))
+        Err(core::writer::WriteError::UnsupportedVersion(_))
     ));
     assert!(try_write(&gstate, PdfVersion::V1_4).is_ok());
 
@@ -1399,7 +1399,7 @@ fn content_feature_checks_cover_jbig2_transparency_oc_and_encryption() {
     ));
     assert!(matches!(
         try_write(&oc, PdfVersion::V1_4),
-        Err(pdf::writer::WriteError::UnsupportedVersion(_))
+        Err(core::writer::WriteError::UnsupportedVersion(_))
     ));
     assert!(try_write(&oc, PdfVersion::V1_5).is_ok());
 
@@ -1413,7 +1413,7 @@ fn content_feature_checks_cover_jbig2_transparency_oc_and_encryption() {
     enc.trailer = Trailer { dict: enc_dict };
     assert!(matches!(
         try_write(&enc, PdfVersion::V1_0),
-        Err(pdf::writer::WriteError::UnsupportedVersion(_))
+        Err(core::writer::WriteError::UnsupportedVersion(_))
     ));
     assert!(try_write(&enc, PdfVersion::V1_1).is_ok());
 }
@@ -1442,7 +1442,7 @@ fn obj_stm_xref_stream_automatically_downgraded_below_1_5() {
 
     // 以 1.3 写出 → 策略选择 PlainObjectLayout + ClassicXrefSerializer
     let mut out = Vec::new();
-    pdf::writer::DocumentWriter::new()
+    core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_3)
         .build(&doc, &mut out)
         .expect("1.3 目标下结构性特性应自动降级，不应报错");
@@ -1499,13 +1499,13 @@ fn writer_default_target_version_is_1_7_independent_of_source() {
 
     // write_document 不传 version → 输出 writer default 1.7
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
     let text = String::from_utf8_lossy(&buf);
     assert!(text.contains("%PDF-1.7"), "默认输出应为 1.7 而非 1.3");
 
     // 显式传 1.5 仍然可用
     let mut buf2 = Vec::new();
-    pdf::writer::DocumentWriter::new()
+    core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_5)
         .build(&doc, &mut buf2)
         .expect("write with_version");
@@ -1531,12 +1531,12 @@ fn feature_profile_matches_content_validation() {
 
     // 目标 1.4 应因 JPXDecode 被拒（不可自动降级）
     let mut buf = Vec::new();
-    let e = pdf::writer::DocumentWriter::new()
+    let e = core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_4)
         .build(&doc, &mut buf)
         .expect_err("1.4 应拒绝 JPXDecode");
     match e {
-        pdf::writer::WriteError::UnsupportedVersion(msg) => {
+        core::writer::WriteError::UnsupportedVersion(msg) => {
             assert!(msg.contains("JPXDecode"));
             assert!(msg.contains("1.5"));
         }
@@ -1544,7 +1544,7 @@ fn feature_profile_matches_content_validation() {
     }
 
     // 目标 1.5 通过，不报错
-    pdf::writer::DocumentWriter::new()
+    core::writer::DocumentWriter::new()
         .with_version(PdfVersion::V1_5)
         .build(&doc, &mut Vec::new())
         .expect("1.5 应接受 JPXDecode");
@@ -1591,7 +1591,7 @@ fn writer_strips_compression_filter_after_reader_decompression() {
 
     // writer 应自动去掉 /Filter /FlateDecode，输出未压缩内容
     let mut out = Vec::new();
-    pdf::writer::write_document(&doc, &mut out).expect("write");
+    core::writer::write_document(&doc, &mut out).expect("write");
     let text = String::from_utf8_lossy(&out);
 
     // 输出流字典不应再有 /Filter /FlateDecode
@@ -1829,12 +1829,12 @@ fn standard_security_r2_decrypts_strings_and_streams() {
     );
     assert!(parse_buf_result(&buf, Some(b"wrong-password")).is_err());
 
-    let error = demo::pdf::writer::DocumentWriter::new()
+    let error = pdf_engine::core::writer::DocumentWriter::new()
         .build(&doc, &mut Vec::new())
         .unwrap_err();
     assert!(matches!(
         error,
-        demo::pdf::writer::WriteError::EncryptedDocument
+        pdf_engine::core::writer::WriteError::EncryptedDocument
     ));
 
     // 加密特性被记录
@@ -1918,6 +1918,7 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
         0,
         Value::Array(Array(vec![Value::Integer(500), Value::Float(611.5)])),
     ));
+    doc.set_object(Object::new(12, 0, Value::Integer(400)));
     doc.set_object(Object::new(
         11,
         0,
@@ -1925,6 +1926,9 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
             Dict::new()
                 .insert("Type", Value::Name("FontDescriptor".into()))
                 .insert("FontName", Value::Name("ExampleSans".into()))
+                .insert("FontFamily", Value::String("Example Sans".into()))
+                .insert("FontStretch", Value::Name("Normal".into()))
+                .insert("FontWeight", Value::Ref(12, 0))
                 .insert("Flags", Value::Integer(32))
                 .insert(
                     "FontBBox",
@@ -1935,9 +1939,18 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
                         Value::Integer(900),
                     ])),
                 )
+                .insert("ItalicAngle", Value::Integer(0))
                 .insert("Ascent", Value::Integer(750))
                 .insert("Descent", Value::Integer(-200))
-                .insert("MissingWidth", Value::Integer(400)),
+                .insert("Leading", Value::Integer(200))
+                .insert("CapHeight", Value::Integer(700))
+                .insert("XHeight", Value::Integer(500))
+                .insert("StemV", Value::Integer(80))
+                .insert("StemH", Value::Integer(60))
+                .insert("AvgWidth", Value::Integer(600))
+                .insert("MaxWidth", Value::Integer(1000))
+                .insert("MissingWidth", Value::Integer(400))
+                .insert("CharSet", Value::String("/A/B".into())),
         ),
     ));
     let font = Value::Dict(
@@ -1958,11 +1971,26 @@ fn type1_font_resolves_indirect_widths_and_descriptor_metrics() {
     assert_eq!(font.width_for(67), Some(400.0));
     let descriptor = font.descriptor.unwrap();
     assert_eq!(descriptor.font_name.as_deref(), Some("ExampleSans"));
+    assert_eq!(descriptor.font_family.as_deref(), Some("Example Sans"));
+    assert_eq!(descriptor.font_stretch.as_deref(), Some("Normal"));
+    assert_eq!(descriptor.font_weight, Some(400.0));
     assert_eq!(descriptor.flags, Some(32));
+    assert!(descriptor.is_nonsymbolic());
+    assert!(!descriptor.is_serif());
     assert_eq!(descriptor.font_bbox, Some([-20.0, -200.0, 1000.0, 900.0]));
+    assert_eq!(descriptor.italic_angle, Some(0.0));
     assert_eq!(descriptor.ascent, Some(750.0));
     assert_eq!(descriptor.descent, Some(-200.0));
+    assert_eq!(descriptor.leading, Some(200.0));
+    assert_eq!(descriptor.cap_height, Some(700.0));
+    assert_eq!(descriptor.x_height, Some(500.0));
+    assert_eq!(descriptor.stem_v, Some(80.0));
+    assert_eq!(descriptor.stem_h, Some(60.0));
+    assert_eq!(descriptor.avg_width, Some(600.0));
+    assert_eq!(descriptor.max_width, Some(1000.0));
     assert_eq!(descriptor.missing_width, Some(400.0));
+    assert_eq!(descriptor.char_set.as_deref(), Some("/A/B"));
+    assert_eq!(descriptor.cid_is_present(0), None);
 
     let incomplete = Value::Dict(
         Dict::new()
@@ -3182,7 +3210,7 @@ fn xref_generation_mismatch_defers_to_object_header() {
 /// ToUnicode CMap）下的十六进制 CID 文本应原样还原为 Unicode。
 #[test]
 fn type0_text_roundtrips_through_writer_and_extractor() {
-    let mut content = pdf::content::ContentStream::new();
+    let mut content = core::content::ContentStream::new();
     content
         .begin_text()
         .set_font("F1", 18.0)
@@ -3315,7 +3343,7 @@ end"
     };
 
     let mut buf = Vec::new();
-    pdf::writer::write_document(&doc, &mut buf).expect("write");
+    core::writer::write_document(&doc, &mut buf).expect("write");
 
     let reparsed = parse_buf(&buf);
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("中文😀"));
@@ -3325,7 +3353,7 @@ end"
 /// 应经读端编码解析后反映到文本提取。
 #[test]
 fn builder_custom_encoding_roundtrips_through_parser() {
-    use demo::pdf::builder::{Font, FontEncoding, PageSize, PdfBuilder};
+    use pdf_engine::core::builder::{Font, FontEncoding, PageSize, PdfBuilder};
 
     let mut builder = PdfBuilder::new();
     let page = builder.page(PageSize::A4);
@@ -3346,7 +3374,7 @@ fn builder_custom_encoding_roundtrips_through_parser() {
 /// 字符码转换后，由读端按同一编码还原。
 #[test]
 fn builder_encodes_non_ascii_text_for_roundtrip() {
-    use demo::pdf::builder::{Font, FontEncoding, PageSize, PdfBuilder};
+    use pdf_engine::core::builder::{Font, FontEncoding, PageSize, PdfBuilder};
 
     let mut builder = PdfBuilder::new();
     let win_page = builder.page(PageSize::A4);

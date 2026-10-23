@@ -33,17 +33,21 @@
 
 阶段状态同样四态：⬜ 未开始 / 🚧 进行中 / ✅ 完成 / ❌ 放弃。
 
-### 工程约定（第三方库与扩展点）
+### 工程约定（依赖、扩展点与失败语义）
+
+以下约定面向全库；条目中的现有模块只是当前实例，同类新增实现同样适用。
 
 1. **第三方库必须隔离在 PDF 语义 trait/适配器之后**：
     - 代码实现方案优先级：rust标准库>成熟第三方库/本地实现
     - 需要在实现内部使用第三方能力时，禁止直接调用第三方库，需要先定义稳定的 trait，再由适配器实现（现有示例：`filters::InflateBackend` 封装 `flate2`）;
-2. **过滤器统一经 `filters::StreamFilter` 扩展**：新增过滤器只实现 trait 并注册到 `builtin_filters`，不改 `decode_stream` 的调度逻辑；`decode_stream_with` 支持外部注入/覆盖实现。
-3. **扩展点须可测试**：每个新 trait/适配器至少有自定义实现的测试，证明可用替代实现替换第三方依赖。
-4. **解码器失败语义**：任何过滤器对损坏/截断输入返回 `DecodeError`，不得 panic；宽容恢复策略须在矩阵备注中写明。
+2. **扩展优先于修改核心调度**：新增能力应通过既有扩展点（trait、注册表、可注入后端）接入，核心调度逻辑保持稳定；不得为单个实现修改调度分支。现有实例：过滤器经 `filters::StreamFilter` + `builtin_filters` 注册，`decode_stream` 不改动，`decode_stream_with` 支持注入/覆盖；字体程序、函数、安全处理器等新增同类能力时，先定义或复用 trait 与注册入口。
+3. **抽象须可替换、可验证**：每个扩展点（trait、适配器、注入式后端）都要有替代实现的测试，证明核心只依赖抽象而非具体实现；新增扩展点时同步交付该测试，替代实现可以是自定义模拟实现或不同后端。
+4. **边界失败语义统一**：所有解析、解码与安全边界对损坏、截断或非法输入返回类型化错误（如 `DecodeError`、`FontError`、`ParseError`），不得 panic；任何宽容恢复或降级行为必须显式实现、有测试覆盖并记录在矩阵备注中，禁止隐式吞错。
 5. **模块拆分约定**：单个 `.rs` 文件超过约 600 行或 25 KiB，或同时承担多个职责时，必须解构为目录模块（`foo/mod.rs` + 子模块）；编解码器实现、码表、测试应分文件；既有超限模块列入下方「工程债」逐项拆分，新增功能不得继续扩大超限文件。
 
-## 工程债：模块目录化（已完成）
+## 工程债：模块目录化
+
+已完成拆分：
 
 - [x] `filters`：`filters/{mod,ascii,flate,lzw,predictor,tests}.rs`（原 1200+ 行单文件）
 - [x] `ccitt`：`ccitt/{mod,decoder,tables,tests}.rs`（原 1000+ 行单文件）
@@ -51,8 +55,19 @@
 - [x] `writer`：`writer/{mod,value,version,serialize,context,document_writer,tests}.rs`（原约 1099 行 / 43 KiB）
 - [x] `types`：`types/{mod,version,features,value,document,tests}.rs`（原约 910 行 / 32 KiB）
 - [x] `content`：`content/{mod,types,serialize,stream,tests}.rs`（原约 1060 行 / 34 KiB）
+- [x] `builder`：`builder/{mod,types,assemble,tests}.rs`（原 842 行 / 31 KiB；公共类型、`Document` 组装与测试分文件）
+- [x] `type1_program/charstring`：`charstring.rs` + `charstring/tests.rs`（527 行测试移出后实现文件 527 行 / 17 KiB；CharString 解释与测试分文件）
+- [x] `reader/font`：`font/{mod,descriptor,encoding,simple,tests}.rs`（原 923 行 / 33.4 KiB；描述符指标、简单字体编码、Type 1 指标与测试分文件）
+- [x] `reader/text`：`text/{mod,tokenizer,tests}.rs`（原 889 行 / 29.1 KiB；内容流分词器与测试移出，`mod.rs` 约 400 行）
 
-各根模块当前均低于约 600 行；编解码器、码表、序列化与测试均已独立成文件。
+`src/core` 根模块与上述条目均低于约 600 行 / 25 KiB。以下嵌套与集成测试模块仍超限，后续增量触及前必须先拆分或同步拆分，不得继续扩大：
+
+- [ ] `reader/security/standard.rs`（998 行 / 35.2 KiB）
+- [ ] `reader/font/type1_program/mod.rs`（960 行 / 34.1 KiB）
+- [ ] `reader/font/cid_cmap.rs`（918 行 / 32.6 KiB）
+- [ ] `reader/font/truetype/glyph.rs`（816 行 / 29.6 KiB）
+- [ ] `reader/tests.rs`（689 行 / 26.1 KiB）
+- [ ] `tests/main.rs`（125.6 KiB；集成测试）
 
 ## 阶段总览
 
@@ -102,26 +117,26 @@
 
 **包含条目**：
 
-- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标，并为 Courier、Helvetica/Times 四种样式、Symbol、ZapfDingbats 提供对应内建编码宽度；`Document::type1_program` 可解析嵌入 `/FontFile` 程序的明文头、内建编码、eexec 段与解密后的 CharStrings/Subrs；`Type1FontProgram::glyph` 解释 CharString 数值编码与路径操作符（hsbw/sbw、moveto/lineto/curveto、closepath、callsubr/return、div，seac 记录为复合操作数），输出字宽、side bearing 与绝对坐标路径；seac 合成展开、`callothersubr`/`pop`（flex/提示替换）、hinting/渲染、字体嵌入与子集化仍待实现）
-- [ ] `9.6.3` TrueType 字体（进行中：读端解析 SFNT 目录、基础度量表、Unicode cmap format 4/12 和 loca/glyf 字形记录，可查询水平 advance、Unicode→glyph ID，并递归展开复合字形及其仿射变换/点对齐；简单字形轮廓端点、指令、标志与坐标解码已实现；字体与 CIDFontType2 的集成见 9.7.4，Unicode 文本提取和渲染仍待实现）
+- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标，并为 Courier、Helvetica/Times 四种样式、Symbol、ZapfDingbats 提供对应内建编码宽度；`Document::type1_program` 可解析嵌入 `/FontFile` 程序的明文头、内建编码、eexec 段与解密后的 CharStrings/Subrs；`Type1FontProgram::glyph` 解释 CharString 数值编码与路径操作符（hsbw/sbw、moveto/lineto/curveto、closepath、callsubr/return、div），并把 seac 经 StandardEncoding 字符码递归展开为基字形与平移后的重音字形轮廓（嵌套上限 10），输出字宽、side bearing 与绝对坐标路径；flex 的 `callothersubr`/`pop` 序列按七点协议展开为两段三次曲线（进入/退出可跨越 subr 边界，`pop pop setcurrentpoint` 收尾，支持 rmoveto/hmoveto/vmoveto 点形式；提示替换 `callothersubr 3` 与其他过程明确报错）；hinting/渲染、字体嵌入与子集化仍待实现）
+- [ ] `9.6.3` TrueType 字体（进行中：读端解析 SFNT 目录、基础度量表、Unicode cmap format 4/12 和 loca/glyf 字形记录，可查询水平 advance、Unicode→glyph ID，并递归展开复合字形及其仿射变换/点对齐；简单字形轮廓端点、指令、标志与坐标解码已实现；字体与 CIDFontType2 的集成见 9.7.4；`Document::simple_font_encoding` 已覆盖 TrueType/MMType1/Type1 的 `/Encoding`（预定义名、`/BaseEncoding`、`/Differences`），`reader/text` 据此完成 TrueType 简单字体的 Unicode 文本提取，缺少 `/Encoding` 时按 `/BaseFont` 回退 Standard/Symbol/ZapfDingbats（不读取字体程序内建编码）；hinting、其他 cmap 格式、渲染与写入仍待实现）
 - [ ] `9.6.4` 字体子集化（随字体嵌入一并实现）
 - [x] `9.6.6` 字符编码补全（已完成：Type 1 读端识别 Standard/WinAnsi/MacRoman/Symbol/ZapfDingbats，支持 CP1252/MacRoman Unicode 映射、Standard/Symbol/ZapfDingbats glyph name 查询及完整 Adobe Glyph List 2.0→Unicode 映射；写端 `PdfBuilder` 选择预定义编码名、自建 `/BaseEncoding`+`/Differences` 或省略 `/Encoding`，`text` 按编码反向查表转为单字节码——可打印 ASCII 保持字面量、其余输出十六进制字符串，无法表示的字符替换为 `?`，未知编码名回退 UTF-8 直写；测试见矩阵证据）
 - [ ] `9.7.6` Type 0 复合字体 / CIDFontType0（进行中：Type 0→CIDFontType2/CIDFontType0 均可读取；Identity-H/V 与嵌入 CMap（含 Identity-H/V 基座的 usecmap 继承）的字符码→CID 映射已实现；CIDFontType0 解析 CIDSystemInfo、W/DW 与 FontDescriptor，解码 FontFile3（CIDFontType0C/OpenType）程序并经 ToUnicode 接入文本提取，CFF 轮廓解析、其他预定义 CMap 和写入待实现）
 - [ ] `9.7.4` CIDFontType2（进行中：读端解析 CIDSystemInfo、CIDToGIDMap Identity/流映射、W/DW 宽度，并可加载 CIDFont 的 FontFile2 TrueType 程序；已接入 Type 0 父字体与受支持的 CMap 编码；经 `DocumentWriter` 写入→重新解析→文本提取的往返见 `type0_text_roundtrips_through_writer_and_extractor`）
 - [ ] `9.7.5` CMap（进行中：Identity-H/V 和嵌入 CID 编码 CMap 的 codespace/cidchar/cidrange 已实现；嵌入 CMap 的 usecmap 继承支持 Identity-H/V 基座，覆盖项优先、后定义 codespace 替换并裁剪继承映射、WMode 继承；其他预定义 CMap 待实现）
 - [ ] `9.10.3` ToUnicode CMap（进行中：Type 0 字体支持嵌入 ToUnicode CMap 的 bfchar/bfrange Unicode 映射，含 UTF-16BE 补充平面字符；已接入内容流文本提取并纳入写端往返验收）
-- [ ] `9.8` 字体描述符（进行中：简单 Type 1 的 FontDescriptor 元数据已实现；CIDFontType2 描述符类型验证和 FontFile2 读取已接通，CID 专有指标待实现）
-- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 读端经 `Document::type1_program` 解析 `/FontFile` 的明文头、eexec 段、Private 字典与解密后的 CharStrings/Subrs，且 `Type1FontProgram::glyph` 可将单个 CharString 解释为字宽、side bearing 与绝对路径段（`callothersubr`/`pop` 明确报错；seac 仅记录操作数；FontFile3/CFF/OpenType 报错）；TrueType 与 CIDFontType2 读端解析 FontFile2 的 SFNT 目录、基础元数据和轮廓；其他字体格式和字体嵌入写入仍待实现）
-- [ ] `9.10` 文本内容提取（进行中：`reader/text.rs` 实现内容流文本提取——操作数栈式分词与文本操作符解释（BT/ET/Tf/Tj/TJ/Td/TD/T*/Tm/'/"），Type 0 经 CMap+ToUnicode 解码，Type 1 经预定义编码+AGL 解码，无字体时回退 Latin-1；页面级 `extract_page_text` 支持页面树遍历、资源继承与多内容流合并；12 项单元测试覆盖。写端补充 `ContentStream::show_text_hex`（`<...> Tj`），集成测试 `type0_text_roundtrips_through_writer_and_extractor` 验证 Type 0 + CIDFontType2 + FontFile2 + ToUnicode 的写入→解析→提取往返。常用预定义 CMap 仍待推进）
+- [ ] `9.8` 字体描述符（进行中：读端 `FontDescriptorMetrics` 覆盖 FontName、FontFamily、FontStretch、FontWeight、Flags、FontBBox、ItalicAngle、Ascent、Descent、Leading、CapHeight、XHeight、StemV、StemH、AvgWidth、MaxWidth、MissingWidth、CharSet 与 CIDSet；Flags 提供九个标准位的类型化访问器，CIDSet 经过滤器解码后可按 CID 查询位；Type 1 与 CIDFontType2/CIDFontType0 均暴露描述符。测试见矩阵证据。写入端仍不生成 FontDescriptor）
+- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 读端经 `Document::type1_program` 解析 `/FontFile` 的明文头、eexec 段、Private 字典与解密后的 CharStrings/Subrs，且 `Type1FontProgram::glyph` 可将单个 CharString 解释为字宽、side bearing 与绝对路径段（flex 的 `callothersubr`/`pop` 按七点协议展开为曲线段，提示替换 `callothersubr 3` 报错；seac 按 StandardEncoding 递归展开为基/重音轮廓；FontFile3/CFF/OpenType 报错）；TrueType 与 CIDFontType2 读端解析 FontFile2 的 SFNT 目录、基础元数据和轮廓；其他字体格式和字体嵌入写入仍待实现）
+- [ ] `9.10` 文本内容提取（进行中：`reader/text/{mod,tokenizer}` 实现内容流文本提取——操作数栈式分词与文本操作符解释（BT/ET/Tf/Tj/TJ/Td/TD/T*/Tm/'/"），Type 0 经 CMap+ToUnicode 解码，简单字体（Type 1/MMType1/TrueType）经 `/Encoding`+AGL 解码，无字体时回退 Latin-1；页面级 `extract_page_text` 支持页面树遍历、资源继承与多内容流合并；14 项单元测试覆盖。写端补充 `ContentStream::show_text_hex`（`<...> Tj`），集成测试 `type0_text_roundtrips_through_writer_and_extractor` 验证 Type 0 + CIDFontType2 + FontFile2 + ToUnicode 的写入→解析→提取往返。常用预定义 CMap 仍待推进）
 - [ ] `7.9` 公共数据结构（已完成：`PdfDate`、`PdfRect` 已实现；`PdfTextString` 支持 PDFDocEncoding 与带 BOM 的 UTF-16BE 编解码；`NameTree` 和 `NumberTree` 支持从字典解析（含 `/Kids` 递归）、按键查找、迭代和序列化往返）
 
 **依赖**：A（过滤器解码能力是字体程序/嵌入流读取的硬依赖；`7.10` Functions 对文本非硬依赖，为软依赖，可并行）。
 
 **执行顺序与并行边界**：
 
-1. **简单字体与度量（进行中）**：Type 1 字体字典、宽度读取、Encoding 字典、WinAnsi/MacRoman 映射、Standard/Symbol/ZapfDingbats glyph name 查询及 AGL 2.0 的 4,281 个 Unicode 序列映射已覆盖；写端编码配置与文本码转换（五种预定义编码 + 自定义 Differences，非 ASCII 输出十六进制字符串）已实现。Standard 14 内建字宽已按 AFM 数据整理为结构化 CSV，Courier 四种样式为固定 600 单位；Type 1 字体程序格式解析（明文头、内建编码、eexec、Private 字典、CharStrings/Subrs 解密）已完成，`Type1FontProgram::glyph` 已解释 CharString 操作符并产出字宽与绝对路径；剩余 seac 合成展开、`callothersubr`/`pop`、hinting/渲染、字体嵌入与子集化。
+1. **简单字体与度量（进行中）**：Type 1 字体字典、宽度读取、Encoding 字典、WinAnsi/MacRoman 映射、Standard/Symbol/ZapfDingbats glyph name 查询及 AGL 2.0 的 4,281 个 Unicode 序列映射已覆盖；写端编码配置与文本码转换（五种预定义编码 + 自定义 Differences，非 ASCII 输出十六进制字符串）已实现。Standard 14 内建字宽已按 AFM 数据整理为结构化 CSV，Courier 四种样式为固定 600 单位；Type 1 字体程序格式解析（明文头、内建编码、eexec、Private 字典、CharStrings/Subrs 解密）已完成，`Type1FontProgram::glyph` 已解释 CharString 操作符并产出字宽与绝对路径，seac 合成字形已按 StandardEncoding 展开（含递归嵌套），flex 的 `callothersubr`/`pop` 已按七点协议展开为曲线段（含 subr 内进出与 `pop pop setcurrentpoint` 收尾）；剩余提示替换（`callothersubr 3`）、hinting/渲染、字体嵌入与子集化。
 2. **TrueType 程序读取（进行中）**：TrueType 的 `/FontFile2` 解码后校验 SFNT 目录，并解析 `head`/`maxp` 的 unitsPerEm/glyph count、`hhea`/`hmtx` 水平度量、Unicode `cmap` format 4/12 以及 `loca`/`glyf` 字形记录。可按 glyph ID 查询 advance width（含 `numberOfHMetrics` 尾部复用规则）、Unicode 查询 glyph ID，并读取 glyph header/bounds 和原始记录；简单字形的轮廓端点、instructions、压缩 flags 及 x/y 坐标增量已解码，复合字形可递归展开，支持 2.14 缩放/旋转/斜切矩阵、XY 偏移与点对齐，并限制递归深度及展开点数；不执行 hinting，也不渲染。此二进制解析仅用 Rust 标准库，以便控制格式支持范围及错误语义，当前无需引入第三方解析依赖。
-3. **CID/复合字体与文本提取（进行中）**：CIDFontType2 可解析 descendant 字典、`CIDSystemInfo`、`CIDToGIDMap`（Identity/流）、`W`/`DW`，并可从 FontDescriptor 加载 `/FontFile2`。Type 0 可连接一个 CIDFontType2 descendant；编码支持 `/Identity-H`、`/Identity-V` 及嵌入 CMap 的 codespace、`cidchar`、`cidrange` 段，并提供字符码→CID→GID/宽度查询。`/ToUnicode` 支持嵌入 CMap 的 `bfchar` 和 `bfrange` 数组/递增目标，按 UTF-16BE 转换为 Unicode 序列，并在 Type 0 decoded code 中附带可选映射结果。`reader/text.rs` 已实现内容流文本提取：操作数栈式分词解释 `BT`/`ET`/`Tf`/`Tj`/`TJ`/`Td`/`TD`/`T*`/`Tm`/`'`/`"` 操作符，Type 0 经 CMap+ToUnicode 解码，Type 1 经预定义编码+AGL 解码，无字体回退 Latin-1；`Document::extract_page_text` 支持页面树遍历、资源继承与多内容流合并（12 项单元测试覆盖）。写端补充 `ContentStream::show_text_hex`，集成测试 `type0_text_roundtrips_through_writer_and_extractor` 验证 Type 0/CIDFontType2 文档经 `DocumentWriter` 写入、重新解析后由 `extract_page_text` 还原原始 Unicode 文本。CMap 的 `usecmap` 继承已支持 Identity-H/V 基座；Type 0 现已同时接受 CIDFontType2 与 CIDFontType0 descendant（后者解析 W/DW 与 FontFile3 程序，文本提取经 ToUnicode 工作）。其他预定义 CMap、CIDFontType0 的 CFF 轮廓解析与专用写端字体 API 仍待实现。
+3. **CID/复合字体与文本提取（进行中）**：CIDFontType2 可解析 descendant 字典、`CIDSystemInfo`、`CIDToGIDMap`（Identity/流）、`W`/`DW`，并可从 FontDescriptor 加载 `/FontFile2`。Type 0 可连接一个 CIDFontType2 descendant；编码支持 `/Identity-H`、`/Identity-V` 及嵌入 CMap 的 codespace、`cidchar`、`cidrange` 段，并提供字符码→CID→GID/宽度查询。`/ToUnicode` 支持嵌入 CMap 的 `bfchar` 和 `bfrange` 数组/递增目标，按 UTF-16BE 转换为 Unicode 序列，并在 Type 0 decoded code 中附带可选映射结果。`reader/text/{mod,tokenizer}` 已实现内容流文本提取：操作数栈式分词解释 `BT`/`ET`/`Tf`/`Tj`/`TJ`/`Td`/`TD`/`T*`/`Tm`/`'`/`"` 操作符，Type 0 经 CMap+ToUnicode 解码，简单字体（Type 1/MMType1/TrueType）经 `/Encoding`+AGL 解码，无字体回退 Latin-1；`Document::extract_page_text` 支持页面树遍历、资源继承与多内容流合并（14 项单元测试覆盖）。写端补充 `ContentStream::show_text_hex`，集成测试 `type0_text_roundtrips_through_writer_and_extractor` 验证 Type 0/CIDFontType2 文档经 `DocumentWriter` 写入、重新解析后由 `extract_page_text` 还原原始 Unicode 文本。CMap 的 `usecmap` 继承已支持 Identity-H/V 基座；Type 0 现已同时接受 CIDFontType2 与 CIDFontType0 descendant（后者解析 W/DW 与 FontFile3 程序，文本提取经 ToUnicode 工作）。其他预定义 CMap、CIDFontType0 的 CFF 轮廓解析与专用写端字体 API 仍待实现。
 4. **独立公共类型（已完成）**：`7.9` 的 `PdfDate`、`PdfRect`、`PdfTextString`、`NameTree` 与 `NumberTree` 均已实现；名称树和数值树支持 `/Kids` 递归解析、按键查找、迭代和序列化。
 
 **范围边界**：

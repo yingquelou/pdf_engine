@@ -1,5 +1,5 @@
 [package]
-name = "demo"
+name = "pdf_engine"
 version = "0.1.0"
 edition = "2024"
 
@@ -18,7 +18,7 @@ zune-core = "0.5"
 zune-jpeg = "0.5.15"
 
 [lib]
-name = "demo"
+name = "pdf_engine"
 path = "src/lib.rs"
 crate-type = ["cdylib","lib"]
 

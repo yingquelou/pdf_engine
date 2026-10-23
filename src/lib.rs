@@ -1,9 +1,9 @@
-//! `demo` PDF 处理库：解析与生成 PDF 1.x 文件。
+//! `pdf_engine` PDF 处理库：解析与生成 PDF 1.x 文件。
 //!
-//! 顶层只导出 [`pdf`] 模块。详见各子模块文档：
-//! - [`pdf::types`]：对象模型
-//! - [`pdf::reader`]：解析器
-//! - [`pdf::writer`]：序列化器
+//! 顶层只导出 [`core`] 模块。详见各子模块文档：
+//! - [`core::types`]：对象模型
+//! - [`core::reader`]：解析器
+//! - [`core::writer`]：序列化器
 //!
 //! # 使用示例
 //!
@@ -12,7 +12,7 @@
 //!
 //! 解析已有 PDF 并按需取对象（懒加载）：
 //! ```no_run
-//! use demo::pdf::reader::Parser;
+//! use pdf_engine::core::reader::Parser;
 //!
 //! let file = std::fs::File::open("input.pdf")?;
 //! let doc = Parser::new(file)?.parse_document()?;
@@ -26,8 +26,8 @@
 //!
 //! 生成一个含文字的最小 PDF：
 //! ```no_run
-//! use demo::pdf::builder::{Font, PageSize, PdfBuilder};
-//! use demo::pdf::types::PdfVersion;
+//! use pdf_engine::core::builder::{Font, PageSize, PdfBuilder};
+//! use pdf_engine::core::types::PdfVersion;
 //!
 //! let mut builder = PdfBuilder::with_version(PdfVersion::V1_4);
 //! let page = builder.page(PageSize::A4);
@@ -41,9 +41,9 @@
 //!
 //! 版本转换：读 1.5（XRef 流 + 对象流）→ 写 1.3（经典 xref 表 + 顶层对象）：
 //! ```no_run
-//! use demo::pdf::reader::Parser;
-//! use demo::pdf::types::PdfVersion;
-//! use demo::pdf::writer::DocumentWriter;
+//! use pdf_engine::core::reader::Parser;
+//! use pdf_engine::core::types::PdfVersion;
+//! use pdf_engine::core::writer::DocumentWriter;
 //!
 //! let file = std::fs::File::open("input-1.5.pdf")?;
 //! let doc = Parser::new(file)?.parse_document()?;
@@ -61,4 +61,4 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-pub mod pdf;
+pub mod core;

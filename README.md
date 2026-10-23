@@ -1,4 +1,4 @@
-# demo — Rust PDF 解析/生成库
+# pdf_engine — Rust PDF 解析/生成库
 
 一个纯 Rust 实现的 PDF 1.x 文件解析与生成库。版本中立的类型系统、宽进严出的读写策略，支持 XRef 流 / 对象流 / FlateDecode / LZWDecode / CCITTFaxDecode / PNG Up Predictor。
 
@@ -41,7 +41,7 @@ flowchart LR
 
 ```toml
 [dependencies]
-demo = { path = "." }
+pdf_engine = { path = "." }
 ```
 
 仅启用 `flate2` 的 `rust_backend`（纯 Rust miniz_oxide，无 C 依赖）。
@@ -56,7 +56,7 @@ cargo run -- gen output.pdf --version 1.3 # 生成最小 PDF（可选版本）
 ### 代码示例 1：解析 + 取对象
 
 ```rust
-use demo::pdf::reader::Parser;
+use pdf_engine::core::reader::Parser;
 
 let file = std::fs::File::open("input.pdf")?;
 let mut parser = Parser::new(file)?;
@@ -73,8 +73,8 @@ if let Some((root_num, _)) = doc.trailer().root() {
 ### 代码示例 2：生成 PDF
 
 ```rust
-use demo::pdf::builder::{Font, PageSize, PdfBuilder};
-use demo::pdf::types::PdfVersion;
+use pdf_engine::core::builder::{Font, PageSize, PdfBuilder};
+use pdf_engine::core::types::PdfVersion;
 
 let mut builder = PdfBuilder::with_version(PdfVersion::V1_4);
 let page = builder.page(PageSize::A4);
@@ -90,9 +90,9 @@ std::fs::write("output.pdf", out)?;
 读一个 PDF 1.5 文件（XRef 流 + 对象流），以 1.3 写出——结构性特性自动降级为经典 xref 表 + 顶层对象。
 
 ```rust
-use demo::pdf::reader::Parser;
-use demo::pdf::types::PdfVersion;
-use demo::pdf::writer::DocumentWriter;
+use pdf_engine::core::reader::Parser;
+use pdf_engine::core::types::PdfVersion;
+use pdf_engine::core::writer::DocumentWriter;
 
 let file = std::fs::File::open("input-1.5.pdf")?;
 let doc = Parser::new(file)?.parse_document()?;
@@ -117,7 +117,7 @@ assert_eq!(doc2.source_version(), PdfVersion::V1_3);
 
 ### 过滤器接口与第三方隔离
 
-`pdf::filters::StreamFilter` 是 PDF 过滤器的统一解码接口：`decode_stream` 按 `/Filter` 规范名调度 `builtin_filters()`，`decode_stream_with` 可注入自定义实现（放在内建实现之前即可覆盖）。依赖第三方库的过滤器**只在自身实现内部**经后端适配器调用——当前 `FlateDecode` 通过 `InflateBackend` 隔离 `flate2`，过滤器接口与调度层不暴露任何第三方类型；`CCITTFaxDecode`（Group 3/4）为 `pdf/ccitt.rs` 中的纯 Rust 实现，不引入第三方传真库。后续新增 DCT/JPX 等过滤器只需实现 trait 并注册，无需改动调度逻辑。
+`core::filters::StreamFilter` 是 PDF 过滤器的统一解码接口：`decode_stream` 按 `/Filter` 规范名调度 `builtin_filters()`，`decode_stream_with` 可注入自定义实现（放在内建实现之前即可覆盖）。依赖第三方库的过滤器**只在自身实现内部**经后端适配器调用——当前 `FlateDecode` 通过 `InflateBackend` 隔离 `flate2`，过滤器接口与调度层不暴露任何第三方类型；`CCITTFaxDecode`（Group 3/4）为 `src/core/ccitt/` 中的纯 Rust 实现，不引入第三方传真库。后续新增 DCT/JPX 等过滤器只需实现 trait 并注册，无需改动调度逻辑。
 
 ### 宽进严出
 
@@ -157,17 +157,17 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 
 | 入口 | 类型 | 说明 |
 |------|------|------|
-| `pdf::types::Document` | struct | 顶层文档对象，懒加载 |
-| `pdf::types::PdfVersion` | struct | 版本号 + `supports(feature)` 判定 |
-| `pdf::types::PdfFeature` | enum | 版本特性（ObjStm / XRef / JPXDecode / …） |
-| `pdf::reader::Parser` | struct | 文件解析入口（`Parser::new` → `parse_document`） |
-| `pdf::writer::DocumentWriter` | struct | 序列化入口（`new` → `with_version` → `build`） |
-| `pdf::writer::write_document` | fn | 便捷包装（writer 默认 1.7） |
-| `pdf::builder::PdfBuilder` | struct | 逻辑构建层（`with_version` → `page` / `text` → `build`） |
-| `pdf::filters::decode_stream` | fn | 流过滤器解码（`Flate` / `LZW` / `ASCIIHex` / `RunLength` / …） |
-| `pdf::filters::decode_stream_with` | fn | 用自定义/扩展过滤器集合解码 |
-| `pdf::filters::StreamFilter` | trait | 过滤器解码接口（新增或替换实现） |
-| `pdf::filters::builtin_filters` | fn | 内建标准过滤器集合（可追加自定义实现） |
+| `core::types::Document` | struct | 顶层文档对象，懒加载 |
+| `core::types::PdfVersion` | struct | 版本号 + `supports(feature)` 判定 |
+| `core::types::PdfFeature` | enum | 版本特性（ObjStm / XRef / JPXDecode / …） |
+| `core::reader::Parser` | struct | 文件解析入口（`Parser::new` → `parse_document`） |
+| `core::writer::DocumentWriter` | struct | 序列化入口（`new` → `with_version` → `build`） |
+| `core::writer::write_document` | fn | 便捷包装（writer 默认 1.7） |
+| `core::builder::PdfBuilder` | struct | 逻辑构建层（`with_version` → `page` / `text` → `build`） |
+| `core::filters::decode_stream` | fn | 流过滤器解码（`Flate` / `LZW` / `ASCIIHex` / `RunLength` / …） |
+| `core::filters::decode_stream_with` | fn | 用自定义/扩展过滤器集合解码 |
+| `core::filters::StreamFilter` | trait | 过滤器解码接口（新增或替换实现） |
+| `core::filters::builtin_filters` | fn | 内建标准过滤器集合（可追加自定义实现） |
 
 ## 版本特性速查表
 

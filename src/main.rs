@@ -8,14 +8,14 @@
 //!
 //! 不传参数时打印帮助。
 
-use demo::pdf;
+use pdf_engine::core;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
 
 fn cmd_parse(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let file = fs::File::open(path)?;
-    let mut parser = pdf::reader::Parser::new(file)?;
+    let mut parser = core::reader::Parser::new(file)?;
     let doc = parser.parse_document()?;
     // 懒加载：此处只解析了文件级结构，未解析任何对象。
     println!("declared version: {}", doc.source_version());
@@ -65,8 +65,8 @@ fn cmd_parse(path: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_gen(path: &str, version: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    use pdf::builder::{Font, PageSize, PdfBuilder};
-    use pdf::types::PdfVersion;
+    use core::builder::{Font, PageSize, PdfBuilder};
+    use core::types::PdfVersion;
 
     // 版本解析复用 `types` 的集中实现（唯一事实源），CLI 不再维护一份
     // 版本表；只接受规范写法（如 "1.5"）。2.0 虽可解析，但会被 writer
