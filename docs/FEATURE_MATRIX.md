@@ -131,14 +131,14 @@
 | 9.6.4 | 字体子集化（Font Subsets，六字标签前缀） | 1.0（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（随字体嵌入一并实现） |
 | 9.6.5 | Type 3 字体 | 1.0 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
 | 9.6.6 | 字符编码（WinAnsiEncoding 等预定义 Encoding） | 1.0 | 🟡 | ⬜ | 🟡 | P1 | `reader::font::Document::type1_font_encoding` 解析五种预定义编码名称和 `/Differences`；WinAnsi 支持 CP1252→Unicode、MacRoman 支持 0x80–0xFF→Unicode、StandardEncoding 支持已定义字形槽位；Symbol 支持 glyph name 表及 Adobe Glyph List Unicode 映射，ZapfDingbats 支持 glyph name 表及 Zapf AGL 映射；完整 Adobe Glyph List 2.0 的 4,281 个映射由 `SimpleFontEncoding::unicode_sequence_for` 提供（多标量名称在 `unicode_for` 中返回 `None`）。测试 `type1_font_encoding_resolves_predefined_encodings_and_differences`；builder.rs 写端仍输出 WinAnsiEncoding |
-| 9.7.6 | Type 0 复合字体 / CIDFontType0（CID-Keyed） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码；中文/CJK 文本无法正确表达（字符串按 Latin-1 假设） |
-| 9.7.4 | CIDFontType2（TrueType 轮廓 CID 字体） | 1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码 |
-| 9.7.5 | CMap（预定义 CMap / 嵌入 CMap 文件） | 1.2–1.3（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（含 CIDSystemInfo 字典） |
+| 9.7.6 | Type 0 复合字体 / CIDFontType0（CID-Keyed） | 1.2–1.3（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Document::type0_font` 可解析 Type 0 父字体并连接一个 CIDFontType2 descendant；提供字符码→CID→GID/宽度查询，支持 `/Identity-H`、`/Identity-V` 和嵌入编码 CMap。尚不支持 CIDFontType0、文本抽取/写入与完整 CJK 映射。测试 Type 0 和 CMap 单元测试 |
+| 9.7.4 | CIDFontType2（TrueType 轮廓 CID 字体） | 1.3（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Document::cid_font_type2` 解析 CIDFontType2 descendant 字典的 `CIDSystemInfo`、`CIDToGIDMap`（Identity/解码后的 16 位大端映射流）、`W` 两种宽度格式和默认 `/DW` 1000，并可通过 FontDescriptor 加载 `/FontFile2` TrueType 程序；Type 0 父字体已通过受支持的 CMap 编码接入。尚未接入文本操作符、Unicode 提取或 CID 专有 FontDescriptor 指标。测试 CID 映射/宽度解析单元测试、Type 0/CMap 单元测试及 `truetype_font_program_resolves_and_parses_fontfile2` 集成路径 |
+| 9.7.5 | CMap（预定义 CMap / 嵌入 CMap 文件） | 1.2–1.3（待核） | 🟡 | 🟡 | ⬜ | P1 | CID 编码 CMap 支持预定义 `/Identity-H`、`/Identity-V`，以及嵌入 CMap stream 中的 codespace、`cidchar`、`cidrange` 与 `/WMode`；Type 0 可解析嵌入 `/ToUnicode` 的 `bfchar` 和 `bfrange`，目标使用 UTF-16BE；拒绝 `usecmap`，其他预定义 CMap 尚未实现。`CIDSystemInfo` 在 CIDFontType2 解析时校验。测试 `cid_cmap`、`type0` 单元测试 |
 | 9.6–9.9 | OpenType 字体（FontFile3 /Subtype /OpenType） | 1.6 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| 9.8 | 字体描述符（FontDescriptor、Flags、CIDFont 描述符） | 1.1（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Type1Font` 解析简单 Type 1 字体的 FontDescriptor 数值元数据；CIDFont 描述符与其他字体种类仍未实现。测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics` |
-| 9.9 | 嵌入字体程序（FontFile/FontFile2/FontFile3） | 1.1–1.6（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Document::type1_font_program` 只接受 Type 1 适用的 FontFile/FontFile3；`Document::truetype_font` 只接受 TrueType 的 `/FontFile2` 并解析 SFNT 目录。两者均经标准过滤器/解密路径；其他字体格式读取、写入仍未实现。测试 `type1_font_program_resolves_and_decodes_descriptor_streams`、`type1_font_program_reports_malformed_descriptor_entries`、`truetype_font_program_resolves_and_parses_fontfile2` |
-| 9.10 | 文本内容提取（字符码→Unicode 映射） | 1.0–1.4（待核） | ⬜ | ⬜ | — | P1 | 无对应代码 |
-| 9.10.3 | ToUnicode CMap | 1.4（待核） | ⬜ | ⬜ | ⬜ | P1 | 无对应代码（文本提取与可复制文本的前提） |
+| 9.8 | 字体描述符（FontDescriptor、Flags、CIDFont 描述符） | 1.1（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Type1Font` 解析简单 Type 1 字体的 FontDescriptor 数值元数据；CIDFontType2 的 FontDescriptor 经类型验证并可加载 FontFile2，但 CID 专有描述符指标尚未暴露。测试 `type1_font_resolves_indirect_widths_and_descriptor_metrics`、CIDFontType2 的 FontFile2 集成路径 |
+| 9.9 | 嵌入字体程序（FontFile/FontFile2/FontFile3） | 1.1–1.6（待核） | 🟡 | 🟡 | ⬜ | P1 | `reader::font::Document::type1_font_program` 只接受 Type 1 适用的 FontFile/FontFile3；`Document::truetype_font` 和 `Document::cid_font_type2_program` 分别解析简单 TrueType 与 CIDFontType2 的 `/FontFile2` SFNT。所有程序流均经标准过滤器/解密路径；其他字体格式读取、写入仍未实现。测试 `type1_font_program_resolves_and_decodes_descriptor_streams`、`type1_font_program_reports_malformed_descriptor_entries`、`truetype_font_program_resolves_and_parses_fontfile2` |
+| 9.10 | 文本内容提取（字符码→Unicode 映射） | 1.0–1.4（待核） | 🟡 | 🟡 | — | P1 | `Type0Font::decode_codes` 将输入字符码映射为 CID、GID、宽度，并按 `/ToUnicode` 附带 Unicode 字符串；内容流 `Tj`/`TJ` 遍历、simple-font 文本解码及页面级文本提取仍未实现。测试 `maps_decoded_codes_to_unicode_sequences`、Type 0/CMap 单元测试 |
+| 9.10.3 | ToUnicode CMap | 1.4（待核） | 🟡 | 🟡 | ⬜ | P1 | Type 0 字体解析嵌入 `/ToUnicode` stream，支持 `bfchar`、`bfrange` 递增目标及数组目标，UTF-16BE 包括代理对解码；拒绝畸形/重复映射与无效 UTF-16，限制输入与展开规模。尚未支持 ToUnicode `usecmap` 或串接内容流文本提取。测试 `parses_tounicode_bfchar_and_both_bfrange_forms`、`rejects_malformed_tounicode_mappings`、Type 0 ToUnicode 单元测试 |
 
 ## 第 10 章 渲染（Rendering）
 

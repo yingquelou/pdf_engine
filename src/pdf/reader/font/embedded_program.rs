@@ -46,6 +46,11 @@ impl Document {
         self.font_program(value, "TrueType", &[FontProgramSource::FontFile2])
     }
 
+    /// Resolve and decode the embedded `/FontFile2` stream in a CIDFontType2.
+    pub fn cid_font_type2_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
+        self.font_program(value, "CIDFontType2", &[FontProgramSource::FontFile2])
+    }
+
     fn font_program(
         &self,
         value: &Value,

@@ -6,14 +6,19 @@ use crate::pdf::types::{Array, Dict, Document, Value};
 
 use super::ParseError;
 
+mod cid;
+mod cid_cmap;
 mod embedded_program;
 mod encoding_data;
 mod encoding_unicode;
 mod standard14_metrics;
 mod truetype;
+mod type0;
 
+pub use cid::CidFontType2;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 pub use truetype::{CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph};
+pub use type0::{Type0DecodedCode, Type0Font};
 
 type FontResult<T> = std::result::Result<T, FontError>;
 

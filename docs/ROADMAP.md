@@ -101,15 +101,15 @@
 **包含条目**：
 
 - [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标，并为 Courier、Helvetica/Times 四种样式、Symbol、ZapfDingbats 提供对应内建编码宽度；字体嵌入仍待实现）
-- [ ] `9.6.3` TrueType 字体（进行中：读端解析 SFNT 目录、基础度量表、Unicode cmap format 4/12 和 loca/glyf 字形记录，可查询水平 advance、Unicode→glyph ID，并递归展开复合字形及其仿射变换/点对齐；简单字形轮廓端点、指令、标志与坐标解码已实现，CID 映射和渲染仍待实现）
+- [ ] `9.6.3` TrueType 字体（进行中：读端解析 SFNT 目录、基础度量表、Unicode cmap format 4/12 和 loca/glyf 字形记录，可查询水平 advance、Unicode→glyph ID，并递归展开复合字形及其仿射变换/点对齐；简单字形轮廓端点、指令、标志与坐标解码已实现；字体与 CIDFontType2 的集成见 9.7.4，Unicode 文本提取和渲染仍待实现）
 - [ ] `9.6.4` 字体子集化（随字体嵌入一并实现）
 - [ ] `9.6.6` 字符编码补全（进行中：Type 1 读端识别 Standard/WinAnsi/MacRoman/Symbol/ZapfDingbats，支持 CP1252/MacRoman Unicode 映射、Standard/Symbol/ZapfDingbats glyph name 查询及完整 Adobe Glyph List 2.0→Unicode 映射；写端编码配置仍待实现）
-- [ ] `9.7.6` Type 0 复合字体 / CIDFontType0（解决 CJK 文本表达）
-- [ ] `9.7.4` CIDFontType2（TrueType 轮廓 CID 字体）
-- [ ] `9.7.5` CMap（预定义/嵌入，含 CIDSystemInfo）
-- [ ] `9.10.3` ToUnicode CMap
-- [ ] `9.8` 字体描述符（进行中：简单 Type 1 的 FontDescriptor 元数据已实现；CIDFont 描述符待实现）
-- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 读端解析 FontFile/FontFile3 流，TrueType 读端解析 FontFile2 的 SFNT 目录及基础元数据；其他字体格式和写入仍待实现）
+- [ ] `9.7.6` Type 0 复合字体 / CIDFontType0（进行中：Type 0→CIDFontType2 可读取；Identity-H/V 与嵌入 CMap 的 codespace/cidchar/cidrange 字符码→CID 映射已实现；CIDFontType0、其他预定义 CMap 和写入待实现）
+- [ ] `9.7.4` CIDFontType2（进行中：读端解析 CIDSystemInfo、CIDToGIDMap Identity/流映射、W/DW 宽度，并可加载 CIDFont 的 FontFile2 TrueType 程序；已接入 Type 0 父字体与受支持的 CMap 编码）
+- [ ] `9.7.5` CMap（进行中：Identity-H/V 和嵌入 CID 编码 CMap 的 codespace/cidchar/cidrange 已实现；其他预定义 CMap 与 usecmap 继承待实现）
+- [ ] `9.10.3` ToUnicode CMap（进行中：Type 0 字体支持嵌入 ToUnicode CMap 的 bfchar/bfrange Unicode 映射，含 UTF-16BE 补充平面字符；未接入内容流文本提取）
+- [ ] `9.8` 字体描述符（进行中：简单 Type 1 的 FontDescriptor 元数据已实现；CIDFontType2 描述符类型验证和 FontFile2 读取已接通，CID 专有指标待实现）
+- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 读端解析 FontFile/FontFile3 流，TrueType 与 CIDFontType2 读端解析 FontFile2 的 SFNT 目录、基础元数据和轮廓；其他字体格式和写入仍待实现）
 - [ ] `9.10` 文本内容提取（字符码→Unicode 映射）
 - [ ] `7.9` 公共数据结构（进行中：`PdfDate`、`PdfRect` 已实现；`PdfTextString` 支持 PDFDocEncoding 与带 BOM 的 UTF-16BE 编解码；名称树、数值树待实现）
 
@@ -118,8 +118,8 @@
 **执行顺序与并行边界**：
 
 1. **简单字体与度量（进行中）**：Type 1 字体字典、宽度读取、Encoding 字典、WinAnsi/MacRoman 映射、Standard/Symbol/ZapfDingbats glyph name 查询及 AGL 2.0 的 4,281 个 Unicode 序列映射已覆盖。Standard 14 内建字宽已按 AFM 数据整理为结构化 CSV，Courier 四种样式为固定 600 单位；需继续补足写端编码配置、Type 1 字体程序格式解析及嵌入。
-2. **TrueType 程序读取（进行中）**：TrueType 的 `/FontFile2` 解码后校验 SFNT 目录，并解析 `head`/`maxp` 的 unitsPerEm/glyph count、`hhea`/`hmtx` 水平度量、Unicode `cmap` format 4/12 以及 `loca`/`glyf` 字形记录。可按 glyph ID 查询 advance width（含 `numberOfHMetrics` 尾部复用规则）、Unicode 查询 glyph ID，并读取 glyph header/bounds 和原始记录；简单字形的轮廓端点、instructions、压缩 flags 及 x/y 坐标增量已解码，复合字形可递归展开，支持 2.14 缩放/旋转/斜切矩阵、XY 偏移与点对齐，并限制递归深度及展开点数；不执行 hinting，也不渲染。此二进制解析仅用 Rust 标准库，以便控制格式支持范围及错误语义，当前无需引入第三方解析依赖。下一步衔接 CIDFontType2 映射，随后处理子集化与写出。
-3. **CID/复合字体与文本提取（未开始）**：依次实现 CIDFontType2、Type 0/CIDFontType0、CMap/CIDSystemInfo 与 ToUnicode，再将字体映射串联到内容流文本操作符；写入/提取往返是阶段验收门槛。
+2. **TrueType 程序读取（进行中）**：TrueType 的 `/FontFile2` 解码后校验 SFNT 目录，并解析 `head`/`maxp` 的 unitsPerEm/glyph count、`hhea`/`hmtx` 水平度量、Unicode `cmap` format 4/12 以及 `loca`/`glyf` 字形记录。可按 glyph ID 查询 advance width（含 `numberOfHMetrics` 尾部复用规则）、Unicode 查询 glyph ID，并读取 glyph header/bounds 和原始记录；简单字形的轮廓端点、instructions、压缩 flags 及 x/y 坐标增量已解码，复合字形可递归展开，支持 2.14 缩放/旋转/斜切矩阵、XY 偏移与点对齐，并限制递归深度及展开点数；不执行 hinting，也不渲染。此二进制解析仅用 Rust 标准库，以便控制格式支持范围及错误语义，当前无需引入第三方解析依赖。
+3. **CID/复合字体与文本提取（进行中）**：CIDFontType2 可解析 descendant 字典、`CIDSystemInfo`、`CIDToGIDMap`（Identity/流）、`W`/`DW`，并可从 FontDescriptor 加载 `/FontFile2`。Type 0 可连接一个 CIDFontType2 descendant；编码支持 `/Identity-H`、`/Identity-V` 及嵌入 CMap 的 codespace、`cidchar`、`cidrange` 段，并提供字符码→CID→GID/宽度查询。`/ToUnicode` 支持嵌入 CMap 的 `bfchar` 和 `bfrange` 数组/递增目标，按 UTF-16BE 转换为 Unicode 序列，并在 Type 0 decoded code 中附带可选映射结果；尚未接入内容流 `Tj`/`TJ` 提取。当前不支持 CMap 继承（`usecmap`）、其他预定义 CMap 和 CIDFontType0。下一步将字体映射串联到内容流文本操作符，再推进常用预定义 CMap 与写入/提取往返验收。
 4. **独立公共类型（部分完成）**：`7.9` 的 `PdfDate`、`PdfRect` 与 `PdfTextString` 已实现；名称树/数值树语义类型仍缺失，可与字体解析并行推进并单独更新矩阵证据。
 
 **范围边界**：

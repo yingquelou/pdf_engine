@@ -2199,7 +2199,7 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
                         .insert("Type", Value::Name("FontDescriptor".into()))
                         .insert(
                             "FontFile2",
-                            Value::Stream(Dict::new(), StreamData::Owned(sfnt)),
+                            Value::Stream(Dict::new(), StreamData::Owned(sfnt.clone())),
                         ),
                 ),
             ),
@@ -2217,6 +2217,44 @@ fn truetype_font_program_resolves_and_parses_fontfile2() {
     assert_eq!(glyph.points.len(), 1);
     assert_eq!(font.glyph(2).unwrap().unwrap().points.len(), 1);
     assert_eq!(font.table(b"head").unwrap().len(), 54);
+
+    let cid_font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("CIDFontType2".into()))
+            .insert("BaseFont", Value::Name("ExampleCIDFont".into()))
+            .insert(
+                "CIDSystemInfo",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Registry", Value::String("Adobe".into()))
+                        .insert("Ordering", Value::String("Identity".into()))
+                        .insert("Supplement", Value::Integer(0)),
+                ),
+            )
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert(
+                            "FontFile2",
+                            Value::Stream(Dict::new(), StreamData::Owned(sfnt)),
+                        ),
+                ),
+            ),
+    );
+    let cid_font = doc.cid_font_type2(&cid_font).unwrap().unwrap();
+    assert_eq!(cid_font.glyph_id_for_cid(2), Some(2));
+    assert_eq!(cid_font.glyph_id_for_cid(3), None);
+    assert_eq!(
+        cid_font
+            .true_type_font()
+            .and_then(|font| font.glyph(2).ok().flatten())
+            .unwrap()
+            .points
+            .len(),
+        1
+    );
 
     let no_program = Value::Dict(Dict::new().insert("Subtype", Value::Name("TrueType".into())));
     assert!(doc.truetype_font(&no_program).unwrap().is_none());
