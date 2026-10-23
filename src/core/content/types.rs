@@ -89,6 +89,17 @@ pub enum Op {
     /// 按十六进制形式书写。
     ShowTextHex(Vec<u8>),
     ShowTextArray(Vec<TextArrayItem>),
+    /// 换行并绘制文本：`T* (text) '`（PDF 9.4.5）。
+    ShowTextNextLine(String),
+    /// 设置词距/字距、换行并绘制文本：`aw ac (text) "`（PDF 9.4.5）。
+    SetSpacingShowTextNextLine {
+        /// 词距调整量 `aw`。
+        word_spacing: f64,
+        /// 字距调整量 `ac`。
+        char_spacing: f64,
+        /// 要绘制的文本。
+        text: String,
+    },
     MoveNextLine {
         tx: f64,
         ty: f64,
@@ -103,6 +114,8 @@ pub enum Op {
     SetTextScale(f64),
     SetTextLeading(f64),
     SetTextRender(u8),
+    /// 设置文本上升距离（`Ts`，PDF 9.3.7）：正值上移基线，负值下移。
+    SetTextRise(f64),
 
     // ── 图形状态（PDF 1.0，ri 为 1.2） ────────────────
     SaveState,
@@ -121,8 +134,14 @@ pub enum Op {
     SetRenderingIntent(String),
 
     // ── 路径构造（PDF 1.0） ──────────────────────────
-    MoveTo { x: f64, y: f64 },
-    LineTo { x: f64, y: f64 },
+    MoveTo {
+        x: f64,
+        y: f64,
+    },
+    LineTo {
+        x: f64,
+        y: f64,
+    },
     CurveTo {
         x1: f64,
         y1: f64,
@@ -168,8 +187,16 @@ pub enum Op {
     ClipEvenOdd,
 
     // ── 基本颜色（PDF 1.0；scn/SCN 为 1.2） ────────────
-    SetStrokeRGB { r: f64, g: f64, b: f64 },
-    SetFillRGB { r: f64, g: f64, b: f64 },
+    SetStrokeRGB {
+        r: f64,
+        g: f64,
+        b: f64,
+    },
+    SetFillRGB {
+        r: f64,
+        g: f64,
+        b: f64,
+    },
     SetStrokeCMYK {
         c: f64,
         m: f64,
@@ -190,8 +217,12 @@ pub enum Op {
     SetStrokeColor(Vec<f64>),
     SetFillColor(Vec<f64>),
     /// `scn`：color 数组 + 可选 name 参数（pattern 分支不在本次范围内）。
-    SetStrokeColorN { values: Vec<f64> },
-    SetFillColorN { values: Vec<f64> },
+    SetStrokeColorN {
+        values: Vec<f64>,
+    },
+    SetFillColorN {
+        values: Vec<f64>,
+    },
 
     // ── XObject Do（PDF 1.0） ──────────────────────────
     DrawXObject(String),

@@ -46,10 +46,7 @@ fn save_concat_restore_chain() {
         .restore_state();
     let bytes = s.to_bytes();
     let text = String::from_utf8_lossy(&bytes);
-    assert_eq!(
-        text,
-        "q\n50.0 0.0 0.0 50.0 100.0 100.0 cm\n/Im1 Do\nQ\n"
-    );
+    assert_eq!(text, "q\n50.0 0.0 0.0 50.0 100.0 100.0 cm\n/Im1 Do\nQ\n");
 }
 
 #[test]
@@ -93,6 +90,30 @@ fn show_text_array_mixed() {
 }
 
 #[test]
+fn show_text_next_line_writes_apostrophe_operator() {
+    let mut s = ContentStream::new();
+    s.show_text_next_line("Hello");
+    let bytes = s.to_bytes();
+    assert_eq!(bytes, b"(Hello) '\n");
+}
+
+#[test]
+fn set_spacing_show_text_next_line_writes_quote_operator() {
+    let mut s = ContentStream::new();
+    s.set_spacing_show_text_next_line(0.5, 1.0, "World");
+    let bytes = s.to_bytes();
+    assert_eq!(bytes, b"0.5 1.0 (World) \"\n");
+}
+
+#[test]
+fn set_text_rise_writes_ts_operator() {
+    let mut s = ContentStream::new();
+    s.push(Op::SetTextRise(5.0));
+    let bytes = s.to_bytes();
+    assert_eq!(bytes, b"5.0 Ts\n");
+}
+
+#[test]
 fn transparency_triggers_feature() {
     let mut s = ContentStream::new();
     s.set_fill_alpha(0.5);
@@ -105,7 +126,10 @@ fn transparency_triggers_feature() {
 #[test]
 fn plain_text_stream_has_no_transparency() {
     let mut s = ContentStream::new();
-    s.begin_text().set_font("F1", 12.0).show_text("hi").end_text();
+    s.begin_text()
+        .set_font("F1", 12.0)
+        .show_text("hi")
+        .end_text();
     let _ = s.to_bytes();
     assert!(!s.features().contains(PdfFeature::Transparency));
 }
@@ -118,6 +142,7 @@ fn text_state_operators_individual() {
     s.push(Op::SetTextScale(90.0));
     s.push(Op::SetTextLeading(20.0));
     s.push(Op::SetTextRender(2));
+    s.push(Op::SetTextRise(3.5));
     s.push(Op::NextLine);
     s.push(Op::MoveNextLineSetLeading { leading: 24.0 });
     s.push(Op::SetTextMatrix([1.0, 0.0, 0.0, 1.0, 10.0, 20.0]));
@@ -128,6 +153,7 @@ fn text_state_operators_individual() {
     assert!(text.contains("90.0 Tz\n"));
     assert!(text.contains("20.0 TL\n"));
     assert!(text.contains("2 Tr\n"));
+    assert!(text.contains("3.5 Ts\n"));
     assert!(text.contains("T*\n"));
     assert!(text.contains("24.0 TD\n"));
     assert!(text.contains("1.0 0.0 0.0 1.0 10.0 20.0 Tm\n"));
@@ -139,10 +165,25 @@ fn path_construction_all_kinds() {
     s.push(Op::MoveTo { x: 0.0, y: 0.0 });
     s.push(Op::LineTo { x: 10.0, y: 10.0 });
     s.push(Op::CurveTo {
-        x1: 1.0, y1: 2.0, x2: 3.0, y2: 4.0, x3: 5.0, y3: 6.0,
+        x1: 1.0,
+        y1: 2.0,
+        x2: 3.0,
+        y2: 4.0,
+        x3: 5.0,
+        y3: 6.0,
     });
-    s.push(Op::CurveToInitial { x2: 1.0, y2: 2.0, x3: 3.0, y3: 4.0 });
-    s.push(Op::CurveToFinal { x1: 1.0, y1: 2.0, x3: 3.0, y3: 4.0 });
+    s.push(Op::CurveToInitial {
+        x2: 1.0,
+        y2: 2.0,
+        x3: 3.0,
+        y3: 4.0,
+    });
+    s.push(Op::CurveToFinal {
+        x1: 1.0,
+        y1: 2.0,
+        x3: 3.0,
+        y3: 4.0,
+    });
     s.push(Op::ClosePath);
     let bytes = s.to_bytes();
     let text = String::from_utf8_lossy(&bytes);
@@ -195,16 +236,38 @@ fn clipping_variants() {
 #[test]
 fn color_variants() {
     let mut s = ContentStream::new();
-    s.push(Op::SetStrokeRGB { r: 1.0, g: 0.0, b: 0.0 });
-    s.push(Op::SetFillRGB { r: 0.0, g: 0.0, b: 1.0 });
-    s.push(Op::SetStrokeCMYK { c: 1.0, m: 0.0, y: 0.0, k: 0.0 });
-    s.push(Op::SetFillCMYK { c: 0.0, m: 1.0, y: 0.0, k: 0.0 });
+    s.push(Op::SetStrokeRGB {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+    });
+    s.push(Op::SetFillRGB {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+    });
+    s.push(Op::SetStrokeCMYK {
+        c: 1.0,
+        m: 0.0,
+        y: 0.0,
+        k: 0.0,
+    });
+    s.push(Op::SetFillCMYK {
+        c: 0.0,
+        m: 1.0,
+        y: 0.0,
+        k: 0.0,
+    });
     s.push(Op::SetStrokeColorSpace("DeviceGray".into()));
     s.push(Op::SetFillColorSpace("DeviceGray".into()));
     s.push(Op::SetStrokeColor(vec![0.5]));
     s.push(Op::SetFillColor(vec![0.5]));
-    s.push(Op::SetStrokeColorN { values: vec![0.1, 0.2] });
-    s.push(Op::SetFillColorN { values: vec![0.1, 0.2] });
+    s.push(Op::SetStrokeColorN {
+        values: vec![0.1, 0.2],
+    });
+    s.push(Op::SetFillColorN {
+        values: vec![0.1, 0.2],
+    });
     let bytes = s.to_bytes();
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("1.0 0.0 0.0 RG\n"));

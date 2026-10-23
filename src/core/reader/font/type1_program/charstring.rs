@@ -101,7 +101,7 @@ fn interpret_component(
         return Err(interpreter.error("flex is missing its 3-argument exit call"));
     }
     if interpreter.pending_pops != 0 {
-        return Err(interpreter.error("flex results are not consumed by `pop`"));
+        return Err(interpreter.error("OtherSubrs results are not consumed by `pop`"));
     }
     Ok(Type1CharString {
         width: interpreter.width,
@@ -385,7 +385,7 @@ impl Interpreter<'_> {
                 let args = self.take(2, "setcurrentpoint")?;
                 self.x = args[0];
                 self.y = args[1];
-                // 轮廓已由 flex 或 hint replacement 定位，这里只同步 CharString 坐标。
+                // 轮廓已由 flex 定位，这里只同步 CharString 坐标。
                 Ok(Flow::Continue)
             }
             _ => Err(self.error(format!("unsupported escape operator 12 {escape}"))),

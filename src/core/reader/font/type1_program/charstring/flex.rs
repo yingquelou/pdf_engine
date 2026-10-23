@@ -1,4 +1,4 @@
-//! Type 1 flex: `callothersubr`/`pop` sequences expanded into curve segments.
+//! Type 1 OtherSubrs: flex expansion and hint replacement.
 
 use super::super::super::FontResult;
 use super::{Flow, Interpreter};
@@ -13,7 +13,10 @@ impl Interpreter<'_> {
         match (procedure, argument_count) {
             (1, 0) => self.begin_flex(),
             (0, 3) => self.finish_flex(),
-            (3, _) => Err(self.error("hint replacement (`callothersubr` 3) is not supported")),
+            (3, 1) => self.replace_hints(),
+            (3, _) => Err(self.error(
+                "hint replacement (`callothersubr` 3) requires exactly 1 argument",
+            )),
             _ => Err(self.error(format!(
                 "unsupported `callothersubr` procedure {procedure} with {argument_count} argument(s)"
             ))),
@@ -47,6 +50,21 @@ impl Interpreter<'_> {
         let dy = self.pop("flex vmoveto")?;
         self.stack.push(0.0);
         self.stack.push(dy);
+        Ok(Flow::Continue)
+    }
+
+    /// OtherSubrs procedure 3 switches the active hint mask. This interpreter
+    /// does not apply hints, but it consumes the hint replacement code and
+    /// accounts for the single result the procedure leaves for the next `pop`.
+    fn replace_hints(&mut self) -> FontResult<Flow> {
+        if self.flexing {
+            return Err(self.error("hint replacement is not allowed during flex"));
+        }
+        if self.pending_pops != 0 {
+            return Err(self.error("OtherSubrs results must be popped before hint replacement"));
+        }
+        let _hint_code = self.pop("hint replacement")?;
+        self.pending_pops = 1;
         Ok(Flow::Continue)
     }
 

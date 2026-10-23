@@ -44,6 +44,22 @@ impl ContentStream {
                 w.emit_byte(b']');
                 w.emit_op_space(b"TJ");
             }
+            Op::ShowTextNextLine(text) => {
+                w.emit_literal(text);
+                w.emit_op_space(b"'");
+            }
+            Op::SetSpacingShowTextNextLine {
+                word_spacing,
+                char_spacing,
+                text,
+            } => {
+                w.emit_float(*word_spacing);
+                w.emit_byte(b' ');
+                w.emit_float(*char_spacing);
+                w.emit_byte(b' ');
+                w.emit_literal(text);
+                w.emit_op_space(b"\"");
+            }
             Op::MoveNextLine { tx, ty } => {
                 w.emit_float(*tx);
                 w.emit_byte(b' ');
@@ -83,6 +99,10 @@ impl ContentStream {
             Op::SetTextRender(v) => {
                 w.emit_int(*v as i64);
                 w.emit_op_space(b"Tr");
+            }
+            Op::SetTextRise(v) => {
+                w.emit_float(*v);
+                w.emit_op_space(b"Ts");
             }
 
             Op::SaveState => w.emit_op(b"q"),
@@ -142,7 +162,14 @@ impl ContentStream {
                 w.emit_float(*y);
                 w.emit_op_space(b"l");
             }
-            Op::CurveTo { x1, y1, x2, y2, x3, y3 } => {
+            Op::CurveTo {
+                x1,
+                y1,
+                x2,
+                y2,
+                x3,
+                y3,
+            } => {
                 w.emit_float(*x1);
                 w.emit_byte(b' ');
                 w.emit_float(*y1);

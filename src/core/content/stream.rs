@@ -85,7 +85,10 @@ impl ContentStream {
 
     /// 设置当前字体：`/name size Tf`。
     pub fn set_font(&mut self, name: impl Into<String>, size: f64) -> &mut Self {
-        self.push(Op::SetFont { name: name.into(), size });
+        self.push(Op::SetFont {
+            name: name.into(),
+            size,
+        });
         self
     }
 
@@ -135,6 +138,31 @@ impl ContentStream {
     /// 文本数组绘制：`[... ] TJ`——**不包 BT/ET**。
     pub fn show_text_array(&mut self, items: Vec<TextArrayItem>) -> &mut Self {
         self.push(Op::ShowTextArray(items));
+        self
+    }
+
+    /// 换行并绘制文本：`T* (text) '`——**不包 BT/ET**。
+    ///
+    /// 等效于先调用 [`Self::next_line`]，再调用 [`Self::show_text`]。
+    pub fn show_text_next_line(&mut self, text: impl Into<String>) -> &mut Self {
+        self.push(Op::ShowTextNextLine(text.into()));
+        self
+    }
+
+    /// 设置词距/字距、换行并绘制文本：`aw ac (text) "`——**不包 BT/ET**。
+    ///
+    /// 等效于 `Tw Tc T* Tj` 的组合。
+    pub fn set_spacing_show_text_next_line(
+        &mut self,
+        word_spacing: f64,
+        char_spacing: f64,
+        text: impl Into<String>,
+    ) -> &mut Self {
+        self.push(Op::SetSpacingShowTextNextLine {
+            word_spacing,
+            char_spacing,
+            text: text.into(),
+        });
         self
     }
 
