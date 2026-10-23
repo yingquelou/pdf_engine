@@ -12,15 +12,19 @@
 //! 1. Catalog（对象 1）
 //! 2. Pages（对象 2）
 //! 3. 每页：Page 字典对象、内容流对象
-//! 4. 字体对象（每个用到的标准字体一个）
+//! 4. 字体对象（每个用到的标准字体一个，含可配置的 `/Encoding`）
 //! 5. 图片 XObject 流对象（每张一个）
 //!
 //! trailer 的 `/Root` 指向 Catalog(1)，`/Size` 由 writer 自动取
 //! `最大对象号 + 1`。
 
 use crate::pdf::content::ContentStream;
+use crate::pdf::reader::font::{
+    PredefinedEncoding, code_for_char, default_encoding, predefined_encoding,
+};
 use crate::pdf::types::{Array, Dict, Document, Object, PdfVersion, StreamData, Trailer, Value};
 use crate::pdf::writer::{DocumentWriter, WriteError};
+use std::collections::BTreeMap;
 use std::io::Write;
 
 /// 页面尺寸预设。
@@ -48,27 +52,143 @@ impl PageSize {
     }
 }
 
+/// 简单字体 `/Encoding` 的写端配置。
+///
+/// 默认取 [`FontEncoding::Named`] 的 `WinAnsiEncoding`，与既有输出一致。
+/// [`FontEncoding::BuiltIn`] 省略 `/Encoding`，让字体程序的内建编码生效；
+/// [`FontEncoding::Custom`] 写入 `/BaseEncoding` 与 `/Differences` 覆盖。
+///
+/// `text` 会按此配置把文本转成单字节字符码：五个预定义编码名可识别，
+/// 其余名称无法转码时退回原始 UTF-8 字节。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontEncoding {
+    /// 省略 `/Encoding`（使用字体内建编码，如 Standard 14 的 Standard）。
+    BuiltIn,
+    /// 预定义编码名（不含前导 `/`），如 `MacRomanEncoding`。
+    Named(String),
+    /// 编码字典。
+    Custom {
+        /// `/BaseEncoding` 名（不含前导 `/`）；`None` 表示省略。
+        base: Option<String>,
+        /// 字符码 → glyph 名覆盖项，写出时按字符码升序排列。
+        differences: BTreeMap<u8, String>,
+    },
+}
+
+impl Default for FontEncoding {
+    fn default() -> Self {
+        Self::Named("WinAnsiEncoding".to_string())
+    }
+}
+
+impl FontEncoding {
+    /// 指定预定义编码名。
+    pub fn named(name: impl Into<String>) -> Self {
+        Self::Named(name.into())
+    }
+
+    /// 带 `/Differences` 的编码字典；`base` 为 `None` 时省略 `/BaseEncoding`。
+    ///
+    /// 同一字符码重复出现时，后定义者覆盖先定义者。
+    pub fn with_differences(base: Option<&str>, differences: Vec<(u8, String)>) -> Self {
+        Self::Custom {
+            base: base.map(str::to_string),
+            differences: differences.into_iter().collect(),
+        }
+    }
+
+    /// 解析基础预定义编码；编码名无法识别或 `/BaseEncoding` 无效时返回 `None`。
+    fn base_encoding(&self, base_font: &str) -> Option<PredefinedEncoding> {
+        match self {
+            Self::BuiltIn => Some(default_encoding(base_font)),
+            Self::Named(name) => predefined_encoding(name).ok(),
+            Self::Custom {
+                base: Some(name), ..
+            } => predefined_encoding(name).ok(),
+            Self::Custom { base: None, .. } => Some(default_encoding(base_font)),
+        }
+    }
+
+    /// 把文本按编码转成单字节字符码。
+    ///
+    /// 无法表示的字符替换为 `?`（0x3F）；基础编码无法识别时返回 `None`，
+    /// 调用方回退为原始 UTF-8 字节。
+    fn encode_text(&self, base_font: &str, text: &str) -> Option<Vec<u8>> {
+        let base = self.base_encoding(base_font)?;
+        let empty = BTreeMap::new();
+        let differences = match self {
+            Self::Custom { differences, .. } => differences,
+            _ => &empty,
+        };
+        Some(
+            text.chars()
+                .map(|ch| code_for_char(base, differences, ch).unwrap_or(b'?'))
+                .collect(),
+        )
+    }
+
+    /// 转换为字体字典的 `/Encoding` 值；`BuiltIn` 无对应值。
+    fn to_value(&self) -> Option<Value> {
+        match self {
+            Self::BuiltIn => None,
+            Self::Named(name) => Some(Value::Name(name.clone())),
+            Self::Custom { base, differences } => {
+                let mut dict = Dict::new();
+                if let Some(base) = base {
+                    dict = dict.insert("BaseEncoding", Value::Name(base.clone()));
+                }
+                if !differences.is_empty() {
+                    let mut arr = Array::new();
+                    for (code, name) in differences {
+                        arr = arr
+                            .push(Value::Integer(i64::from(*code)))
+                            .push(Value::Name(name.clone()));
+                    }
+                    dict = dict.insert("Differences", Value::Array(arr));
+                }
+                Some(Value::Dict(dict))
+            }
+        }
+    }
+}
+
 /// 逻辑字体描述。
 ///
 /// 本层仅支持 PDF 标准内置 Type1 字体（如 Helvetica），无需子集嵌入。
 /// 字段 [`Font::name`] 指定 BaseFont 名，[`Font::size`] 指定字号 pt，
-/// 可通过 [`Font::helvetica`] 便捷构造常用 Helvetica。
+/// [`Font::encoding`] 控制字体字典的 `/Encoding`（默认 WinAnsiEncoding），
+/// 可通过 [`Font::helvetica`] 便捷构造常用 Helvetica、用
+/// [`Font::with_encoding`] 替换编码配置。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Font {
     /// BaseFont 名（不含前导 `/`），如 `Helvetica`。
     pub name: String,
     /// 字号（pt）。
     pub size: f64,
+    /// `/Encoding` 写端配置。
+    pub encoding: FontEncoding,
 }
 
 impl Font {
-    /// Helvetica 标准字体。
+    /// Helvetica 标准字体（默认 WinAnsiEncoding）。
     pub fn helvetica(size: f64) -> Self {
         Self {
             name: "Helvetica".to_string(),
             size,
+            encoding: FontEncoding::default(),
         }
     }
+
+    /// 替换编码配置（链式构造）。
+    pub fn with_encoding(mut self, encoding: FontEncoding) -> Self {
+        self.encoding = encoding;
+        self
+    }
+}
+
+/// 字体去重键：BaseFont 名、字号位模式与编码配置都相同才算同一字体对象。
+fn same_font(a: &Font, b: &Font) -> bool {
+    a.name == b.name && a.size.to_bits() == b.size.to_bits() && a.encoding == b.encoding
 }
 
 /// 图片色彩空间。
@@ -184,20 +304,18 @@ impl PdfBuilder {
 
     /// 在指定页上写一段文字。
     ///
-    /// 生成内容操作符：`BT /F<n> <size> Tf x y Td (str) Tj ET`，
-    /// 其中字符串字面量对 `(` `)` `\` 做转义（由底层 [`ContentStream`]
-    /// 负责）。坐标原点在页面左下角，单位 pt。
+    /// 文本先按字体的 [`FontEncoding`] 转成单字节字符码：可打印 ASCII
+    /// 仍输出字面量 `BT /F<n> <size> Tf x y Td (text) Tj ET`（`(` `)` `\`
+    /// 由 [`ContentStream`] 转义），其他字节输出十六进制字符串
+    /// `BT ... <hex> Tj ET`。无法映射的字符写成 `?`；编码名无法识别时
+    /// 退回原始 UTF-8 字节。坐标原点在页面左下角，单位 pt。
     pub fn text(&mut self, page: usize, font: &Font, x: f64, y: f64, s: &str) -> &mut Self {
         let p = match self.pages.get_mut(page) {
             Some(p) => p,
             None => return self,
         };
-        // 字体去重：同 BaseFont 名 + 同字号 视为同一字体对象。
-        let fidx = match p
-            .fonts
-            .iter()
-            .position(|f| f.name == font.name && f.size.to_bits() == font.size.to_bits())
-        {
+        // 字体去重：同 BaseFont 名 + 同字号 + 同编码 视为同一字体对象。
+        let fidx = match p.fonts.iter().position(|f| same_font(f, font)) {
             Some(i) => i,
             None => {
                 p.fonts.push(font.clone());
@@ -208,8 +326,26 @@ impl PdfBuilder {
         // 委托内容流引擎：资源名 /F<fidx+1>（1-based）由 builder 分配，
         // 操作符组装（BT/ET/Tf/Td/Tj）和字面量转义由 ContentStream 负责。
         let font_name = format!("F{}", fidx + 1);
-        p.content
-            .show_text_at(font_name, font.size, x, y, s);
+        match font.encoding.encode_text(&font.name, s) {
+            Some(bytes) if bytes.iter().all(|&b| (0x20..=0x7E).contains(&b)) => {
+                // 纯可打印 ASCII 保持字面量输出，便于阅读。
+                let literal: String = bytes.iter().map(|&b| char::from(b)).collect();
+                p.content.show_text_at(font_name, font.size, x, y, literal);
+            }
+            Some(bytes) => {
+                // 单字节码用十六进制字符串写出，避免 UTF-8 误写。
+                p.content
+                    .begin_text()
+                    .set_font(font_name, font.size)
+                    .move_next_line(x, y)
+                    .show_text_hex(bytes)
+                    .end_text();
+            }
+            None => {
+                // 编码名无法识别：维持原始 UTF-8 直写。
+                p.content.show_text_at(font_name, font.size, x, y, s);
+            }
+        }
         self
     }
 
@@ -280,7 +416,7 @@ impl PdfBuilder {
             page_slots.push((pn, cn));
         }
 
-        // 字体去重池：跨页合并同一 (name,size) 字体，复用同一对象号。
+        // 字体去重池：跨页合并同一 (name,size,encoding) 字体，复用同一对象号。
         let mut font_pool: Vec<(Font, i64)> = Vec::new();
         // 每页用到的字体在页内是 1-based 索引；映射到全局对象号。
         // 页内字体列表顺序即 text() 调用首次出现顺序；同一对象号在
@@ -289,9 +425,7 @@ impl PdfBuilder {
         for p in &self.pages {
             let mut v = Vec::with_capacity(p.fonts.len());
             for f in &p.fonts {
-                let pos = font_pool
-                    .iter()
-                    .position(|(g, _)| g.name == f.name && g.size.to_bits() == f.size.to_bits());
+                let pos = font_pool.iter().position(|(g, _)| same_font(g, f));
                 let obj_num = match pos {
                     Some(i) => font_pool[i].1,
                     None => {
@@ -418,17 +552,14 @@ impl PdfBuilder {
 
         // 字体对象
         for (f, fnum) in &font_pool {
-            doc.set_object(Object::new(
-                *fnum,
-                0,
-                Value::Dict(
-                    Dict::new()
-                        .insert("Type", Value::Name("Font".into()))
-                        .insert("Subtype", Value::Name("Type1".into()))
-                        .insert("BaseFont", Value::Name(f.name.clone()))
-                        .insert("Encoding", Value::Name("WinAnsiEncoding".into())),
-                ),
-            ));
+            let mut font_dict = Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name("Type1".into()))
+                .insert("BaseFont", Value::Name(f.name.clone()));
+            if let Some(encoding) = f.encoding.to_value() {
+                font_dict = font_dict.insert("Encoding", encoding);
+            }
+            doc.set_object(Object::new(*fnum, 0, Value::Dict(font_dict)));
         }
 
         // 图片 XObject 流对象
@@ -562,5 +693,150 @@ mod tests {
         b.text(p, &Font::helvetica(12.0), 10.0, 10.0, "hi");
         let s = render(&mut b);
         assert!(s.contains("%PDF-1.4"));
+    }
+
+    #[test]
+    fn named_encoding_is_emitted() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::named("MacRomanEncoding"));
+        b.text(p, &font, 10.0, 10.0, "hi");
+        let s = render(&mut b);
+        assert!(s.contains("/Encoding /MacRomanEncoding"));
+        assert!(!s.contains("WinAnsiEncoding"));
+    }
+
+    #[test]
+    fn builtin_encoding_omits_encoding_entry() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::BuiltIn);
+        b.text(p, &font, 10.0, 10.0, "hi");
+        let s = render(&mut b);
+        assert!(!s.contains("/Encoding"), "BuiltIn 不应写出 /Encoding");
+    }
+
+    #[test]
+    fn custom_encoding_writes_base_and_sorted_differences() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::with_differences(
+            Some("WinAnsiEncoding"),
+            vec![
+                (66, "adieresis".to_string()),
+                (65, "eacute".to_string()),
+                (66, "egrave".to_string()),
+                (200, "Euro".to_string()),
+            ],
+        ));
+        b.text(p, &font, 10.0, 10.0, "AB");
+        let s = render(&mut b);
+        assert!(s.contains("/BaseEncoding /WinAnsiEncoding"));
+        // 升序输出，且重复的 66 以后定义者为准。
+        assert!(
+            s.contains("/Differences [65 /eacute 66 /egrave 200 /Euro]"),
+            "Differences 应按字符码升序: {s}"
+        );
+    }
+
+    #[test]
+    fn custom_encoding_without_base_omits_base_encoding() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0)
+            .with_encoding(FontEncoding::with_differences(None, vec![(65, "A".into())]));
+        b.text(p, &font, 10.0, 10.0, "A");
+        let s = render(&mut b);
+        assert!(!s.contains("/BaseEncoding"));
+        assert!(s.contains("/Differences [65 /A]"));
+    }
+
+    #[test]
+    fn font_dedup_includes_encoding() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &Font::helvetica(12.0), 10.0, 10.0, "a");
+        let mac = Font::helvetica(12.0).with_encoding(FontEncoding::named("MacRomanEncoding"));
+        b.text(p, &mac, 10.0, 20.0, "b");
+        b.text(p, &mac, 10.0, 30.0, "c");
+        let s = render(&mut b);
+
+        assert_eq!(
+            s.matches("/Type /Font").count(),
+            2,
+            "不同编码应生成两个字体对象"
+        );
+        assert!(s.contains("/Encoding /WinAnsiEncoding"));
+        assert!(s.contains("/Encoding /MacRomanEncoding"));
+    }
+
+    #[test]
+    fn text_encodes_winansi_non_ascii_as_hex() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &Font::helvetica(12.0), 10.0, 10.0, "Café €");
+        let s = render(&mut b);
+        assert!(
+            s.contains("<436166E92080> Tj"),
+            "WinAnsi 应按 CP1252 转码: {s}"
+        );
+    }
+
+    #[test]
+    fn text_encodes_macroman_codes() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::named("MacRomanEncoding"));
+        b.text(p, &font, 10.0, 10.0, "é");
+        let s = render(&mut b);
+        assert!(s.contains("<8E> Tj"), "MacRoman 中 é 应为 0x8E: {s}");
+    }
+
+    #[test]
+    fn text_replaces_unencodable_characters() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &Font::helvetica(12.0), 10.0, 10.0, "a中b");
+        let s = render(&mut b);
+        // 替换后的 ? 仍是可打印 ASCII，因此走字面量输出。
+        assert!(s.contains("(a?b) Tj"), "无法映射的字符应替换为 ?: {s}");
+    }
+
+    #[test]
+    fn text_uses_differences_and_skips_overridden_base_codes() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::with_differences(
+            Some("WinAnsiEncoding"),
+            vec![(65, "eacute".to_string())],
+        ));
+        b.text(p, &font, 10.0, 10.0, "éA");
+        let s = render(&mut b);
+        // é 使用 /Differences 的 65；A 的原 65 被覆盖，退化为 ?。
+        assert!(
+            s.contains("(A?) Tj"),
+            "Differences 应优先且屏蔽被覆盖的基码: {s}"
+        );
+    }
+
+    #[test]
+    fn text_builtin_encoding_uses_standard_default() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::BuiltIn);
+        b.text(p, &font, 10.0, 10.0, "Aé");
+        let s = render(&mut b);
+        // A 在 StandardEncoding 为 65（可打印 ASCII），é 无映射。
+        assert!(s.contains("(A?) Tj"), "BuiltIn 应按 Standard 编码转码: {s}");
+    }
+
+    #[test]
+    fn text_with_unknown_encoding_name_falls_back_to_utf8() {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::named("UnknownEncoding"));
+        b.text(p, &font, 10.0, 10.0, "é");
+        let s = render(&mut b);
+        assert!(s.contains("(é) Tj"), "未知编码名应保留 UTF-8 直写: {s}");
     }
 }

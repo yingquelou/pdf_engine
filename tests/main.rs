@@ -4,7 +4,10 @@ use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
 use demo::pdf;
 use demo::pdf::reader::Parser;
-use demo::pdf::reader::font::{EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor};
+use demo::pdf::reader::font::{
+    EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor, Type1BuiltinEncoding,
+    Type1PathSegment,
+};
 use demo::pdf::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value, XrefKind,
 };
@@ -2123,6 +2126,201 @@ fn type1_font_program_reports_malformed_descriptor_entries() {
     assert!(doc.type1_font_program(&make_font(missing_subtype)).is_err());
 }
 
+/// 合成一个最小 Type 1 程序：明文头 + eexec 加密的 Private 字典，
+/// `/lenIV 4`，含 1 个 Subr 与 `.notdef`/`A` 两个 CharString。
+fn sample_type1_program() -> Vec<u8> {
+    fn encrypt(plaintext: &[u8], key: u16) -> Vec<u8> {
+        let mut running = key;
+        let mut ciphertext = Vec::with_capacity(plaintext.len());
+        for &plain in plaintext {
+            let cipher = plain ^ (running >> 8) as u8;
+            running = u16::from(cipher)
+                .wrapping_add(running)
+                .wrapping_mul(52845)
+                .wrapping_add(22719);
+            ciphertext.push(cipher);
+        }
+        ciphertext
+    }
+    fn segment(charstring: &[u8]) -> Vec<u8> {
+        let mut padded = vec![0x41u8; 4];
+        padded.extend_from_slice(charstring);
+        encrypt(&padded, 4330)
+    }
+    fn number(output: &mut Vec<u8>, value: i32) {
+        match value {
+            -107..=107 => output.push((value + 139) as u8),
+            108..=1131 => {
+                let encoded = value - 108;
+                output.push((247 + (encoded >> 8)) as u8);
+                output.push((encoded & 0xFF) as u8);
+            }
+            -1131..=-108 => {
+                let encoded = -value - 108;
+                output.push((251 + (encoded >> 8)) as u8);
+                output.push((encoded & 0xFF) as u8);
+            }
+            _ => {
+                output.push(255);
+                output.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+    }
+
+    let mut subr = Vec::new();
+    number(&mut subr, 0);
+    subr.push(11); // return
+
+    let mut notdef = Vec::new();
+    number(&mut notdef, 0);
+    number(&mut notdef, 500);
+    notdef.extend_from_slice(&[13, 14]); // hsbw endchar
+
+    let mut glyph_a = Vec::new();
+    number(&mut glyph_a, 20);
+    number(&mut glyph_a, 600);
+    glyph_a.push(13); // hsbw
+    number(&mut glyph_a, 100);
+    number(&mut glyph_a, 0);
+    glyph_a.push(21); // rmoveto
+    for delta in [[0, 700], [-100, 0], [0, -700]] {
+        number(&mut glyph_a, delta[0]);
+        number(&mut glyph_a, delta[1]);
+        glyph_a.push(5); // rlineto
+    }
+    glyph_a.extend_from_slice(&[9, 14]); // closepath endchar
+
+    let subr = segment(&subr);
+    let notdef = segment(&notdef);
+    let glyph_a = segment(&glyph_a);
+    let mut private = Vec::new();
+    private.extend_from_slice(b"dup /Private 8 dict dup begin\n");
+    private.extend_from_slice(b"/RD {string currentfile exch readstring pop} executeonly def\n");
+    private.extend_from_slice(b"/lenIV 4 def\n");
+    private.extend_from_slice(format!("/Subrs 1 array\ndup 0 {} RD ", subr.len()).as_bytes());
+    private.extend_from_slice(&subr);
+    private.extend_from_slice(b" NP\ndef\n");
+    private.extend_from_slice(b"2 index /CharStrings 2 dict dup begin\n");
+    private.extend_from_slice(format!("/.notdef {} RD ", notdef.len()).as_bytes());
+    private.extend_from_slice(&notdef);
+    private.extend_from_slice(b" ND\n");
+    private.extend_from_slice(format!("/A {} RD ", glyph_a.len()).as_bytes());
+    private.extend_from_slice(&glyph_a);
+    private.extend_from_slice(b" ND\nend\nend\nmark currentfile closefile\n");
+
+    let mut eexec_plain = vec![0x5Au8; 4];
+    eexec_plain.extend_from_slice(&private);
+    let eexec = encrypt(&eexec_plain, 55665);
+
+    let mut program = Vec::new();
+    program.extend_from_slice(b"%!PS-AdobeFont-1.0: EmbeddedSans 001.000\n");
+    program.extend_from_slice(b"/FontName /EmbeddedSans def\n");
+    program.extend_from_slice(b"/FamilyName (Embedded Sans) def\n");
+    program.extend_from_slice(b"/FontBBox {0 -200 1000 900} readonly def\n");
+    program.extend_from_slice(b"/Encoding StandardEncoding def\n");
+    program.extend_from_slice(b"currentfile eexec\n");
+    program.extend_from_slice(&eexec);
+    program.extend_from_slice(&[b'0'; 512]);
+    program.extend_from_slice(b"\ncleartomark\n");
+    program
+}
+
+#[test]
+fn type1_program_parses_embedded_font_file() {
+    let doc = Document::new();
+    doc.set_object(Object::new(
+        60,
+        0,
+        Value::Stream(Dict::new(), StreamData::Owned(sample_type1_program())),
+    ));
+    doc.set_object(Object::new(
+        61,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("FontDescriptor".into()))
+                .insert("FontFile", Value::Ref(60, 0)),
+        ),
+    ));
+    let font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("EmbeddedSans".into()))
+            .insert("FontDescriptor", Value::Ref(61, 0)),
+    );
+
+    let program = doc.type1_program(&font).unwrap().unwrap();
+    assert_eq!(program.header.font_name.as_deref(), Some("EmbeddedSans"));
+    assert_eq!(program.header.family_name.as_deref(), Some("Embedded Sans"));
+    assert_eq!(program.header.font_bbox, Some([0.0, -200.0, 1000.0, 900.0]));
+    assert_eq!(
+        program.header.encoding,
+        Some(Type1BuiltinEncoding::Predefined(
+            "StandardEncoding".to_string()
+        ))
+    );
+    assert_eq!(program.len_iv, 4);
+    assert_eq!(
+        program.charstrings.get(".notdef").map(Vec::as_slice),
+        Some(b"\x8b\xf8\x88\x0d\x0e".as_slice())
+    );
+    assert_eq!(
+        program.charstrings.get("A").map(Vec::as_slice),
+        Some(
+            b"\x9f\xf8\xec\x0d\xef\x8b\x15\x8b\xf9\x50\x05\x27\x8b\x05\x8b\xfd\x50\x05\x09\x0e"
+                .as_slice()
+        )
+    );
+    assert_eq!(
+        program.subrs.get(&0).map(Vec::as_slice),
+        Some(b"\x8b\x0b".as_slice())
+    );
+
+    let glyph = program.glyph("A").unwrap().unwrap();
+    assert_eq!(glyph.width, 600.0);
+    assert_eq!(glyph.side_bearing, [20.0, 0.0]);
+    assert_eq!(
+        glyph.path,
+        vec![
+            Type1PathSegment::MoveTo { x: 120.0, y: 0.0 },
+            Type1PathSegment::LineTo { x: 120.0, y: 700.0 },
+            Type1PathSegment::LineTo { x: 20.0, y: 700.0 },
+            Type1PathSegment::LineTo { x: 20.0, y: 0.0 },
+            Type1PathSegment::ClosePath,
+        ]
+    );
+    assert_eq!(glyph.seac, None);
+    assert!(program.glyph("missing").unwrap().is_none());
+
+    let no_program = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("Helvetica".into())),
+    );
+    assert!(doc.type1_program(&no_program).unwrap().is_none());
+
+    let type1c_font = Value::Dict(
+        Dict::new()
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("EmbeddedSans".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert(
+                            "FontFile3",
+                            Value::Stream(
+                                Dict::new().insert("Subtype", Value::Name("Type1C".into())),
+                                StreamData::Owned(b"CFF".to_vec()),
+                            ),
+                        ),
+                ),
+            ),
+    );
+    assert!(doc.type1_program(&type1c_font).is_err());
+}
+
 /// 合成一个最小可解析的 TrueType 程序：head/maxp/hhea/hmtx/cmap/loca/glyf，
 /// 1000 upem、3 个字形、cmap format 4（A → glyph 2）。
 fn sample_sfnt_font() -> Vec<u8> {
@@ -3121,4 +3319,46 @@ end"
 
     let reparsed = parse_buf(&buf);
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("中文😀"));
+}
+
+/// 写入 → 重新解析 → 提取：builder 写端的自定义 `/Differences`
+/// 应经读端编码解析后反映到文本提取。
+#[test]
+fn builder_custom_encoding_roundtrips_through_parser() {
+    use demo::pdf::builder::{Font, FontEncoding, PageSize, PdfBuilder};
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let font = Font::helvetica(12.0).with_encoding(FontEncoding::with_differences(
+        Some("WinAnsiEncoding"),
+        vec![(65, "eacute".to_string()), (66, "egrave".to_string())],
+    ));
+    builder.text(page, &font, 72.0, 700.0, "éè");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let reparsed = parse_buf(&buf);
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("éè"));
+}
+
+/// 写入 → 重新解析 → 提取：WinAnsi/MacRoman 的非 ASCII 文本应经写端
+/// 字符码转换后，由读端按同一编码还原。
+#[test]
+fn builder_encodes_non_ascii_text_for_roundtrip() {
+    use demo::pdf::builder::{Font, FontEncoding, PageSize, PdfBuilder};
+
+    let mut builder = PdfBuilder::new();
+    let win_page = builder.page(PageSize::A4);
+    builder.text(win_page, &Font::helvetica(12.0), 72.0, 700.0, "Café €");
+    let mac_page = builder.page(PageSize::A4);
+    let mac_font = Font::helvetica(12.0).with_encoding(FontEncoding::named("MacRomanEncoding"));
+    builder.text(mac_page, &mac_font, 72.0, 700.0, "Café €");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let reparsed = parse_buf(&buf);
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Café €"));
+    assert_eq!(reparsed.extract_page_text(1).as_deref(), Some("Café €"));
 }

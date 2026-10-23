@@ -15,12 +15,17 @@ mod encoding_unicode;
 mod standard14_metrics;
 mod truetype;
 mod type0;
+mod type1_program;
 
 pub use cid::CidFontType2;
 pub use cid_type0::CidFontType0;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 pub use truetype::{CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph};
 pub use type0::{CidDescendant, Type0DecodedCode, Type0Font};
+pub use type1_program::{
+    Type1BuiltinEncoding, Type1CharString, Type1FontProgram, Type1Header, Type1PathSegment,
+    Type1Seac,
+};
 
 type FontResult<T> = std::result::Result<T, FontError>;
 
@@ -137,29 +142,7 @@ impl SimpleFontEncoding {
     pub fn unicode_for(&self, code: u8) -> Option<char> {
         match self.mapping_for(code) {
             EncodingMapping::GlyphName(name) => encoding_unicode::unicode_for_glyph_name(name),
-            EncodingMapping::Predefined {
-                encoding: PredefinedEncoding::WinAnsi,
-                code,
-            } => encoding_data::win_ansi_unicode(code),
-            EncodingMapping::Predefined {
-                encoding: PredefinedEncoding::Standard,
-                code,
-            } => encoding_data::standard_glyph_name(code)
-                .and_then(|name| encoding_unicode::unicode_for_glyph_name(&name)),
-            EncodingMapping::Predefined {
-                encoding: PredefinedEncoding::MacRoman,
-                code,
-            } => encoding_data::mac_roman_unicode(code),
-            EncodingMapping::Predefined {
-                encoding: PredefinedEncoding::Symbol,
-                code,
-            } => {
-                encoding_data::symbol_name(code).and_then(encoding_unicode::unicode_for_glyph_name)
-            }
-            EncodingMapping::Predefined {
-                encoding: PredefinedEncoding::ZapfDingbats,
-                code,
-            } => encoding_unicode::zapf_dingbats_unicode(code),
+            EncodingMapping::Predefined { encoding, code } => base_unicode(encoding, code),
         }
     }
 
@@ -462,7 +445,8 @@ fn parse_differences(values: &Array) -> FontResult<BTreeMap<u8, String>> {
     Ok(differences)
 }
 
-fn predefined_encoding(name: &str) -> FontResult<PredefinedEncoding> {
+/// Resolve a predefined encoding name for reading and write-side encoding.
+pub(crate) fn predefined_encoding(name: &str) -> FontResult<PredefinedEncoding> {
     match name {
         "StandardEncoding" => Ok(PredefinedEncoding::Standard),
         "WinAnsiEncoding" => Ok(PredefinedEncoding::WinAnsi),
@@ -475,12 +459,47 @@ fn predefined_encoding(name: &str) -> FontResult<PredefinedEncoding> {
     }
 }
 
-fn default_encoding(base_font: &str) -> PredefinedEncoding {
+/// Encoding a font uses when `/Encoding` is omitted (PDF 32000-1 §9.6.6.1).
+pub(crate) fn default_encoding(base_font: &str) -> PredefinedEncoding {
     match base_font {
         "Symbol" => PredefinedEncoding::Symbol,
         "ZapfDingbats" => PredefinedEncoding::ZapfDingbats,
         _ => PredefinedEncoding::Standard,
     }
+}
+
+/// Unicode scalar for a code in a predefined encoding.
+fn base_unicode(encoding: PredefinedEncoding, code: u8) -> Option<char> {
+    match encoding {
+        PredefinedEncoding::WinAnsi => encoding_data::win_ansi_unicode(code),
+        PredefinedEncoding::Standard => encoding_data::standard_glyph_name(code)
+            .and_then(|name| encoding_unicode::unicode_for_glyph_name(&name)),
+        PredefinedEncoding::MacRoman => encoding_data::mac_roman_unicode(code),
+        PredefinedEncoding::Symbol => {
+            encoding_data::symbol_name(code).and_then(encoding_unicode::unicode_for_glyph_name)
+        }
+        PredefinedEncoding::ZapfDingbats => encoding_unicode::zapf_dingbats_unicode(code),
+    }
+}
+
+/// Reverse of [`base_unicode`] for write-side text encoding.
+///
+/// `/Differences` assignments are searched first (lowest code wins). The base
+/// encoding is then scanned with overridden codes excluded, so a glyph name
+/// reassigned by `/Differences` no longer resolves to its original base code.
+pub(crate) fn code_for_char(
+    base: PredefinedEncoding,
+    differences: &BTreeMap<u8, String>,
+    ch: char,
+) -> Option<u8> {
+    if let Some((&code, _)) = differences
+        .iter()
+        .find(|(_, name)| encoding_unicode::unicode_for_glyph_name(name) == Some(ch))
+    {
+        return Some(code);
+    }
+    (0..=u8::MAX)
+        .find(|&code| !differences.contains_key(&code) && base_unicode(base, code) == Some(ch))
 }
 
 fn standard14_width(base_font: &str, code: u8) -> Option<f64> {
@@ -595,4 +614,62 @@ fn is_standard_14(name: &str) -> bool {
             | "Symbol"
             | "ZapfDingbats"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_for_char_maps_predefined_encodings() {
+        let none = BTreeMap::new();
+        assert_eq!(
+            code_for_char(PredefinedEncoding::WinAnsi, &none, 'é'),
+            Some(0xE9)
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::WinAnsi, &none, '€'),
+            Some(0x80)
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::MacRoman, &none, 'é'),
+            Some(0x8E)
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::Standard, &none, 'A'),
+            Some(0x41)
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::Symbol, &none, 'α'),
+            Some(0x61)
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::ZapfDingbats, &none, '✁'),
+            Some(0x21)
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::WinAnsi, &none, '中'),
+            None
+        );
+    }
+
+    #[test]
+    fn code_for_char_prefers_differences_and_hides_overridden_codes() {
+        let mut differences = BTreeMap::new();
+        differences.insert(65, "eacute".to_string());
+
+        assert_eq!(
+            code_for_char(PredefinedEncoding::WinAnsi, &differences, 'é'),
+            Some(65)
+        );
+        // 65 已被 /Differences 改成 eacute，基编码的 'A' 不再可用。
+        assert_eq!(
+            code_for_char(PredefinedEncoding::WinAnsi, &differences, 'A'),
+            None
+        );
+        assert_eq!(
+            code_for_char(PredefinedEncoding::WinAnsi, &differences, 'B'),
+            Some(66)
+        );
+    }
 }
