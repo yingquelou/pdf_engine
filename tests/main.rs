@@ -7,7 +7,7 @@ use pdf_engine::core;
 use pdf_engine::core::reader::Parser;
 use pdf_engine::core::reader::font::{
     EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor, Type1BuiltinEncoding,
-    Type1PathSegment,
+    Type1PathSegment, strip_subset_tag,
 };
 use pdf_engine::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value, XrefKind,
@@ -3349,6 +3349,97 @@ end"
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("中文😀"));
 }
 
+/// 写入 → 重新解析 → 提取：缺少 `/Encoding` 的 TrueType 简单字体应通过
+/// 嵌入程序的 cmap（内建编码）解码，而不是按 `/BaseFont`（Symbol）的
+/// 预定义编码把 0x41 解成希腊字母 Α。
+#[test]
+fn truetype_without_encoding_extracts_through_builtin_cmap() {
+    let mut doc = Document::new();
+    doc.set_object(Object::new(
+        1,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Catalog".into()))
+                .insert("Pages", Value::Ref(2, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        2,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Pages".into()))
+                .insert("Kids", Value::Array(Array::new().push(Value::Ref(3, 0))))
+                .insert("Count", Value::Integer(1)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        3,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Page".into()))
+                .insert("Parent", Value::Ref(2, 0))
+                .insert("Contents", Value::Ref(5, 0))
+                .insert(
+                    "Resources",
+                    Value::Dict(Dict::new().insert(
+                        "Font",
+                        Value::Dict(Dict::new().insert("F1", Value::Ref(4, 0))),
+                    )),
+                ),
+        ),
+    ));
+    doc.set_object(Object::new(
+        4,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name("TrueType".into()))
+                .insert("BaseFont", Value::Name("Symbol".into()))
+                .insert("FontDescriptor", Value::Ref(6, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        5,
+        0,
+        Value::Stream(
+            Dict::new(),
+            StreamData::Owned(b"BT /F1 12 Tf (A) Tj ET".to_vec()),
+        ),
+    ));
+    doc.set_object(Object::new(
+        6,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("FontDescriptor".into()))
+                .insert("FontName", Value::Name("Symbol".into()))
+                .insert("FontFile2", Value::Ref(7, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        7,
+        0,
+        Value::Stream(Dict::new(), StreamData::Owned(sample_sfnt_font())),
+    ));
+    doc.trailer = Trailer {
+        dict: Dict::new()
+            .insert("Root", Value::Ref(1, 0))
+            .insert("Size", Value::Integer(8)),
+    };
+
+    let mut buf = Vec::new();
+    core::writer::write_document(&doc, &mut buf).expect("write");
+
+    let reparsed = parse_buf(&buf);
+    // sample_sfnt_font 的 cmap 将 0x41 映射到 glyph 2，反向为 U+0041；
+    // Symbol 预定义编码则会把 0x41 解成 U+0391 (Α)。
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("A"));
+}
+
 /// 写入 → 重新解析 → 提取：builder 写端的自定义 `/Differences`
 /// 应经读端编码解析后反映到文本提取。
 #[test]
@@ -3525,6 +3616,48 @@ fn builder_embeds_truetype_font_program_roundtrip() {
     assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
 }
 
+/// 写入 → 重新解析： 子集字体应写出 `TAG+Name` 形式的 BaseFont，
+/// 读端剥离标签后仍能解析嵌入程序并提取文本。
+#[test]
+fn subset_font_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, FontProgram, PageSize, PdfBuilder};
+
+    let sfnt = sample_sfnt_font();
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::TrueType(sfnt.clone()))
+        .subset();
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Test");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "TrueType");
+    let base_font = font_dict
+        .as_dict()
+        .and_then(|dict| dict.get("BaseFont"))
+        .and_then(Value::as_name)
+        .expect("BaseFont");
+    let (tag, name) = base_font.split_once('+').expect("应含子集标签前缀");
+    assert_eq!(tag.len(), 6, "标签应为六个字母: {tag}");
+    assert!(
+        tag.bytes().all(|byte| byte.is_ascii_uppercase()),
+        "标签应为大写 ASCII 字母: {tag}"
+    );
+    assert_eq!(name, "Helvetica");
+    assert_eq!(strip_subset_tag(base_font), "Helvetica");
+
+    let parsed = reparsed
+        .truetype_font(&font_dict)
+        .expect("should parse program")
+        .expect("should have program");
+    assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Test"));
+}
+
 /// 写入 → 重新解析： builder 嵌入的 CFF 程序应作为 `/FontFile3`
 /// 保存，并带 `/Subtype /Type1C`。
 #[test]
@@ -3605,4 +3738,261 @@ fn builder_cid_font_descriptor_roundtrips_through_parser() {
     assert_eq!(metrics.cid_is_present(1), Some(false));
     assert_eq!(metrics.cid_is_present(2), Some(true));
     assert_eq!(metrics.cid_is_present(15), Some(true));
+}
+
+/// 写入 → 重新解析： CIDFontType2 嵌入的 TrueType 程序应作为 `/FontFile2`
+/// 保存，读端可还原原始字节并继续解析 CIDFont。
+#[test]
+fn builder_cid_font_type2_embeds_truetype_program_roundtrip() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, FontProgram, PageSize, PdfBuilder,
+    };
+
+    let sfnt = sample_sfnt_font();
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::TrueType(sfnt.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid(page, index, 72.0, 700.0, &[2]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType2");
+    let embedded = reparsed
+        .cid_font_type2_program(&descendant)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile2);
+    assert_eq!(embedded.data, sfnt);
+
+    let parsed = reparsed
+        .cid_font_type2(&descendant)
+        .expect("should parse CIDFontType2")
+        .expect("should be CIDFontType2");
+    assert_eq!(parsed.system_info().registry, "Adobe");
+    assert_eq!(parsed.system_info().ordering, "Identity");
+}
+
+/// 写入 → 重新解析： CIDFontType0 嵌入的 CFF 程序应作为 `/FontFile3`
+/// 保存，流子类型为 `/CIDFontType0C`。
+#[test]
+fn builder_cid_font_type0_embeds_cff_program_roundtrip() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, FontProgram, PageSize, PdfBuilder,
+    };
+
+    let cff = vec![0x01, 0x00, 0x04, 0x05];
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType0,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::CFF(cff.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid(page, index, 72.0, 700.0, &[2]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType0");
+    let embedded = reparsed
+        .cid_font_type0_program(&descendant)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile3);
+    assert_eq!(embedded.subtype.as_deref(), Some("CIDFontType0C"));
+    assert_eq!(embedded.data, cff);
+
+    let parsed = reparsed
+        .cid_font_type0(&descendant)
+        .expect("should parse CIDFontType0")
+        .expect("should be CIDFontType0");
+    let program = parsed.font_program().expect("should keep program");
+    assert_eq!(program.subtype.as_deref(), Some("CIDFontType0C"));
+    assert_eq!(program.data, cff);
+}
+
+/// 写入 → 重新解析 → 提取：builder 为 CIDFont 写出的 `/ToUnicode`
+/// CMap 应让读端把 CID 还原为 Unicode 文本。
+#[test]
+fn builder_cid_font_to_unicode_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid_unicode(
+        page,
+        index,
+        72.0,
+        700.0,
+        &[(1, "T"), (2, "é"), (3, "测"), (4, "😀")],
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let type0 = find_font_dict(&reparsed, "Type0");
+    let font = reparsed
+        .type0_font(&type0)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    let decoded = font
+        .decode_codes(&[0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04])
+        .expect("should decode");
+    let text: Vec<&str> = decoded
+        .iter()
+        .map(|code| code.unicode.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(text, ["T", "é", "测", "😀"]);
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Té测😀"));
+}
+
+/// 写入 → 重新解析 → 提取：连续 CID 的 `/ToUnicode` 应以 `bfrange`
+/// 写出，读端仍能把 CID 序列还原为文本。
+#[test]
+fn builder_cid_font_bfrange_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid_unicode(
+        page,
+        index,
+        72.0,
+        700.0,
+        &[(1, "A"), (2, "B"), (3, "C"), (4, "D"), (5, "E")],
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let type0 = find_font_dict(&reparsed, "Type0");
+    let (cmap_num, _) = type0
+        .as_dict()
+        .and_then(|dict| dict.get("ToUnicode"))
+        .and_then(Value::as_ref)
+        .expect("Type 0 字体应引用 ToUnicode");
+    let cmap = reparsed
+        .get_object(cmap_num)
+        .expect("ToUnicode 对象应可解析")
+        .expect("ToUnicode 对象应存在");
+    let cmap_bytes = reparsed
+        .decode_stream_bytes(&cmap.value)
+        .expect("ToUnicode 流应可解码");
+    let cmap_text = String::from_utf8_lossy(&cmap_bytes);
+    assert!(
+        cmap_text.contains("<0001> <0005> <0041>"),
+        "连续 CID 应以 bfrange 写出: {cmap_text}"
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("ABCDE"));
+}
+
+/// 写入 → 重新解析 → 提取：自定义嵌入 CMap（非 Identity）应把 2 字节
+/// 字符码映射为 CID，ToUnicode 以字符码为键，提取器仍还原出原文。
+#[test]
+fn builder_custom_cid_encoding_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{
+        CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let encoding = CidEncoding::new(0)
+        .mapping(0x0020, 1)
+        .mapping(0x0021, 2)
+        .mapping(0x0022, 3);
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_encoding(encoding);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_codes_unicode(
+        page,
+        index,
+        72.0,
+        700.0,
+        &[(0x0020, "A"), (0x0021, "B"), (0x0022, "C")],
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let type0 = find_font_dict(&reparsed, "Type0");
+    assert!(
+        matches!(
+            type0.as_dict().and_then(|dict| dict.get("Encoding")),
+            Some(Value::Ref(_, _))
+        ),
+        "自定义编码应以流引用写出"
+    );
+    let font = reparsed
+        .type0_font(&type0)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    assert!(!font.is_vertical(), "WMode 0 应为水平书写");
+    let decoded = font
+        .decode_codes(&[0x00, 0x20, 0x00, 0x21, 0x00, 0x22])
+        .expect("should decode");
+    assert_eq!(
+        decoded.iter().map(|code| code.cid).collect::<Vec<_>>(),
+        [1, 2, 3],
+        "字符码应经嵌入 CMap 映射为 CID"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .map(|code| code.unicode.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("A"), Some("B"), Some("C")]
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("ABC"));
 }

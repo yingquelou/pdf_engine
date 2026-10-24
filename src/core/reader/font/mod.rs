@@ -21,20 +21,24 @@ mod standard14_metrics;
 mod truetype;
 mod type0;
 mod type1_program;
+mod type3;
 
 pub use cff::{CffGlyphOutline, CffOutlineParser, CffPathSegment, TtfParserCffBackend};
 pub use cid::{CidFontType2, CidSystemInfo};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
-pub use encoding::{EncodingMapping, PredefinedEncoding, SimpleFontEncoding};
+pub use encoding::{EncodingMapping, PredefinedEncoding, SimpleFontEncoding, strip_subset_tag};
 pub use simple::Type1Font;
-pub use truetype::{CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph};
+pub use truetype::{
+    CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph, subset_truetype,
+};
 pub use type0::{CidDescendant, Type0DecodedCode, Type0Font};
 pub use type1_program::{
     Type1BuiltinEncoding, Type1CharString, Type1FontProgram, Type1Header, Type1PathSegment,
     Type1Seac,
 };
+pub use type3::Type3Font;
 
 use descriptor::parse_descriptor;
 pub(crate) use encoding::{code_for_char, default_encoding, predefined_encoding};

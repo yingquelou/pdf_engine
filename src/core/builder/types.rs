@@ -429,6 +429,25 @@ impl FontProgram {
             FontProgram::CFF(data) => data,
         }
     }
+
+    /// 按字体程序内容生成确定性的六字母子集标签（PDF 32000-1 §9.6.4）。
+    ///
+    /// 使用 FNV-1a 64 位哈希按 26 进制展开为 6 个大写字母，同一程序
+    /// 总是得到同一标签，便于重复构建与测试。
+    pub(super) fn subset_tag(&self) -> String {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for &byte in self.data() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let mut tag = [b'A'; 6];
+        let mut value = hash;
+        for slot in tag.iter_mut().rev() {
+            *slot = b'A' + (value % 26) as u8;
+            value /= 26;
+        }
+        String::from_utf8(tag.to_vec()).expect("subset tag is ASCII")
+    }
 }
 
 /// 逻辑字体描述。
@@ -437,10 +456,11 @@ impl FontProgram {
 /// 字段 [`Font::name`] 指定 BaseFont 名，[`Font::size`] 指定字号 pt，
 /// [`Font::encoding`] 控制字体字典的 `/Encoding`（默认 WinAnsiEncoding），
 /// [`Font::descriptor`] 可选地提供字体描述符度量，
-/// [`Font::font_program`] 可选地嵌入字体程序数据。
+/// [`Font::font_program`] 可选地嵌入字体程序数据，
+/// [`Font::subset`] 控制是否以六字母子集标签前缀写出 BaseFont。
 /// 可通过 [`Font::helvetica`] 便捷构造常用 Helvetica、用
 /// [`Font::with_encoding`] 替换编码配置、[`Font::with_descriptor`] 添加描述符、
-/// [`Font::with_font_program`] 嵌入字体程序。
+/// [`Font::with_font_program`] 嵌入字体程序、[`Font::subset`] 标记子集字体。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Font {
     /// BaseFont 名（不含前导 `/`），如 `Helvetica`。
@@ -453,6 +473,8 @@ pub struct Font {
     pub descriptor: Option<FontDescriptor>,
     /// 可选的嵌入字体程序。
     pub font_program: Option<FontProgram>,
+    /// 是否按子集字体写出（BaseFont 加六字母标签前缀）。
+    pub subset: bool,
 }
 
 impl Font {
@@ -464,6 +486,7 @@ impl Font {
             encoding: FontEncoding::default(),
             descriptor: None,
             font_program: None,
+            subset: false,
         }
     }
 
@@ -482,6 +505,16 @@ impl Font {
     /// 嵌入字体程序（链式构造）。
     pub fn with_font_program(mut self, program: FontProgram) -> Self {
         self.font_program = Some(program);
+        self
+    }
+
+    /// 标记为子集字体（链式构造）。
+    ///
+    /// 写出时若已嵌入字体程序，`/BaseFont` 会加上由程序内容确定的
+    /// 六字母标签前缀，如 `ABCDEF+Helvetica`（PDF 32000-1 §9.6.4）。
+    /// 未嵌入程序时该标记不产生前缀。
+    pub fn subset(mut self) -> Self {
+        self.subset = true;
         self
     }
 }
@@ -548,10 +581,51 @@ pub enum CidWidth {
     Range(u16, u16, f64),
 }
 
+/// Type 0 字体的嵌入 CMap 编码配置（PDF 32000-1 §9.7.5）。
+///
+/// 仅支持 2 字节字符码：字符码按 2 字节大端序写入内容流，再由
+/// [`CidEncoding::mappings`] 映射为 CID。未配置本编码时 Type 0 字体按
+/// `/Identity-H` 写出（字符码即 CID）。
+///
+/// `wmode` 只能为 0（水平）或 1（垂直）；非法值或空映射会在
+/// [`PdfBuilder::build`] 阶段返回 [`WriteError::InvalidObject`]。
+///
+/// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+/// [`WriteError::InvalidObject`]: crate::core::writer::WriteError::InvalidObject
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CidEncoding {
+    /// 书写模式：0 水平（`/Custom-H`）、1 垂直（`/Custom-V`）。
+    pub wmode: u8,
+    /// 字符码 → CID 映射，写出时按字符码升序排列。
+    pub mappings: BTreeMap<u16, u16>,
+}
+
+impl CidEncoding {
+    /// 创建指定书写模式的空编码。
+    ///
+    /// 空映射本身合法，但 [`CidFont::with_encoding`] 使用后若未调用
+    /// [`CidEncoding::mapping`] 登记任何映射，构建会因空映射失败。
+    pub fn new(wmode: u8) -> Self {
+        Self {
+            wmode,
+            mappings: BTreeMap::new(),
+        }
+    }
+
+    /// 登记一个字符码到 CID 的映射（链式构造）。
+    ///
+    /// 同一字符码重复登记时以最后一次为准。
+    pub fn mapping(mut self, code: u16, cid: u16) -> Self {
+        self.mappings.insert(code, cid);
+        self
+    }
+}
+
 /// CIDFont 逻辑字体描述。
 ///
 /// 对应 PDF 标准 Type 0 复合字体中的 CIDFont 后代字体字典。
-/// 包含 `/CIDSystemInfo`、`/FontDescriptor`（含 `/CIDSet`）、`/DW`/`/W` 宽度信息。
+/// 包含 `/CIDSystemInfo`、`/FontDescriptor`（含 `/CIDSet`）、`/DW`/`/W` 宽度信息，
+/// 并可通过 [`CidFont::with_font_program`] 嵌入字体程序。
 /// 通过 [`PdfBuilder::cid_font`] 注册到页面资源。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CidFont {
@@ -569,6 +643,31 @@ pub struct CidFont {
     pub widths: Vec<CidWidth>,
     /// 字号（pt），用于内容流 `Tf` 操作符。
     pub size: f64,
+    /// 可选的嵌入字体程序。
+    ///
+    /// CIDFontType2 接受 [`FontProgram::TrueType`]（写为 `/FontFile2`），
+    /// CIDFontType0 接受 [`FontProgram::CFF`]（写为 `/FontFile3`，流
+    /// `/Subtype /CIDFontType0C`）；类型不匹配时 [`PdfBuilder::build`]
+    /// 返回错误。
+    pub font_program: Option<FontProgram>,
+    /// 可选的自定义编码 CMap（非 Identity）。
+    ///
+    /// 为 `None` 时 Type 0 父字体写 `/Encoding /Identity-H`，字符码即 CID；
+    /// 为 `Some` 时写出嵌入 CMap 流并以引用作为 `/Encoding`，2 字节字符码
+    /// 经映射转换为 CID。`wmode` 非法或映射为空会使 [`PdfBuilder::build`]
+    /// 返回错误。
+    ///
+    /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+    pub encoding: Option<CidEncoding>,
+    /// 字符码 → Unicode 映射，写出时生成 Type 0 字体的 `/ToUnicode` CMap。
+    ///
+    /// 键是**内容流中的源字符码**（即使经自定义 CMap 映射到不同 CID）；
+    /// 非空时 [`PdfBuilder::build`] 用 `bfchar`/`bfrange` 条目输出标准
+    /// ToUnicode CMap；[`PdfBuilder::text_cid_unicode`] 与
+    /// [`PdfBuilder::text_codes_unicode`] 会自动登记。
+    ///
+    /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+    pub to_unicode: BTreeMap<u16, String>,
 }
 
 impl CidFont {
@@ -588,7 +687,19 @@ impl CidFont {
             default_width: 1000.0,
             widths: Vec::new(),
             size,
+            font_program: None,
+            encoding: None,
+            to_unicode: BTreeMap::new(),
         }
+    }
+
+    /// 设置自定义编码 CMap（链式构造）。
+    ///
+    /// 使用后 Type 0 父字体的 `/Encoding` 指向嵌入 CMap 流，字符码按
+    /// 2 字节大端序写出并经 [`CidEncoding::mappings`] 映射为 CID。
+    pub fn with_encoding(mut self, encoding: CidEncoding) -> Self {
+        self.encoding = Some(encoding);
+        self
     }
 
     /// 设置默认宽度 `/DW`。
@@ -600,6 +711,12 @@ impl CidFont {
     /// 添加宽度条目。
     pub fn with_widths(mut self, widths: Vec<CidWidth>) -> Self {
         self.widths = widths;
+        self
+    }
+
+    /// 嵌入字体程序（链式构造）。
+    pub fn with_font_program(mut self, program: FontProgram) -> Self {
+        self.font_program = Some(program);
         self
     }
 

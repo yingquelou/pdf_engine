@@ -263,3 +263,89 @@ fn empty_content_stream_returns_empty() {
     let text = document.extract_text(b"", &resources);
     assert_eq!(text, "");
 }
+
+#[test]
+fn truetype_without_encoding_falls_back_when_program_is_missing() {
+    let font = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Font".into()))
+            .insert("Subtype", Value::Name("TrueType".into()))
+            .insert("BaseFont", Value::Name("Arial".into())),
+    );
+    let document = Document::new();
+    let resources = resources_with_font("F1", font);
+    let content = b"BT /F1 12 Tf (A) Tj ET";
+    let text = document.extract_text(content, &resources);
+    assert_eq!(text, "A");
+}
+
+#[test]
+fn truetype_without_encoding_falls_back_when_program_is_invalid() {
+    let font = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Font".into()))
+            .insert("Subtype", Value::Name("TrueType".into()))
+            .insert("BaseFont", Value::Name("Arial".into()))
+            .insert(
+                "FontDescriptor",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("FontDescriptor".into()))
+                        .insert("FontName", Value::Name("Arial".into()))
+                        .insert(
+                            "FontFile2",
+                            Value::Stream(Dict::new(), StreamData::Owned(b"not an sfnt".to_vec())),
+                        ),
+                ),
+            ),
+    );
+    let document = Document::new();
+    let resources = resources_with_font("F1", font);
+    let content = b"BT /F1 12 Tf (A) Tj ET";
+    let text = document.extract_text(content, &resources);
+    assert_eq!(text, "A");
+}
+
+mod simple_byte_text_preference {
+    use super::super::{is_private_use, simple_byte_text};
+    use super::{Document, Value, truetype_font};
+    use crate::core::reader::font::SimpleFontEncoding;
+
+    fn encoding(name: &str) -> SimpleFontEncoding {
+        let font = truetype_font(Value::Name(name.into()));
+        Document::new()
+            .simple_font_encoding(&font)
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn non_private_use_builtin_wins_over_encoding() {
+        let win_ansi = encoding("WinAnsiEncoding");
+        assert_eq!(
+            simple_byte_text(0x41, Some('A'), Some(&win_ansi)),
+            Some("A".to_string())
+        );
+    }
+
+    #[test]
+    fn private_use_builtin_loses_to_encoding() {
+        // Symbol cmaps map code 0x41 to U+F041; SymbolEncoding resolves the
+        // same byte to the Greek capital alpha, which is more useful text.
+        let symbol = encoding("SymbolEncoding");
+        assert_eq!(
+            simple_byte_text(0x41, Some('\u{F041}'), Some(&symbol)),
+            Some("\u{0391}".to_string())
+        );
+    }
+
+    #[test]
+    fn private_use_builtin_used_when_encoding_has_no_mapping() {
+        assert_eq!(
+            simple_byte_text(0x41, Some('\u{F041}'), None),
+            Some("\u{F041}".to_string())
+        );
+        assert!(is_private_use('\u{F041}'));
+        assert!(!is_private_use('\u{0391}'));
+    }
+}

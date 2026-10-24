@@ -28,8 +28,8 @@ mod tests;
 mod types;
 
 pub use types::{
-    CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, Font, FontDescriptor,
-    FontEncoding, FontProgram, ImageData, PageSize,
+    CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, Font,
+    FontDescriptor, FontEncoding, FontProgram, ImageData, PageSize,
 };
 
 use crate::core::content::ContentStream;
@@ -51,9 +51,23 @@ struct PageBuild {
     images: Vec<ImageData>,
 }
 
-/// 字体去重键：BaseFont 名、字号位模式与编码配置都相同才算同一字体对象。
+/// 把 16-bit 字符码（或 Identity 语义下的 CID）按 2 字节大端序
+/// 追加到内容流字节缓冲。
+fn push_two_byte_codes(bytes: &mut Vec<u8>, codes: impl IntoIterator<Item = u16>) {
+    for code in codes {
+        bytes.push((code >> 8) as u8);
+        bytes.push((code & 0xFF) as u8);
+    }
+}
+
+/// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序与子集标记
+/// 都相同才算同一字体对象。
 fn same_font(a: &Font, b: &Font) -> bool {
-    a.name == b.name && a.size.to_bits() == b.size.to_bits() && a.encoding == b.encoding
+    a.name == b.name
+        && a.size.to_bits() == b.size.to_bits()
+        && a.encoding == b.encoding
+        && a.font_program == b.font_program
+        && a.subset == b.subset
 }
 
 /// PDF 逻辑层构建器。
@@ -195,8 +209,8 @@ impl PdfBuilder {
 
     /// 在指定页上注册一个 CIDFont 并返回该页内的字体索引（0-based）。
     ///
-    /// 索引供 [`PdfBuilder::text_cid`] 使用。同一 CIDFont（按名称、子类型、
-    /// 系统信息、描述符、宽度全部相等判定）在同一页内去重。
+    /// 索引供 [`PdfBuilder::text_cid`] 与 [`PdfBuilder::text_cid_unicode`]
+    /// 使用。同一 CIDFont（整体结构相等判定）在同一页内去重。
     pub fn cid_font(&mut self, page: usize, cid_font: &CidFont) -> usize {
         let p = match self.pages.get_mut(page) {
             Some(p) => p,
@@ -211,10 +225,13 @@ impl PdfBuilder {
         }
     }
 
-    /// 在指定页上用 CIDFont 写一段文字。
+    /// 在指定页上用 CIDFont 写一段文字（Identity 语义）。
     ///
-    /// `cids` 为 CID 序列（16-bit），按 Identity-H 编码为 2 字节大端序
-    /// 十六进制字符串输出。坐标原点在页面左下角，单位 pt。
+    /// `cids` 为 CID 序列（16-bit），直接按 `/Identity-H` 语义（字符码
+    /// 即 CID）写成 2 字节大端序十六进制字符串。若字体配置了自定义
+    /// [`CidEncoding`]，请改用 [`PdfBuilder::text_codes`] 传入源字符码，
+    /// 否则内容流中的字节会被嵌入 CMap 当作字符码重新映射。
+    /// 坐标原点在页面左下角，单位 pt。
     pub fn text_cid(
         &mut self,
         page: usize,
@@ -227,19 +244,129 @@ impl PdfBuilder {
             Some(p) => p,
             None => return self,
         };
-        let cid_font = match p.cid_fonts.get(cid_font_idx) {
-            Some(f) => f,
+        let size = match p.cid_fonts.get(cid_font_idx) {
+            Some(f) => f.size,
             None => return self,
         };
-        let size = cid_font.size;
         // 简单字体用 /F1..，CIDFont 用 /CF1.. 避免命名冲突。
         let font_name = format!("CF{}", cid_font_idx + 1);
-        // Identity-H 编码：每个 CID 为 2 字节大端序。
         let mut bytes = Vec::with_capacity(cids.len() * 2);
-        for &cid in cids {
-            bytes.push((cid >> 8) as u8);
-            bytes.push((cid & 0xFF) as u8);
-        }
+        push_two_byte_codes(&mut bytes, cids.iter().copied());
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
+        self
+    }
+
+    /// 在指定页上用 CIDFont 写一段文字，并登记 CID → Unicode 映射
+    /// （Identity 语义）。
+    ///
+    /// `glyphs` 为 `(CID, Unicode 文本)` 序列：CID 按 Identity-H 写成
+    /// 2 字节大端序十六进制串，同时写入该 CIDFont 的 `/ToUnicode` CMap
+    /// （`bfchar`/`bfrange` 条目，目标为 UTF-16BE）。同一 CID 的映射以
+    /// 最后一次登记为准；CIDFont 未注册时忽略本次调用。配置自定义
+    /// [`CidEncoding`] 时应改用 [`PdfBuilder::text_codes_unicode`]。
+    pub fn text_cid_unicode(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        glyphs: &[(u16, &str)],
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let size = match p.cid_fonts.get_mut(cid_font_idx) {
+            Some(f) => {
+                for &(cid, text) in glyphs {
+                    f.to_unicode.insert(cid, text.to_owned());
+                }
+                f.size
+            }
+            None => return self,
+        };
+        let font_name = format!("CF{}", cid_font_idx + 1);
+        let mut bytes = Vec::with_capacity(glyphs.len() * 2);
+        push_two_byte_codes(&mut bytes, glyphs.iter().map(|&(cid, _)| cid));
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
+        self
+    }
+
+    /// 在指定页上用 CIDFont 按 2 字节字符码写一段文字。
+    ///
+    /// `codes` 是内容流中的**源字符码**，逐个按 2 字节大端序写成十六进制
+    /// 字符串。CIDFont 配置了 [`CidEncoding`] 时由嵌入 CMap 把字符码映射
+    /// 为 CID；未配置时等价于 `/Identity-H`（字符码即 CID）。字符码可以不
+    /// 在编码映射中，此时读端按 CMap 语义得到 CID 0。
+    pub fn text_codes(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        codes: &[u16],
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let size = match p.cid_fonts.get(cid_font_idx) {
+            Some(f) => f.size,
+            None => return self,
+        };
+        let font_name = format!("CF{}", cid_font_idx + 1);
+        let mut bytes = Vec::with_capacity(codes.len() * 2);
+        push_two_byte_codes(&mut bytes, codes.iter().copied());
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
+        self
+    }
+
+    /// 在指定页上用 CIDFont 按 2 字节字符码写文字，并登记
+    /// 字符码 → Unicode 映射。
+    ///
+    /// `glyphs` 为 `(字符码, Unicode 文本)` 序列：字符码按 2 字节大端序
+    /// 写入内容流，同时以**字符码**为键登记到该 CIDFont 的 `/ToUnicode`
+    /// CMap（读端按源字符码查询，即使嵌入 CMap 把它映射到不同 CID）。
+    /// 同一字符码的映射以最后一次登记为准；CIDFont 未注册时忽略本次调用。
+    pub fn text_codes_unicode(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        glyphs: &[(u16, &str)],
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let size = match p.cid_fonts.get_mut(cid_font_idx) {
+            Some(f) => {
+                for &(code, text) in glyphs {
+                    f.to_unicode.insert(code, text.to_owned());
+                }
+                f.size
+            }
+            None => return self,
+        };
+        let font_name = format!("CF{}", cid_font_idx + 1);
+        let mut bytes = Vec::with_capacity(glyphs.len() * 2);
+        push_two_byte_codes(&mut bytes, glyphs.iter().map(|&(code, _)| code));
         p.content
             .begin_text()
             .set_font(font_name, size)
@@ -254,7 +381,7 @@ impl PdfBuilder {
     /// 内部按固定顺序分配对象号、构造底层 `Document`，再交给
     /// [`DocumentWriter`] 输出。xref/trailer 由 writer 自动生成。
     pub fn build<W: Write>(&mut self, w: &mut W) -> Result<(), WriteError> {
-        let doc = self.assemble_document();
+        let doc = self.assemble_document()?;
         DocumentWriter::new()
             .with_version(self.version)
             .build(&doc, w)

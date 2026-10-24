@@ -134,9 +134,23 @@ pub(crate) fn predefined_encoding(name: &str) -> FontResult<PredefinedEncoding> 
     }
 }
 
+/// Strip a six-letter subset tag prefix from a font name (PDF 32000-1 §9.6.4).
+///
+/// A subset font's `/BaseFont` is `TAG+Name`, where the tag is exactly six
+/// uppercase ASCII letters followed by `+`. Names without such a prefix are
+/// returned unchanged.
+pub fn strip_subset_tag(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    if bytes.len() > 7 && bytes[6] == b'+' && bytes[..6].iter().all(u8::is_ascii_uppercase) {
+        &name[7..]
+    } else {
+        name
+    }
+}
+
 /// Encoding a font uses when `/Encoding` is omitted (PDF 32000-1 §9.6.6.1).
 pub(crate) fn default_encoding(base_font: &str) -> PredefinedEncoding {
-    match base_font {
+    match strip_subset_tag(base_font) {
         "Symbol" => PredefinedEncoding::Symbol,
         "ZapfDingbats" => PredefinedEncoding::ZapfDingbats,
         _ => PredefinedEncoding::Standard,

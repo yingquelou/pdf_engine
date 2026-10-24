@@ -253,6 +253,59 @@ impl TrueTypeFont {
         Ok(reverse.get(&glyph_id).copied())
     }
 
+    /// Return the built-in single-byte encoding derived from the `cmap` table.
+    ///
+    /// Entry `i` is the Unicode scalar for character code `i` (0–255), resolved
+    /// through glyph ID the same way PDF maps character codes for TrueType fonts
+    /// without an `/Encoding` entry (ISO 32000-1 §9.6.6.4, §9.10.2). Codes with
+    /// no glyph, or glyphs with no reverse cmap entry, are `None`.
+    ///
+    /// Symbolic (3, 0) subtables commonly address their glyphs through one of
+    /// three bases above the ASCII range: `0xF000`, `0xF100`, or `0xF200`.
+    /// When the direct lookup for a code fails, those offsets are probed in
+    /// that order and the first mapped glyph wins, so the widespread `0xF000`
+    /// convention keeps priority over the `0xF100` and `0xF200` variants.
+    pub fn builtin_encoding(&self) -> Result<Vec<Option<char>>, FontError> {
+        let cmap_data = self
+            .table(b"cmap")
+            .ok_or_else(|| invalid_sfnt("missing required `cmap` table"))?;
+        let reverse = self
+            .cmap
+            .reverse_cmap(cmap_data, self.metadata.glyph_count)?;
+        let mut encoding = vec![None; 256];
+        for code in 0..=u8::MAX {
+            let glyph =
+                match self
+                    .cmap
+                    .glyph_id(cmap_data, u32::from(code), self.metadata.glyph_count)?
+                {
+                    Some(glyph) => Some(glyph),
+                    None if self.cmap.is_symbolic() => self.symbolic_glyph(cmap_data, code)?,
+                    None => None,
+                };
+            if let Some(glyph) = glyph {
+                encoding[usize::from(code)] =
+                    reverse.get(&glyph).and_then(|cp| char::from_u32(*cp));
+            }
+        }
+        Ok(encoding)
+    }
+
+    /// Resolve a symbolic character code through the common `0xF000`-based
+    /// offsets, trying `0xF000`, `0xF100`, then `0xF200` and stopping at the
+    /// first mapped glyph.
+    fn symbolic_glyph(&self, cmap_data: &[u8], code: u8) -> Result<Option<u16>, FontError> {
+        for base in [0xF000u32, 0xF100, 0xF200] {
+            let glyph =
+                self.cmap
+                    .glyph_id(cmap_data, base | u32::from(code), self.metadata.glyph_count)?;
+            if glyph.is_some() {
+                return Ok(glyph);
+            }
+        }
+        Ok(None)
+    }
+
     /// Return a glyph record and its header bounds by glyph ID.
     ///
     /// Empty glyphs and IDs outside the font's glyph range return `None`.
@@ -303,6 +356,102 @@ mod tests {
         subtable[24..26].copy_from_slice(&(-63i16).to_be_bytes());
         subtable[26..28].copy_from_slice(&1i16.to_be_bytes());
         cmap
+    }
+
+    /// A Microsoft Symbol (3, 0) format 4 cmap that maps `0xF041` to glyph 2.
+    fn symbolic_format4_cmap() -> Vec<u8> {
+        format4_cmap(3, 0, &[(0xF041, 2)])
+    }
+
+    /// Build a format 4 `cmap` recorded under `platform`/`encoding` with one
+    /// segment per `(code, glyph)` pair, plus the required `0xFFFF` sentinel.
+    fn format4_cmap(platform: u16, encoding: u16, mappings: &[(u16, u16)]) -> Vec<u8> {
+        let segment_count = mappings.len() + 1;
+        let mut end_codes = Vec::with_capacity(segment_count);
+        let mut start_codes = Vec::with_capacity(segment_count);
+        let mut deltas = Vec::with_capacity(segment_count);
+        for (code, glyph) in mappings {
+            end_codes.push(*code);
+            start_codes.push(*code);
+            deltas.push(glyph.wrapping_sub(*code));
+        }
+        end_codes.push(u16::MAX);
+        start_codes.push(u16::MAX);
+        // The sentinel maps 0xFFFF to glyph 0 through the idDelta wrap.
+        deltas.push(1);
+
+        let mut subtable = vec![0; 16 + segment_count * 8];
+        let subtable_length = subtable.len() as u16;
+        let write = |data: &mut [u8], offset: usize, values: &[u16]| {
+            for (index, value) in values.iter().enumerate() {
+                data[offset + index * 2..offset + index * 2 + 2]
+                    .copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        let end_codes_offset = 14;
+        let start_codes_offset = end_codes_offset + segment_count * 2 + 2;
+        let deltas_offset = start_codes_offset + segment_count * 2;
+        subtable[0..2].copy_from_slice(&4u16.to_be_bytes());
+        subtable[2..4].copy_from_slice(&subtable_length.to_be_bytes());
+        subtable[6..8].copy_from_slice(&((segment_count * 2) as u16).to_be_bytes());
+        write(&mut subtable, end_codes_offset, &end_codes);
+        write(&mut subtable, start_codes_offset, &start_codes);
+        write(&mut subtable, deltas_offset, &deltas);
+
+        let mut cmap = vec![0; 12 + subtable.len()];
+        cmap[2..4].copy_from_slice(&1u16.to_be_bytes());
+        cmap[4..6].copy_from_slice(&platform.to_be_bytes());
+        cmap[6..8].copy_from_slice(&encoding.to_be_bytes());
+        cmap[8..12].copy_from_slice(&12u32.to_be_bytes());
+        cmap[12..].copy_from_slice(&subtable);
+        cmap
+    }
+
+    /// Build a three-glyph font whose `cmap` table is `cmap`.
+    ///
+    /// The `loca` and `glyf` tables follow the cmap table, so fixtures may use
+    /// cmaps larger than the 44-byte single-segment layout.
+    fn font_with_cmap(cmap: Vec<u8>) -> Vec<u8> {
+        let loca_offset = 260 + cmap.len().div_ceil(4) * 4;
+        let glyf_offset = loca_offset + 8;
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 10),
+                (*b"cmap", 260, cmap.len() as u32),
+                (*b"loca", loca_offset as u32, 8),
+                (*b"glyf", glyf_offset as u32, 34),
+            ],
+        );
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&2048u16.to_be_bytes());
+        bytes[124 + 50..124 + 52].copy_from_slice(&0i16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&2u16.to_be_bytes());
+        bytes[248..250].copy_from_slice(&500u16.to_be_bytes());
+        bytes[252..254].copy_from_slice(&600u16.to_be_bytes());
+        bytes[260..260 + cmap.len()].copy_from_slice(&cmap);
+        bytes[loca_offset..loca_offset + 2].copy_from_slice(&0u16.to_be_bytes());
+        bytes[loca_offset + 2..loca_offset + 4].copy_from_slice(&9u16.to_be_bytes());
+        bytes[loca_offset + 4..loca_offset + 6].copy_from_slice(&9u16.to_be_bytes());
+        bytes[loca_offset + 6..loca_offset + 8].copy_from_slice(&17u16.to_be_bytes());
+        bytes[glyf_offset..glyf_offset + 2].copy_from_slice(&1i16.to_be_bytes());
+        bytes[glyf_offset + 2..glyf_offset + 10].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+        bytes[glyf_offset + 10..glyf_offset + 12].copy_from_slice(&0u16.to_be_bytes());
+        bytes[glyf_offset + 12..glyf_offset + 14].copy_from_slice(&0u16.to_be_bytes());
+        bytes[glyf_offset + 14] = 0x37;
+        bytes[glyf_offset + 15] = 1;
+        bytes[glyf_offset + 16] = 2;
+        bytes[glyf_offset + 18..glyf_offset + 20].copy_from_slice(&(-1i16).to_be_bytes());
+        bytes[glyf_offset + 20..glyf_offset + 28].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        bytes[glyf_offset + 28..glyf_offset + 30].copy_from_slice(&0x0002u16.to_be_bytes());
+        bytes[glyf_offset + 30..glyf_offset + 32].copy_from_slice(&0u16.to_be_bytes());
+        bytes
     }
 
     fn font_with_tables(signature: [u8; 4], records: &[([u8; 4], u32, u32)]) -> Vec<u8> {
@@ -554,6 +703,135 @@ mod tests {
 
         // Unmapped glyph should return None
         assert_eq!(font.unicode_for_glyph(99).unwrap(), None);
+    }
+
+    #[test]
+    fn builtin_encoding_maps_codes_through_cmap() {
+        let mut bytes = font_with_tables(
+            [0, 1, 0, 0],
+            &[
+                (*b"head", 124, 54),
+                (*b"maxp", 180, 32),
+                (*b"hhea", 212, 36),
+                (*b"hmtx", 248, 10),
+                (*b"cmap", 260, 44),
+                (*b"loca", 304, 8),
+                (*b"glyf", 312, 34),
+            ],
+        );
+        bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+        bytes[124 + 18..124 + 20].copy_from_slice(&2048u16.to_be_bytes());
+        bytes[124 + 50..124 + 52].copy_from_slice(&0i16.to_be_bytes());
+        bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+        bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[246..248].copy_from_slice(&2u16.to_be_bytes());
+        bytes[248..250].copy_from_slice(&500u16.to_be_bytes());
+        bytes[252..254].copy_from_slice(&600u16.to_be_bytes());
+        let cmap = simple_format4_cmap();
+        bytes[260..304].copy_from_slice(&cmap);
+        bytes[304..306].copy_from_slice(&0u16.to_be_bytes());
+        bytes[306..308].copy_from_slice(&9u16.to_be_bytes());
+        bytes[308..310].copy_from_slice(&9u16.to_be_bytes());
+        bytes[310..312].copy_from_slice(&17u16.to_be_bytes());
+        bytes[312..314].copy_from_slice(&1i16.to_be_bytes());
+        bytes[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+        bytes[322..324].copy_from_slice(&0u16.to_be_bytes());
+        bytes[324..326].copy_from_slice(&0u16.to_be_bytes());
+        bytes[326] = 0x37;
+        bytes[327] = 1;
+        bytes[328] = 2;
+        bytes[330..332].copy_from_slice(&(-1i16).to_be_bytes());
+        bytes[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+        bytes[340..342].copy_from_slice(&0x0002u16.to_be_bytes());
+        bytes[342..344].copy_from_slice(&0u16.to_be_bytes());
+
+        let font = TrueTypeFont::parse(bytes).unwrap();
+        let encoding = font.builtin_encoding().unwrap();
+
+        // The fixture maps code 0x41 ('A') to glyph 2, which reverses to 0x41.
+        assert_eq!(encoding.len(), 256);
+        assert_eq!(encoding[0x41], Some('A'));
+        assert_eq!(encoding[0x42], None);
+        assert_eq!(encoding[0x00], None);
+    }
+
+    #[test]
+    fn builtin_encoding_maps_codes_through_symbolic_cmap() {
+        let font = TrueTypeFont::parse(font_with_cmap(symbolic_format4_cmap())).unwrap();
+        assert!(font.cmap.is_symbolic());
+        assert_eq!(font.cmap_format(), CmapFormat::Format4);
+
+        let encoding = font.builtin_encoding().unwrap();
+
+        // 0xF041 is absent, so code 0x41 falls back to 0xF000 | 0x41 and
+        // reverses through glyph 2 back to U+F041.
+        assert_eq!(encoding.len(), 256);
+        assert_eq!(encoding[0x41], Some('\u{F041}'));
+        assert_eq!(encoding[0x42], None);
+        assert_eq!(encoding[0x00], None);
+    }
+
+    #[test]
+    fn builtin_encoding_maps_codes_through_f100_symbolic_cmap() {
+        let cmap = format4_cmap(3, 0, &[(0xF141, 2)]);
+        let font = TrueTypeFont::parse(font_with_cmap(cmap)).unwrap();
+        assert!(font.cmap.is_symbolic());
+
+        let encoding = font.builtin_encoding().unwrap();
+
+        // 0x41 and 0xF041 are absent, so code 0x41 falls through to
+        // 0xF100 | 0x41 and reverses through glyph 2 back to U+F141.
+        assert_eq!(encoding.len(), 256);
+        assert_eq!(encoding[0x41], Some('\u{F141}'));
+        assert_eq!(encoding[0x42], None);
+        assert_eq!(encoding[0x00], None);
+    }
+
+    #[test]
+    fn builtin_encoding_maps_codes_through_f200_symbolic_cmap() {
+        let cmap = format4_cmap(3, 0, &[(0xF241, 2)]);
+        let font = TrueTypeFont::parse(font_with_cmap(cmap)).unwrap();
+        assert!(font.cmap.is_symbolic());
+
+        let encoding = font.builtin_encoding().unwrap();
+
+        // Only the 0xF200 offset is mapped, so code 0x41 resolves through it.
+        assert_eq!(encoding.len(), 256);
+        assert_eq!(encoding[0x41], Some('\u{F241}'));
+        assert_eq!(encoding[0x42], None);
+        assert_eq!(encoding[0x00], None);
+    }
+
+    #[test]
+    fn builtin_encoding_prefers_f000_offset_over_f100() {
+        // 0xF041 and 0xF141 map to different glyphs, so the reverse cmap
+        // yields different Unicode scalars for the same character code.
+        let cmap = format4_cmap(3, 0, &[(0xF041, 1), (0xF141, 2)]);
+        let font = TrueTypeFont::parse(font_with_cmap(cmap)).unwrap();
+        assert!(font.cmap.is_symbolic());
+        assert_eq!(font.unicode_for_glyph(1).unwrap(), Some(0xF041));
+        assert_eq!(font.unicode_for_glyph(2).unwrap(), Some(0xF141));
+
+        let encoding = font.builtin_encoding().unwrap();
+
+        // Probing order is 0xF000, 0xF100, 0xF200, so 0xF041 wins even though
+        // 0xF141 is also mapped for code 0x41.
+        assert_eq!(encoding[0x41], Some('\u{F041}'));
+    }
+
+    #[test]
+    fn builtin_encoding_ignores_offsets_for_unicode_cmap() {
+        // A (3, 1) Unicode subtable that happens to map 0xF041 must not be
+        // probed through symbolic offsets for code 0x41.
+        let cmap = format4_cmap(3, 1, &[(0xF041, 2)]);
+        let font = TrueTypeFont::parse(font_with_cmap(cmap)).unwrap();
+        assert!(!font.cmap.is_symbolic());
+
+        let encoding = font.builtin_encoding().unwrap();
+
+        assert_eq!(encoding[0x41], None);
+        assert_eq!(encoding[0xF0], None);
     }
 
     fn font_with_vertical_metrics() -> Vec<u8> {

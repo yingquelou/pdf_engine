@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::core::types::{Array, Dict, Document, StreamData, Value};
 
-use super::{PredefinedEncoding, code_for_char, parse_descriptor};
+use super::{PredefinedEncoding, code_for_char, parse_descriptor, strip_subset_tag};
 
 fn descriptor(entries: Vec<(&str, Value)>) -> Dict {
     let mut dict = Dict::new().insert("Type", Value::Name("FontDescriptor".into()));
@@ -197,4 +197,36 @@ fn type1_font_encoding_still_rejects_truetype_fonts() {
     );
     assert!(document.type1_font_encoding(&font).unwrap().is_none());
     assert!(document.simple_font_encoding(&font).unwrap().is_some());
+}
+
+#[test]
+fn strip_subset_tag_removes_only_six_letter_prefixes() {
+    assert_eq!(strip_subset_tag("ABCDEF+Helvetica"), "Helvetica");
+    assert_eq!(strip_subset_tag("ABCDEF+Symbol"), "Symbol");
+    // 标签必须恰好六个大写 ASCII 字母。
+    assert_eq!(strip_subset_tag("ABCDE+Helvetica"), "ABCDE+Helvetica");
+    assert_eq!(strip_subset_tag("abcdeF+Helvetica"), "abcdeF+Helvetica");
+    assert_eq!(strip_subset_tag("ABCDEF1+Helvetica"), "ABCDEF1+Helvetica");
+    assert_eq!(strip_subset_tag("ABCDEFHelvetica"), "ABCDEFHelvetica");
+    assert_eq!(strip_subset_tag("ABCDEF+"), "ABCDEF+");
+    assert_eq!(strip_subset_tag("Helvetica"), "Helvetica");
+    assert_eq!(strip_subset_tag(""), "");
+}
+
+#[test]
+fn subset_prefix_keeps_default_encoding_and_standard14_metrics() {
+    let document = Document::new();
+
+    let symbolic = simple_font("TrueType", "ABCDEF+Symbol", None);
+    let encoding = document.simple_font_encoding(&symbolic).unwrap().unwrap();
+    assert_eq!(encoding.base_encoding(), PredefinedEncoding::Symbol);
+
+    // 无 /Widths、无描述符时仍应按标准 14 回退，而不是拒绝字体。
+    let subset = simple_font("Type1", "ABCDEF+Helvetica", None);
+    let subset_font = document.type1_font(&subset).unwrap().unwrap();
+    assert_eq!(subset_font.base_font, "ABCDEF+Helvetica");
+    let plain = simple_font("Type1", "Helvetica", None);
+    let plain_font = document.type1_font(&plain).unwrap().unwrap();
+    assert_eq!(subset_font.width_for(0x41), plain_font.width_for(0x41));
+    assert!(subset_font.width_for(0x41).is_some());
 }

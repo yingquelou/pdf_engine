@@ -93,8 +93,8 @@ impl Document {
 
     /// Resolve a simple font's predefined `/Encoding` and `/Differences`.
     ///
-    /// Accepts the three simple-font subtypes that carry a single-byte
-    /// encoding: Type 1, MMType1, and TrueType. Returns `Ok(None)` for other
+    /// Accepts the simple-font subtypes that carry a single-byte encoding:
+    /// Type 1, MMType1, TrueType, and Type 3. Returns `Ok(None)` for other
     /// subtypes.
     ///
     /// When `/Encoding` is absent, the encoding implied by `/BaseFont` is used
@@ -102,8 +102,16 @@ impl Document {
     /// embedded font program's built-in encoding is not consulted, so a
     /// symbolic TrueType font that relies solely on its built-in cmap may
     /// decode through StandardEncoding instead.
+    ///
+    /// Type 3 fonts have no `/BaseFont` and must provide `/Encoding`; a
+    /// missing entry is an error. When their `/Encoding` is a dictionary
+    /// without `/BaseEncoding`, StandardEncoding is used as the base. That
+    /// default is an approximation: without a `/BaseFont` the dictionary does
+    /// not identify which predefined encoding the differences extend, so
+    /// callers that know the producer's intent should prefer an explicit
+    /// `/BaseEncoding`.
     pub fn simple_font_encoding(&self, value: &Value) -> FontResult<Option<SimpleFontEncoding>> {
-        self.simple_font_encoding_for(value, &["Type1", "MMType1", "TrueType"])
+        self.simple_font_encoding_for(value, &["Type1", "MMType1", "TrueType", "Type3"])
     }
 
     /// Resolve a Type 1 font's predefined `/Encoding` and `/Differences`.
@@ -127,6 +135,16 @@ impl Document {
         let subtype = dict.get("Subtype").and_then(Value::as_name);
         if !subtype.is_some_and(|subtype| subtypes.contains(&subtype)) {
             return Ok(None);
+        }
+        if subtype == Some("Type3") {
+            if dict.get("Encoding").is_none() {
+                return Err(FontError::Invalid(
+                    "Type 3 fonts require /Encoding".to_string(),
+                ));
+            }
+            return self
+                .parse_encoding(dict, PredefinedEncoding::Standard)
+                .map(Some);
         }
         let base_font = dict
             .get("BaseFont")
@@ -184,7 +202,7 @@ impl Document {
         }
     }
 
-    fn read_widths(&self, dict: &Dict) -> FontResult<(Option<u8>, Vec<f64>)> {
+    pub(super) fn read_widths(&self, dict: &Dict) -> FontResult<(Option<u8>, Vec<f64>)> {
         let first = dict.get("FirstChar");
         let last = dict.get("LastChar");
         let widths = dict.get("Widths");
@@ -270,7 +288,7 @@ fn parse_differences(values: &Array) -> FontResult<BTreeMap<u8, String>> {
 }
 
 fn standard14_width(base_font: &str, code: u8) -> Option<f64> {
-    match base_font {
+    match crate::core::reader::font::strip_subset_tag(base_font) {
         "Courier" | "Courier-Bold" | "Courier-Oblique" | "Courier-BoldOblique" => Some(600.0),
         "Helvetica" => standard14_metrics::helvetica_width(code, false, false),
         "Helvetica-Bold" => standard14_metrics::helvetica_width(code, true, false),
@@ -288,7 +306,7 @@ fn standard14_width(base_font: &str, code: u8) -> Option<f64> {
 
 fn is_standard_14(name: &str) -> bool {
     matches!(
-        name,
+        crate::core::reader::font::strip_subset_tag(name),
         "Courier"
             | "Courier-Bold"
             | "Courier-Oblique"

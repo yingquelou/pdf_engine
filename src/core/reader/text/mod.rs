@@ -7,7 +7,9 @@
 //!   mapped to Unicode via `/ToUnicode` (bfchar/bfrange).
 //! - **Simple fonts** (Type 1, MMType1, TrueType): decoded through the
 //!   `/Encoding` (WinAnsi, MacRoman, Standard, Symbol, ZapfDingbats) with
-//!   AGL 2.0 fallback for `/Differences` glyph names.
+//!   AGL 2.0 fallback for `/Differences` glyph names. TrueType fonts without
+//!   `/Encoding` first use the embedded program's `cmap` (its built-in
+//!   encoding) and fall back to the predefined encoding when parsing fails.
 //! - **Fallback**: raw bytes interpreted as Latin-1 when no font metadata
 //!   is available.
 //!
@@ -20,7 +22,7 @@ use std::collections::HashMap;
 
 use crate::core::types::{Dict, Document, Value};
 
-use super::font::{SimpleFontEncoding, Type0Font, Type1Font};
+use super::font::{SimpleFontEncoding, TrueTypeFont, Type0Font, Type1Font};
 
 mod tokenizer;
 
@@ -53,6 +55,7 @@ enum FontHandle {
         #[allow(dead_code)]
         font: Option<Type1Font>,
         encoding: Option<SimpleFontEncoding>,
+        builtin: Option<Vec<Option<char>>>,
     },
 }
 
@@ -99,17 +102,14 @@ impl TextState {
                 }
                 Err(_) => self.output.push_str(&lossy_latin1(bytes)),
             },
-            FontHandle::Simple { encoding, .. } => {
-                if let Some(enc) = encoding {
-                    for &byte in bytes {
-                        match enc.unicode_sequence_for(byte) {
-                            Some(s) => self.output.push_str(&s),
-                            None => self.output.push(byte as char),
-                        }
-                    }
-                } else {
-                    for &byte in bytes {
-                        self.output.push(byte as char);
+            FontHandle::Simple {
+                encoding, builtin, ..
+            } => {
+                for &byte in bytes {
+                    let builtin_char = builtin.as_ref().and_then(|table| table[usize::from(byte)]);
+                    match simple_byte_text(byte, builtin_char, encoding.as_ref()) {
+                        Some(text) => self.output.push_str(&text),
+                        None => self.output.push(byte as char),
                     }
                 }
             }
@@ -143,6 +143,33 @@ enum BreakKind {
 
 fn lossy_latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|&b| b as char).collect()
+}
+
+/// Whether `ch` lies in the Unicode Private Use Area (U+E000–U+F8FF).
+fn is_private_use(ch: char) -> bool {
+    matches!(ch, '\u{E000}'..='\u{F8FF}')
+}
+
+/// Resolve the text for one byte of a simple font.
+///
+/// A symbolic TrueType cmap maps codes into the Private Use Area, so a
+/// predefined or `/Differences` encoding is preferred over a PUA built-in
+/// character; a regular built-in character still wins over the encoding.
+/// Returns `None` when neither source produces text.
+fn simple_byte_text(
+    byte: u8,
+    builtin: Option<char>,
+    encoding: Option<&SimpleFontEncoding>,
+) -> Option<String> {
+    if let Some(ch) = builtin
+        && !is_private_use(ch)
+    {
+        return Some(ch.to_string());
+    }
+    if let Some(sequence) = encoding.and_then(|encoding| encoding.unicode_sequence_for(byte)) {
+        return Some(sequence);
+    }
+    builtin.map(String::from)
 }
 
 // ── Public entry point ────────────────────────────────────
@@ -264,13 +291,37 @@ fn resolve_fonts(resources: &Dict, document: &Document, state: &mut TextState) {
         } else {
             let font = document.type1_font(&font_val).ok().flatten();
             let encoding = document.simple_font_encoding(&font_val).ok().flatten();
+            let builtin = true_type_builtin_encoding(document, &font_val);
             if font.is_some() || encoding.is_some() || font_val.as_dict().is_some() {
-                state
-                    .fonts
-                    .insert(name.clone(), FontHandle::Simple { font, encoding });
+                state.fonts.insert(
+                    name.clone(),
+                    FontHandle::Simple {
+                        font,
+                        encoding,
+                        builtin,
+                    },
+                );
             }
         }
     }
+}
+
+/// Resolve the embedded program's built-in single-byte encoding for a
+/// TrueType simple font that has no `/Encoding` entry.
+///
+/// Returns `None` when `/Encoding` is present, the font is not `/TrueType`,
+/// or the embedded `/FontFile2` program cannot be parsed, so callers keep the
+/// predefined-encoding fallback.
+fn true_type_builtin_encoding(document: &Document, font_val: &Value) -> Option<Vec<Option<char>>> {
+    let dict = font_val.as_dict()?;
+    if dict.get("Encoding").is_some() {
+        return None;
+    }
+    if dict.get("Subtype").and_then(Value::as_name) != Some("TrueType") {
+        return None;
+    }
+    let font: TrueTypeFont = document.truetype_font(font_val).ok().flatten()?;
+    font.builtin_encoding().ok()
 }
 
 fn resolve_value(document: &Document, value: &Value) -> Option<Value> {

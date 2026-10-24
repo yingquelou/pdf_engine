@@ -1,11 +1,18 @@
 //! 逻辑态 → `Document`：对象号分配、资源字典与字体/图片对象组装。
 
-use super::{CidFont, Font, FontProgram, ImageData, PdfBuilder, same_font};
+use super::{
+    CidEncoding, CidFont, CidFontSubtype, Font, FontProgram, ImageData, PdfBuilder, same_font,
+};
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Trailer, Value};
+use crate::core::writer::WriteError;
+use std::collections::BTreeMap;
 
 impl PdfBuilder {
     /// 把逻辑态翻译为底层 `Document`。
-    pub(super) fn assemble_document(&mut self) -> Document {
+    ///
+    /// CIDFont 的嵌入程序类型必须与子类型匹配，否则返回
+    /// [`WriteError::InvalidObject`]。
+    pub(super) fn assemble_document(&mut self) -> Result<Document, WriteError> {
         // —— 对象号分配 ——
         // Catalog = 1, Pages = 2 固定；其后按页、字体、图片依次递增。
         let catalog_num: i64 = 1;
@@ -196,10 +203,15 @@ impl PdfBuilder {
                 Some(FontProgram::TrueType(_)) => "TrueType",
                 _ => "Type1",
             };
+            // 子集字体：BaseFont 加六字母标签前缀（PDF 32000-1 §9.6.4）。
+            let base_font = match (&f.font_program, f.subset) {
+                (Some(program), true) => format!("{}+{}", program.subset_tag(), f.name),
+                _ => f.name.clone(),
+            };
             let mut font_dict = Dict::new()
                 .insert("Type", Value::Name("Font".into()))
                 .insert("Subtype", Value::Name(subtype.into()))
-                .insert("BaseFont", Value::Name(f.name.clone()));
+                .insert("BaseFont", Value::Name(base_font));
             if let Some(encoding) = f.encoding.to_value() {
                 font_dict = font_dict.insert("Encoding", encoding);
             }
@@ -262,6 +274,21 @@ impl PdfBuilder {
 
         // CIDFont 对象：Type 0 父 + CIDFont 后代 + FontDescriptor + CIDSet 流
         for (cid_font, type0_num) in &cid_font_pool {
+            // 自定义编码在 build 阶段校验：wmode 仅 0/1，且至少一条映射。
+            if let Some(encoding) = &cid_font.encoding {
+                if encoding.wmode > 1 {
+                    return Err(WriteError::InvalidObject(format!(
+                        "CidEncoding wmode must be 0 or 1, got {}",
+                        encoding.wmode
+                    )));
+                }
+                if encoding.mappings.is_empty() {
+                    return Err(WriteError::InvalidObject(
+                        "CidEncoding requires at least one code-to-CID mapping".into(),
+                    ));
+                }
+            }
+
             // 1. FontDescriptor 字典（/CIDSet 作为独立流对象引用）
             let descriptor_num = num;
             num += 1;
@@ -283,6 +310,43 @@ impl PdfBuilder {
                     ),
                 ));
             }
+            // 嵌入 CIDFont 字体程序：Type2 → /FontFile2，Type0 → /FontFile3
+            // （流 /Subtype /CIDFontType0C）。builder 的 Owned 流写明文。
+            if let Some(program) = &cid_font.font_program {
+                let (program_key, stream_subtype) = match (cid_font.subtype, program) {
+                    (CidFontSubtype::CIDFontType2, FontProgram::TrueType(_)) => ("FontFile2", None),
+                    (CidFontSubtype::CIDFontType0, FontProgram::CFF(_)) => {
+                        ("FontFile3", Some("CIDFontType0C"))
+                    }
+                    (subtype, _) => {
+                        let expected = match subtype {
+                            CidFontSubtype::CIDFontType2 => "TrueType",
+                            CidFontSubtype::CIDFontType0 => "CFF",
+                        };
+                        return Err(WriteError::InvalidObject(format!(
+                            "{} requires a {expected} font program",
+                            subtype.as_name()
+                        )));
+                    }
+                };
+                let program_num = num;
+                num += 1;
+                let mut stream_dict = Dict::new();
+                if let Some(subtype) = stream_subtype {
+                    stream_dict = stream_dict.insert("Subtype", Value::Name(subtype.into()));
+                }
+                stream_dict =
+                    stream_dict.insert("Length", Value::Integer(program.data().len() as i64));
+                doc.set_object(Object::new(
+                    program_num,
+                    0,
+                    Value::Stream(stream_dict, StreamData::Owned(program.data().to_vec())),
+                ));
+                if let Value::Dict(d) = descriptor_value {
+                    descriptor_value =
+                        Value::Dict(d.insert(program_key, Value::Ref(program_num, 0)));
+                }
+            }
             doc.set_object(Object::new(descriptor_num, 0, descriptor_value));
 
             // 2. CIDFont 后代字典
@@ -302,8 +366,8 @@ impl PdfBuilder {
             }
             doc.set_object(Object::new(cid_font_num, 0, Value::Dict(cid_dict)));
 
-            // 3. Type 0 父字体字典
-            let type0_dict = Dict::new()
+            // 3. Type 0 父字体字典；有 CID→Unicode 映射时附带 /ToUnicode CMap
+            let mut type0_dict = Dict::new()
                 .insert("Type", Value::Name("Font".into()))
                 .insert("Subtype", Value::Name("Type0".into()))
                 .insert("BaseFont", Value::Name(cid_font.name.clone()))
@@ -312,6 +376,37 @@ impl PdfBuilder {
                     "DescendantFonts",
                     Value::Array(Array::new().push(Value::Ref(cid_font_num, 0))),
                 );
+            if let Some(encoding) = &cid_font.encoding {
+                // 非 Identity 编码：嵌入 CMap 流作为 /Encoding 引用。
+                let encoding_num = num;
+                num += 1;
+                let cmap = cid_encoding_cmap(encoding);
+                let cmap_len = cmap.len();
+                doc.set_object(Object::new(
+                    encoding_num,
+                    0,
+                    Value::Stream(
+                        Dict::new().insert("Length", Value::Integer(cmap_len as i64)),
+                        StreamData::Owned(cmap),
+                    ),
+                ));
+                type0_dict = type0_dict.insert("Encoding", Value::Ref(encoding_num, 0));
+            }
+            if !cid_font.to_unicode.is_empty() {
+                let cmap_num = num;
+                num += 1;
+                let cmap = to_unicode_cmap(&cid_font.to_unicode);
+                let cmap_len = cmap.len();
+                doc.set_object(Object::new(
+                    cmap_num,
+                    0,
+                    Value::Stream(
+                        Dict::new().insert("Length", Value::Integer(cmap_len as i64)),
+                        StreamData::Owned(cmap),
+                    ),
+                ));
+                type0_dict = type0_dict.insert("ToUnicode", Value::Ref(cmap_num, 0));
+            }
             doc.set_object(Object::new(*type0_num, 0, Value::Dict(type0_dict)));
         }
 
@@ -340,6 +435,176 @@ impl PdfBuilder {
                 .insert("Root", Value::Ref(catalog_num, 0))
                 .insert("Size", Value::Integer(max_num + 1)),
         };
-        doc
+        Ok(doc)
     }
+}
+
+/// 生成 Type 0 嵌入编码 CMap（PDF 32000-1 §9.7.5）。
+///
+/// 仅支持 2 字节字符码，codespace 固定 `<0000> <FFFF>`。字符码与 CID
+/// 同时逐 1 递增的极大段写 `cidrange`，其余写 `cidchar`；每节至多 100 条
+/// （与 §9.10.3 的分段约定一致）。CID 按 PDF CMap 语法写十进制整数。
+fn cid_encoding_cmap(encoding: &CidEncoding) -> Vec<u8> {
+    /// cidrange / cidchar 单节条目上限。
+    const SECTION_LIMIT: usize = 100;
+
+    let entries: Vec<(u16, u16)> = encoding
+        .mappings
+        .iter()
+        .map(|(&code, &cid)| (code, cid))
+        .collect();
+
+    // 找出极大连续段：字符码与 CID 同时逐 1 递增。以 u32 运算，
+    // u16::MAX 之后无法再递增，天然避免回绕。
+    let mut in_range = vec![false; entries.len()];
+    let mut ranges: Vec<(u16, u16, u16)> = Vec::new();
+    let mut start = 0;
+    while start < entries.len() {
+        let mut end = start;
+        while end + 1 < entries.len() {
+            let next_code = u32::from(entries[end].0) + 1;
+            let next_cid = u32::from(entries[end].1) + 1;
+            if next_code != u32::from(entries[end + 1].0)
+                || next_cid != u32::from(entries[end + 1].1)
+            {
+                break;
+            }
+            end += 1;
+        }
+        if end > start {
+            ranges.push((entries[start].0, entries[end].0, entries[start].1));
+            in_range[start..=end].fill(true);
+        }
+        start = end + 1;
+    }
+
+    let wmode = encoding.wmode;
+    let suffix = if wmode == 1 { "V" } else { "H" };
+    let mut cmap = format!(
+        "/CIDInit /ProcSet findresource begin\n\
+         12 dict begin\n\
+         begincmap\n\
+         /CMapName /Custom-{suffix} def\n\
+         /CMapType 1 def\n\
+         /WMode {wmode} def\n\
+         1 begincodespacerange\n\
+         <0000> <FFFF>\n\
+         endcodespacerange\n"
+    );
+    for chunk in ranges.chunks(SECTION_LIMIT) {
+        cmap.push_str(&format!("{} begincidrange\n", chunk.len()));
+        for (start_code, end_code, start_cid) in chunk {
+            cmap.push_str(&format!(
+                "<{start_code:04X}> <{end_code:04X}> {start_cid}\n"
+            ));
+        }
+        cmap.push_str("endcidrange\n");
+    }
+
+    let chars: Vec<(u16, u16)> = entries
+        .iter()
+        .zip(&in_range)
+        .filter(|(_, covered)| !**covered)
+        .map(|(&entry, _)| entry)
+        .collect();
+    for chunk in chars.chunks(SECTION_LIMIT) {
+        cmap.push_str(&format!("{} begincidchar\n", chunk.len()));
+        for (code, cid) in chunk {
+            cmap.push_str(&format!("<{code:04X}> {cid}\n"));
+        }
+        cmap.push_str("endcidchar\n");
+    }
+
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    cmap.into_bytes()
+}
+
+/// 生成标准 ToUnicode CMap：2 字节 codespace；CID 连续且目标为单个
+/// UTF-16 码元、并逐 1 递增的极大段写 `bfrange`，其余（代理对、多码元
+/// 串、目标跳变）写 `bfchar`；每节至多 100 条（PDF 32000-1 §9.10.3）。
+fn to_unicode_cmap(mappings: &BTreeMap<u16, String>) -> Vec<u8> {
+    /// bfchar / bfrange 单节条目上限。
+    const SECTION_LIMIT: usize = 100;
+
+    // 仅「恰好一个 UTF-16 码元」的目标可参与 bfrange；
+    // 代理对与多码元串只能逐条写 bfchar。
+    let entries: Vec<(u16, &str, Option<u16>)> = mappings
+        .iter()
+        .map(|(cid, text)| {
+            let mut units = text.encode_utf16();
+            let first = units.next();
+            let single = if units.next().is_none() { first } else { None };
+            (*cid, text.as_str(), single)
+        })
+        .collect();
+
+    // 找出极大连续段：CID 与目标码元同时逐 1 递增。以 u32 运算，
+    // u16::MAX 之后无法再递增，天然避免回绕。
+    let mut in_range = vec![false; entries.len()];
+    let mut ranges: Vec<(u16, u16, u16)> = Vec::new();
+    let mut start = 0;
+    while start < entries.len() {
+        let Some(first_unit) = entries[start].2 else {
+            start += 1;
+            continue;
+        };
+        let mut end = start;
+        while end + 1 < entries.len() {
+            let Some(next_unit) = entries[end + 1].2 else {
+                break;
+            };
+            let offset = (end - start) as u32 + 1;
+            if u32::from(entries[end].0) + 1 != u32::from(entries[end + 1].0)
+                || u32::from(first_unit) + offset != u32::from(next_unit)
+            {
+                break;
+            }
+            end += 1;
+        }
+        if end > start {
+            ranges.push((entries[start].0, entries[end].0, first_unit));
+            in_range[start..=end].fill(true);
+        }
+        start = end + 1;
+    }
+
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n\
+         12 dict begin\n\
+         begincmap\n\
+         /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n\
+         /CMapName /Adobe-Identity-UCS def\n\
+         /CMapType 2 def\n\
+         1 begincodespacerange\n\
+         <0000> <FFFF>\n\
+         endcodespacerange\n",
+    );
+    for chunk in ranges.chunks(SECTION_LIMIT) {
+        cmap.push_str(&format!("{} beginbfrange\n", chunk.len()));
+        for (start_cid, end_cid, unit) in chunk {
+            cmap.push_str(&format!("<{start_cid:04X}> <{end_cid:04X}> <{unit:04X}>\n"));
+        }
+        cmap.push_str("endbfrange\n");
+    }
+
+    let chars: Vec<(u16, &str)> = entries
+        .iter()
+        .zip(&in_range)
+        .filter(|(_, covered)| !**covered)
+        .map(|((cid, text, _), _)| (*cid, *text))
+        .collect();
+    for chunk in chars.chunks(SECTION_LIMIT) {
+        cmap.push_str(&format!("{} beginbfchar\n", chunk.len()));
+        for (cid, text) in chunk {
+            cmap.push_str(&format!("<{cid:04X}> <"));
+            for unit in text.encode_utf16() {
+                cmap.push_str(&format!("{unit:04X}"));
+            }
+            cmap.push_str(">\n");
+        }
+        cmap.push_str("endbfchar\n");
+    }
+
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    cmap.into_bytes()
 }

@@ -1,11 +1,13 @@
 mod cmap;
 mod glyph;
 mod sfnt;
+mod subset;
 mod tables;
 
 pub use cmap::CmapFormat;
 pub use glyph::{GlyphPoint, TrueTypeGlyph};
 pub use sfnt::{SfntFlavor, TrueTypeFont};
+pub use subset::subset_truetype;
 
 use crate::core::types::{Document, Value};
 
