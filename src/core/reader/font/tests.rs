@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::core::types::{Array, Dict, Document, StreamData, Value};
 
-use super::{PredefinedEncoding, code_for_char, parse_descriptor, strip_subset_tag};
+use super::{
+    FontError, FontProgramSource, PredefinedEncoding, SfntFlavor, code_for_char, parse_descriptor,
+    strip_subset_tag,
+};
 
 fn descriptor(entries: Vec<(&str, Value)>) -> Dict {
     let mut dict = Dict::new().insert("Type", Value::Name("FontDescriptor".into()));
@@ -10,6 +13,105 @@ fn descriptor(entries: Vec<(&str, Value)>) -> Dict {
         dict = dict.insert(key, value);
     }
     dict
+}
+
+/// Build an SFNT table directory; table payloads start zeroed.
+fn sfnt_with_tables(signature: [u8; 4], records: &[([u8; 4], u32, u32)]) -> Vec<u8> {
+    let directory_end = 12 + records.len() * 16;
+    let data_length = records
+        .iter()
+        .map(|(_, offset, length)| (*offset as usize) + (*length as usize))
+        .max()
+        .unwrap_or(directory_end)
+        .max(directory_end);
+    let mut bytes = vec![0; data_length];
+    bytes[..4].copy_from_slice(&signature);
+    bytes[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, (tag, offset, length)) in records.iter().enumerate() {
+        let start = 12 + index * 16;
+        bytes[start..start + 4].copy_from_slice(tag);
+        bytes[start + 8..start + 12].copy_from_slice(&offset.to_be_bytes());
+        bytes[start + 12..start + 16].copy_from_slice(&length.to_be_bytes());
+    }
+    bytes
+}
+
+/// A format 4 cmap that maps U+0041 to glyph 2 of a three-glyph font.
+fn format4_cmap() -> Vec<u8> {
+    let mut cmap = vec![0; 44];
+    cmap[2..4].copy_from_slice(&1u16.to_be_bytes());
+    cmap[4..6].copy_from_slice(&3u16.to_be_bytes());
+    cmap[6..8].copy_from_slice(&1u16.to_be_bytes());
+    cmap[8..12].copy_from_slice(&12u32.to_be_bytes());
+    let subtable = &mut cmap[12..];
+    subtable[0..2].copy_from_slice(&4u16.to_be_bytes());
+    subtable[2..4].copy_from_slice(&32u16.to_be_bytes());
+    subtable[6..8].copy_from_slice(&4u16.to_be_bytes());
+    subtable[8..10].copy_from_slice(&4u16.to_be_bytes());
+    subtable[10..12].copy_from_slice(&1u16.to_be_bytes());
+    subtable[14..16].copy_from_slice(&0x41u16.to_be_bytes());
+    subtable[16..18].copy_from_slice(&u16::MAX.to_be_bytes());
+    subtable[20..22].copy_from_slice(&0x41u16.to_be_bytes());
+    subtable[22..24].copy_from_slice(&u16::MAX.to_be_bytes());
+    subtable[24..26].copy_from_slice(&(-63i16).to_be_bytes());
+    subtable[26..28].copy_from_slice(&1i16.to_be_bytes());
+    cmap
+}
+
+/// A three-glyph TrueType-flavored SFNT whose cmap maps U+0041 to glyph 2.
+fn truetype_sfnt() -> Vec<u8> {
+    let mut bytes = sfnt_with_tables(
+        [0, 1, 0, 0],
+        &[
+            (*b"head", 124, 54),
+            (*b"maxp", 180, 32),
+            (*b"hhea", 212, 36),
+            (*b"hmtx", 248, 10),
+            (*b"cmap", 260, 44),
+            (*b"loca", 304, 8),
+            (*b"glyf", 312, 34),
+        ],
+    );
+    bytes[124 + 12..124 + 16].copy_from_slice(&0x5F0F3CF5u32.to_be_bytes());
+    bytes[124 + 18..124 + 20].copy_from_slice(&2048u16.to_be_bytes());
+    bytes[180..184].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    bytes[184..186].copy_from_slice(&3u16.to_be_bytes());
+    bytes[212..216].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    bytes[246..248].copy_from_slice(&2u16.to_be_bytes());
+    bytes[248..250].copy_from_slice(&500u16.to_be_bytes());
+    bytes[252..254].copy_from_slice(&600u16.to_be_bytes());
+    bytes[260..304].copy_from_slice(&format4_cmap());
+    // Short loca offsets 0 -> 9 -> 9 -> 17 into a 34-byte glyf table.
+    for (index, offset) in [0u16, 9, 9, 17].iter().enumerate() {
+        bytes[304 + index * 2..306 + index * 2].copy_from_slice(&offset.to_be_bytes());
+    }
+    bytes[312..314].copy_from_slice(&1i16.to_be_bytes());
+    bytes[314..322].copy_from_slice(&[0, 1, 0, 2, 0, 5, 0, 8]);
+    bytes[330..332].copy_from_slice(&(-1i16).to_be_bytes());
+    bytes[332..340].copy_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4]);
+    bytes
+}
+
+fn truetype_font_with_program(
+    file_key: &str,
+    stream_subtype: Option<&str>,
+    data: Vec<u8>,
+) -> Value {
+    let mut stream_dict = Dict::new();
+    if let Some(stream_subtype) = stream_subtype {
+        stream_dict = stream_dict.insert("Subtype", Value::Name(stream_subtype.into()));
+    }
+    let descriptor = descriptor(vec![(
+        file_key,
+        Value::Stream(stream_dict, StreamData::Owned(data)),
+    )]);
+    Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Font".into()))
+            .insert("Subtype", Value::Name("TrueType".into()))
+            .insert("BaseFont", Value::Name("Arial".into()))
+            .insert("FontDescriptor", Value::Dict(descriptor)),
+    )
 }
 
 fn simple_font(subtype: &str, base_font: &str, encoding: Option<Value>) -> Value {
@@ -229,4 +331,61 @@ fn subset_prefix_keeps_default_encoding_and_standard14_metrics() {
     let plain_font = document.type1_font(&plain).unwrap().unwrap();
     assert_eq!(subset_font.width_for(0x41), plain_font.width_for(0x41));
     assert!(subset_font.width_for(0x41).is_some());
+}
+
+#[test]
+fn truetype_font_accepts_opentype_fontfile3_program() {
+    let font = truetype_font_with_program("FontFile3", Some("OpenType"), truetype_sfnt());
+    let document = Document::new();
+
+    let program = document.truetype_font_program(&font).unwrap().unwrap();
+    assert_eq!(program.source, FontProgramSource::FontFile3);
+    assert_eq!(program.subtype.as_deref(), Some("OpenType"));
+
+    let parsed = document.truetype_font(&font).unwrap().unwrap();
+    assert_eq!(parsed.flavor(), SfntFlavor::TrueType);
+    assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
+    assert_eq!(parsed.builtin_encoding().unwrap()[0x41], Some('A'));
+
+    // Without /Encoding, text extraction uses the program's built-in encoding.
+    let resources = Dict::new().insert("Font", Value::Dict(Dict::new().insert("F1", font)));
+    assert_eq!(
+        document.extract_text(b"BT /F1 12 Tf (A) Tj ET", &resources),
+        "A"
+    );
+}
+
+#[test]
+fn truetype_font_still_accepts_fontfile2_program() {
+    let font = truetype_font_with_program("FontFile2", None, truetype_sfnt());
+    let document = Document::new();
+
+    let program = document.truetype_font_program(&font).unwrap().unwrap();
+    assert_eq!(program.source, FontProgramSource::FontFile2);
+    assert_eq!(program.subtype, None);
+    assert!(document.truetype_font(&font).unwrap().is_some());
+}
+
+#[test]
+fn truetype_font_rejects_fontfile3_type1c_program() {
+    let font = truetype_font_with_program("FontFile3", Some("Type1C"), b"CFF ".to_vec());
+    let document = Document::new();
+    assert!(matches!(
+        document.truetype_font(&font),
+        Err(FontError::Invalid(_))
+    ));
+    assert!(matches!(
+        document.truetype_font_program(&font),
+        Err(FontError::Invalid(_))
+    ));
+}
+
+#[test]
+fn truetype_font_rejects_fontfile3_program_without_subtype() {
+    let font = truetype_font_with_program("FontFile3", None, truetype_sfnt());
+    let document = Document::new();
+    assert!(matches!(
+        document.truetype_font(&font),
+        Err(FontError::Invalid(_))
+    ));
 }

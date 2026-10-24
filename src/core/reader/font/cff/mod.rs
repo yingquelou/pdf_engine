@@ -2,10 +2,19 @@
 //!
 //! This module provides CFF charstring interpretation for CIDFontType0 and
 //! FontFile3 fonts. The parsing backend is abstracted behind the
-//! [`CffOutlineParser`] trait, with a default implementation using `ttf-parser`.
+//! [`CffOutlineParser`] trait:
+//!
+//! * [`TtfParserCffBackend`] for SFNT (`OTTO`) programs, using `ttf-parser`;
+//! * [`RawCffBackend`] for bare CFF1 programs (`/CIDFontType0C`, `/Type1C`),
+//!   which parses the CFF structure and wraps it in a synthetic face.
 
 mod outline;
+mod raw;
 mod ttf_parser;
 
-pub use outline::{CffGlyphOutline, CffOutlineParser, CffPathSegment};
+#[cfg(test)]
+pub(crate) mod fixtures;
+
+pub use outline::{CffGlyphOutline, CffOutlineParser, CffPathSegment, UnavailableCffBackend};
+pub use raw::{RawCffBackend, RawCffFont};
 pub use ttf_parser::TtfParserCffBackend;

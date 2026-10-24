@@ -1,0 +1,51 @@
+//! 逻辑层公共数据类型：页面尺寸、字体与编码配置、图片数据。
+//!
+//! 按领域拆分为子模块，并由本模块统一 `pub use`：
+//! - `descriptor`：字体描述符度量；
+//! - `encoding`：简单字体编码配置；
+//! - `font`：逻辑字体描述；
+//! - `type3`：Type 3 字体与字形；
+//! - `cid`：CIDFont、CID 编码与宽度；
+//! - `program`：嵌入字体程序；
+//! - `image`：图片数据。
+
+mod cid;
+mod descriptor;
+mod encoding;
+mod font;
+mod image;
+mod program;
+mod type3;
+
+pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth};
+pub use descriptor::FontDescriptor;
+pub use encoding::FontEncoding;
+pub use font::Font;
+pub use image::{ColorSpace, ImageData};
+pub use program::FontProgram;
+pub use type3::{Type3Font, Type3Glyph};
+
+/// 页面尺寸预设。
+///
+/// 提供 A4、Letter 两种常用规格（单位 pt），以及可选的自定义宽高。
+/// 用于 [`crate::core::builder::PdfBuilder::page`] 声明新页的 MediaBox。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageSize {
+    /// A4 纵向：595 × 842 pt。
+    A4,
+    /// Letter 纵向：612 × 792 pt。
+    Letter,
+    /// 自定义宽高（pt）。
+    Custom(f64, f64),
+}
+
+impl PageSize {
+    /// 返回 `(width, height)`，单位 pt。
+    pub(super) fn dimensions(&self) -> (f64, f64) {
+        match self {
+            PageSize::A4 => (595.0, 842.0),
+            PageSize::Letter => (612.0, 792.0),
+            PageSize::Custom(w, h) => (*w, *h),
+        }
+    }
+}

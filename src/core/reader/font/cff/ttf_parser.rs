@@ -18,18 +18,20 @@ impl TtfParserCffBackend {
     }
 }
 
-struct PathBuilder {
-    segments: Vec<CffPathSegment>,
+/// Collects `ttf-parser` outline callbacks as [`CffPathSegment`] values.
+///
+/// Shared with the bare CFF backend, which also outlines through `ttf-parser`.
+pub(super) struct PathBuilder {
+    pub(super) segments: Vec<CffPathSegment>,
 }
 
 impl PathBuilder {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             segments: Vec::new(),
         }
     }
 }
-
 impl OutlineBuilder for PathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
         self.segments.push(CffPathSegment::MoveTo { x, y });
@@ -74,6 +76,14 @@ impl OutlineBuilder for PathBuilder {
 
 impl CffOutlineParser for TtfParserCffBackend {
     fn parse_glyph(&self, gid: u16) -> FontResult<CffGlyphOutline> {
+        if looks_like_bare_cff(&self.data) {
+            return Err(FontError::Invalid(
+                "failed to parse CFF font: the program is bare CFF1 data, not an SFNT font; \
+                 use RawCffBackend for /CIDFontType0C or /Type1C streams"
+                    .into(),
+            ));
+        }
+
         let face = Face::parse(&self.data, 0)
             .map_err(|e| FontError::Invalid(format!("failed to parse CFF font: {e}")))?;
 
@@ -98,6 +108,15 @@ impl CffOutlineParser for TtfParserCffBackend {
             .map(|f| f.number_of_glyphs())
             .unwrap_or(0)
     }
+}
+
+/// Return whether `data` starts with a CFF1 header instead of an SFNT signature.
+///
+/// `ttf-parser` only accepts `0x00010000`, `true`, `OTTO` and `ttcf` containers,
+/// so a bare CFF program (major version 1) has to be rejected with a message
+/// pointing at [`super::raw::RawCffBackend`].
+fn looks_like_bare_cff(data: &[u8]) -> bool {
+    data.len() >= 4 && data[0] == 1 && data[2] >= 4 && (1..=4).contains(&data[3])
 }
 
 #[cfg(test)]
@@ -143,5 +162,13 @@ mod tests {
     fn mock_backend_rejects_out_of_range_glyph() {
         let mock = MockCffBackend { glyph_count: 5 };
         assert!(mock.parse_glyph(10).is_err());
+    }
+
+    #[test]
+    fn rejects_bare_cff_with_a_clear_error() {
+        // CFF1 header: major 1, minor 0, header size 4, offset size 1.
+        let backend = TtfParserCffBackend::new(vec![1, 0, 4, 1]);
+        let error = backend.parse_glyph(0).unwrap_err();
+        assert!(error.to_string().contains("bare CFF1 data"), "{error}");
     }
 }

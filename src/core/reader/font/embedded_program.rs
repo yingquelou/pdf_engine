@@ -36,19 +36,29 @@ impl Document {
             value,
             "Type1",
             &[FontProgramSource::FontFile, FontProgramSource::FontFile3],
+            None,
         )
     }
 
-    /// Resolve and decode the embedded `/FontFile2` stream in a TrueType font.
+    /// Resolve and decode the embedded font program of a TrueType font.
     ///
-    /// The returned bytes are decoded but not parsed as an SFNT font program.
+    /// ISO 32000-1 §9.9 allows a TrueType simple font to embed either a
+    /// `/FontFile2` stream or an OpenType program stored as `/FontFile3` with
+    /// stream `/Subtype /OpenType`. Any other `/FontFile3` subtype (such as
+    /// `/Type1C`) is rejected. The returned bytes are decoded but not parsed
+    /// as an SFNT font program.
     pub fn truetype_font_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
-        self.font_program(value, "TrueType", &[FontProgramSource::FontFile2])
+        self.font_program(
+            value,
+            "TrueType",
+            &[FontProgramSource::FontFile2, FontProgramSource::FontFile3],
+            Some("OpenType"),
+        )
     }
 
     /// Resolve and decode the embedded `/FontFile2` stream in a CIDFontType2.
     pub fn cid_font_type2_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
-        self.font_program(value, "CIDFontType2", &[FontProgramSource::FontFile2])
+        self.font_program(value, "CIDFontType2", &[FontProgramSource::FontFile2], None)
     }
 
     /// Resolve and decode the embedded `/FontFile3` stream in a CIDFontType0.
@@ -56,14 +66,19 @@ impl Document {
     /// The stream `/Subtype` (`/CIDFontType0C` or `/OpenType`) is returned
     /// for the caller to validate.
     pub fn cid_font_type0_program(&self, value: &Value) -> FontResult<Option<EmbeddedFontProgram>> {
-        self.font_program(value, "CIDFontType0", &[FontProgramSource::FontFile3])
+        self.font_program(value, "CIDFontType0", &[FontProgramSource::FontFile3], None)
     }
 
+    /// Shared `/FontFile*` resolution for simple and CID font subtypes.
+    ///
+    /// `font_file3_subtype` restricts the stream `/Subtype` required when the
+    /// descriptor uses `/FontFile3`; `None` leaves validation to the caller.
     fn font_program(
         &self,
         value: &Value,
         expected_subtype: &str,
         allowed_sources: &[FontProgramSource],
+        font_file3_subtype: Option<&str>,
     ) -> FontResult<Option<EmbeddedFontProgram>> {
         let value = self.resolve_value(value)?;
         let dict = value
@@ -115,10 +130,19 @@ impl Document {
             )));
         };
         let subtype = optional_stream_subtype(stream_dict, key)?;
-        if source == FontProgramSource::FontFile3 && subtype.is_none() {
-            return Err(FontError::Invalid(
-                "/FontDescriptor /FontFile3 stream is missing /Subtype".into(),
-            ));
+        if source == FontProgramSource::FontFile3 {
+            let Some(subtype_name) = subtype.as_deref() else {
+                return Err(FontError::Invalid(
+                    "/FontDescriptor /FontFile3 stream is missing /Subtype".into(),
+                ));
+            };
+            if let Some(expected) = font_file3_subtype
+                && subtype_name != expected
+            {
+                return Err(FontError::Invalid(format!(
+                    "/Subtype /{expected_subtype} /FontFile3 stream requires /Subtype /{expected}, found /{subtype_name}"
+                )));
+            }
         }
         let data = self.decode_stream_bytes(&program_value).map_err(|error| {
             FontError::Invalid(format!(

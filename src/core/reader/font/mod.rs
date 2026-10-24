@@ -23,7 +23,10 @@ mod type0;
 mod type1_program;
 mod type3;
 
-pub use cff::{CffGlyphOutline, CffOutlineParser, CffPathSegment, TtfParserCffBackend};
+pub use cff::{
+    CffGlyphOutline, CffOutlineParser, CffPathSegment, RawCffBackend, RawCffFont,
+    TtfParserCffBackend, UnavailableCffBackend,
+};
 pub use cid::{CidFontType2, CidSystemInfo};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
@@ -36,7 +39,7 @@ pub use truetype::{
 pub use type0::{CidDescendant, Type0DecodedCode, Type0Font};
 pub use type1_program::{
     Type1BuiltinEncoding, Type1CharString, Type1FontProgram, Type1Header, Type1PathSegment,
-    Type1Seac,
+    Type1Seac, subset_type1,
 };
 pub use type3::Type3Font;
 

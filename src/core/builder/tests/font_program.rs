@@ -1,0 +1,434 @@
+//! 字体程序嵌入与 TrueType / Type 1 子集化测试。
+
+use super::*;
+use crate::core::reader::font::{TrueTypeFont, Type1FontProgram};
+use crate::core::types::Value;
+
+#[test]
+fn type1_font_program_is_embedded() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    // Type 1 字体程序数据（简化的 PostScript 格式）
+    let type1_data = b"%!PS-AdobeFont-1.0: TestFont 001.000\n11 dict begin\n/TestFont def\n";
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::Type1(type1_data.to_vec()));
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 和 FontFile 流（builder 的 Owned 流按约定写明文）
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFile"), "应含 /FontFile 引用: {s}");
+    assert!(
+        s.contains("%!PS-AdobeFont-1.0: TestFont"),
+        "应含 Type 1 程序明文: {s}"
+    );
+    assert!(
+        !s.contains("/Filter /FlateDecode"),
+        "builder Owned 流不应声明 FlateDecode: {s}"
+    );
+}
+
+#[test]
+fn truetype_font_program_is_embedded() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    // TrueType 字体程序数据（简化的 SFNT 格式）
+    let truetype_data = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x0A]; // SFNT header
+    let font =
+        Font::helvetica(12.0).with_font_program(FontProgram::TrueType(truetype_data.clone()));
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 和 FontFile2 流
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFile2"), "应含 /FontFile2 引用: {s}");
+    assert!(
+        s.contains(&format!("/Length {}", truetype_data.len())),
+        "FontFile2 流长度应与程序字节一致: {s}"
+    );
+}
+
+#[test]
+fn cff_font_program_is_embedded() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    // CFF 字体程序数据（简化的 CFF 格式）
+    let cff_data = vec![0x01, 0x00, 0x04, 0x05]; // CFF header
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::CFF(cff_data.clone()));
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+    // 应输出 FontDescriptor 和 FontFile3 流
+    assert!(
+        s.contains("/Type /FontDescriptor"),
+        "应含 FontDescriptor 类型: {s}"
+    );
+    assert!(s.contains("/FontFile3"), "应含 /FontFile3 引用: {s}");
+    assert!(s.contains("/Subtype /Type1C"), "应含 /Subtype /Type1C: {s}");
+}
+
+#[test]
+fn subset_font_prefixes_base_font_with_six_letters() {
+    let program = FontProgram::TrueType(vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x0A]);
+    let tag = program.subset_tag();
+    assert_eq!(tag.len(), 6, "子集标签应为六个字母");
+    assert!(
+        tag.bytes().all(|byte| byte.is_ascii_uppercase()),
+        "子集标签应为大写 ASCII 字母: {tag}"
+    );
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let font = Font::helvetica(12.0).with_font_program(program).subset();
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let s = render(&mut b);
+
+    assert!(
+        s.contains(&format!("/BaseFont /{tag}+Helvetica")),
+        "BaseFont 应带子集标签前缀: {s}"
+    );
+    assert!(
+        !s.contains("/BaseFont /Helvetica"),
+        "不应再写出无前缀的 BaseFont: {s}"
+    );
+}
+
+#[test]
+fn subset_tag_is_deterministic_and_content_dependent() {
+    let data = b"%!PS-AdobeFont-1.0: TestFont 001.000\n".to_vec();
+    let first = FontProgram::Type1(data.clone()).subset_tag();
+    let second = FontProgram::Type1(data).subset_tag();
+    assert_eq!(first, second, "同一字体程序应得到同一标签");
+
+    let other = FontProgram::Type1(b"%!PS-AdobeFont-1.0: OtherFont".to_vec()).subset_tag();
+    assert_ne!(first, other, "不同字体程序应得到不同标签");
+    assert_eq!(other.len(), 6);
+}
+
+#[test]
+fn subset_without_font_program_keeps_base_font() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &Font::helvetica(12.0).subset(), 10.0, 10.0, "Test");
+    let s = render(&mut b);
+
+    assert!(s.contains("/BaseFont /Helvetica"), "应写原始 BaseFont: {s}");
+    assert!(
+        !s.contains("+Helvetica"),
+        "未嵌入字体程序时不应加子集标签: {s}"
+    );
+}
+
+#[test]
+fn subset_glyphs_rewrite_truetype_fontfile2() {
+    let program = sample_truetype_program();
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::TrueType(program.clone()))
+        .with_subset_glyphs(&[2]);
+    assert!(font.subset, "with_subset_glyphs 应同时打开子集标记");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "Test");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "TrueType");
+    let (declared_length, bytes) = embedded_program(&doc, &font_dict, "FontFile2");
+    assert_ne!(bytes, program, "嵌入程序应被重写为子集");
+    assert!(
+        bytes.len() < program.len(),
+        "子集程序应更短: {} >= {}",
+        bytes.len(),
+        program.len()
+    );
+    assert_eq!(
+        declared_length,
+        bytes.len() as i64,
+        "/Length 应与子集字节一致"
+    );
+
+    let parsed = TrueTypeFont::parse(bytes).expect("子集程序应可解析");
+    assert_eq!(parsed.glyph_count(), 2, "应只保留 gid 0 与 2");
+    assert_eq!(
+        parsed.glyph_id_for_unicode(0x41).expect("cmap lookup"),
+        Some(1),
+        "U+0041 应重编号为 gid 1"
+    );
+
+    // BaseFont 前缀仍由原始程序决定（确定性），与单独计算一致。
+    let base_font = font_dict
+        .get("BaseFont")
+        .and_then(Value::as_name)
+        .expect("BaseFont");
+    let expected = format!("{}+Helvetica", FontProgram::TrueType(program).subset_tag());
+    assert_eq!(base_font, expected);
+}
+
+#[test]
+fn subset_glyphs_reject_non_truetype_programs() {
+    for (program, kind) in [
+        (
+            FontProgram::Type1(b"%!PS-AdobeFont-1.0: TestFont".to_vec()),
+            "Type1",
+        ),
+        (FontProgram::CFF(vec![0x01, 0x00, 0x04, 0x05]), "CFF"),
+    ] {
+        let font = Font::helvetica(12.0)
+            .with_font_program(program)
+            .with_subset_glyphs(&[1]);
+
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &font, 10.0, 10.0, "Test");
+
+        let mut out = Vec::new();
+        let error = b
+            .build(&mut out)
+            .expect_err("只有 TrueType 程序可以按字形子集化");
+        assert!(
+            matches!(&error, WriteError::InvalidObject(_)),
+            "错误应为 InvalidObject: {error}"
+        );
+        assert!(
+            error.to_string().contains(kind) && error.to_string().contains("subset_glyphs"),
+            "错误信息应说明所需程序类型: {error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
+fn subset_glyphs_without_font_program_is_invalid() {
+    let font = Font::helvetica(12.0).with_subset_glyphs(&[1]);
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "Test");
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("缺少字体程序时不能子集化");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(error.to_string().contains("subset_glyphs"), "{error}");
+    assert!(out.is_empty());
+}
+
+#[test]
+fn subset_glyphs_invalid_glyph_id_is_invalid_object() {
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::TrueType(sample_truetype_program()))
+        .with_subset_glyphs(&[99]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "Test");
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("越界 gid 应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("TrueType subsetting"),
+        "错误信息应带子集化上下文: {error}"
+    );
+    assert!(out.is_empty());
+}
+
+#[test]
+fn subset_glyph_lists_do_not_deduplicate_fonts() {
+    let program = FontProgram::TrueType(sample_truetype_program());
+    let wide = Font::helvetica(12.0)
+        .with_font_program(program.clone())
+        .with_subset_glyphs(&[0, 2]);
+    let narrow = Font::helvetica(12.0)
+        .with_font_program(program)
+        .with_subset_glyphs(&[2]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &wide, 10.0, 10.0, "A");
+    b.text(p, &narrow, 10.0, 20.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let font_count = (1..=64)
+        .filter(|num| {
+            doc.get_object(*num).ok().flatten().is_some_and(|object| {
+                object
+                    .value
+                    .as_dict()
+                    .and_then(|dict| dict.get("Type"))
+                    .and_then(Value::as_name)
+                    == Some("Font")
+            })
+        })
+        .count();
+    assert_eq!(font_count, 2, "不同字形列表应生成两个字体对象");
+}
+
+#[test]
+fn type1_subset_glyphs_rewrite_fontfile() {
+    let program = sample_type1_program();
+    let original = Type1FontProgram::parse(&program).expect("fixture should parse");
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::Type1(program.clone()))
+        .with_subset_type1_glyphs(&["A"]);
+    assert!(font.subset, "with_subset_type1_glyphs 应同时打开子集标记");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type1");
+    let (declared_length, bytes) = embedded_program(&doc, &font_dict, "FontFile");
+    assert_ne!(bytes, program, "嵌入程序应被重写为子集");
+    assert!(
+        bytes.len() < program.len(),
+        "子集程序应更短: {} >= {}",
+        bytes.len(),
+        program.len()
+    );
+    assert_eq!(
+        declared_length,
+        bytes.len() as i64,
+        "/Length 应与子集字节一致"
+    );
+
+    let parsed = doc
+        .type1_program(&Value::Dict(font_dict.clone()))
+        .expect("子集程序应可解析")
+        .expect("应含 FontFile 程序");
+    let names: Vec<&str> = parsed.charstrings.keys().map(String::as_str).collect();
+    assert_eq!(names, [".notdef", "A"], "应只保留 .notdef 与请求字形");
+    for name in [".notdef", "A"] {
+        assert_eq!(
+            parsed.charstrings.get(name),
+            original.charstrings.get(name),
+            "保留字形 {name} 的 CharString 不应改变"
+        );
+    }
+
+    // BaseFont 前缀仍由原始程序决定（确定性），与单独计算一致。
+    let base_font = font_dict
+        .get("BaseFont")
+        .and_then(Value::as_name)
+        .expect("BaseFont");
+    let expected = format!("{}+Helvetica", FontProgram::Type1(program).subset_tag());
+    assert_eq!(base_font, expected);
+}
+
+#[test]
+fn type1_subset_glyphs_without_font_program_is_invalid() {
+    let font = Font::helvetica(12.0).with_subset_type1_glyphs(&["A"]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("缺少字体程序时不能按 Type 1 字形子集化");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("requires an embedded Type 1 font program"),
+        "{error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn type1_subset_glyphs_reject_non_type1_programs() {
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::TrueType(sample_truetype_program()))
+        .with_subset_type1_glyphs(&["A"]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("TrueType 程序不能按 Type 1 字形名子集化");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("requires an embedded Type 1 font program"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("TrueType"), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn type1_subset_glyphs_unknown_glyph_is_invalid_object() {
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::Type1(sample_type1_program()))
+        .with_subset_type1_glyphs(&["Z"]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("未知字形名应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("Type 1 subsetting"),
+        "错误信息应带子集化上下文: {error}"
+    );
+    assert!(error.to_string().contains('Z'), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn subset_glyphs_and_type1_subset_glyphs_cannot_be_combined() {
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::Type1(sample_type1_program()))
+        .with_subset_glyphs(&[1])
+        .with_subset_type1_glyphs(&["A"]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("两种子集字形列表不能同时使用");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(error.to_string().contains("cannot be combined"), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn type1_subset_glyph_lists_do_not_deduplicate_fonts() {
+    let program = FontProgram::Type1(sample_type1_program());
+    let wide = Font::helvetica(12.0)
+        .with_font_program(program.clone())
+        .with_subset_type1_glyphs(&["A", "B"]);
+    let narrow = Font::helvetica(12.0)
+        .with_font_program(program)
+        .with_subset_type1_glyphs(&["A"]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &wide, 10.0, 10.0, "AB");
+    b.text(p, &narrow, 10.0, 20.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let font_count = (1..=64)
+        .filter(|num| {
+            doc.get_object(*num).ok().flatten().is_some_and(|object| {
+                object
+                    .value
+                    .as_dict()
+                    .and_then(|dict| dict.get("Type"))
+                    .and_then(Value::as_name)
+                    == Some("Font")
+            })
+        })
+        .count();
+    assert_eq!(font_count, 2, "不同 Type 1 字形列表应生成两个字体对象");
+}

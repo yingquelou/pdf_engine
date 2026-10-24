@@ -2350,9 +2350,10 @@ fn type1_program_parses_embedded_font_file() {
 }
 
 /// 合成一个最小可解析的 TrueType 程序：head/maxp/hhea/hmtx/cmap/loca/glyf，
-/// 1000 upem、3 个字形、cmap format 4（A → glyph 2）。
+/// 1000 upem、3 个字形、cmap format 4（A → glyph 2）。末尾保留 54 字节
+/// 填充，模拟真实字体中未被表目录覆盖的数据，使子集化后的程序明显更小。
 fn sample_sfnt_font() -> Vec<u8> {
-    let mut sfnt = vec![0; 346];
+    let mut sfnt = vec![0; 400];
     sfnt[..4].copy_from_slice(&[0, 1, 0, 0]);
     sfnt[4..6].copy_from_slice(&7u16.to_be_bytes());
     sfnt[12..16].copy_from_slice(b"head");
@@ -3582,6 +3583,55 @@ fn builder_embeds_type1_font_program_roundtrip() {
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Test"));
 }
 
+/// 写入 → 重新解析： builder 按 Type 1 字形名子集化嵌入的 `/FontFile`，
+/// BaseFont 带标签前缀，文本提取与子集后的程序都只保留 `.notdef`/`A`。
+#[test]
+fn builder_type1_subset_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, FontEncoding, FontProgram, PageSize, PdfBuilder};
+
+    let program = sample_type1_program();
+    let font = Font::helvetica(12.0)
+        .with_encoding(FontEncoding::named("WinAnsiEncoding"))
+        .with_font_program(FontProgram::Type1(program.clone()))
+        .with_subset_type1_glyphs(&["A"]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "A");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type1");
+    let base_font = font_dict
+        .as_dict()
+        .and_then(|dict| dict.get("BaseFont"))
+        .and_then(Value::as_name)
+        .expect("BaseFont");
+    let (tag, name) = base_font
+        .split_once('+')
+        .expect("子集 BaseFont 应带标签前缀");
+    assert_eq!(tag.len(), 6, "标签应为六个字母: {tag}");
+    assert_eq!(name, "Helvetica");
+
+    let embedded = reparsed
+        .type1_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile);
+    assert_ne!(embedded.data, program, "嵌入程序应被重写为子集");
+
+    let parsed = reparsed
+        .type1_program(&font_dict)
+        .expect("should parse subset program")
+        .expect("should have program");
+    let names: Vec<&str> = parsed.charstrings.keys().map(String::as_str).collect();
+    assert_eq!(names, [".notdef", "A"], "子集程序应只含 .notdef 与请求字形");
+    assert!(parsed.glyph("A").expect("glyph lookup").is_some());
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("A"));
+}
+
 /// 写入 → 重新解析： builder 嵌入的 TrueType 程序应作为 `/FontFile2`
 /// 保存，并让字体字典使用 `/Subtype /TrueType`。
 #[test]
@@ -3655,6 +3705,68 @@ fn subset_font_roundtrips_through_parser() {
         .expect("should parse program")
         .expect("should have program");
     assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Test"));
+}
+
+/// 写入 → 重新解析： `with_subset_glyphs` 应把嵌入的 TrueType 程序重写为
+/// 只含请求字形的子集（字形数减少、cmap 重编号），/BaseFont 仍带确定性
+/// 六字母标签，且页面文本仍可提取。
+#[test]
+fn builder_truetype_subset_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, FontProgram, PageSize, PdfBuilder};
+
+    let sfnt = sample_sfnt_font();
+    let font = Font::helvetica(12.0)
+        .with_font_program(FontProgram::TrueType(sfnt.clone()))
+        .with_subset_glyphs(&[2]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Test");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "TrueType");
+    let parsed = reparsed
+        .truetype_font(&font_dict)
+        .expect("should parse program")
+        .expect("should have program");
+    assert_eq!(parsed.glyph_count(), 2, "子集应只保留 gid 0 与 2");
+    assert_eq!(
+        parsed.glyph_id_for_unicode(0x41).expect("cmap lookup"),
+        Some(1),
+        "U+0041 应在子集中重编号为 gid 1"
+    );
+
+    let embedded = reparsed
+        .truetype_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile2);
+    assert_ne!(embedded.data, sfnt, "嵌入程序应为重写后的子集");
+    assert!(
+        embedded.data.len() < sfnt.len(),
+        "子集程序应短于原始程序: {} >= {}",
+        embedded.data.len(),
+        sfnt.len()
+    );
+
+    let base_font = font_dict
+        .as_dict()
+        .and_then(|dict| dict.get("BaseFont"))
+        .and_then(Value::as_name)
+        .expect("BaseFont");
+    let (tag, name) = base_font.split_once('+').expect("应含子集标签前缀");
+    assert_eq!(tag.len(), 6, "标签应为六个字母: {tag}");
+    assert!(
+        tag.bytes().all(|byte| byte.is_ascii_uppercase()),
+        "标签应为大写 ASCII 字母: {tag}"
+    );
+    assert_eq!(name, "Helvetica");
+    assert_eq!(strip_subset_tag(base_font), "Helvetica");
+
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Test"));
 }
 
@@ -3995,4 +4107,61 @@ fn builder_custom_cid_encoding_roundtrips_through_extractor() {
     );
 
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("ABC"));
+}
+
+/// 写入 → 重新解析 → 提取：builder 写出的 Type 3 字体字典应能被读端
+/// 解析出矩阵、宽度与字符过程，文本提取仍还原出原文（9.6.5）。
+#[test]
+fn builder_type3_font_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder, Type3Font, Type3Glyph};
+
+    let type3 = Type3Font::new()
+        .glyph(Type3Glyph::new(65, "A", 500.0, b"500 0 d0"))
+        .glyph(Type3Glyph::new(66, "B", 600.0, b"600 0 d0"));
+    let font = Font::type3(12.0, type3);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "AB");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type3");
+    let parsed = reparsed
+        .type3_font(&font_dict)
+        .expect("should parse Type 3 font")
+        .expect("should be Type 3");
+    assert_eq!(parsed.font_matrix, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]);
+    assert_eq!(parsed.font_bbox, [0.0, 0.0, 1000.0, 1000.0]);
+    assert_eq!(parsed.first_char, 65);
+    assert_eq!(parsed.widths, vec![500.0, 600.0]);
+    assert_eq!(parsed.char_procs, vec!["A".to_string(), "B".to_string()]);
+    assert_eq!(parsed.width_for(65), Some(500.0));
+    assert_eq!(parsed.width_for(66), Some(600.0));
+    assert_eq!(parsed.width_for(64), None);
+
+    // /CharProcs 的每个条目应解析为含原始字符过程字节的流。
+    let char_procs = font_dict
+        .as_dict()
+        .and_then(|dict| dict.get("CharProcs"))
+        .and_then(Value::as_dict)
+        .expect("/CharProcs");
+    for (name, expected) in [("A", b"500 0 d0".as_slice()), ("B", b"600 0 d0".as_slice())] {
+        let (proc_num, _) = char_procs
+            .get(name)
+            .and_then(Value::as_ref)
+            .unwrap_or_else(|| panic!("缺少字符过程 {name}"));
+        let proc_object = reparsed
+            .get_object(proc_num)
+            .expect("字符过程查找")
+            .expect("字符过程对象");
+        let bytes = reparsed
+            .decode_stream_bytes(&proc_object.value)
+            .expect("字符过程流应可解码");
+        assert_eq!(bytes, expected, "{name} 的字符过程字节");
+    }
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
 }

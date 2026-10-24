@@ -7,8 +7,10 @@ use crate::core::types::{Document, Value};
 use super::{FontError, FontResult, embedded_program::FontProgramSource};
 
 mod charstring;
+mod subset;
 
 pub use charstring::{Type1CharString, Type1PathSegment, Type1Seac};
+pub use subset::subset_type1;
 
 use charstring::interpret;
 

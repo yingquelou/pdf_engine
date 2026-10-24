@@ -29,7 +29,7 @@ mod types;
 
 pub use types::{
     CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, Font,
-    FontDescriptor, FontEncoding, FontProgram, ImageData, PageSize,
+    FontDescriptor, FontEncoding, FontProgram, ImageData, PageSize, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::ContentStream;
@@ -60,14 +60,17 @@ fn push_two_byte_codes(bytes: &mut Vec<u8>, codes: impl IntoIterator<Item = u16>
     }
 }
 
-/// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序与子集标记
-/// 都相同才算同一字体对象。
+/// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序、子集标记
+/// 与两种子集字形列表都相同才算同一字体对象；Type 3 字体还比较字形定义。
 fn same_font(a: &Font, b: &Font) -> bool {
     a.name == b.name
         && a.size.to_bits() == b.size.to_bits()
         && a.encoding == b.encoding
         && a.font_program == b.font_program
         && a.subset == b.subset
+        && a.subset_glyphs == b.subset_glyphs
+        && a.subset_type1_glyphs == b.subset_type1_glyphs
+        && a.type3 == b.type3
 }
 
 /// PDF 逻辑层构建器。
