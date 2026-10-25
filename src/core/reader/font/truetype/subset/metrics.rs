@@ -1,11 +1,11 @@
 use std::ops::Range;
 
-use crate::core::reader::font::FontError;
 use super::MAX_SHORT_LOCA_OFFSET;
 use super::directory::{read_i16, read_u16, read_u32};
 use super::glyph::glyph_contour_count;
 use super::invalid_subset;
 use super::source::SourceFont;
+use crate::core::reader::font::FontError;
 
 impl<'a> SourceFont<'a> {
     fn horizontal_metric(&self, glyph_id: u16) -> Result<(u16, i16), FontError> {

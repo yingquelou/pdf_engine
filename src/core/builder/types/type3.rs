@@ -1,5 +1,7 @@
 //! Type 3 字体与字形描述。
 
+use crate::core::types::Value;
+
 /// Type 3 字体的单个字形（字符过程）。
 ///
 /// 对应 `/CharProcs` 字典中的一个条目：`name` 是字形程序名（也是
@@ -48,6 +50,14 @@ pub struct Type3Font {
     pub font_matrix: [f64; 6],
     /// 字形列表（写出时按此顺序分配 `/CharProcs` 流对象号）。
     pub glyphs: Vec<Type3Glyph>,
+    /// 可选的 `/Resources`（PDF 32000-1 Table 112）。
+    ///
+    /// 字形程序是内容流，可引用这里的资源（如 `/XObject`、`/ColorSpace`、
+    /// `/Pattern`）。构建时原样写出：可以直接传字典，也可以传指向字典的
+    /// 间接引用（`Value::Ref`）；其他 `Value` 类型在构建时报
+    /// `WriteError::InvalidObject`。间接引用不会被自动注册，其对象号
+    /// 有效性由调用方自行保证（builder 的对象号在构建期分配）。
+    pub resources: Option<Value>,
 }
 
 impl Default for Type3Font {
@@ -63,6 +73,7 @@ impl Type3Font {
             font_bbox: [0.0, 0.0, 1000.0, 1000.0],
             font_matrix: [0.001, 0.0, 0.0, 0.001, 0.0, 0.0],
             glyphs: Vec::new(),
+            resources: None,
         }
     }
 
@@ -81,6 +92,15 @@ impl Type3Font {
     /// 追加一个字形（链式构造）。
     pub fn glyph(mut self, glyph: Type3Glyph) -> Self {
         self.glyphs.push(glyph);
+        self
+    }
+
+    /// 设置 `/Resources`（链式构造）。
+    ///
+    /// 值原样写出：可为直接字典或指向字典的间接引用；间接引用的对象号
+    /// 有效性由调用方保证。未设置时不写该条目。
+    pub fn with_resources(mut self, resources: Value) -> Self {
+        self.resources = Some(resources);
         self
     }
 }

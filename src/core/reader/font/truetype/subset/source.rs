@@ -3,7 +3,6 @@ use std::{
     ops::Range,
 };
 
-use crate::core::reader::font::FontError;
 use super::directory::{parse_directory, read_i16, read_u16, read_u32, required_table};
 use super::glyph::{composite_component_refs, glyph_contour_count};
 use super::metrics::{build_loca, parse_loca, validate_vertical_metrics};
@@ -11,6 +10,7 @@ use super::{
     HEAD_MAGIC, MAXP_VERSION_0_5, MAXP_VERSION_1_0, PRESERVED_TABLES, REWRITTEN_TABLES,
     invalid_subset,
 };
+use crate::core::reader::font::FontError;
 
 use super::super::cmap::Cmap;
 

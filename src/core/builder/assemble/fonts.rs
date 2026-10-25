@@ -1,7 +1,7 @@
-//! 普通字体字典与字体程序嵌入（含 TrueType / Type 1 子集）。
+//! 普通字体字典与字体程序嵌入（含 TrueType / Type 1 / name-keyed CFF 子集）。
 
 use crate::core::builder::{Font, FontProgram};
-use crate::core::reader::font::{subset_truetype, subset_type1};
+use crate::core::reader::font::{subset_cff_type1c, subset_truetype, subset_type1};
 use crate::core::types::{Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
 
@@ -22,13 +22,51 @@ pub(super) fn font_dict(
         Some(FontProgram::TrueType(_)) => "TrueType",
         _ => "Type1",
     };
-    // 两种子集字形列表互斥：分别针对 TrueType gid 与 Type 1 字形名。
-    if f.subset_glyphs.is_some() && f.subset_type1_glyphs.is_some() {
+    // 三种子集字形列表互斥：分别针对 TrueType gid、Type 1 字形名与
+    // name-keyed CFF 字形名。
+    let subset_kinds = [
+        ("subset_glyphs", f.subset_glyphs.is_some()),
+        ("subset_type1_glyphs", f.subset_type1_glyphs.is_some()),
+        ("subset_cff_glyphs", f.subset_cff_glyphs.is_some()),
+    ];
+    let active: Vec<&str> = subset_kinds
+        .iter()
+        .filter(|(_, present)| *present)
+        .map(|(name, _)| *name)
+        .collect();
+    if active.len() > 1 {
         return Err(WriteError::InvalidObject(format!(
-            "subset_glyphs and subset_type1_glyphs cannot be combined \
-             for /BaseFont {}",
+            "{} cannot be combined for /BaseFont {}",
+            active.join(" and "),
             f.name
         )));
+    }
+    // name-keyed CFF 子集字形名必须由嵌入的 CFF 程序承载。
+    if f.subset_cff_glyphs.is_some() {
+        match &f.font_program {
+            Some(FontProgram::CFF(_)) => {}
+            Some(FontProgram::Type1(_)) => {
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_cff_glyphs requires an embedded CFF font program, \
+                     but /BaseFont {} embeds a Type 1 program",
+                    f.name
+                )));
+            }
+            Some(FontProgram::TrueType(_)) => {
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_cff_glyphs requires an embedded CFF font program, \
+                     but /BaseFont {} embeds a TrueType program",
+                    f.name
+                )));
+            }
+            None => {
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_cff_glyphs requires an embedded CFF font program, \
+                     but /BaseFont {} has none",
+                    f.name
+                )));
+            }
+        }
     }
     // Type 1 子集字形名必须由嵌入的 Type 1 程序承载。
     if f.subset_type1_glyphs.is_some() {
@@ -98,8 +136,12 @@ pub(super) fn font_dict(
             // 子集化：请求了字形列表时，用子集重写结果替换原始
             // 程序字节（PDF 32000-1 §9.6.4）。BaseFont 标签仍由
             // 原始程序推导，保证确定性。
-            let subset_program = match (&f.subset_glyphs, &f.subset_type1_glyphs) {
-                (Some(glyph_ids), None) => match program {
+            let subset_program = match (
+                &f.subset_glyphs,
+                &f.subset_type1_glyphs,
+                &f.subset_cff_glyphs,
+            ) {
+                (Some(glyph_ids), None, None) => match program {
                     FontProgram::TrueType(data) => {
                         Some(subset_truetype(data, glyph_ids).map_err(|error| {
                             WriteError::InvalidObject(format!(
@@ -116,18 +158,29 @@ pub(super) fn font_dict(
                         };
                         return Err(WriteError::InvalidObject(format!(
                             "subset_glyphs requires an embedded TrueType font program, \
-                             but /BaseFont {} embeds a {kind} program",
+                                 but /BaseFont {} embeds a {kind} program",
                             f.name
                         )));
                     }
                 },
-                (None, Some(glyph_names)) => match program {
+                (None, Some(glyph_names), None) => match program {
                     FontProgram::Type1(data) => {
-                        let names: Vec<&str> =
-                            glyph_names.iter().map(String::as_str).collect();
+                        let names: Vec<&str> = glyph_names.iter().map(String::as_str).collect();
                         Some(subset_type1(data, &names).map_err(|error| {
                             WriteError::InvalidObject(format!(
                                 "Type 1 subsetting for /BaseFont {} failed: {error}",
+                                f.name
+                            ))
+                        })?)
+                    }
+                    _ => unreachable!("program type checked above"),
+                },
+                (None, None, Some(glyph_names)) => match program {
+                    FontProgram::CFF(data) => {
+                        let names: Vec<&str> = glyph_names.iter().map(String::as_str).collect();
+                        Some(subset_cff_type1c(data, &names).map_err(|error| {
+                            WriteError::InvalidObject(format!(
+                                "CFF subsetting for /BaseFont {} failed: {error}",
                                 f.name
                             ))
                         })?)

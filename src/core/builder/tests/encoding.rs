@@ -144,3 +144,163 @@ fn cid_encoding_rejects_invalid_wmode_and_empty_mapping() {
         assert!(out.is_empty(), "构建失败时不应写出任何字节");
     }
 }
+
+#[test]
+fn predefined_cid_encoding_writes_name_reference_without_cmap_stream() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "GB1", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_predefined_encoding("Adobe-GB1");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    b.text_codes(p, idx, 10.0, 10.0, &[0xA1A1]);
+    let s = render(&mut b);
+
+    // /Encoding 直接写名册名称引用，且不再写 Identity-H。
+    assert!(
+        s.contains("/Encoding /Adobe-GB1"),
+        "预定义 CMap 应按名称引用写出: {s}"
+    );
+    assert!(!s.contains("/Identity-H"), "不应再写 Identity-H: {s}");
+    // 不生成嵌入 CMap 流（本用例未登记 ToUnicode，全文不应出现 CMap 流）。
+    assert!(!s.contains("/CIDInit"), "不应生成嵌入 CMap 流: {s}");
+    assert!(s.contains("<A1A1> Tj"), "内容流应写字符码: {s}");
+}
+
+#[test]
+fn predefined_cid_encoding_rejects_unknown_and_vertical_names() {
+    for name in ["NoSuch-CMap", "UniGB-UCS2-V"] {
+        let cid_font = CidFont::new(
+            "ExampleCIDFont",
+            CidFontSubtype::CIDFontType2,
+            CidSystemInfo::new("Adobe", "GB1", 0),
+            FontDescriptor::new(),
+            12.0,
+        )
+        .with_predefined_encoding(name);
+
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let idx = b.cid_font(p, &cid_font);
+        b.text_codes(p, idx, 10.0, 10.0, &[1]);
+
+        let mut out = Vec::new();
+        let error = b
+            .build(&mut out)
+            .expect_err("未知或竖排（不在名册内）的 CMap 名应使构建失败");
+        assert!(
+            matches!(&error, WriteError::InvalidObject(_)),
+            "应返回 InvalidObject: {error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
+fn predefined_cid_encoding_conflicts_with_custom_encoding() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "GB1", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_encoding(CidEncoding::new(0).mapping(1, 1))
+    .with_predefined_encoding("Adobe-GB1");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    b.text_codes(p, idx, 10.0, 10.0, &[1]);
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("预定义 CMap 与嵌入 CMap 混用应使构建失败");
+    assert!(
+        matches!(&error, WriteError::InvalidObject(_)),
+        "应返回 InvalidObject: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn predefined_cid_encoding_unicode_text_encodes_ucs2_and_registers_to_unicode() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "GB1", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_predefined_encoding("UniGB-UCS2-H");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    // '😀' 在补充平面，无法表示为 2 字节码，应被跳过。
+    b.text_predefined_unicode(p, idx, 10.0, 10.0, "中A😀");
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/Encoding /UniGB-UCS2-H"),
+        "应按名称引用 UniGB-UCS2-H: {s}"
+    );
+    assert!(
+        s.contains("<4E2D0041> Tj"),
+        "Unicode 码位应按 2 字节大端序写出，补充平面字符跳过: {s}"
+    );
+    // ToUnicode 以字符码（Unicode 码位）为键写 bfchar。
+    assert!(
+        s.contains("<4E2D> <4E2D>"),
+        "ToUnicode 应登记 中 的映射: {s}"
+    );
+    assert!(
+        s.contains("<0041> <0041>"),
+        "ToUnicode 应登记 A 的映射: {s}"
+    );
+}
+
+#[test]
+fn predefined_cid_encoding_unicode_text_skips_codes_outside_codespace() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "GB1", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_predefined_encoding("Adobe-GB1");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    // Adobe-GB1 的 2 字节码空间为 <A1A1>..<FEFE>：
+    // 中(U+4E2D) 在码空间外被跳过，가(U+AC00) 在码空间内保留。
+    b.text_predefined_unicode(p, idx, 10.0, 10.0, "中\u{AC00}");
+    let s = render(&mut b);
+
+    assert!(s.contains("<AC00> Tj"), "码空间内字符应写出: {s}");
+    assert!(!s.contains("4E2D"), "码空间外字符不应写出: {s}");
+
+    // 未配置预定义编码的字体调用本 API 应被忽略。
+    let plain = CidFont::new(
+        "PlainCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    );
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &plain);
+    b.text_predefined_unicode(p, idx, 10.0, 10.0, "中");
+    let s = render(&mut b);
+    assert!(!s.contains("Tj"), "未配置预定义编码时不应写文本: {s}");
+}

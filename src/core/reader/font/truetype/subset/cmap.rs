@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::core::reader::font::FontError;
 use super::super::cmap::CmapFormat;
 use super::invalid_subset;
 use super::source::SourceFont;
+use crate::core::reader::font::FontError;
 
 impl SourceFont<'_> {
     pub(super) fn build_cmap(&self, mapping: &BTreeMap<u16, u16>) -> Result<Vec<u8>, FontError> {

@@ -1,7 +1,7 @@
 //! Type 3 字体字典与字符过程测试。
 
 use super::*;
-use crate::core::types::{Array, StreamData, Value};
+use crate::core::types::{Array, Dict, StreamData, Value};
 
 #[test]
 fn type3_font_rejects_subset_type1_glyphs() {
@@ -243,4 +243,141 @@ fn type3_font_rejects_subset_glyphs() {
         "错误信息应说明无字体程序可裁剪: {error}"
     );
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+/// 单字形 Type 3 字体（字符码 65，字形名 A）。
+fn single_glyph_type3() -> Type3Font {
+    Type3Font::new().glyph(Type3Glyph::new(65, "A", 500.0, b"500 0 d0"))
+}
+
+/// 字形程序可引用的示例资源字典。
+fn sample_resources() -> Dict {
+    Dict::new()
+        .insert(
+            "XObject",
+            Value::Dict(Dict::new().insert("Im1", Value::Ref(40, 0))),
+        )
+        .insert(
+            "ProcSet",
+            Value::Array(Array::new().push(Value::Name("PDF".into()))),
+        )
+}
+
+#[test]
+fn type3_font_writes_resources() {
+    let resources = sample_resources();
+    let font = Font::type3(
+        12.0,
+        single_glyph_type3().with_resources(Value::Dict(resources.clone())),
+    );
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type3");
+    assert_eq!(
+        font_dict.get("Resources"),
+        Some(&Value::Dict(resources)),
+        "字体字典应原样写出 /Resources"
+    );
+    let s = render(&mut b);
+    assert!(
+        s.contains("/XObject"),
+        "序列化结果应含 /Resources 的嵌套条目: {s}"
+    );
+    assert!(
+        s.contains("/ProcSet"),
+        "序列化结果应含 /Resources 的嵌套条目: {s}"
+    );
+}
+
+#[test]
+fn type3_font_writes_indirect_resources_as_is() {
+    // 间接引用原样写出，不尝试注册或解析目标对象。
+    let font = Font::type3(12.0, single_glyph_type3().with_resources(Value::Ref(9, 0)));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type3");
+    assert_eq!(
+        font_dict.get("Resources"),
+        Some(&Value::Ref(9, 0)),
+        "间接引用应原样写出"
+    );
+}
+
+#[test]
+fn type3_font_omits_resources_when_unset() {
+    let font = Font::type3(12.0, single_glyph_type3());
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type3");
+    assert!(
+        font_dict.get("Resources").is_none(),
+        "未设置时不应写 /Resources"
+    );
+}
+
+#[test]
+fn type3_font_rejects_non_dict_resources() {
+    for resources in [
+        Value::Integer(1),
+        Value::Name("R".into()),
+        Value::Array(Array::new()),
+        Value::Null,
+    ] {
+        let font = Font::type3(12.0, single_glyph_type3().with_resources(resources));
+
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &font, 10.0, 10.0, "A");
+
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("非字典 /Resources 应构建失败");
+        assert!(
+            matches!(&error, WriteError::InvalidObject(_)),
+            "错误应为 InvalidObject: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("/Resources must be a dictionary"),
+            "错误信息应说明 /Resources 类型不合法: {error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
+fn type3_font_resources_round_trip() {
+    let resources = sample_resources();
+    let font = Font::type3(
+        12.0,
+        single_glyph_type3().with_resources(Value::Dict(resources.clone())),
+    );
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type3");
+    let parsed = doc
+        .type3_font(&Value::Dict(font_dict))
+        .expect("解析写出的字体字典")
+        .expect("应为 Type 3 字体");
+    assert_eq!(
+        parsed.resources(&doc).expect("读端解析 /Resources"),
+        Some(resources),
+        "读端应还原同一资源字典"
+    );
 }

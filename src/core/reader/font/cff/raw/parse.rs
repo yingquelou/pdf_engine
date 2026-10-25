@@ -31,16 +31,16 @@ const OP_NOMINAL_WIDTH: u16 = 21;
 
 /// `defaultWidthX` / `nominalWidthX` values from one Private DICT.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(super) struct WidthDefaults {
-    pub(super) default_width: f64,
-    pub(super) nominal_width: f64,
+pub(crate) struct WidthDefaults {
+    pub(crate) default_width: f64,
+    pub(crate) nominal_width: f64,
 }
 
 /// Parse an INDEX starting at `offset`.
 ///
 /// Returns the object ranges (absolute offsets into `data`) and the offset of
 /// the first byte after the INDEX.
-pub(super) fn parse_index(data: &[u8], offset: usize) -> FontResult<CffIndex> {
+pub(crate) fn parse_index(data: &[u8], offset: usize) -> FontResult<CffIndex> {
     let count = usize::from(read_u16(data, offset)?);
     if count == 0 {
         return Ok(CffIndex {
@@ -93,9 +93,9 @@ pub(super) fn parse_index(data: &[u8], offset: usize) -> FontResult<CffIndex> {
     })
 }
 
-pub(super) struct CffIndex {
-    pub(super) entries: Vec<Range<usize>>,
-    pub(super) end: usize,
+pub(crate) struct CffIndex {
+    pub(crate) entries: Vec<Range<usize>>,
+    pub(crate) end: usize,
 }
 
 /// A DICT operator together with the operands that preceded it.
@@ -148,7 +148,7 @@ fn last_operands(entries: &[DictEntry], operator: u16) -> Option<&[f64]> {
         .map(|entry| entry.operands.as_slice())
 }
 
-fn dict_number(data: &[u8], position: &mut usize) -> FontResult<f64> {
+pub(crate) fn dict_number(data: &[u8], position: &mut usize) -> FontResult<f64> {
     let start = *position;
     let first = read_u8(data, start)?;
     *position += 1;
@@ -226,20 +226,20 @@ fn parse_real(data: &[u8], position: &mut usize) -> FontResult<f64> {
 }
 
 /// The Top DICT operators that matter for bare CFF parsing.
-pub(super) struct TopDict {
-    pub(super) charset: Option<usize>,
-    pub(super) char_strings: Option<usize>,
+pub(crate) struct TopDict {
+    pub(crate) charset: Option<usize>,
+    pub(crate) char_strings: Option<usize>,
     /// `(size, offset)` from the `Private` operator.
-    pub(super) private: Option<(usize, usize)>,
-    pub(super) ros: Option<[u16; 3]>,
-    pub(super) fd_array: Option<usize>,
-    pub(super) fd_select: Option<usize>,
-    pub(super) cid_count: Option<u16>,
-    pub(super) font_matrix: Option<[f64; 6]>,
-    pub(super) font_bbox: Option<[f64; 4]>,
+    pub(crate) private: Option<(usize, usize)>,
+    pub(crate) ros: Option<[u16; 3]>,
+    pub(crate) fd_array: Option<usize>,
+    pub(crate) fd_select: Option<usize>,
+    pub(crate) cid_count: Option<u16>,
+    pub(crate) font_matrix: Option<[f64; 6]>,
+    pub(crate) font_bbox: Option<[f64; 4]>,
 }
 
-pub(super) fn parse_top_dict(data: &[u8]) -> FontResult<TopDict> {
+pub(crate) fn parse_top_dict(data: &[u8]) -> FontResult<TopDict> {
     let entries = parse_dict(data)?;
 
     if let Some(operands) = last_operands(&entries, OP_CHARSTRING_TYPE) {
@@ -281,18 +281,18 @@ pub(super) fn parse_top_dict(data: &[u8]) -> FontResult<TopDict> {
 }
 
 /// The Font DICT entries that matter inside the FDArray INDEX.
-pub(super) struct FontDict {
-    pub(super) private: Option<(usize, usize)>,
+pub(crate) struct FontDict {
+    pub(crate) private: Option<(usize, usize)>,
 }
 
-pub(super) fn parse_font_dict(data: &[u8]) -> FontResult<FontDict> {
+pub(crate) fn parse_font_dict(data: &[u8]) -> FontResult<FontDict> {
     let entries = parse_dict(data)?;
     Ok(FontDict {
         private: private_range(last_operands(&entries, OP_PRIVATE))?,
     })
 }
 
-pub(super) fn parse_private_widths(
+pub(crate) fn parse_private_widths(
     data: &[u8],
     offset: usize,
     size: usize,
@@ -317,7 +317,7 @@ pub(super) fn parse_private_widths(
 }
 
 /// Parse a charset into a GID -> CID (name-keyed: GID -> SID) table.
-pub(super) fn parse_charset(data: &[u8], offset: usize, glyph_count: u16) -> FontResult<Vec<u16>> {
+pub(crate) fn parse_charset(data: &[u8], offset: usize, glyph_count: u16) -> FontResult<Vec<u16>> {
     let count = usize::from(glyph_count);
     let mut charset = Vec::with_capacity(count);
     charset.push(0);
@@ -370,7 +370,7 @@ pub(super) fn parse_charset(data: &[u8], offset: usize, glyph_count: u16) -> Fon
 }
 
 /// Parse an FDSelect table into a GID -> Font DICT index table.
-pub(super) fn parse_fd_select(data: &[u8], offset: usize, glyph_count: u16) -> FontResult<Vec<u8>> {
+pub(crate) fn parse_fd_select(data: &[u8], offset: usize, glyph_count: u16) -> FontResult<Vec<u8>> {
     let format = read_u8(data, offset)?;
     let count = usize::from(glyph_count);
     match format {
@@ -512,7 +512,7 @@ fn ros_operands(operands: Option<&[f64]>) -> FontResult<Option<[u16; 3]>> {
     }
 }
 
-pub(super) fn read_u8(data: &[u8], position: usize) -> FontResult<u8> {
+pub(crate) fn read_u8(data: &[u8], position: usize) -> FontResult<u8> {
     data.get(position)
         .copied()
         .ok_or_else(|| truncated("byte", position))
@@ -525,18 +525,18 @@ fn read_u16(data: &[u8], position: usize) -> FontResult<u16> {
     Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
 }
 
-pub(super) fn read_i16(data: &[u8], position: usize) -> FontResult<i16> {
+pub(crate) fn read_i16(data: &[u8], position: usize) -> FontResult<i16> {
     Ok(read_u16(data, position)? as i16)
 }
 
-pub(super) fn read_i32(data: &[u8], position: usize) -> FontResult<i32> {
+pub(crate) fn read_i32(data: &[u8], position: usize) -> FontResult<i32> {
     let bytes = data
         .get(position..position + 4)
         .ok_or_else(|| truncated("i32", position))?;
     Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-pub(super) fn truncated(what: &str, position: usize) -> FontError {
+pub(crate) fn truncated(what: &str, position: usize) -> FontError {
     FontError::Invalid(format!(
         "truncated CFF program: cannot read {what} at offset {position}"
     ))

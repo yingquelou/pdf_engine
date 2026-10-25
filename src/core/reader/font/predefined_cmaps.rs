@@ -22,10 +22,31 @@ pub fn resolve_predefined_cmap(name: &str) -> FontResult<PredefinedCMap> {
         "Adobe-CNS1" => Ok(build_adobe_cns1()),
         "Adobe-Japan1" => Ok(build_adobe_japan1()),
         "Adobe-Korea1" => Ok(build_adobe_korea1()),
+        "UniGB-UCS2-H" => Ok(build_uni_gb_ucs2()),
         _ => Err(FontError::Invalid(format!(
             "unknown predefined CMap: {}",
             name
         ))),
+    }
+}
+
+/// UniGB-UCS2-H：字符码即 UCS-2 码位（2 字节大端），映射为 CID。
+///
+/// codespace 为整段 `<0000> <FFFF>`，覆盖全部 BMP；写端按名称引用该
+/// CMap 时可直接把 Unicode 文本按码位写成 2 字节字符码。
+/// 注意：`from_predefined` 按起始码推断映射范围的字节长度（≤ 0xFF 记为
+/// 1 字节），因此恒等映射从 0x0100 起登记，保证整段落入 2 字节
+/// codespace；0x0000–0x00FF 的低位码解码为 CID 0（文本提取由
+/// ToUnicode 驱动，不受影响）。
+fn build_uni_gb_ucs2() -> PredefinedCMap {
+    let mut mappings = BTreeMap::new();
+    for code in 0x0100..=u32::from(u16::MAX) {
+        mappings.insert(code, code as u16);
+    }
+    PredefinedCMap {
+        codespace_ranges: vec![(0x0000, 0xFFFF, 2)],
+        cid_mappings: mappings,
+        writing_mode: 0,
     }
 }
 
@@ -159,5 +180,14 @@ mod tests {
     #[test]
     fn rejects_unknown_cmap() {
         assert!(resolve_predefined_cmap("Unknown-CMap").is_err());
+    }
+
+    #[test]
+    fn resolves_uni_gb_ucs2() {
+        let cmap = resolve_predefined_cmap("UniGB-UCS2-H").unwrap();
+        assert_eq!(cmap.writing_mode, 0);
+        assert_eq!(cmap.codespace_ranges, vec![(0x0000, 0xFFFF, 2)]);
+        assert_eq!(cmap.cid_mappings.get(&0x4E2D), Some(&0x4E2D));
+        assert_eq!(cmap.cid_mappings.get(&0x0041), None);
     }
 }

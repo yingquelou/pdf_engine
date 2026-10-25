@@ -7,12 +7,14 @@
 //! - `type3`：Type 3 字体与字形；
 //! - `cid`：CIDFont、CID 编码与宽度；
 //! - `program`：嵌入字体程序；
-//! - `image`：图片数据。
+//! - `image`：图片数据；
+//! - `graphics_state`：图形状态参数（ExtGState）。
 
 mod cid;
 mod descriptor;
 mod encoding;
 mod font;
+mod graphics_state;
 mod image;
 mod program;
 mod type3;
@@ -21,6 +23,7 @@ pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;
 pub use font::Font;
+pub use graphics_state::{DashPattern, GraphicsState, GraphicsStateFont};
 pub use image::{ColorSpace, ImageData};
 pub use program::FontProgram;
 pub use type3::{Type3Font, Type3Glyph};

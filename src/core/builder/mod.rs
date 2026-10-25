@@ -28,11 +28,13 @@ mod tests;
 mod types;
 
 pub use types::{
-    CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, Font,
-    FontDescriptor, FontEncoding, FontProgram, ImageData, PageSize, Type3Font, Type3Glyph,
+    CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, DashPattern, Font,
+    FontDescriptor, FontEncoding, FontProgram, GraphicsState, GraphicsStateFont, ImageData,
+    PageSize, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::ContentStream;
+use crate::core::reader::font::predefined_cmaps::resolve_predefined_cmap;
 use crate::core::types::PdfVersion;
 use crate::core::writer::{DocumentWriter, WriteError};
 use std::io::Write;
@@ -49,6 +51,8 @@ struct PageBuild {
     cid_fonts: Vec<CidFont>,
     /// 该页用到的图片（按添加顺序）。
     images: Vec<ImageData>,
+    /// 该页用到的图形状态参数（按首次出现顺序，资源名 `/GS<n>`）。
+    graphics_states: Vec<GraphicsState>,
 }
 
 /// 把 16-bit 字符码（或 Identity 语义下的 CID）按 2 字节大端序
@@ -61,7 +65,7 @@ fn push_two_byte_codes(bytes: &mut Vec<u8>, codes: impl IntoIterator<Item = u16>
 }
 
 /// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序、子集标记
-/// 与两种子集字形列表都相同才算同一字体对象；Type 3 字体还比较字形定义。
+/// 与三种子集字形列表都相同才算同一字体对象；Type 3 字体还比较字形定义。
 fn same_font(a: &Font, b: &Font) -> bool {
     a.name == b.name
         && a.size.to_bits() == b.size.to_bits()
@@ -70,6 +74,7 @@ fn same_font(a: &Font, b: &Font) -> bool {
         && a.subset == b.subset
         && a.subset_glyphs == b.subset_glyphs
         && a.subset_type1_glyphs == b.subset_type1_glyphs
+        && a.subset_cff_glyphs == b.subset_cff_glyphs
         && a.type3 == b.type3
 }
 
@@ -128,6 +133,7 @@ impl PdfBuilder {
             fonts: Vec::new(),
             cid_fonts: Vec::new(),
             images: Vec::new(),
+            graphics_states: Vec::new(),
         });
         idx
     }
@@ -207,6 +213,36 @@ impl PdfBuilder {
             .concat_matrix([w, 0.0, 0.0, h, x, y])
             .draw_xobject(format!("Im{}", iidx + 1))
             .restore_state();
+        self
+    }
+
+    /// 在指定页应用一组图形状态参数。
+    ///
+    /// 在页面资源字典中登记 `/ExtGState` 条目（同页相同配置去重为同一
+    /// `/GS<n>`），并在当前位置追加 `/GS<n> gs`。`/Font` 条目引用的字体
+    /// 会一并登记到该页字体资源，构建阶段解析为字体字典对象引用。
+    ///
+    /// 参数在 [`PdfBuilder::build`] 阶段校验：非法取值返回
+    /// [`WriteError::InvalidObject`]；包含透明度参数且目标版本低于 1.4
+    /// 时返回 [`WriteError::UnsupportedVersion`]。
+    pub fn set_graphics_state(&mut self, page: usize, state: &GraphicsState) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        if let Some(gs_font) = &state.font
+            && !p.fonts.iter().any(|font| same_font(font, &gs_font.font))
+        {
+            p.fonts.push(gs_font.font.clone());
+        }
+        let idx = match p.graphics_states.iter().position(|s| s == state) {
+            Some(i) => i,
+            None => {
+                p.graphics_states.push(state.clone());
+                p.graphics_states.len() - 1
+            }
+        };
+        p.content.set_ext_g_state(format!("GS{}", idx + 1));
         self
     }
 
@@ -370,6 +406,164 @@ impl PdfBuilder {
         let font_name = format!("CF{}", cid_font_idx + 1);
         let mut bytes = Vec::with_capacity(glyphs.len() * 2);
         push_two_byte_codes(&mut bytes, glyphs.iter().map(|&(code, _)| code));
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
+        self
+    }
+
+    /// 在指定页上用 CIDFont 按显式字节字符码写一段文字。
+    ///
+    /// `codes` 中每一项是一个完整的源字符码（大端字节序列），长度须为
+    /// 1..=4，与 [`CidEncoding::mapping_bytes`] 登记的码长对应；长度非法
+    /// 的条目被跳过（本 API 无法逐项报错）。CIDFont 未配置编码时等价于
+    /// `/Identity-H`（2 字节码即 CID）。字符码可不在编码映射中，此时读端
+    /// 按 CMap 语义得到 CID 0。
+    ///
+    /// [`CidEncoding::mapping_bytes`]: crate::core::builder::CidEncoding::mapping_bytes
+    pub fn text_code_bytes(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        codes: &[&[u8]],
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let size = match p.cid_fonts.get(cid_font_idx) {
+            Some(f) => f.size,
+            None => return self,
+        };
+        let font_name = format!("CF{}", cid_font_idx + 1);
+        let mut bytes = Vec::new();
+        for code in codes {
+            if (1..=4).contains(&code.len()) {
+                bytes.extend_from_slice(code);
+            }
+        }
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
+        self
+    }
+
+    /// 在指定页上按显式字节字符码写文字，并登记字符码 → Unicode 映射。
+    ///
+    /// `glyphs` 为 `(字符码字节序列, Unicode 文本)` 序列：字符码原样写入
+    /// 内容流，同时以**完整字节序列**为键登记到该 CIDFont 的
+    /// `/ToUnicode` CMap（键长度与字符码一致）。长度非法的条目被跳过；
+    /// 同一字符码以最后一次登记为准。
+    pub fn text_code_bytes_unicode(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        glyphs: &[(&[u8], &str)],
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let size = match p.cid_fonts.get_mut(cid_font_idx) {
+            Some(f) => {
+                for &(code, text) in glyphs {
+                    if (1..=4).contains(&code.len()) {
+                        f.to_unicode_bytes.insert(code.to_vec(), text.to_owned());
+                    }
+                }
+                f.size
+            }
+            None => return self,
+        };
+        let font_name = format!("CF{}", cid_font_idx + 1);
+        let mut bytes = Vec::new();
+        for &(code, _) in glyphs {
+            if (1..=4).contains(&code.len()) {
+                bytes.extend_from_slice(code);
+            }
+        }
+        p.content
+            .begin_text()
+            .set_font(font_name, size)
+            .move_next_line(x, y)
+            .show_text_hex(bytes)
+            .end_text();
+        self
+    }
+
+    /// 在指定页上用配置了预定义 CMap 的 CIDFont 写一段 Unicode 文本。
+    ///
+    /// 每个字符取其 Unicode 码位作为字符码，按 2 字节大端序写入内容流，
+    /// 并以字符码为键登记到该 CIDFont 的 `/ToUnicode` CMap，保持
+    /// 「写入→解析→提取」可还原。字符码必须是目标 CMap **2 字节码空间**
+    /// 内的值（如 `UniGB-UCS2-H` 覆盖全部 BMP；`Adobe-GB1` 等混合码空间
+    /// CMap 只接受其 2 字节区段内的码位）。
+    ///
+    /// 取舍说明（本 API 返回 `&mut Self`，无法逐字报错，参照现有
+    /// 「无法表示」约定跳过而非替换）：
+    /// - 补充平面字符（码位 > U+FFFF）无法用 2 字节码表示，跳过；
+    /// - 码位不在目标 CMap 2 字节码空间内时，写出后读端会把字节拆成
+    ///   较短码或拒绝解码，ToUnicode 无法对应，故同样跳过；
+    ///   被跳过的字符既不写内容流也不登记 ToUnicode。
+    ///
+    /// CIDFont 未注册、未配置 [`CidFont::predefined_encoding`] 或名称不在
+    /// 读端名册内时忽略本次调用（未知名称仍会在 [`PdfBuilder::build`]
+    /// 阶段报错）。
+    pub fn text_predefined_unicode(
+        &mut self,
+        page: usize,
+        cid_font_idx: usize,
+        x: f64,
+        y: f64,
+        text: &str,
+    ) -> &mut Self {
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let font = match p.cid_fonts.get_mut(cid_font_idx) {
+            Some(f) => f,
+            None => return self,
+        };
+        let Some(name) = font.predefined_encoding.as_deref() else {
+            return self;
+        };
+        // 名称合法性由 build 统一校验；此处解析失败直接忽略本次文本。
+        let Ok(cmap) = resolve_predefined_cmap(name) else {
+            return self;
+        };
+        let size = font.size;
+        let mut bytes = Vec::with_capacity(text.len() * 2);
+        for ch in text.chars() {
+            let code = u32::from(ch);
+            // 补充平面无法表示为 2 字节码，跳过。
+            if code > u32::from(u16::MAX) {
+                continue;
+            }
+            // 仅接受落在 2 字节码空间内的码位，保证读端按 2 字节解码。
+            let in_codespace = cmap
+                .codespace_ranges
+                .iter()
+                .any(|&(low, high, length)| length == 2 && (low..=high).contains(&code));
+            if !in_codespace {
+                continue;
+            }
+            let code = code as u16;
+            bytes.push((code >> 8) as u8);
+            bytes.push((code & 0xFF) as u8);
+            font.to_unicode.insert(code, ch.to_string());
+        }
+        let font_name = format!("CF{}", cid_font_idx + 1);
         p.content
             .begin_text()
             .set_font(font_name, size)

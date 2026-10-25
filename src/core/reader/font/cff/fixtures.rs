@@ -5,6 +5,9 @@
 //! and all offsets are therefore a fixed width, which lets the builders compute
 //! absolute offsets in a single pass and assert that no size changed.
 
+// name-keyed 样本拆到独立文件，这里重导出以保持既有 `fixtures::*` 路径。
+pub(crate) use super::name_keyed_fixtures::*;
+
 /// Build a CFF INDEX from object payloads.
 pub(crate) fn build_index(entries: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -42,7 +45,7 @@ pub(crate) fn build_index(entries: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// Encode an integer using the DICT `29` (longint) format.
-fn dict_longint(value: i32) -> Vec<u8> {
+pub(super) fn dict_longint(value: i32) -> Vec<u8> {
     let mut out = vec![29];
     out.extend_from_slice(&value.to_be_bytes());
     out
@@ -72,14 +75,14 @@ fn dict_real(text: &str) -> Vec<u8> {
 }
 
 /// Encode a charstring integer using the 3-byte `28` (shortint) format.
-fn charstring_int(value: i16) -> Vec<u8> {
+pub(super) fn charstring_int(value: i16) -> Vec<u8> {
     let mut out = vec![28];
     out.extend_from_slice(&value.to_be_bytes());
     out
 }
 
 /// `defaultWidthX 20` / `nominalWidthX 21`.
-fn private_dict(default_width: i16, nominal_width: i16) -> Vec<u8> {
+pub(super) fn private_dict(default_width: i16, nominal_width: i16) -> Vec<u8> {
     let mut out = charstring_int(default_width);
     out.push(20);
     out.extend(charstring_int(nominal_width));
@@ -96,7 +99,7 @@ fn font_dict(private_size: usize, private_offset: usize) -> Vec<u8> {
 }
 
 /// `rmoveto` (with an explicit width operand) followed by `rlineto` + `endchar`.
-fn rmoveto_rlineto_charstring(width_operand: i16) -> Vec<u8> {
+pub(super) fn rmoveto_rlineto_charstring(width_operand: i16) -> Vec<u8> {
     let mut out = charstring_int(width_operand);
     out.extend(charstring_int(100)); // dx
     out.extend(charstring_int(0)); // dy
@@ -114,6 +117,27 @@ fn name_keyed_top_dict(
     private_offset: usize,
     char_strings_offset: usize,
 ) -> Vec<u8> {
+    name_keyed_top_dict_full(
+        Some(charset_offset),
+        None,
+        private_size,
+        private_offset,
+        char_strings_offset,
+    )
+}
+
+/// name-keyed Top DICT，可选 `charset` 与 `Encoding` 条目。
+///
+/// `charset_operand` 为 `None` 时省略 `charset`；`encoding_offset` 为 `None`
+/// 时省略 `Encoding`。所有整数操作数都用定长 longint，因此 Top DICT 的
+/// 字节数不随偏移取值变化。
+pub(super) fn name_keyed_top_dict_full(
+    charset_operand: Option<usize>,
+    encoding_offset: Option<usize>,
+    private_size: usize,
+    private_offset: usize,
+    char_strings_offset: usize,
+) -> Vec<u8> {
     let mut out = Vec::new();
     for value in [-10, -20, 500, 700] {
         out.extend(dict_longint(value));
@@ -123,8 +147,14 @@ fn name_keyed_top_dict(
         out.extend(dict_real(text));
     }
     out.extend([12, 7]); // FontMatrix
-    out.extend(dict_longint(charset_offset as i32));
-    out.push(15); // charset
+    if let Some(charset_offset) = charset_operand {
+        out.extend(dict_longint(charset_offset as i32));
+        out.push(15); // charset
+    }
+    if let Some(encoding_offset) = encoding_offset {
+        out.extend(dict_longint(encoding_offset as i32));
+        out.push(16); // Encoding
+    }
     out.extend(dict_longint(private_size as i32));
     out.extend(dict_longint(private_offset as i32));
     out.push(18); // Private
@@ -337,6 +367,157 @@ pub(crate) fn cid_keyed_cff_without_charset() -> Vec<u8> {
 /// which the CFF specification forbids for CID fonts.
 pub(crate) fn cid_keyed_cff_with_predefined_charset() -> Vec<u8> {
     cid_keyed_cff_impl(CharsetFixture::Predefined, fd_select_format_0())
+}
+
+/// `defaultWidthX`/`nominalWidthX` plus a `Subrs` offset pointing at the Local
+/// Subr INDEX that immediately follows the Private DICT.
+pub(super) fn private_dict_with_subrs(
+    default_width: i16,
+    nominal_width: i16,
+    subrs: &[u8],
+) -> Vec<u8> {
+    let mut out = private_dict(default_width, nominal_width);
+    // The Subrs offset is relative to the Private DICT start; the Local Subr
+    // INDEX follows the Private DICT directly, so the offset is the length of
+    // the DICT including this entry (fixed-width longint operand).
+    let private_len = out.len() + dict_longint(0).len() + 1;
+    out.extend(dict_longint(private_len as i32));
+    out.push(19); // Subrs
+    out.extend_from_slice(subrs);
+    out
+}
+
+/// A CID-keyed CFF with five glyphs, three Font DICTs and subroutines.
+///
+/// * charset format 0 maps GID 1..=4 to CIDs 7, 9, 20 and 42;
+/// * FDSelect format 3 assigns GID 0 to FD 0, GID 1..=2 to FD 1 and
+///   GID 3..=4 to FD 2;
+/// * FD 2 carries a Local Subr INDEX (`rlineto (50, 50); return`) which
+///   GID 4 calls via `callsubr`;
+/// * the Global Subr INDEX holds one subroutine (`rlineto (200, 0); return`)
+///   which GID 2 calls via `callgsubr` (operand -107 = index 0, bias 107);
+/// * GID 1 takes a 480 width operand (700/20 defaults in FD 1 → 500),
+///   GID 3 takes FD 2's default width 600, GID 4 takes 300 + 30 = 330.
+///
+/// Subsetting to `{7}` retains FD 0/1 and drops FD 2, exercising FDArray
+/// pruning and FDSelect renumbering.
+pub(crate) fn cid_keyed_cff_multi() -> Vec<u8> {
+    let header = [1u8, 0, 4, 1];
+    let name_index = build_index(&[b"CIDMulti".to_vec()]);
+    let string_index = build_index(&[]);
+    let global_subr = {
+        let mut subr = charstring_int(200);
+        subr.extend(charstring_int(0));
+        subr.push(5); // rlineto
+        subr.push(11); // return
+        subr
+    };
+    let global_subrs = build_index(&[global_subr]);
+    let local_subr = {
+        let mut subr = charstring_int(50);
+        subr.extend(charstring_int(50));
+        subr.push(5); // rlineto
+        subr.push(11); // return
+        subr
+    };
+    let local_subrs = build_index(&[local_subr]);
+    let fd_privates = [
+        private_dict(300, 10),
+        private_dict(700, 20),
+        private_dict_with_subrs(600, 30, &local_subrs),
+    ];
+    // charset format 0: GID 1..=4 -> CID 7, 9, 20, 42.
+    let charset = vec![0, 0, 7, 0, 9, 0, 20, 0, 42];
+    // FDSelect format 3: ranges [(0, FD 0), (1, FD 1), (3, FD 2)], sentinel 5.
+    let fd_select = vec![3, 0, 3, 0, 0, 0, 0, 1, 1, 0, 3, 2, 0, 5];
+    let gsubr_caller = {
+        let mut cs = Vec::new();
+        cs.extend(charstring_int(480)); // width operand
+        cs.extend(charstring_int(100));
+        cs.extend(charstring_int(0));
+        cs.push(21); // rmoveto
+        cs.extend(charstring_int(50));
+        cs.extend(charstring_int(0));
+        cs.push(5); // rlineto（直接绘制，保证 draws_path 检测为真）
+        cs.extend(charstring_int(-107));
+        cs.push(29); // callgsubr
+        cs.push(14); // endchar
+        cs
+    };
+    let lsubr_caller = {
+        let mut cs = Vec::new();
+        cs.extend(charstring_int(300)); // width operand
+        cs.extend(charstring_int(0));
+        cs.extend(charstring_int(0));
+        cs.push(21); // rmoveto
+        cs.extend(charstring_int(25));
+        cs.extend(charstring_int(0));
+        cs.push(5); // rlineto（直接绘制）
+        cs.extend(charstring_int(-107));
+        cs.push(10); // callsubr
+        cs.push(14); // endchar
+        cs
+    };
+    let charstrings = build_index(&[
+        vec![14],
+        rmoveto_rlineto_charstring(480),
+        gsubr_caller,
+        vec![14],
+        lsubr_caller,
+    ]);
+    let fd_array_placeholder = build_index(&[font_dict(0, 0), font_dict(0, 0), font_dict(0, 0)]);
+
+    let placeholder = cid_top_dict(Some(0), 0, 0, 0);
+    let top_index_size = build_index(&[placeholder]).len();
+    let prefix =
+        header.len() + name_index.len() + top_index_size + string_index.len() + global_subrs.len();
+
+    let charset_offset = prefix;
+    let fd_select_offset = charset_offset + charset.len();
+    let fd_array_offset = fd_select_offset + fd_select.len();
+    let fd_private_base = fd_array_offset + fd_array_placeholder.len();
+    let fd0_offset = fd_private_base;
+    let fd1_offset = fd0_offset + fd_privates[0].len();
+    let fd2_offset = fd1_offset + fd_privates[1].len();
+    let char_strings_offset = fd2_offset + fd_privates[2].len();
+
+    let fd_array = build_index(&[
+        font_dict(fd_privates[0].len(), fd0_offset),
+        font_dict(fd_privates[1].len(), fd1_offset),
+        font_dict(fd_privates[2].len(), fd2_offset),
+    ]);
+    assert_eq!(
+        fd_array.len(),
+        fd_array_placeholder.len(),
+        "FDArray size must not depend on offset values"
+    );
+
+    let top_dict = cid_top_dict(
+        Some(charset_offset),
+        fd_array_offset,
+        fd_select_offset,
+        char_strings_offset,
+    );
+    assert_eq!(
+        build_index(std::slice::from_ref(&top_dict)).len(),
+        top_index_size,
+        "top DICT size must not depend on offset values"
+    );
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&header);
+    out.extend(name_index);
+    out.extend(build_index(&[top_dict]));
+    out.extend(string_index);
+    out.extend(global_subrs);
+    out.extend(charset);
+    out.extend(fd_select);
+    out.extend(fd_array);
+    for private in &fd_privates {
+        out.extend_from_slice(private);
+    }
+    out.extend(charstrings);
+    out
 }
 
 /// Wrap a bare CFF program in a minimal `OTTO` SFNT container.

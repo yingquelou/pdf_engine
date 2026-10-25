@@ -11,12 +11,14 @@ use super::{FontDescriptor, FontEncoding, FontProgram, Type3Font};
 /// [`Font::font_program`] 可选地嵌入字体程序数据，
 /// [`Font::subset`] 控制是否以六字母子集标签前缀写出 BaseFont，
 /// [`Font::subset_glyphs`] 可选地给出要保留的 TrueType 字形（gid）列表，
-/// [`Font::subset_type1_glyphs`] 可选地给出要保留的 Type 1 字形名列表。
+/// [`Font::subset_type1_glyphs`] 可选地给出要保留的 Type 1 字形名列表，
+/// [`Font::subset_cff_glyphs`] 可选地给出要保留的 name-keyed CFF 字形名列表。
 /// 可通过 [`Font::helvetica`] 便捷构造常用 Helvetica、用
 /// [`Font::with_encoding`] 替换编码配置、[`Font::with_descriptor`] 添加描述符、
 /// [`Font::with_font_program`] 嵌入字体程序、[`Font::subset`] 标记子集字体、
 /// [`Font::with_subset_glyphs`] 请求嵌入程序按字形子集化、
-/// [`Font::with_subset_type1_glyphs`] 请求嵌入的 Type 1 程序按字形名子集化。
+/// [`Font::with_subset_type1_glyphs`] 请求嵌入的 Type 1 程序按字形名子集化、
+/// [`Font::with_subset_cff_glyphs`] 请求嵌入的 name-keyed CFF 程序按字形名子集化。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Font {
     /// BaseFont 名（不含前导 `/`），如 `Helvetica`。
@@ -48,13 +50,26 @@ pub struct Font {
     /// 且仅适用于嵌入的 Type 1 程序；Type 3 字体不允许使用（见
     /// [`Font::type3`](super::Font::type3)）。
     pub subset_type1_glyphs: Option<Vec<String>>,
+    /// 可选的 name-keyed CFF 子集字形名列表。
+    ///
+    /// 为 `Some` 时，嵌入的 name-keyed CFF 程序（`/FontFile3` +
+    /// `/Subtype /Type1C`）会先由
+    /// [`subset_cff_type1c`](crate::core::reader::font::subset_cff_type1c)
+    /// 重写为只含 `.notdef` 与这些字形名的子集；其他程序类型、未嵌入
+    /// 程序或未知字形名都会在构建时报错。
+    ///
+    /// 本字段与 [`Font::subset_glyphs`]、[`Font::subset_type1_glyphs`]
+    /// 互斥（同时设置会在构建时报错），且仅适用于嵌入的 name-keyed CFF
+    /// 程序；Type 3 字体不允许使用（见 [`Font::type3`](super::Font::type3)）。
+    pub subset_cff_glyphs: Option<Vec<String>>,
     /// 可选的 Type 3 字体描述。
     ///
     /// 为 `Some` 时写出 `/Subtype /Type3` 字体字典（`/CharProcs`、
     /// `/Widths`、`/Encoding` 等），不写 `/BaseFont`、`/FontDescriptor`
-    /// 与字体程序；此时 [`Font::font_program`]、[`Font::subset_glyphs`]
-    /// 与 [`Font::subset_type1_glyphs`] 必须为 `None`（否则构建时报错），
-    /// [`Font::subset`] 无效果（Type 3 没有 `/BaseFont` 可加子集标签）。
+    /// 与字体程序；此时 [`Font::font_program`]、[`Font::subset_glyphs`]、
+    /// [`Font::subset_type1_glyphs`] 与 [`Font::subset_cff_glyphs`] 必须为
+    /// `None`（否则构建时报错），[`Font::subset`] 无效果（Type 3 没有
+    /// `/BaseFont` 可加子集标签）。
     pub type3: Option<Type3Font>,
 }
 
@@ -70,6 +85,7 @@ impl Font {
             subset: false,
             subset_glyphs: None,
             subset_type1_glyphs: None,
+            subset_cff_glyphs: None,
             type3: None,
         }
     }
@@ -97,6 +113,7 @@ impl Font {
             subset: false,
             subset_glyphs: None,
             subset_type1_glyphs: None,
+            subset_cff_glyphs: None,
             type3: Some(font),
         }
     }
@@ -156,6 +173,24 @@ impl Font {
     /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
     pub fn with_subset_type1_glyphs(mut self, glyphs: &[&str]) -> Self {
         self.subset_type1_glyphs = Some(glyphs.iter().map(|name| (*name).to_string()).collect());
+        self.subset = true;
+        self
+    }
+
+    /// 按 name-keyed CFF 字形名子集嵌入字体程序（链式构造）。
+    ///
+    /// `glyphs` 是原程序 charset 中的字形名；`.notdef` 总会保留，其余
+    /// 未请求的字形在子集程序中删除，保留字形按原 GID 升序重编号。
+    /// 该方法同时把 [`Font::subset`] 置为 `true`，因此 `/BaseFont` 会带
+    /// 六字母子集标签前缀（标签仍按原始程序字节计算）。
+    ///
+    /// 与 [`Font::subset_glyphs`]、[`Font::subset_type1_glyphs`] 互斥。
+    /// 未嵌入程序、程序不是 [`FontProgram::CFF`] 或请求了 charset 中不
+    /// 存在的字形名时，
+    /// [`PdfBuilder::build`](super::super::PdfBuilder::build) 返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    pub fn with_subset_cff_glyphs(mut self, glyphs: &[&str]) -> Self {
+        self.subset_cff_glyphs = Some(glyphs.iter().map(|name| (*name).to_string()).collect());
         self.subset = true;
         self
     }

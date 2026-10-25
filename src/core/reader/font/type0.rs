@@ -111,8 +111,9 @@ impl Document {
     ///
     /// The predefined `/Identity-H` and `/Identity-V` encodings and embedded
     /// CMaps with codespace, `cidchar`, and `cidrange` sections are supported.
-    /// Embedded CMaps may inherit `/Identity-H` or `/Identity-V` through
-    /// `usecmap`; other predefined base CMaps are not supported.
+    /// `/Encoding` may also reference a predefined CMap from the
+    /// `predefined_cmaps` roster by name; embedded CMaps may inherit
+    /// `/Identity-H`, `/Identity-V`, or a roster CMap through `usecmap`.
     ///
     /// Returns `Ok(None)` for values whose `/Subtype` is not `/Type0`.
     pub fn type0_font(&self, value: &Value) -> FontResult<Option<Type0Font>> {
@@ -135,10 +136,19 @@ impl Document {
         let encoding = match encoding_value {
             Value::Name(name) if name == "Identity-H" => identity_cmap(0),
             Value::Name(name) if name == "Identity-V" => identity_cmap(1),
+            // 名册内的预定义 CMap（如 Adobe-GB1、UniGB-UCS2-H）允许按名称引用。
             Value::Name(name) => {
-                return Err(FontError::Invalid(format!(
-                    "unsupported predefined Type 0 encoding /{name}"
-                )));
+                let predefined =
+                    super::predefined_cmaps::resolve_predefined_cmap(&name).map_err(|_| {
+                        FontError::Invalid(format!(
+                            "unsupported predefined Type 0 encoding /{name}"
+                        ))
+                    })?;
+                CidCMap::from_predefined(
+                    &predefined.codespace_ranges,
+                    &predefined.cid_mappings,
+                    predefined.writing_mode,
+                )
             }
             Value::Stream(_, _) => {
                 let bytes = self.decode_stream_bytes(&encoding_value).map_err(|error| {
@@ -393,6 +403,29 @@ mod tests {
             )),
         );
         assert!(document.type0_font(&malformed).is_err());
+    }
+
+    #[test]
+    fn resolves_predefined_encoding_names_by_reference() {
+        let document = Document::new();
+        // UniGB-UCS2-H：UCS-2 码位即字符码，恒等映射为 CID。
+        let font = document
+            .type0_font(&type0_font(Value::Name("UniGB-UCS2-H".into())))
+            .unwrap()
+            .unwrap();
+        assert!(!font.is_vertical());
+        let decoded = font.decode_codes(&[0x4E, 0x2D]).unwrap();
+        assert_eq!(decoded[0].code, [0x4E, 0x2D]);
+        assert_eq!(decoded[0].cid, 0x4E2D);
+
+        // Adobe-GB1：混合 1/2 字节 codespace。
+        let font = document
+            .type0_font(&type0_font(Value::Name("Adobe-GB1".into())))
+            .unwrap()
+            .unwrap();
+        assert!(!font.is_vertical());
+        assert_eq!(font.decode_codes(&[0xA1, 0xA1]).unwrap()[0].cid, 0x0100);
+        assert_eq!(font.decode_codes(&[0x41]).unwrap()[0].cid, 0x41);
     }
 
     #[test]

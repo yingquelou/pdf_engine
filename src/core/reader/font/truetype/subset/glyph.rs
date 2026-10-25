@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::core::reader::font::FontError;
 use super::directory::{read_i16, read_u16};
 use super::invalid_subset;
 use super::source::SourceFont;
+use crate::core::reader::font::FontError;
 
 impl<'a> SourceFont<'a> {
     pub(super) fn glyph_record(&self, glyph_id: u16) -> Result<&'a [u8], FontError> {

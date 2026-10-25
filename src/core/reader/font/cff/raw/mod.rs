@@ -36,7 +36,8 @@
 //! * `tables` - the synthetic `head`/`hhea`/`maxp`/`hmtx` tables.
 
 mod charstring;
-mod parse;
+// 子集化模块（`cff::subset`）需要复用 INDEX/charset/FDSelect/DICT 解析器。
+pub(crate) mod parse;
 mod tables;
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,9 @@
 //! CIDFont 后代字典、Type 0 父字体与相关流。
 
-use super::cmap::{cid_encoding_cmap, to_unicode_cmap};
+use super::cmap::{cid_encoding_cmap, cmap_name, to_unicode_cmap};
 use crate::core::builder::{CidFont, CidFontSubtype, FontProgram};
+use crate::core::reader::font::predefined_cmaps::resolve_predefined_cmap;
+use crate::core::reader::font::subset_cff;
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
 
@@ -17,7 +19,19 @@ pub(super) fn write_cid_font(
     num_out: &mut i64,
 ) -> Result<(), WriteError> {
     let mut num = *num_out;
-    // 自定义编码在 build 阶段校验：wmode 仅 0/1，且至少一条映射。
+    // 预定义 CMap 名称引用与自定义嵌入 CMap 互斥。
+    if cid_font.encoding.is_some() && cid_font.predefined_encoding.is_some() {
+        return Err(WriteError::InvalidObject(
+            "CidFont predefined encoding and custom CidEncoding are mutually exclusive".into(),
+        ));
+    }
+    // 预定义 CMap 名称复用读端名册校验；未知名称（含 -V 竖排变体）报错。
+    if let Some(name) = &cid_font.predefined_encoding {
+        resolve_predefined_cmap(name)
+            .map_err(|_| WriteError::InvalidObject(format!("unknown predefined CMap: {name}")))?;
+    }
+    // 自定义编码在 build 阶段校验：wmode 仅 0/1、至少一条映射、码长
+    // 1..=4、/CMapName 合法、usecmap 基座已知且不与 CMapName 同名。
     if let Some(encoding) = &cid_font.encoding {
         if encoding.wmode > 1 {
             return Err(WriteError::InvalidObject(format!(
@@ -25,23 +39,117 @@ pub(super) fn write_cid_font(
                 encoding.wmode
             )));
         }
-        if encoding.mappings.is_empty() {
+        if encoding.mappings.is_empty() && encoding.byte_mappings.is_empty() {
             return Err(WriteError::InvalidObject(
                 "CidEncoding requires at least one code-to-CID mapping".into(),
             ));
         }
+        if let Some(code) = encoding
+            .byte_mappings
+            .keys()
+            .find(|code| !(1..=4).contains(&code.len()))
+        {
+            return Err(WriteError::InvalidObject(format!(
+                "CidEncoding character code must be 1 to 4 bytes, got {} bytes",
+                code.len()
+            )));
+        }
+        if let Some(name) = &encoding.cmap_name
+            && !is_valid_pdf_name(name)
+        {
+            return Err(WriteError::InvalidObject(format!(
+                "CidEncoding /CMapName {name:?} is not a valid PDF name"
+            )));
+        }
+        if let Some(base) = &encoding.usecmap {
+            let known = matches!(base.as_str(), "Identity-H" | "Identity-V")
+                || resolve_predefined_cmap(base).is_ok();
+            if !known {
+                return Err(WriteError::InvalidObject(format!(
+                    "CidEncoding usecmap base /{base} is not a supported CMap"
+                )));
+            }
+            if cmap_name(encoding) == *base {
+                return Err(WriteError::InvalidObject(
+                    "CidEncoding usecmap base must differ from /CMapName".into(),
+                ));
+            }
+        }
     }
+    // ToUnicode 字节键：长度须为 1..=4，且不与 2 字节映射键重复（读端会把
+    // 重复源码视为非法 CMap）。
+    for code in cid_font.to_unicode_bytes.keys() {
+        if !(1..=4).contains(&code.len()) {
+            return Err(WriteError::InvalidObject(format!(
+                "CidFont ToUnicode character code must be 1 to 4 bytes, got {} bytes",
+                code.len()
+            )));
+        }
+        if let [high, low] = code.as_slice()
+            && cid_font
+                .to_unicode
+                .contains_key(&u16::from_be_bytes([*high, *low]))
+        {
+            return Err(WriteError::InvalidObject(
+                "CidFont ToUnicode maps the same 2-byte source code twice".into(),
+            ));
+        }
+    }
+    // CID 子集请求只能由 CIDFontType0 + 嵌入 CFF 程序承载。
+    if cid_font.subset_cids.is_some() {
+        if cid_font.subtype != CidFontSubtype::CIDFontType0 {
+            return Err(WriteError::InvalidObject(format!(
+                "subset_cids requires CIDFontType0, but /BaseFont {} is {}",
+                cid_font.name,
+                cid_font.subtype.as_name()
+            )));
+        }
+        match &cid_font.font_program {
+            Some(FontProgram::CFF(_)) => {}
+            Some(other) => {
+                let kind = match other {
+                    FontProgram::Type1(_) => "Type1",
+                    FontProgram::TrueType(_) => "TrueType",
+                    FontProgram::CFF(_) => unreachable!("checked above"),
+                };
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_cids requires an embedded CFF font program, \
+                     but /BaseFont {} embeds a {kind} program",
+                    cid_font.name
+                )));
+            }
+            None => {
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_cids requires an embedded CFF font program, \
+                     but /BaseFont {} has none",
+                    cid_font.name
+                )));
+            }
+        }
+    }
+    // 子集字体：BaseFont 加六字母标签前缀（PDF 32000-1 §9.6.4），
+    // 标签按原始程序字节推导，Type 0 父字体与 CIDFont 后代保持一致。
+    let base_font_name = match (&cid_font.font_program, &cid_font.subset_cids) {
+        (Some(program), Some(_)) => format!("{}+{}", program.subset_tag(), cid_font.name),
+        _ => cid_font.name.clone(),
+    };
 
     // 1. FontDescriptor 字典（/CIDSet 作为独立流对象引用）
     let descriptor_num = num;
     num += 1;
     let mut descriptor_value = cid_font.descriptor.to_value();
-    if let Some(cid_set_data) = cid_font.descriptor.cid_set_data() {
+    // /CIDSet：有子集请求时按子集 CID 交集裁剪位图（CID 0 恒保留）。
+    let cid_set_data: Option<Vec<u8>> =
+        match (cid_font.descriptor.cid_set_data(), &cid_font.subset_cids) {
+            (Some(data), Some(cids)) => Some(mask_cid_set(data, cids)),
+            (Some(data), None) => Some(data.to_vec()),
+            (None, _) => None,
+        };
+    if let Some(cid_set_data) = cid_set_data {
         let cid_set_num = num;
         num += 1;
         if let Value::Dict(ref d) = descriptor_value {
-            descriptor_value =
-                Value::Dict(d.clone().insert("CIDSet", Value::Ref(cid_set_num, 0)));
+            descriptor_value = Value::Dict(d.clone().insert("CIDSet", Value::Ref(cid_set_num, 0)));
         }
         let cid_set_len = cid_set_data.len();
         doc.set_object(Object::new(
@@ -49,7 +157,7 @@ pub(super) fn write_cid_font(
             0,
             Value::Stream(
                 Dict::new().insert("Length", Value::Integer(cid_set_len as i64)),
-                StreamData::Owned(cid_set_data.to_vec()),
+                StreamData::Owned(cid_set_data),
             ),
         ));
     }
@@ -74,20 +182,32 @@ pub(super) fn write_cid_font(
         };
         let program_num = num;
         num += 1;
+        // CID 子集化：写流前先用子集重写结果替换原始 CFF 程序字节
+        // （PDF 32000-1 §9.6.4）；类型组合已在上方校验。
+        let subset_program = match (&cid_font.subset_cids, program) {
+            (Some(cids), FontProgram::CFF(data)) => {
+                Some(subset_cff(data, cids).map_err(|error| {
+                    WriteError::InvalidObject(format!(
+                        "CFF subsetting for /BaseFont {} failed: {error}",
+                        cid_font.name
+                    ))
+                })?)
+            }
+            _ => None,
+        };
+        let program_bytes = subset_program.as_deref().unwrap_or_else(|| program.data());
         let mut stream_dict = Dict::new();
         if let Some(subtype) = stream_subtype {
             stream_dict = stream_dict.insert("Subtype", Value::Name(subtype.into()));
         }
-        stream_dict =
-            stream_dict.insert("Length", Value::Integer(program.data().len() as i64));
+        stream_dict = stream_dict.insert("Length", Value::Integer(program_bytes.len() as i64));
         doc.set_object(Object::new(
             program_num,
             0,
-            Value::Stream(stream_dict, StreamData::Owned(program.data().to_vec())),
+            Value::Stream(stream_dict, StreamData::Owned(program_bytes.to_vec())),
         ));
         if let Value::Dict(d) = descriptor_value {
-            descriptor_value =
-                Value::Dict(d.insert(program_key, Value::Ref(program_num, 0)));
+            descriptor_value = Value::Dict(d.insert(program_key, Value::Ref(program_num, 0)));
         }
     }
     doc.set_object(Object::new(descriptor_num, 0, descriptor_value));
@@ -98,7 +218,7 @@ pub(super) fn write_cid_font(
     let mut cid_dict = Dict::new()
         .insert("Type", Value::Name("Font".into()))
         .insert("Subtype", Value::Name(cid_font.subtype.as_name().into()))
-        .insert("BaseFont", Value::Name(cid_font.name.clone()))
+        .insert("BaseFont", Value::Name(base_font_name.clone()))
         .insert("CIDSystemInfo", cid_font.system_info.to_value())
         .insert("FontDescriptor", Value::Ref(descriptor_num, 0));
     if (cid_font.default_width - 1000.0).abs() > f64::EPSILON {
@@ -113,17 +233,21 @@ pub(super) fn write_cid_font(
     let mut type0_dict = Dict::new()
         .insert("Type", Value::Name("Font".into()))
         .insert("Subtype", Value::Name("Type0".into()))
-        .insert("BaseFont", Value::Name(cid_font.name.clone()))
+        .insert("BaseFont", Value::Name(base_font_name))
         .insert("Encoding", Value::Name("Identity-H".into()))
         .insert(
             "DescendantFonts",
             Value::Array(Array::new().push(Value::Ref(cid_font_num, 0))),
         );
-    if let Some(encoding) = &cid_font.encoding {
+    if let Some(name) = &cid_font.predefined_encoding {
+        // 预定义 CMap：/Encoding 直接写名称引用，不生成嵌入 CMap 流。
+        // 名称已在上方按读端名册校验，只含安全的 Name 字符。
+        type0_dict = type0_dict.insert("Encoding", Value::Name(name.clone()));
+    } else if let Some(encoding) = &cid_font.encoding {
         // 非 Identity 编码：嵌入 CMap 流作为 /Encoding 引用。
         let encoding_num = num;
         num += 1;
-        let cmap = cid_encoding_cmap(encoding);
+        let cmap = cid_encoding_cmap(encoding)?;
         let cmap_len = cmap.len();
         doc.set_object(Object::new(
             encoding_num,
@@ -135,10 +259,10 @@ pub(super) fn write_cid_font(
         ));
         type0_dict = type0_dict.insert("Encoding", Value::Ref(encoding_num, 0));
     }
-    if !cid_font.to_unicode.is_empty() {
+    if !cid_font.to_unicode.is_empty() || !cid_font.to_unicode_bytes.is_empty() {
         let cmap_num = num;
         num += 1;
-        let cmap = to_unicode_cmap(&cid_font.to_unicode);
+        let cmap = to_unicode_cmap(&cid_font.to_unicode, &cid_font.to_unicode_bytes);
         let cmap_len = cmap.len();
         doc.set_object(Object::new(
             cmap_num,
@@ -153,4 +277,41 @@ pub(super) fn write_cid_font(
     doc.set_object(Object::new(type0_num, 0, Value::Dict(type0_dict)));
     *num_out = num;
     Ok(())
+}
+
+/// 校验名称可作为不含前导 `/` 的 PDF Name 原样写出：非空、仅可打印
+/// ASCII，且不含空白、分隔符与 `#`（`#` 在 Name 中表示转义前缀）。
+fn is_valid_pdf_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            (0x21..=0x7E).contains(&byte)
+                && !matches!(
+                    byte,
+                    b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#'
+                )
+        })
+}
+
+/// 按子集 CID 交集裁剪 `/CIDSet` 位图（MSB-first）：CID 0 恒保留，
+/// 其余仅保留原位图与子集请求的交集。长度与原位图一致。
+fn mask_cid_set(data: &[u8], cids: &[u16]) -> Vec<u8> {
+    let mut out = vec![0u8; data.len()];
+    let mut keep = |cid: u16| {
+        let byte = usize::from(cid / 8);
+        if byte < out.len() {
+            out[byte] |= 0x80 >> (cid % 8);
+        }
+    };
+    keep(0);
+    for &cid in cids {
+        // 与原位图取交集：原位图未标记的 CID 不补位。
+        let byte = usize::from(cid / 8);
+        let present = data
+            .get(byte)
+            .is_some_and(|bits| bits & (0x80 >> (cid % 8)) != 0);
+        if present {
+            keep(cid);
+        }
+    }
+    out
 }

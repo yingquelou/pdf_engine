@@ -4109,6 +4109,65 @@ fn builder_custom_cid_encoding_roundtrips_through_extractor() {
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("ABC"));
 }
 
+/// 写入 → 重新解析 → 提取：预定义 CMap（GB1 的 UCS2 变体 UniGB-UCS2-H）
+/// 以名称引用作为 `/Encoding` 写出，Unicode 文本按码位写 2 字节字符码，
+/// ToUnicode 以字符码为键，提取器仍还原出原文。
+#[test]
+fn builder_predefined_cmap_encoding_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "GB1", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_predefined_encoding("UniGB-UCS2-H");
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_predefined_unicode(page, index, 72.0, 700.0, "中文GB");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let type0 = find_font_dict(&reparsed, "Type0");
+    assert!(
+        matches!(
+            type0.as_dict().and_then(|dict| dict.get("Encoding")),
+            Some(Value::Name(name)) if name == "UniGB-UCS2-H"
+        ),
+        "预定义 CMap 应以名称引用写出"
+    );
+    let font = reparsed
+        .type0_font(&type0)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    assert!(!font.is_vertical(), "UniGB-UCS2-H 应为水平书写");
+    let decoded = font
+        .decode_codes(&[0x4E, 0x2D, 0x65, 0x87, 0x00, 0x47, 0x00, 0x42])
+        .expect("should decode");
+    assert_eq!(
+        decoded.iter().map(|code| code.cid).collect::<Vec<_>>(),
+        [0x4E2D, 0x6587, 0, 0],
+        "≥ 0x0100 的字符码恒等映射为 CID，低位码映射为 CID 0（提取由 ToUnicode 驱动）"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .map(|code| code.unicode.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("中"), Some("文"), Some("G"), Some("B")]
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("中文GB"));
+}
+
 /// 写入 → 重新解析 → 提取：builder 写出的 Type 3 字体字典应能被读端
 /// 解析出矩阵、宽度与字符过程，文本提取仍还原出原文（9.6.5）。
 #[test]
@@ -4164,4 +4223,505 @@ fn builder_type3_font_roundtrips_through_extractor() {
     }
 
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
+}
+
+/// 写入 → 重新解析：builder 写出的 Type 3 字形程序以 d0/d1 开头时，读端
+/// 应能按字符码查询其声明的宽度与包围盒，且文本提取不受影响（9.6.5）。
+#[test]
+fn builder_type3_glyph_metrics_roundtrip_with_text_extraction() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder, Type3Font, Type3Glyph};
+
+    // 手工构造含 d0/d1 前缀的 CharProcs 字节：A 用 d1 声明宽度与包围盒，
+    // B 用 d0 仅声明宽度（与 /Widths 中的 600 故意不同，两者独立可查）。
+    let type3 = Type3Font::new()
+        .glyph(Type3Glyph::new(
+            65,
+            "A",
+            500.0,
+            b"500 0 10 20 490 680 d1 10 20 480 660 re f",
+        ))
+        .glyph(Type3Glyph::new(66, "B", 600.0, b"650 0 d0"));
+    let font = Font::type3(12.0, type3);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "AB");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type3");
+    let parsed = reparsed
+        .type3_font(&font_dict)
+        .expect("should parse Type 3 font")
+        .expect("should be Type 3");
+
+    // d1：声明宽度 + 包围盒（glyph 空间）。
+    let metrics_a = parsed
+        .glyph_metrics(&reparsed, 65)
+        .expect("glyph A metrics")
+        .expect("glyph A should have metrics");
+    assert_eq!(metrics_a.width, [500.0, 0.0]);
+    assert_eq!(metrics_a.bbox, Some([10.0, 20.0, 490.0, 680.0]));
+
+    // d0：仅声明宽度，无包围盒；与 /Widths 的 600 共存且互不干扰。
+    let metrics_b = parsed
+        .glyph_metrics(&reparsed, 66)
+        .expect("glyph B metrics")
+        .expect("glyph B should have metrics");
+    assert_eq!(metrics_b.width, [650.0, 0.0]);
+    assert_eq!(metrics_b.bbox, None);
+    assert_eq!(parsed.width_for(66), Some(600.0));
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
+}
+
+/// 合成一个最小 CID-keyed CFF 程序：3 个字形（CID 0/7/9）、单个 Font
+/// DICT、charset 与 FDSelect 均为 format 0。所有 DICT 操作数用定长
+/// longint 编码，偏移可单趟计算。
+fn sample_cid_keyed_cff_program() -> Vec<u8> {
+    fn longint(value: i32) -> Vec<u8> {
+        let mut out = vec![29];
+        out.extend_from_slice(&value.to_be_bytes());
+        out
+    }
+    fn shortint(value: i16) -> Vec<u8> {
+        let mut out = vec![28];
+        out.extend_from_slice(&value.to_be_bytes());
+        out
+    }
+    fn index(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        if entries.is_empty() {
+            return out;
+        }
+        let mut offsets = vec![1u32];
+        let mut total = 1u32;
+        for entry in entries {
+            total += entry.len() as u32;
+            offsets.push(total);
+        }
+        out.push(1); // offSize：本夹具的偏移都小于 0xFF
+        for offset in offsets {
+            out.push(offset as u8);
+        }
+        for entry in entries {
+            out.extend_from_slice(entry);
+        }
+        out
+    }
+
+    // charstring：宽度操作数 400 + rmoveto + rlineto + endchar。
+    let charstring = {
+        let mut cs = shortint(400);
+        cs.extend(shortint(100));
+        cs.extend(shortint(0));
+        cs.push(21); // rmoveto
+        cs.extend(shortint(200));
+        cs.extend(shortint(0));
+        cs.push(5); // rlineto
+        cs.push(14); // endchar
+        cs
+    };
+    let private = {
+        let mut p = shortint(500);
+        p.push(20); // defaultWidthX
+        p.extend(shortint(0));
+        p.push(21); // nominalWidthX
+        p
+    };
+    let header = [1u8, 0, 4, 1];
+    let name_index = index(&[b"B".to_vec()]);
+    let string_index = index(&[]);
+    let gsubr_index = index(&[]);
+    let charset = vec![0, 0, 7, 0, 9]; // format 0：GID 1→CID 7，GID 2→CID 9
+    let fd_select = vec![0, 0, 0, 0]; // format 0：全部 FD 0
+    let charstrings = index(&[vec![14], charstring.clone(), charstring]);
+
+    let top_dict = |charset_off: i32, fd_array_off: i32, fd_select_off: i32, cs_off: i32| {
+        let mut out = Vec::new();
+        for value in [391, 392, 0] {
+            out.extend(longint(value));
+        }
+        out.extend([12, 30]); // ROS
+        out.extend(longint(100));
+        out.extend([12, 34]); // CIDCount
+        out.extend(longint(charset_off));
+        out.push(15); // charset
+        out.extend(longint(fd_array_off));
+        out.extend([12, 36]); // FDArray
+        out.extend(longint(fd_select_off));
+        out.extend([12, 37]); // FDSelect
+        out.extend(longint(cs_off));
+        out.push(17); // CharStrings
+        out
+    };
+    let top_index_size = index(&[top_dict(0, 0, 0, 0)]).len();
+    let fd_array_size = index(&[{
+        let mut fd = longint(0);
+        fd.extend(longint(0));
+        fd.push(18); // Private
+        fd
+    }])
+    .len();
+
+    let prefix =
+        header.len() + name_index.len() + top_index_size + string_index.len() + gsubr_index.len();
+    let charset_off = prefix;
+    let fd_select_off = charset_off + charset.len();
+    let fd_array_off = fd_select_off + fd_select.len();
+    let private_off = fd_array_off + fd_array_size;
+    let cs_off = private_off + private.len();
+
+    let fd_array = index(&[{
+        let mut fd = longint(private.len() as i32);
+        fd.extend(longint(private_off as i32));
+        fd.push(18); // Private
+        fd
+    }]);
+    assert_eq!(fd_array.len(), fd_array_size);
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&header);
+    out.extend(name_index);
+    out.extend(index(&[top_dict(
+        charset_off as i32,
+        fd_array_off as i32,
+        fd_select_off as i32,
+        cs_off as i32,
+    )]));
+    out.extend(string_index);
+    out.extend(gsubr_index);
+    out.extend(charset);
+    out.extend(fd_select);
+    out.extend(fd_array);
+    out.extend(private);
+    out.extend(charstrings);
+    out
+}
+
+/// 写入 → 重新解析 → 提取：CIDFontType0 的 CFF 程序按 `with_subset_cids`
+/// 裁剪后仍应完整往返——`/BaseFont` 带标签、`/FontFile3` 为可解析的子
+/// 集、文本经 `/ToUnicode` 提取一致。
+#[test]
+fn builder_cid_font_type0_subset_roundtrips_through_reader() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, FontProgram, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::reader::font::RawCffFont;
+
+    let cff = sample_cid_keyed_cff_program();
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType0,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::CFF(cff.clone()))
+    .with_subset_cids(&[9]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid_unicode(page, index, 72.0, 700.0, &[(9, "乙")]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    // Type 0 父字体与 CIDFont 后代的 /BaseFont 都带六字母标签前缀。
+    let assert_tagged = |base_font: &str| {
+        assert_eq!(strip_subset_tag(base_font), "ExampleCIDFont");
+        assert_ne!(base_font, "ExampleCIDFont", "应带标签前缀");
+        let (tag, rest) = base_font.split_at(7);
+        assert!(
+            tag[..6].bytes().all(|b| b.is_ascii_uppercase()),
+            "{base_font}"
+        );
+        assert_eq!(tag.as_bytes()[6], b'+');
+        assert_eq!(rest, "ExampleCIDFont");
+    };
+    let type0_dict = find_font_dict(&reparsed, "Type0");
+    let type0 = reparsed
+        .type0_font(&type0_dict)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    assert_tagged(type0.base_font());
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType0");
+    let cid = reparsed
+        .cid_font_type0(&descendant)
+        .expect("should parse CIDFontType0")
+        .expect("should be CIDFontType0");
+    assert_tagged(cid.base_font());
+
+    // /FontFile3 已被裁剪：更短、仍为 CIDFontType0C 且可被 raw 层解析，
+    // 只剩 CID 0 与 CID 9（GID 重编号为 0/1）。
+    let embedded = reparsed
+        .cid_font_type0_program(&descendant)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile3);
+    assert_eq!(embedded.subtype.as_deref(), Some("CIDFontType0C"));
+    assert!(embedded.data.len() < cff.len(), "子集程序应更短");
+    let parsed = RawCffFont::parse(embedded.data.clone()).expect("子集程序应可解析");
+    assert!(parsed.is_cid_keyed());
+    assert_eq!(parsed.glyph_count(), 2, "应只剩 CID 0 与 CID 9");
+    assert_eq!(parsed.glyph_for_cid(9), Some(1));
+    assert_eq!(parsed.glyph_for_cid(7), None);
+
+    // 文本经 /ToUnicode 提取一致。
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("乙"));
+}
+
+/// 写入 → 重新解析 → 提取：1/2/3 字节混合字符码经嵌入 CMap 映射为 CID，
+/// 读端按最长匹配解码，ToUnicode 键长度与字符码一致。
+#[test]
+fn builder_multibyte_cid_cmap_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{
+        CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let encoding = CidEncoding::new(0)
+        .mapping_bytes(&[0x41], 1)
+        .mapping(0xB1B2, 2)
+        .mapping_bytes(&[0x01, 0x02, 0x03], 3);
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_encoding(encoding);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_code_bytes_unicode(
+        page,
+        index,
+        72.0,
+        700.0,
+        &[
+            (&[0x41], "A"),
+            (&[0xB1, 0xB2], "B"),
+            (&[0x01, 0x02, 0x03], "C"),
+        ],
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let type0 = find_font_dict(&reparsed, "Type0");
+    let font = reparsed
+        .type0_font(&type0)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    let decoded = font
+        .decode_codes(&[0x41, 0xB1, 0xB2, 0x01, 0x02, 0x03])
+        .expect("should decode");
+    assert_eq!(
+        decoded.iter().map(|code| code.cid).collect::<Vec<_>>(),
+        [1, 2, 3],
+        "混合码长应最长匹配并映射为 CID"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .map(|code| code.code.len())
+            .collect::<Vec<_>>(),
+        [1, 2, 3],
+        "回读应保留字符码字节长度"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .map(|code| code.unicode.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("A"), Some("B"), Some("C")]
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("ABC"));
+}
+
+/// 写入 → 重新解析 → 提取：自定义 /CMapName 与 usecmap 基座（Identity-H）
+/// 一同写出；本地映射覆盖基座，未覆盖码仍继承基座映射。
+#[test]
+fn builder_usecmap_and_custom_cmap_name_roundtrip() {
+    use pdf_engine::core::builder::{
+        CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let encoding = CidEncoding::new(0)
+        .with_cmap_name("Roundtrip-H")
+        .with_usecmap("Identity-H")
+        .mapping(0x0041, 9);
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_encoding(encoding);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_codes_unicode(page, index, 72.0, 700.0, &[(0x0041, "A"), (0x0043, "C")]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let text = String::from_utf8_lossy(&buf);
+    assert!(
+        text.contains("/CMapName /Roundtrip-H def"),
+        "应写自定义 CMapName"
+    );
+    assert!(text.contains("/Identity-H usecmap"), "应写 usecmap 基座");
+
+    let reparsed = parse_buf(&buf);
+    let type0 = find_font_dict(&reparsed, "Type0");
+    let font = reparsed
+        .type0_font(&type0)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    let decoded = font
+        .decode_codes(&[0x00, 0x41, 0x00, 0x43])
+        .expect("should decode");
+    assert_eq!(
+        decoded.iter().map(|code| code.cid).collect::<Vec<_>>(),
+        [9, 0x43],
+        "本地映射覆盖基座，未覆盖码继承 Identity-H"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .map(|code| code.unicode.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("A"), Some("C")]
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AC"));
+}
+
+/// 解析页面树第一页的字典（builder 输出用直接 Resources 字典）。
+fn first_page_dict(doc: &Document) -> Dict {
+    fn resolve(doc: &Document, value: &Value) -> Value {
+        match value {
+            Value::Ref(num, generation) => doc
+                .get_object(*num)
+                .expect("object lookup")
+                .filter(|object| object.generation == *generation)
+                .map(|object| object.value)
+                .expect("resolved object"),
+            other => other.clone(),
+        }
+    }
+    let root = resolve(doc, doc.trailer.dict.get("Root").expect("/Root"));
+    let pages = resolve(
+        doc,
+        root.as_dict()
+            .expect("catalog")
+            .get("Pages")
+            .expect("/Pages"),
+    );
+    let kids = pages
+        .as_dict()
+        .expect("pages")
+        .get("Kids")
+        .and_then(Value::as_array)
+        .expect("/Kids");
+    resolve(doc, &kids.0[0])
+        .as_dict()
+        .expect("page dictionary")
+        .clone()
+}
+
+/// 写入 → 重新解析：builder 构造的 `/ExtGState` 资源应被读端完整解析，
+/// 包括 `/D`、`/BM` 回退数组与 `/Font` 字体字典引用，同时不影响文本提取。
+#[test]
+fn builder_graphics_state_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{DashPattern, Font, GraphicsState, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::graphics_state::BlendMode;
+
+    let font = Font::helvetica(12.0);
+    let state = GraphicsState::new()
+        .with_line_width(2.5)
+        .with_line_cap(1)
+        .with_line_join(2)
+        .with_miter_limit(4.0)
+        .with_dash_pattern(DashPattern::new(vec![2.0, 1.0], 0.5))
+        .with_rendering_intent("RelativeColorimetric")
+        .with_overprint(true)
+        .with_nonstroking_overprint(false)
+        .with_overprint_mode(1)
+        .with_font(font.clone(), 18.0)
+        .with_flatness(50.0)
+        .with_smoothness(0.25)
+        .with_stroke_adjustment(true)
+        .with_blend_modes(&["Normal", "Compatible"])
+        .with_stroke_alpha(0.8)
+        .with_fill_alpha(0.6)
+        .with_alpha_is_shape(true)
+        .with_text_knockout(false);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.set_graphics_state(page, &state);
+    builder.text(page, &font, 72.0, 700.0, "Hello");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let reparsed = parse_buf(&buf);
+    let page_dict = first_page_dict(&reparsed);
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("/Resources");
+    let states = reparsed
+        .ext_g_states(resources)
+        .expect("parse /ExtGState resources");
+    let gs = states.get("GS1").expect("GS1 graphics state");
+
+    assert_eq!(gs.line_width, Some(2.5));
+    assert_eq!(gs.line_cap, Some(1));
+    assert_eq!(gs.line_join, Some(2));
+    assert_eq!(gs.miter_limit, Some(4.0));
+    let dash = gs.dash_pattern.as_ref().expect("/D");
+    assert_eq!(dash.array, vec![2.0, 1.0]);
+    assert_eq!(dash.phase, 0.5);
+    assert_eq!(gs.rendering_intent.as_deref(), Some("RelativeColorimetric"));
+    assert_eq!(gs.overprint, Some(true));
+    assert_eq!(gs.nonstroking_overprint, Some(false));
+    assert_eq!(gs.overprint_mode, Some(1));
+    assert_eq!(gs.flatness, Some(50.0));
+    assert_eq!(gs.smoothness, Some(0.25));
+    assert_eq!(gs.stroke_adjustment, Some(true));
+    assert_eq!(
+        gs.blend_mode,
+        Some(BlendMode::Array(vec![
+            "Normal".to_string(),
+            "Compatible".to_string(),
+        ]))
+    );
+    assert_eq!(gs.stroke_alpha, Some(0.8));
+    assert_eq!(gs.fill_alpha, Some(0.6));
+    assert_eq!(gs.alpha_is_shape, Some(true));
+    assert_eq!(gs.text_knockout, Some(false));
+
+    let font_entry = gs.font.as_ref().expect("/Font");
+    assert_eq!(font_entry.size, 18.0);
+    let num = font_entry.font.as_ref().expect("font reference").0;
+    let font_object = reparsed
+        .get_object(num)
+        .expect("font lookup")
+        .expect("font object");
+    let font_dict = font_object.value.as_dict().expect("font dictionary");
+    assert_eq!(font_dict.get("Type").and_then(Value::as_name), Some("Font"));
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Hello"));
 }

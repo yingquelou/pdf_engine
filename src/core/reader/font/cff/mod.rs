@@ -10,11 +10,15 @@
 
 mod outline;
 mod raw;
+mod subset;
 mod ttf_parser;
 
 #[cfg(test)]
 pub(crate) mod fixtures;
+#[cfg(test)]
+mod name_keyed_fixtures;
 
 pub use outline::{CffGlyphOutline, CffOutlineParser, CffPathSegment, UnavailableCffBackend};
 pub use raw::{RawCffBackend, RawCffFont};
+pub use subset::{subset_cff, subset_cff_type1c};
 pub use ttf_parser::TtfParserCffBackend;

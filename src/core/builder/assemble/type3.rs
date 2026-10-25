@@ -13,8 +13,8 @@ use std::collections::BTreeSet;
 /// `/BaseFont` 可供推导内建编码）。
 ///
 /// 以下情况返回 [`WriteError::InvalidObject`]：嵌入字体程序、请求
-/// `subset_glyphs` 或 `subset_type1_glyphs`、字形列表为空、字符码或
-/// 字形名重复、`/Encoding` 缺失。
+/// `subset_glyphs`/`subset_type1_glyphs`/`subset_cff_glyphs`、字形列表为空、
+/// 字符码或字形名重复、`/Encoding` 缺失、`/Resources` 不是字典或间接引用。
 pub(super) fn type3_font_dict(
     doc: &mut Document,
     font: &Font,
@@ -36,6 +36,12 @@ pub(super) fn type3_font_dict(
     if font.subset_type1_glyphs.is_some() {
         return Err(WriteError::InvalidObject(format!(
             "Type 3 font {} cannot be subset with subset_type1_glyphs: it has no font program",
+            font.name
+        )));
+    }
+    if font.subset_cff_glyphs.is_some() {
+        return Err(WriteError::InvalidObject(format!(
+            "Type 3 font {} cannot be subset with subset_cff_glyphs: it has no font program",
             font.name
         )));
     }
@@ -67,6 +73,17 @@ pub(super) fn type3_font_dict(
             font.name
         )));
     };
+
+    // `/Resources` 原样写出：直接字典或指向字典的间接引用均可，引用目标
+    // 的有效性由调用方保证（builder 的对象号在构建期分配，不自动注册）。
+    if let Some(resources) = &type3.resources
+        && !matches!(resources, Value::Dict(_) | Value::Ref(_, _))
+    {
+        return Err(WriteError::InvalidObject(format!(
+            "Type 3 font {} /Resources must be a dictionary or an indirect reference",
+            font.name
+        )));
+    }
 
     // 字符过程流：按字形列表顺序分配对象号（与字形的书写顺序一致）。
     let mut char_procs = Dict::new();
@@ -116,7 +133,7 @@ pub(super) fn type3_font_dict(
         .iter()
         .fold(Array::new(), |arr, value| arr.push(Value::Float(*value)));
 
-    Ok(Dict::new()
+    let mut font_dict = Dict::new()
         .insert("Type", Value::Name("Font".into()))
         .insert("Subtype", Value::Name("Type3".into()))
         .insert("FontBBox", Value::Array(bbox))
@@ -125,5 +142,10 @@ pub(super) fn type3_font_dict(
         .insert("FirstChar", Value::Integer(i64::from(first_char)))
         .insert("LastChar", Value::Integer(i64::from(last_char)))
         .insert("Widths", Value::Array(widths))
-        .insert("Encoding", encoding))
+        .insert("Encoding", encoding);
+    // 未设置 `/Resources` 时不写该条目，保持既有输出不变。
+    if let Some(resources) = &type3.resources {
+        font_dict = font_dict.insert("Resources", resources.clone());
+    }
+    Ok(font_dict)
 }

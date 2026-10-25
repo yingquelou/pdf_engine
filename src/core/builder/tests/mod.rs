@@ -2,7 +2,8 @@
 //!
 //! 按主题拆分：
 //! - `font`：简单字体编码与描述符；
-//! - `font_program`：字体程序嵌入与子集化；
+//! - `font_program`：字体程序嵌入与 TrueType/Type 1 子集化；
+//! - `font_cff`：name-keyed CFF 子集化写入；
 //! - `type3`：Type 3 字体；
 //! - `cid`：CIDFont 描述符与内容流；
 //! - `to_unicode`：ToUnicode CMap；
@@ -10,9 +11,12 @@
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
 mod cid;
+mod cid_cmap_multibyte;
 mod encoding;
 mod font;
+mod font_cff;
 mod font_program;
+mod graphics_state;
 mod to_unicode;
 mod type3;
 

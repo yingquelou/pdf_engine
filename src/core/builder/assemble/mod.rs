@@ -11,7 +11,7 @@ mod cmap;
 mod fonts;
 mod type3;
 
-use super::{CidFont, Font, ImageData, PdfBuilder, same_font};
+use super::{CidFont, Font, GraphicsState, ImageData, PdfBuilder, same_font};
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Trailer, Value};
 use crate::core::writer::WriteError;
 
@@ -110,6 +110,27 @@ impl PdfBuilder {
             page_cid_font_nums.push(v);
         }
 
+        // ExtGState 去重池：跨页合并相同参数配置，复用同一对象号。
+        let mut gs_pool: Vec<(GraphicsState, i64)> = Vec::new();
+        let mut page_gs_nums: Vec<Vec<i64>> = Vec::with_capacity(self.pages.len());
+        for p in &self.pages {
+            let mut v = Vec::with_capacity(p.graphics_states.len());
+            for state in &p.graphics_states {
+                let pos = gs_pool.iter().position(|(g, _)| g == state);
+                let obj_num = match pos {
+                    Some(i) => gs_pool[i].1,
+                    None => {
+                        let n = num;
+                        num += 1;
+                        gs_pool.push((state.clone(), n));
+                        n
+                    }
+                };
+                v.push(obj_num);
+            }
+            page_gs_nums.push(v);
+        }
+
         // —— 构造 Document ——
         let mut doc = Document::new();
 
@@ -164,6 +185,10 @@ impl PdfBuilder {
             for (k, inum) in page_image_nums[i].iter().enumerate() {
                 xobj_dict = xobj_dict.insert(format!("Im{}", k + 1), Value::Ref(*inum, 0));
             }
+            let mut gs_dict = Dict::new();
+            for (k, gnum) in page_gs_nums[i].iter().enumerate() {
+                gs_dict = gs_dict.insert(format!("GS{}", k + 1), Value::Ref(*gnum, 0));
+            }
 
             let mut resources = Dict::new();
             if !font_dict.0.is_empty() {
@@ -171,6 +196,9 @@ impl PdfBuilder {
             }
             if !xobj_dict.0.is_empty() {
                 resources = resources.insert("XObject", Value::Dict(xobj_dict));
+            }
+            if !gs_dict.0.is_empty() {
+                resources = resources.insert("ExtGState", Value::Dict(gs_dict));
             }
 
             doc.set_object(Object::new(
@@ -218,7 +246,6 @@ impl PdfBuilder {
             cid::write_cid_font(&mut doc, cid_font, *type0_num, &mut num)?;
         }
 
-
         // 图片 XObject 流对象
         for (img, inum) in &image_pool {
             let stream_dict = Dict::new()
@@ -233,6 +260,27 @@ impl PdfBuilder {
                 0,
                 Value::Stream(stream_dict, StreamData::Owned(img.data.clone())),
             ));
+        }
+
+        // 图形状态参数对象：/Font 条目写成字体字典的间接引用。
+        for (state, gs_num) in &gs_pool {
+            let font_num = match &state.font {
+                Some(gs_font) => Some(
+                    font_pool
+                        .iter()
+                        .find(|(font, _)| same_font(font, &gs_font.font))
+                        .map(|(_, font_num)| *font_num)
+                        .ok_or_else(|| {
+                            WriteError::InvalidObject(format!(
+                                "graphics state font {} is not registered on any page",
+                                gs_font.font.name
+                            ))
+                        })?,
+                ),
+                None => None,
+            };
+            let dict = state.to_value(font_num)?;
+            doc.set_object(Object::new(*gs_num, 0, Value::Dict(dict)));
         }
 
         // trailer：/Root -> Catalog(1)。/Size 由 writer 按**实际写出**的

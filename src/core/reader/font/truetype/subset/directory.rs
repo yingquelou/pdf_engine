@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::core::reader::font::FontError;
 use super::{APPLE_TRUETYPE_SIGNATURE, CHECKSUM_MAGIC, TRUETYPE_SIGNATURE, invalid_subset};
+use crate::core::reader::font::FontError;
 
 type TableMap<'a> = BTreeMap<[u8; 4], &'a [u8]>;
 

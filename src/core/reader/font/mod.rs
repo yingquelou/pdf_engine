@@ -15,7 +15,7 @@ mod embedded_program;
 mod encoding;
 mod encoding_data;
 mod encoding_unicode;
-mod predefined_cmaps;
+pub(crate) mod predefined_cmaps;
 mod simple;
 mod standard14_metrics;
 mod truetype;
@@ -25,8 +25,11 @@ mod type3;
 
 pub use cff::{
     CffGlyphOutline, CffOutlineParser, CffPathSegment, RawCffBackend, RawCffFont,
-    TtfParserCffBackend, UnavailableCffBackend,
+    TtfParserCffBackend, UnavailableCffBackend, subset_cff, subset_cff_type1c,
 };
+// builder 单元测试复用 CFF 合成样本（仅测试构建可见）。
+#[cfg(test)]
+pub(crate) use cff::fixtures;
 pub use cid::{CidFontType2, CidSystemInfo};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
@@ -41,7 +44,7 @@ pub use type1_program::{
     Type1BuiltinEncoding, Type1CharString, Type1FontProgram, Type1Header, Type1PathSegment,
     Type1Seac, subset_type1,
 };
-pub use type3::Type3Font;
+pub use type3::{Type3Font, Type3GlyphMetrics};
 
 use descriptor::parse_descriptor;
 pub(crate) use encoding::{code_for_char, default_encoding, predefined_encoding};
