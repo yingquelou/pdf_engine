@@ -198,6 +198,24 @@ impl FontDescriptor {
         self
     }
 
+    /// 补齐 PDF 32000-1 Table 122 的必需项，供 assemble 阶段兜底。
+    ///
+    /// 仅填充缺失字段，用户显式提供的值保持不变。默认值：
+    /// `FontName = font_name`（应为带子集标签的 `/BaseFont`）、
+    /// `Flags = 4`（Symbolic）、`FontBBox = [0 -200 1000 900]`、
+    /// `ItalicAngle = 0`、`Ascent = 800`、`Descent = -200`、
+    /// `CapHeight = 700`、`StemV = 80`。
+    pub(crate) fn fill_required_defaults(&mut self, font_name: &str) {
+        self.font_name.get_or_insert_with(|| font_name.to_string());
+        self.flags.get_or_insert(4);
+        self.font_bbox.get_or_insert([0.0, -200.0, 1000.0, 900.0]);
+        self.italic_angle.get_or_insert(0.0);
+        self.ascent.get_or_insert(800.0);
+        self.descent.get_or_insert(-200.0);
+        self.cap_height.get_or_insert(700.0);
+        self.stem_v.get_or_insert(80.0);
+    }
+
     /// 转换为 PDF 字典值。
     pub(crate) fn to_value(&self) -> Value {
         let mut dict = Dict::new().insert("Type", Value::Name("FontDescriptor".into()));

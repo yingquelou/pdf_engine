@@ -2,6 +2,18 @@
 
 use super::{FontDescriptor, FontEncoding, FontProgram, Type3Font};
 
+/// 简单字体的 `/Widths` 配置（PDF 32000-1 §9.6.2.1 Table 111）。
+///
+/// `widths[i]` 是字符码 `first_char + i` 的字形宽度（1/1000 text space
+/// units），写出时对应 `/FirstChar`、`/LastChar` 与 `/Widths`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontWidths {
+    /// 首个字符码（`/FirstChar`）。
+    pub first_char: u8,
+    /// 从 `first_char` 起连续字符码的宽度，不得为空。
+    pub widths: Vec<f64>,
+}
+
 /// 逻辑字体描述。
 ///
 /// 本层支持 PDF 标准内置 Type1 字体（如 Helvetica）与嵌入字体程序。
@@ -18,7 +30,8 @@ use super::{FontDescriptor, FontEncoding, FontProgram, Type3Font};
 /// [`Font::with_font_program`] 嵌入字体程序、[`Font::subset`] 标记子集字体、
 /// [`Font::with_subset_glyphs`] 请求嵌入程序按字形子集化、
 /// [`Font::with_subset_type1_glyphs`] 请求嵌入的 Type 1 程序按字形名子集化、
-/// [`Font::with_subset_cff_glyphs`] 请求嵌入的 name-keyed CFF 程序按字形名子集化。
+/// [`Font::with_subset_cff_glyphs`] 请求嵌入的 name-keyed CFF 程序按字形名子集化，
+/// [`Font::with_widths`] 给出简单字体的 `/Widths`。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Font {
     /// BaseFont 名（不含前导 `/`），如 `Helvetica`。
@@ -61,7 +74,16 @@ pub struct Font {
     /// 本字段与 [`Font::subset_glyphs`]、[`Font::subset_type1_glyphs`]
     /// 互斥（同时设置会在构建时报错），且仅适用于嵌入的 name-keyed CFF
     /// 程序；Type 3 字体不允许使用（见 [`Font::type3`](super::Font::type3)）。
+    /// CFF 子集化会移除程序内的 `/Encoding`，因此不能与
+    /// [`FontEncoding::BuiltIn`] 同时使用。
     pub subset_cff_glyphs: Option<Vec<String>>,
+    /// 可选的简单字体 `/Widths` 配置。
+    ///
+    /// 为 `Some` 时字体字典写出 `/FirstChar`、`/LastChar` 与 `/Widths`
+    /// （PDF 32000-1 Table 111）；提供 [`Font::font_program`] 且 BaseFont
+    /// 不是标准 14 字体时必须提供，否则构建报错。Type 3 字体不允许使用
+    /// （其 `/Widths` 由字形定义推导）。
+    pub widths: Option<FontWidths>,
     /// 可选的 Type 3 字体描述。
     ///
     /// 为 `Some` 时写出 `/Subtype /Type3` 字体字典（`/CharProcs`、
@@ -86,6 +108,7 @@ impl Font {
             subset_glyphs: None,
             subset_type1_glyphs: None,
             subset_cff_glyphs: None,
+            widths: None,
             type3: None,
         }
     }
@@ -114,8 +137,24 @@ impl Font {
             subset_glyphs: None,
             subset_type1_glyphs: None,
             subset_cff_glyphs: None,
+            widths: None,
             type3: Some(font),
         }
+    }
+
+    /// 设置简单字体的 `/Widths`（链式构造）。
+    ///
+    /// `widths[i]` 是字符码 `first_char + i` 的宽度（1/1000 text space
+    /// units），字符码范围必须是单字节空间内的连续区间。构建时校验：
+    /// 列表非空、`first_char + widths.len() <= 256`、每个宽度有限且
+    /// 非负，否则 [`PdfBuilder::build`](super::super::PdfBuilder::build)
+    /// 返回 [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    pub fn with_widths(mut self, first_char: u8, widths: &[f64]) -> Self {
+        self.widths = Some(FontWidths {
+            first_char,
+            widths: widths.to_vec(),
+        });
+        self
     }
 
     /// 替换编码配置（链式构造）。

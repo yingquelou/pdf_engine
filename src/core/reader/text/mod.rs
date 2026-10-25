@@ -18,15 +18,34 @@
 //! keyword is encountered, it consumes the relevant operands. This matches
 //! the PDF content stream model where operands precede their operator.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 
-use crate::core::types::{Dict, Document, Value};
+use crate::core::types::{Dict, Document, StreamData, Value};
 
 use super::font::{SimpleFontEncoding, TrueTypeFont, Type0Font, Type1Font};
 
 mod tokenizer;
 
 use tokenizer::{CsToken, tokenize_content_stream};
+
+// ── Extraction limits ─────────────────────────────────────
+//
+// Content streams are untrusted input: decoded bytes are commonly much larger
+// than the file and a page can reference arbitrarily many streams (directly or
+// through nested form XObjects). The limits below bound CPU and memory use so
+// a hostile PDF cannot exhaust the process.
+
+/// Maximum decoded content bytes per page, including nested form XObjects.
+const MAX_CONTENT_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum content streams per page, including nested form XObjects.
+const MAX_CONTENT_STREAMS: usize = 4096;
+/// Maximum page tree (`/Kids`) nesting depth.
+const MAX_PAGE_TREE_DEPTH: usize = 64;
+/// Maximum `/Parent` chain length when inheriting page resources.
+const MAX_PARENT_CHAIN_DEPTH: usize = 64;
+/// Maximum form XObject nesting depth.
+const MAX_FORM_DEPTH: usize = 32;
 
 // ── Operand stack & text state ────────────────────────────
 
@@ -172,6 +191,39 @@ fn simple_byte_text(
     builtin.map(String::from)
 }
 
+// ── Extraction errors ────────────────────────────────────
+
+/// Failure modes of [`Document::try_extract_page_text`].
+///
+/// The infallible [`Document::extract_page_text`] collapses every error to
+/// `None`; callers that need to distinguish malformed input from a resource
+/// limit can use the fallible entry point instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextExtractionError {
+    /// The requested page index is absent, or the page tree cannot be walked
+    /// (cycle, excessive depth, or malformed page tree).
+    PageNotFound,
+    /// `/Contents`, `/Resources`, or a referenced object is missing or cannot
+    /// be decoded.
+    MalformedContent,
+    /// The page's content streams (including nested form XObjects) exceed
+    /// the extraction budget (64 MiB or 4096 streams).
+    ContentTooLarge,
+}
+
+impl fmt::Display for TextExtractionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::PageNotFound => "page not found",
+            Self::MalformedContent => "malformed page content",
+            Self::ContentTooLarge => "page content exceeds extraction limits",
+        };
+        f.write_str(message)
+    }
+}
+
+impl std::error::Error for TextExtractionError {}
+
 // ── Public entry point ────────────────────────────────────
 
 /// Extract Unicode text from content stream bytes given a resource dictionary.
@@ -184,39 +236,228 @@ fn simple_byte_text(
 /// separators so that the output reads naturally. The `'` and `"` operators
 /// are also handled.
 pub fn extract_text(content_bytes: &[u8], resources: &Dict, document: &Document) -> String {
-    let tokens = tokenize_content_stream(content_bytes);
-    let mut state = TextState::new();
-    resolve_fonts(resources, document, &mut state);
+    let mut context = ExtractionContext::new(document);
+    // This convenience entry point has no error channel; exceeding the
+    // extraction budget stops parsing and returns whatever was collected so
+    // far. Use `Document::try_extract_page_text` to observe the error.
+    let _ = context.extract_from_content(content_bytes, resources);
+    context.state.output
+}
 
-    let mut operands: Vec<Operand> = Vec::new();
-    for token in &tokens {
-        match token {
-            CsToken::ArrayOpen => {
-                operands.push(Operand::Array(Vec::new()));
-            }
-            CsToken::ArrayClose => {
-                let array = match operands.pop() {
-                    Some(Operand::Array(a)) => Operand::Array(a),
-                    _ => Operand::Array(Vec::new()),
-                };
-                operands.push(array);
-            }
-            CsToken::Keyword(kw) => {
-                execute_operator(kw, &operands, &mut state);
-                operands.clear();
-            }
-            _ => {
-                if let Some(op) = token_to_operand(token) {
-                    if let Some(Operand::Array(arr)) = operands.last_mut() {
-                        arr.push(op);
+/// Per-page extraction state shared by the page content stream and any form
+/// XObjects it invokes.
+struct ExtractionContext<'a> {
+    document: &'a Document,
+    state: TextState,
+    budget: ContentBudget,
+    /// Indirect form XObject references already rendered on this page, keyed
+    /// by `(object number, generation)`. Prevents cyclic form invocations.
+    visited_forms: HashSet<(i64, i64)>,
+    form_depth: usize,
+}
+
+impl<'a> ExtractionContext<'a> {
+    fn new(document: &'a Document) -> Self {
+        Self {
+            document,
+            state: TextState::new(),
+            budget: ContentBudget::new(),
+            visited_forms: HashSet::new(),
+            form_depth: 0,
+        }
+    }
+
+    /// Parse one content stream (page content or a form XObject body) and
+    /// append its text to the shared output.
+    fn extract_from_content(
+        &mut self,
+        content_bytes: &[u8],
+        resources: &Dict,
+    ) -> Result<(), TextExtractionError> {
+        resolve_fonts(resources, self.document, &mut self.state);
+
+        let tokens = tokenize_content_stream(content_bytes);
+        let mut operands: Vec<Operand> = Vec::new();
+        for token in &tokens {
+            match token {
+                CsToken::ArrayOpen => {
+                    operands.push(Operand::Array(Vec::new()));
+                }
+                CsToken::ArrayClose => {
+                    let array = match operands.pop() {
+                        Some(Operand::Array(a)) => Operand::Array(a),
+                        _ => Operand::Array(Vec::new()),
+                    };
+                    operands.push(array);
+                }
+                CsToken::Keyword(kw) => {
+                    if kw == "Do" {
+                        if let Some(Operand::Name(name)) = operands.last() {
+                            self.draw_form(name, resources)?;
+                        }
                     } else {
-                        operands.push(op);
+                        execute_operator(kw, &operands, &mut self.state);
+                    }
+                    operands.clear();
+                }
+                _ => {
+                    if let Some(op) = token_to_operand(token) {
+                        if let Some(Operand::Array(arr)) = operands.last_mut() {
+                            arr.push(op);
+                        } else {
+                            operands.push(op);
+                        }
                     }
                 }
             }
         }
+        Ok(())
     }
-    state.output
+
+    /// Handle `Do` for a form XObject: resolve it through the current
+    /// `/XObject` resource dictionary and append its text in place.
+    ///
+    /// Missing, malformed, image, and already visited XObjects are skipped so
+    /// one bad resource does not fail the whole page. The content budget error
+    /// is deliberately propagated.
+    fn draw_form(&mut self, name: &str, resources: &Dict) -> Result<(), TextExtractionError> {
+        let Some(xobject_map) = resources
+            .get("XObject")
+            .and_then(|value| resolve_value(self.document, value))
+        else {
+            return Ok(());
+        };
+        let Some(xobject_map) = xobject_map.as_dict() else {
+            return Ok(());
+        };
+        let Some(xobject_value) = xobject_map.get(name) else {
+            return Ok(());
+        };
+        let Some(resolved) = resolve_value(self.document, xobject_value) else {
+            return Ok(());
+        };
+        let Some(dict) = resolved.as_dict() else {
+            return Ok(());
+        };
+        let subtype = dict
+            .get("Subtype")
+            .and_then(|value| resolve_value(self.document, value));
+        if subtype.as_ref().and_then(Value::as_name) != Some("Form") {
+            return Ok(());
+        }
+
+        if let Some(key) = xobject_value.as_ref()
+            && !self.visited_forms.insert(key)
+        {
+            return Ok(());
+        }
+        if self.form_depth >= MAX_FORM_DEPTH {
+            return Ok(());
+        }
+
+        // A form without its own `/Resources` inherits the caller's resources
+        // (page or enclosing form), per ISO 32000-1 8.10.
+        let form_resources = match dict.get("Resources") {
+            Some(value) => match resolve_value(self.document, value)
+                .and_then(|value| value.as_dict().cloned())
+            {
+                Some(dict) => dict,
+                None => return Ok(()),
+            },
+            None => resources.clone(),
+        };
+
+        let bytes = match self.decode_stream(&resolved) {
+            Ok(bytes) => bytes,
+            Err(TextExtractionError::ContentTooLarge) => {
+                return Err(TextExtractionError::ContentTooLarge);
+            }
+            Err(_) => return Ok(()),
+        };
+
+        self.form_depth += 1;
+        let result = self.extract_from_content(&bytes, &form_resources);
+        self.form_depth -= 1;
+        result
+    }
+
+    /// Collect the page `/Contents` bytes, charging every stream and byte to
+    /// the shared budget.
+    fn collect_content_bytes(&mut self, page: &Dict) -> Result<Vec<u8>, TextExtractionError> {
+        let contents = page
+            .get("Contents")
+            .ok_or(TextExtractionError::MalformedContent)?;
+        let contents =
+            resolve_value(self.document, contents).ok_or(TextExtractionError::MalformedContent)?;
+        match contents {
+            Value::Stream(_, _) => self.decode_stream(&contents),
+            Value::Array(array) => {
+                if array.len() > self.budget.streams_remaining {
+                    return Err(TextExtractionError::ContentTooLarge);
+                }
+                let mut out = Vec::new();
+                for item in array.iter() {
+                    let item = resolve_value(self.document, item)
+                        .ok_or(TextExtractionError::MalformedContent)?;
+                    let bytes = self.decode_stream(&item)?;
+                    if !out.is_empty() {
+                        out.push(b'\n');
+                    }
+                    out.extend_from_slice(&bytes);
+                }
+                Ok(out)
+            }
+            _ => Err(TextExtractionError::MalformedContent),
+        }
+    }
+
+    /// Decode one stream while charging it to the page-wide budget.
+    ///
+    /// The raw size is checked first when it is already in memory so an
+    /// oversized stream is rejected before decoding; the decoded size is
+    /// checked as well because filters can expand data substantially.
+    fn decode_stream(&mut self, value: &Value) -> Result<Vec<u8>, TextExtractionError> {
+        if self.budget.streams_remaining == 0 {
+            return Err(TextExtractionError::ContentTooLarge);
+        }
+        // Reject oversized streams before reading or cloning their raw bytes.
+        let raw_len = match value {
+            Value::Stream(_, StreamData::Owned(raw)) => Some(raw.len()),
+            Value::Stream(
+                _,
+                StreamData::Ref { len, .. } | StreamData::EncryptedRef { len, .. },
+            ) => usize::try_from(*len).ok(),
+            _ => None,
+        };
+        if raw_len.is_some_and(|len| len > self.budget.bytes_remaining) {
+            return Err(TextExtractionError::ContentTooLarge);
+        }
+        self.budget.streams_remaining -= 1;
+        let bytes = self
+            .document
+            .decode_stream_bytes(value)
+            .map_err(|_| TextExtractionError::MalformedContent)?;
+        if bytes.len() > self.budget.bytes_remaining {
+            return Err(TextExtractionError::ContentTooLarge);
+        }
+        self.budget.bytes_remaining -= bytes.len();
+        Ok(bytes)
+    }
+}
+
+/// Byte/stream budget shared by page content and nested form XObjects.
+struct ContentBudget {
+    bytes_remaining: usize,
+    streams_remaining: usize,
+}
+
+impl ContentBudget {
+    fn new() -> Self {
+        Self {
+            bytes_remaining: MAX_CONTENT_BYTES,
+            streams_remaining: MAX_CONTENT_STREAMS,
+        }
+    }
 }
 
 fn execute_operator(kw: &str, operands: &[Operand], state: &mut TextState) {
@@ -354,52 +595,108 @@ impl Document {
     /// `/Contents` (single stream or array of streams) and `/Resources`
     /// (with inheritance from parent page tree nodes), then extracts text.
     ///
-    /// Returns `None` when the page index is out of range or the page
-    /// structure is malformed.
+    /// Returns `None` when the page index is out of range, the page structure
+    /// is malformed, or the content exceeds the extraction limits. Use
+    /// [`Document::try_extract_page_text`] to distinguish those cases.
     pub fn extract_page_text(&self, page_index: usize) -> Option<String> {
-        let root = self.trailer.dict.get("Root")?;
-        let root = resolve_value(self, root)?;
-        let root = root.as_dict()?;
-        let pages_ref = root.get("Pages")?;
-        let pages = resolve_value(self, pages_ref)?;
-        let pages = pages.as_dict()?;
+        self.try_extract_page_text(page_index).ok()
+    }
 
-        let page_value = find_page_node(self, pages, page_index)?;
-        let page = page_value.as_dict()?;
+    /// Fallible variant of [`Document::extract_page_text`].
+    ///
+    /// Page tree traversal and `/Parent` resource inheritance are bounded (64
+    /// levels) and cycle-safe. Page content plus nested form XObjects share a
+    /// 64 MiB / 4096-stream budget; exceeding it returns
+    /// [`TextExtractionError::ContentTooLarge`] instead of truncating.
+    pub fn try_extract_page_text(&self, page_index: usize) -> Result<String, TextExtractionError> {
+        let root = self
+            .trailer
+            .dict
+            .get("Root")
+            .ok_or(TextExtractionError::PageNotFound)?;
+        let root = resolve_value(self, root).ok_or(TextExtractionError::PageNotFound)?;
+        let root = root.as_dict().ok_or(TextExtractionError::PageNotFound)?;
+        let pages_value = root.get("Pages").ok_or(TextExtractionError::PageNotFound)?;
+        let pages_key = pages_value.as_ref();
+        let pages = resolve_value(self, pages_value).ok_or(TextExtractionError::PageNotFound)?;
+        let pages = pages.as_dict().ok_or(TextExtractionError::PageNotFound)?;
 
-        let resources = resolve_page_resources(self, page)?;
-        let resources = resources.as_dict()?;
+        let page_value = find_page_node(self, pages, pages_key, page_index)
+            .ok_or(TextExtractionError::PageNotFound)?;
+        let page = page_value
+            .as_dict()
+            .ok_or(TextExtractionError::PageNotFound)?;
 
-        let content_bytes = collect_content_bytes(self, page)?;
-        Some(self.extract_text(&content_bytes, resources))
+        let resources =
+            resolve_page_resources(self, page).ok_or(TextExtractionError::MalformedContent)?;
+        let resources = resources
+            .as_dict()
+            .ok_or(TextExtractionError::MalformedContent)?;
+
+        let mut context = ExtractionContext::new(self);
+        let content_bytes = context.collect_content_bytes(page)?;
+        context.extract_from_content(&content_bytes, resources)?;
+        Ok(context.state.output)
     }
 }
 
-fn find_page_node(document: &Document, pages: &Dict, index: usize) -> Option<Value> {
-    let kids = pages.get("Kids")?;
-    let kids = resolve_value(document, kids)?;
-    let kids = kids.as_array()?;
-    let mut remaining = index;
-    for kid_value in kids.iter() {
-        let kid = resolve_value(document, kid_value)?;
-        let kid_dict = kid.as_dict()?;
-        let type_name = kid_dict.get("Type").and_then(|v| v.as_name()).unwrap_or("");
-        match type_name {
+/// Find the `index`th page with an iterative depth-first traversal.
+///
+/// `pages_ref` is the indirect reference the root `/Pages` node was resolved
+/// from (if any) and seeds the visited set so a `/Kids` entry pointing back at
+/// the root is rejected. Only indirect references are tracked; directly
+/// embedded dictionaries cannot form a cycle because a value cannot contain
+/// itself.
+fn find_page_node(
+    document: &Document,
+    pages: &Dict,
+    pages_ref: Option<(i64, i64)>,
+    index: usize,
+) -> Option<Value> {
+    let mut visited: HashSet<(i64, i64)> = HashSet::new();
+    if let Some(key) = pages_ref {
+        visited.insert(key);
+    }
+
+    let mut stack = vec![(Value::Dict(pages.clone()), 0usize)];
+    let mut page_number = 0usize;
+    while let Some((node_value, depth)) = stack.pop() {
+        if depth > MAX_PAGE_TREE_DEPTH {
+            continue;
+        }
+        // Resolve refs lazily, but never enqueue the same ref twice. This is
+        // what makes a cyclic `/Kids` graph terminate.
+        let Some(node) = resolve_value(document, &node_value) else {
+            continue;
+        };
+        let Some(node) = node.as_dict() else {
+            continue;
+        };
+        match node.get("Type").and_then(Value::as_name).unwrap_or("") {
             "Page" => {
-                if remaining == 0 {
-                    return Some(kid);
+                if page_number == index {
+                    return Some(Value::Dict(node.clone()));
                 }
-                remaining -= 1;
+                page_number += 1;
             }
             "Pages" => {
-                let count = kid_dict
-                    .get("Count")
-                    .and_then(|v| v.as_integer())
-                    .unwrap_or(0) as usize;
-                if remaining < count {
-                    return find_page_node(document, kid_dict, remaining);
+                let Some(kids) = node.get("Kids") else {
+                    continue;
+                };
+                let Some(kids) = resolve_value(document, kids) else {
+                    continue;
+                };
+                let Some(kids) = kids.as_array() else {
+                    continue;
+                };
+                for kid in kids.iter().rev() {
+                    if let Some(key) = kid.as_ref()
+                        && !visited.insert(key)
+                    {
+                        continue;
+                    }
+                    stack.push((kid.clone(), depth + 1));
                 }
-                remaining -= count;
             }
             _ => {}
         }
@@ -407,35 +704,26 @@ fn find_page_node(document: &Document, pages: &Dict, index: usize) -> Option<Val
     None
 }
 
+/// Resolve a page's `/Resources`, walking `/Parent` links with a visited set
+/// and a depth bound. A cycle stops the walk; returning the nearest ancestor
+/// resources found so far.
 fn resolve_page_resources(document: &Document, page: &Dict) -> Option<Value> {
-    if let Some(resources) = page.get("Resources") {
-        return resolve_value(document, resources);
-    }
-    let parent = page.get("Parent")?;
-    let parent = resolve_value(document, parent)?;
-    let parent = parent.as_dict()?;
-    resolve_page_resources(document, parent)
-}
-
-fn collect_content_bytes(document: &Document, page: &Dict) -> Option<Vec<u8>> {
-    let contents = page.get("Contents")?;
-    let contents = resolve_value(document, contents)?;
-    match contents {
-        Value::Stream(_, _) => document.decode_stream_bytes(&contents).ok(),
-        Value::Array(array) => {
-            let mut out = Vec::new();
-            for item in array.iter() {
-                let item = resolve_value(document, item)?;
-                let bytes = document.decode_stream_bytes(&item).ok()?;
-                if !out.is_empty() {
-                    out.push(b'\n');
-                }
-                out.extend_from_slice(&bytes);
-            }
-            Some(out)
+    let mut current = page.clone();
+    let mut visited: HashSet<(i64, i64)> = HashSet::new();
+    for _ in 0..=MAX_PARENT_CHAIN_DEPTH {
+        if let Some(resources) = current.get("Resources") {
+            return resolve_value(document, resources);
         }
-        _ => None,
+        let parent = current.get("Parent")?;
+        if let Some(key) = parent.as_ref()
+            && !visited.insert(key)
+        {
+            return None;
+        }
+        let parent = resolve_value(document, parent)?;
+        current = parent.as_dict()?.clone();
     }
+    None
 }
 
 #[cfg(test)]

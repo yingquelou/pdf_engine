@@ -3534,6 +3534,39 @@ fn builder_font_descriptor_roundtrips_through_parser() {
     panic!("Font with FontDescriptor not found");
 }
 
+/// 写入 → 重新解析： `with_widths` 写出的 `/FirstChar`、`/LastChar` 与
+/// `/Widths` 应被读端按同一数值还原，文本提取不受影响。
+#[test]
+fn builder_widths_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder};
+
+    let widths = [500.0, 600.5, 700.0];
+    let font = Font::helvetica(12.0).with_widths(65, &widths);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "AB");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type1");
+    let dict = font_dict.as_dict().expect("font dict");
+    assert_eq!(dict.get("FirstChar").and_then(Value::as_integer), Some(65));
+    assert_eq!(dict.get("LastChar").and_then(Value::as_integer), Some(67));
+    let parsed = reparsed
+        .type1_font(&font_dict)
+        .expect("should parse font")
+        .expect("should be Type1");
+    assert_eq!(parsed.first_char, Some(65));
+    assert_eq!(parsed.widths, widths.to_vec());
+    assert_eq!(parsed.width_for(65), Some(500.0));
+    assert_eq!(parsed.width_for(66), Some(600.5));
+    assert_eq!(parsed.width_for(67), Some(700.0));
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
+}
+
 /// 在重解析后的文档中查找指定 `/Subtype` 的字体字典。
 fn find_font_dict(doc: &Document, subtype: &str) -> Value {
     for num in 1..=64 {

@@ -1,21 +1,34 @@
 //! 普通字体字典与字体程序嵌入（含 TrueType / Type 1 / name-keyed CFF 子集）。
 
-use crate::core::builder::{Font, FontProgram};
-use crate::core::reader::font::{subset_cff_type1c, subset_truetype, subset_type1};
-use crate::core::types::{Dict, Document, Object, StreamData, Value};
+use crate::core::builder::{Font, FontEncoding, FontProgram, FontWidths};
+use crate::core::reader::font::{
+    strip_subset_tag, subset_cff_type1c, subset_truetype, subset_type1,
+};
+use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
 
 /// 构造普通（非 Type 3）字体字典，并在 `doc` 中写出描述符与字体程序流。
 ///
 /// `/Subtype` 由嵌入程序类型决定；请求字形子集时先重写程序字节，
 /// `/BaseFont` 的六字母标签仍按原始程序推导（PDF 32000-1 §9.6.4）。
-/// 子集请求与程序类型不匹配时返回 [`WriteError::InvalidObject`]。
+/// 简单字体字典按 Table 111 写出 `/FirstChar`、`/LastChar` 与 `/Widths`；
+/// 描述符缺失的 Table 122 必需项由
+/// [`FontDescriptor::fill_required_defaults`](crate::core::builder::FontDescriptor)
+/// 补齐。子集请求与程序类型不匹配、编码名未知、`/Widths` 非法、
+/// 嵌入程序的非标准 14 字体缺少 `/Widths` 时返回 [`WriteError::InvalidObject`]。
 pub(super) fn font_dict(
     doc: &mut Document,
     f: &Font,
     num_out: &mut i64,
 ) -> Result<Dict, WriteError> {
     let mut num = *num_out;
+    // 未知编码名无法写出合法的 `/Encoding`：读端会拒绝整份字体，构建期即报错。
+    if let Some(name) = f.encoding.unknown_name() {
+        return Err(WriteError::InvalidObject(format!(
+            "/Encoding /{name} for /BaseFont {} is not a supported predefined encoding",
+            f.name
+        )));
+    }
     // 嵌入 TrueType 程序时 `/Subtype` 必须是 TrueType；
     // Type 1 与 CFF（FontFile3 /Type1C）都使用 Type1 子类型。
     let subtype = match &f.font_program {
@@ -38,6 +51,15 @@ pub(super) fn font_dict(
         return Err(WriteError::InvalidObject(format!(
             "{} cannot be combined for /BaseFont {}",
             active.join(" and "),
+            f.name
+        )));
+    }
+    // CFF 子集化会移除程序内的 `/Encoding`（PDF 32000-1 §9.6.4），与
+    // `/Encoding` 缺省表示的内建编码语义冲突。
+    if f.subset_cff_glyphs.is_some() && matches!(f.encoding, FontEncoding::BuiltIn) {
+        return Err(WriteError::InvalidObject(format!(
+            "subset_cff_glyphs cannot be combined with FontEncoding::BuiltIn for /BaseFont {}: \
+             CFF subsetting removes the program's /Encoding",
             f.name
         )));
     }
@@ -96,16 +118,44 @@ pub(super) fn font_dict(
         }
     }
     // 子集字体：BaseFont 加六字母标签前缀（PDF 32000-1 §9.6.4）。
+    // 标签同时纳入子集列表，确保同一程序的不同子集得到不同标签。
     let base_font = match (&f.font_program, f.subset) {
-        (Some(program), true) => format!("{}+{}", program.subset_tag(), f.name),
+        (Some(program), true) => format!(
+            "{}+{}",
+            program.subset_tag_with(&subset_discriminator(f)),
+            f.name
+        ),
         _ => f.name.clone(),
     };
+    // `/Widths` 的构建期校验：非空、落在单字节码空间、宽度有限且非负。
+    if let Some(widths) = &f.widths {
+        validate_widths(f, widths)?;
+    }
+    // 嵌入程序的非标准 14 字体必须给出 `/Widths`（Table 111 必需项）。
+    if f.widths.is_none() && f.font_program.is_some() && !is_standard_14(&base_font) {
+        return Err(WriteError::InvalidObject(format!(
+            "embedded font program /BaseFont {} is not one of the standard 14 fonts \
+             and requires explicit /Widths; call Font::with_widths",
+            f.name
+        )));
+    }
     let mut font_dict = Dict::new()
         .insert("Type", Value::Name("Font".into()))
         .insert("Subtype", Value::Name(subtype.into()))
-        .insert("BaseFont", Value::Name(base_font));
+        .insert("BaseFont", Value::Name(base_font.clone()));
     if let Some(encoding) = f.encoding.to_value() {
         font_dict = font_dict.insert("Encoding", encoding);
+    }
+    if let Some(widths) = &f.widths {
+        let last_char = widths.first_char as usize + widths.widths.len() - 1;
+        let mut array = Array::new();
+        for width in &widths.widths {
+            array = array.push(Value::Float(*width));
+        }
+        font_dict = font_dict
+            .insert("FirstChar", Value::Integer(i64::from(widths.first_char)))
+            .insert("LastChar", Value::Integer(last_char as i64))
+            .insert("Widths", Value::Array(array));
     }
     // 子集字形列表必须由嵌入的 TrueType 程序承载。
     if f.subset_glyphs.is_some() && f.font_program.is_none() {
@@ -120,14 +170,13 @@ pub(super) fn font_dict(
         let descriptor_ref = num;
         num += 1;
         font_dict = font_dict.insert("FontDescriptor", Value::Ref(descriptor_ref, 0));
-        // 构建字体描述符字典
-        let mut descriptor_dict = if let Some(descriptor) = &f.descriptor {
-            match descriptor.to_value() {
-                Value::Dict(d) => d,
-                _ => Dict::new().insert("Type", Value::Name("FontDescriptor".into())),
-            }
-        } else {
-            Dict::new().insert("Type", Value::Name("FontDescriptor".into()))
+        // 构建字体描述符字典：Table 122 必需项缺省时补默认值，
+        // 用户显式提供的度量保留。
+        let mut descriptor = f.descriptor.clone().unwrap_or_default();
+        descriptor.fill_required_defaults(&base_font);
+        let mut descriptor_dict = match descriptor.to_value() {
+            Value::Dict(d) => d,
+            _ => Dict::new().insert("Type", Value::Name("FontDescriptor".into())),
         };
         // 写入字体程序流（如果有）
         if let Some(program) = &f.font_program {
@@ -223,4 +272,84 @@ pub(super) fn font_dict(
     }
     *num_out = num;
     Ok(font_dict)
+}
+
+/// 校验简单字体 `/Widths`：非空、覆盖区间落在单字节码空间、宽度有限且非负。
+fn validate_widths(f: &Font, widths: &FontWidths) -> Result<(), WriteError> {
+    if widths.widths.is_empty() {
+        return Err(WriteError::InvalidObject(format!(
+            "/Widths for /BaseFont {} must not be empty; call Font::with_widths with at least one width",
+            f.name
+        )));
+    }
+    let end = usize::from(widths.first_char) + widths.widths.len();
+    if end > 256 {
+        return Err(WriteError::InvalidObject(format!(
+            "/Widths for /BaseFont {} covers character codes {}..={}, \
+             beyond the single-byte range 0..=255",
+            f.name,
+            widths.first_char,
+            end - 1
+        )));
+    }
+    for (offset, width) in widths.widths.iter().enumerate() {
+        if !width.is_finite() || *width < 0.0 {
+            return Err(WriteError::InvalidObject(format!(
+                "/Widths for /BaseFont {} has an invalid width for character code {}: {width}",
+                f.name,
+                usize::from(widths.first_char) + offset
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `/BaseFont`（去子集标签后）是否为 PDF 标准 14 字体之一。
+///
+/// 标准 14 字体允许省略 `/Widths` 与嵌入程序（PDF 32000-1 §9.6.2.2）。
+fn is_standard_14(base_font: &str) -> bool {
+    matches!(
+        strip_subset_tag(base_font),
+        "Courier"
+            | "Courier-Bold"
+            | "Courier-Oblique"
+            | "Courier-BoldOblique"
+            | "Helvetica"
+            | "Helvetica-Bold"
+            | "Helvetica-Oblique"
+            | "Helvetica-BoldOblique"
+            | "Times-Roman"
+            | "Times-Bold"
+            | "Times-Italic"
+            | "Times-BoldItalic"
+            | "Symbol"
+            | "ZapfDingbats"
+    )
+}
+
+/// 把简单字体的子集列表编码为无歧义的判别字节。
+///
+/// 首字节区分列表种类（TrueType gid / Type 1 字形名 / CFF 字形名），
+/// 名称带长度前缀，避免不同列表拼接后产生相同字节串。
+fn subset_discriminator(f: &Font) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if let Some(glyphs) = &f.subset_glyphs {
+        bytes.push(1);
+        for glyph in glyphs {
+            bytes.extend_from_slice(&glyph.to_be_bytes());
+        }
+    } else if let Some(names) = &f.subset_type1_glyphs {
+        bytes.push(2);
+        for name in names {
+            bytes.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+        }
+    } else if let Some(names) = &f.subset_cff_glyphs {
+        bytes.push(3);
+        for name in names {
+            bytes.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+        }
+    }
+    bytes
 }

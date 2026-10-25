@@ -9,6 +9,9 @@ use crate::core::writer::WriteError;
 
 /// 写出一个 CIDFont 的全部对象：描述符（含 `/CIDSet` 与嵌入程序流）、
 /// CIDFont 后代字典、Type 0 父字体（含嵌入编码 CMap 与 ToUnicode CMap）。
+/// 描述符缺少的 Table 122 必需项由
+/// [`FontDescriptor::fill_required_defaults`](crate::core::builder::FontDescriptor)
+/// 补齐。
 ///
 /// 自定义编码在 build 阶段校验：`wmode` 仅 0/1，且至少一条映射；
 /// 子类型与嵌入程序类型不匹配时返回 [`WriteError::InvalidObject`]。
@@ -127,17 +130,39 @@ pub(super) fn write_cid_font(
             }
         }
     }
+    // `/CIDToGIDMap` 只存在于 CIDFontType2（PDF 32000-1 Table 116）。
+    if cid_font.cid_to_gid.is_some() && cid_font.subtype != CidFontSubtype::CIDFontType2 {
+        return Err(WriteError::InvalidObject(format!(
+            "cid_to_gid requires CIDFontType2, but /BaseFont {} is {}",
+            cid_font.name,
+            cid_font.subtype.as_name()
+        )));
+    }
     // 子集字体：BaseFont 加六字母标签前缀（PDF 32000-1 §9.6.4），
-    // 标签按原始程序字节推导，Type 0 父字体与 CIDFont 后代保持一致。
+    // 标签同时纳入保留 CID 列表，Type 0 父字体与 CIDFont 后代保持一致。
     let base_font_name = match (&cid_font.font_program, &cid_font.subset_cids) {
-        (Some(program), Some(_)) => format!("{}+{}", program.subset_tag(), cid_font.name),
+        (Some(program), Some(cids)) => {
+            let mut discriminator = Vec::with_capacity(1 + cids.len() * 2);
+            discriminator.push(1);
+            for cid in cids {
+                discriminator.extend_from_slice(&cid.to_be_bytes());
+            }
+            format!(
+                "{}+{}",
+                program.subset_tag_with(&discriminator),
+                cid_font.name
+            )
+        }
         _ => cid_font.name.clone(),
     };
 
     // 1. FontDescriptor 字典（/CIDSet 作为独立流对象引用）
     let descriptor_num = num;
     num += 1;
-    let mut descriptor_value = cid_font.descriptor.to_value();
+    // Table 122 必需项缺省时补默认值，用户显式提供的度量保留。
+    let mut descriptor = cid_font.descriptor.clone();
+    descriptor.fill_required_defaults(&base_font_name);
+    let mut descriptor_value = descriptor.to_value();
     // /CIDSet：有子集请求时按子集 CID 交集裁剪位图（CID 0 恒保留）。
     let cid_set_data: Option<Vec<u8>> =
         match (cid_font.descriptor.cid_set_data(), &cid_font.subset_cids) {
@@ -212,6 +237,27 @@ pub(super) fn write_cid_font(
     }
     doc.set_object(Object::new(descriptor_num, 0, descriptor_value));
 
+    // /CIDToGIDMap 流：按 CID 索引的 2 字节大端 glyph ID 数组。
+    let mut cid_to_gid_ref = None;
+    if let Some(mapping) = &cid_font.cid_to_gid {
+        let map_num = num;
+        num += 1;
+        let mut bytes = Vec::with_capacity(mapping.len() * 2);
+        for gid in mapping {
+            bytes.extend_from_slice(&gid.to_be_bytes());
+        }
+        let map_len = bytes.len();
+        doc.set_object(Object::new(
+            map_num,
+            0,
+            Value::Stream(
+                Dict::new().insert("Length", Value::Integer(map_len as i64)),
+                StreamData::Owned(bytes),
+            ),
+        ));
+        cid_to_gid_ref = Some(map_num);
+    }
+
     // 2. CIDFont 后代字典
     let cid_font_num = num;
     num += 1;
@@ -226,6 +272,9 @@ pub(super) fn write_cid_font(
     }
     if !cid_font.widths.is_empty() {
         cid_dict = cid_dict.insert("W", cid_font.widths_to_value());
+    }
+    if let Some(map_num) = cid_to_gid_ref {
+        cid_dict = cid_dict.insert("CIDToGIDMap", Value::Ref(map_num, 0));
     }
     doc.set_object(Object::new(cid_font_num, 0, Value::Dict(cid_dict)));
 

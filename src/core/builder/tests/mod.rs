@@ -2,6 +2,7 @@
 //!
 //! 按主题拆分：
 //! - `font`：简单字体编码与描述符；
+//! - `widths`：简单字体 `/Widths` 与描述符必需项兜底；
 //! - `font_program`：字体程序嵌入与 TrueType/Type 1 子集化；
 //! - `font_cff`：name-keyed CFF 子集化写入；
 //! - `type3`：Type 3 字体；
@@ -19,6 +20,7 @@ mod font_program;
 mod graphics_state;
 mod to_unicode;
 mod type3;
+mod widths;
 
 use super::*;
 use crate::core::types::{Dict, Document, StreamData, Value};
@@ -147,6 +149,22 @@ fn embedded_program(doc: &Document, font_dict: &Dict, key: &str) -> (i64, Vec<u8
     }
 }
 
+/// 取出字体字典引用的 `/FontDescriptor` 字典。
+fn font_descriptor(doc: &Document, font_dict: &Dict) -> Dict {
+    let descriptor_num = font_dict
+        .get("FontDescriptor")
+        .and_then(Value::as_ref)
+        .map(|(num, _)| num)
+        .expect("font descriptor");
+    doc.get_object(descriptor_num)
+        .expect("descriptor lookup")
+        .expect("descriptor object")
+        .value
+        .as_dict()
+        .cloned()
+        .expect("descriptor dict")
+}
+
 /// 合成一个最小 Type 1 程序：明文头 + eexec 加密的 Private 字典，
 /// `/lenIV 4`，含 1 个 Subr 与 `.notdef`/`A`/`B` 三个 CharString，
 /// 便于观察子集化删除未请求字形后的体积变化。
@@ -220,6 +238,15 @@ fn numbers(value: &Value) -> Vec<f64> {
             other => panic!("expected a number, got {other:?}"),
         })
         .collect()
+}
+
+/// 把单个 Integer/Float 值转成 f64，便于断言描述符度量。
+fn scalar(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Integer(number) => Some(*number as f64),
+        Value::Float(number) => Some(*number),
+        _ => None,
+    }
 }
 
 #[test]

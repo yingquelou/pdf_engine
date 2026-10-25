@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 /// [`FontEncoding::Custom`] 写入 `/BaseEncoding` 与 `/Differences` 覆盖。
 ///
 /// `text` 会按此配置把文本转成单字节字符码：五个预定义编码名可识别，
-/// 其余名称无法转码时退回原始 UTF-8 字节。
+/// 其余名称无法转码时退回原始 UTF-8 字节；未知编码名/`/BaseEncoding`
+/// 会在 [`PdfBuilder::build`](crate::core::builder::PdfBuilder::build)
+/// 阶段报 [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FontEncoding {
     /// 省略 `/Encoding`（使用字体内建编码，如 Standard 14 的 Standard）。
@@ -79,6 +81,22 @@ impl FontEncoding {
                 .map(|ch| code_for_char(base, differences, ch).unwrap_or(b'?'))
                 .collect(),
         )
+    }
+
+    /// 返回无法识别的编码名（不含前导 `/`）。
+    ///
+    /// 仅 `Named` 与 `Custom` 的 `/BaseEncoding` 需要是预定义编码名；
+    /// `BuiltIn` 与省略 `/BaseEncoding` 的 `Custom` 不存在未知名称。
+    /// 构建阶段据此拒绝写出读端无法解析的 `/Encoding`。
+    pub(crate) fn unknown_name(&self) -> Option<&str> {
+        let name = match self {
+            Self::BuiltIn | Self::Custom { base: None, .. } => return None,
+            Self::Named(name) => name,
+            Self::Custom {
+                base: Some(name), ..
+            } => name,
+        };
+        predefined_encoding(name).err().map(|_| name.as_str())
     }
 
     /// 转换为字体字典的 `/Encoding` 值；`BuiltIn` 无对应值。

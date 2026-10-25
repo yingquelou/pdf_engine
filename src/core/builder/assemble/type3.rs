@@ -13,8 +13,9 @@ use std::collections::BTreeSet;
 /// `/BaseFont` 可供推导内建编码）。
 ///
 /// 以下情况返回 [`WriteError::InvalidObject`]：嵌入字体程序、请求
-/// `subset_glyphs`/`subset_type1_glyphs`/`subset_cff_glyphs`、字形列表为空、
-/// 字符码或字形名重复、`/Encoding` 缺失、`/Resources` 不是字典或间接引用。
+/// `subset_glyphs`/`subset_type1_glyphs`/`subset_cff_glyphs`、显式设置
+/// `Font::widths`、未知编码名、字形列表为空、字符码或字形名重复、
+/// `/Encoding` 缺失、`/Resources` 不是字典或间接引用。
 pub(super) fn type3_font_dict(
     doc: &mut Document,
     font: &Font,
@@ -24,6 +25,13 @@ pub(super) fn type3_font_dict(
     if font.font_program.is_some() {
         return Err(WriteError::InvalidObject(format!(
             "Type 3 font {} must not embed a font program",
+            font.name
+        )));
+    }
+    // 未知编码名无法写出合法的 `/Encoding`：构建期即报错。
+    if let Some(name) = font.encoding.unknown_name() {
+        return Err(WriteError::InvalidObject(format!(
+            "/Encoding /{name} for Type 3 font {} is not a supported predefined encoding",
             font.name
         )));
     }
@@ -42,6 +50,12 @@ pub(super) fn type3_font_dict(
     if font.subset_cff_glyphs.is_some() {
         return Err(WriteError::InvalidObject(format!(
             "Type 3 font {} cannot be subset with subset_cff_glyphs: it has no font program",
+            font.name
+        )));
+    }
+    if font.widths.is_some() {
+        return Err(WriteError::InvalidObject(format!(
+            "Type 3 font {} cannot use explicit widths: /Widths is derived from its glyphs",
             font.name
         )));
     }

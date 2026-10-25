@@ -138,13 +138,64 @@ fn text_builtin_encoding_uses_standard_default() {
 }
 
 #[test]
-fn text_with_unknown_encoding_name_falls_back_to_utf8() {
+fn unknown_named_encoding_fails_build() {
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
     let font = Font::helvetica(12.0).with_encoding(FontEncoding::named("UnknownEncoding"));
     b.text(p, &font, 10.0, 10.0, "é");
-    let s = render(&mut b);
-    assert!(s.contains("(é) Tj"), "未知编码名应保留 UTF-8 直写: {s}");
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("未知编码名应构建失败");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("UnknownEncoding"),
+        "错误信息应指出未知编码名: {error}"
+    );
+    assert!(
+        error.to_string().contains("/Encoding"),
+        "错误信息应指出 /Encoding: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn unknown_custom_base_encoding_fails_build() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let font = Font::helvetica(12.0).with_encoding(FontEncoding::with_differences(
+        Some("BogusEncoding"),
+        vec![(65, "A".to_string())],
+    ));
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("未知 /BaseEncoding 应构建失败");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(error.to_string().contains("BogusEncoding"), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn known_predefined_encoding_names_build() {
+    for name in [
+        "StandardEncoding",
+        "WinAnsiEncoding",
+        "MacRomanEncoding",
+        "SymbolEncoding",
+        "ZapfDingbatsEncoding",
+    ] {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        let font = Font::helvetica(12.0).with_encoding(FontEncoding::named(name));
+        b.text(p, &font, 10.0, 10.0, "A");
+        let s = render(&mut b);
+        assert!(
+            s.contains(&format!("/Encoding /{name}")),
+            "应写出 /Encoding /{name}: {s}"
+        );
+    }
 }
 
 #[test]

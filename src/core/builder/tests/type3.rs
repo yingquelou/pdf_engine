@@ -32,6 +32,52 @@ fn type3_font_rejects_subset_type1_glyphs() {
 }
 
 #[test]
+fn type3_font_rejects_unknown_encoding_name() {
+    let type3 = Type3Font::new().glyph(Type3Glyph::new(65, "A", 500.0, b"500 0 d0"));
+    let font = Font::type3(12.0, type3).with_encoding(FontEncoding::named("UnknownEncoding"));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("Type 3 未知编码名应构建失败");
+    assert!(
+        matches!(&error, WriteError::InvalidObject(_)),
+        "错误应为 InvalidObject: {error}"
+    );
+    assert!(
+        error.to_string().contains("UnknownEncoding"),
+        "错误信息应指出未知编码名: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn type3_font_rejects_explicit_widths() {
+    let type3 = Type3Font::new().glyph(Type3Glyph::new(65, "A", 500.0, b"500 0 d0"));
+    let font = Font::type3(12.0, type3).with_widths(65, &[500.0]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("Type 3 字体的 /Widths 由字形定义推导");
+    assert!(
+        matches!(&error, WriteError::InvalidObject(_)),
+        "错误应为 InvalidObject: {error}"
+    );
+    assert!(
+        error.to_string().contains("explicit widths"),
+        "错误信息应说明 /Widths 来源: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
 fn type3_font_writes_char_procs_widths_and_encoding() {
     let type3 = Type3Font::new()
         .with_bbox([0.0, -200.0, 1000.0, 900.0])

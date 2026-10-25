@@ -72,7 +72,7 @@ fn cff_font_program_is_embedded() {
 #[test]
 fn subset_font_prefixes_base_font_with_six_letters() {
     let program = FontProgram::TrueType(vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x0A]);
-    let tag = program.subset_tag();
+    let tag = program.subset_tag_with(&[]);
     assert_eq!(tag.len(), 6, "子集标签应为六个字母");
     assert!(
         tag.bytes().all(|byte| byte.is_ascii_uppercase()),
@@ -98,13 +98,30 @@ fn subset_font_prefixes_base_font_with_six_letters() {
 #[test]
 fn subset_tag_is_deterministic_and_content_dependent() {
     let data = b"%!PS-AdobeFont-1.0: TestFont 001.000\n".to_vec();
-    let first = FontProgram::Type1(data.clone()).subset_tag();
-    let second = FontProgram::Type1(data).subset_tag();
+    let first = FontProgram::Type1(data.clone()).subset_tag_with(&[]);
+    let second = FontProgram::Type1(data).subset_tag_with(&[]);
     assert_eq!(first, second, "同一字体程序应得到同一标签");
 
-    let other = FontProgram::Type1(b"%!PS-AdobeFont-1.0: OtherFont".to_vec()).subset_tag();
+    let other = FontProgram::Type1(b"%!PS-AdobeFont-1.0: OtherFont".to_vec()).subset_tag_with(&[]);
     assert_ne!(first, other, "不同字体程序应得到不同标签");
     assert_eq!(other.len(), 6);
+}
+
+#[test]
+fn subset_tag_with_discriminator_separates_different_subsets() {
+    let program = FontProgram::TrueType(vec![0x00, 0x01, 0x00, 0x00]);
+    let first = program.subset_tag_with(&[2, 0]);
+    let same = program.subset_tag_with(&[2, 0]);
+    let other = program.subset_tag_with(&[5, 0]);
+
+    assert_eq!(first, same, "同一程序与同一子集应得到同一标签");
+    assert_ne!(first, other, "同一程序的不同子集应得到不同标签");
+    assert_ne!(
+        first,
+        program.subset_tag_with(&[]),
+        "带子集判别与未带判别应得到不同标签"
+    );
+    assert_eq!(first.len(), 6);
 }
 
 #[test]
@@ -162,7 +179,10 @@ fn subset_glyphs_rewrite_truetype_fontfile2() {
         .get("BaseFont")
         .and_then(Value::as_name)
         .expect("BaseFont");
-    let expected = format!("{}+Helvetica", FontProgram::TrueType(program).subset_tag());
+    let expected = format!(
+        "{}+Helvetica",
+        FontProgram::TrueType(program).subset_tag_with(&[1, 0, 2])
+    );
     assert_eq!(base_font, expected);
 }
 
@@ -262,6 +282,24 @@ fn subset_glyph_lists_do_not_deduplicate_fonts() {
         })
         .count();
     assert_eq!(font_count, 2, "不同字形列表应生成两个字体对象");
+
+    let base_fonts: Vec<String> = (1..=64)
+        .filter_map(|num| doc.get_object(num).ok().flatten())
+        .filter_map(|object| {
+            let dict = object.value.as_dict()?;
+            if dict.get("Type").and_then(Value::as_name) != Some("Font") {
+                return None;
+            }
+            dict.get("BaseFont")
+                .and_then(Value::as_name)
+                .map(str::to_owned)
+        })
+        .collect();
+    assert_eq!(base_fonts.len(), 2);
+    assert_ne!(
+        base_fonts[0], base_fonts[1],
+        "不同子集不应共享同一 /BaseFont 标签"
+    );
 }
 
 #[test]
@@ -312,7 +350,10 @@ fn type1_subset_glyphs_rewrite_fontfile() {
         .get("BaseFont")
         .and_then(Value::as_name)
         .expect("BaseFont");
-    let expected = format!("{}+Helvetica", FontProgram::Type1(program).subset_tag());
+    let expected = format!(
+        "{}+Helvetica",
+        FontProgram::Type1(program).subset_tag_with(&[2, 0, 0, 0, 1, b'A'])
+    );
     assert_eq!(base_font, expected);
 }
 

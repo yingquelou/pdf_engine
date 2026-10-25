@@ -43,7 +43,10 @@ fn cff_subset_glyphs_rewrite_fontfile3() {
         .get("BaseFont")
         .and_then(Value::as_name)
         .expect("BaseFont");
-    let expected = format!("{}+Helvetica", FontProgram::CFF(program).subset_tag());
+    let expected = format!(
+        "{}+Helvetica",
+        FontProgram::CFF(program).subset_tag_with(&[3, 0, 0, 0, 4, b'B', b'e', b't', b'a'])
+    );
     assert_eq!(base_font, expected);
 }
 
@@ -88,6 +91,33 @@ fn cff_subset_glyphs_require_cff_program() {
             .contains("requires an embedded CFF font program"),
         "{error}"
     );
+}
+
+#[test]
+fn cff_subset_glyphs_reject_builtin_encoding() {
+    let font = Font::helvetica(12.0)
+        .with_encoding(FontEncoding::BuiltIn)
+        .with_font_program(FontProgram::CFF(fixtures::name_keyed_cff_custom_charset(0)))
+        .with_subset_cff_glyphs(&["Beta"]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "B");
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("CFF 子集化会移除内建 /Encoding，不能与 BuiltIn 同用");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("subset_cff_glyphs"),
+        "错误信息应指出 subset_cff_glyphs: {error}"
+    );
+    assert!(
+        error.to_string().contains("BuiltIn"),
+        "错误信息应指出 BuiltIn 编码: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
 }
 
 #[test]

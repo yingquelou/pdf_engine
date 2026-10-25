@@ -2,6 +2,8 @@ use crate::core::types::{
     Array, Dict, Document, Object, StartXref, StreamData, Trailer, Value, Xref,
 };
 
+use super::{MAX_CONTENT_BYTES, MAX_CONTENT_STREAMS, MAX_PAGE_TREE_DEPTH, TextExtractionError};
+
 fn winansi_type1_font() -> Value {
     Value::Dict(
         Dict::new()
@@ -348,4 +350,322 @@ mod simple_byte_text_preference {
         assert!(is_private_use('\u{F041}'));
         assert!(!is_private_use('\u{0391}'));
     }
+}
+
+// ── Page tree / inheritance hardening fixtures ───────────
+
+fn document_from_objects(objects: Vec<Object>) -> Document {
+    let mut trailer = Trailer::new();
+    trailer.dict = Dict::new().insert("Root", Value::Ref(1, 0));
+    Document::from_objects(objects, Xref::new(), trailer, StartXref(0))
+}
+
+fn catalog_with_pages(pages: Value) -> Value {
+    Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Catalog".into()))
+            .insert("Pages", pages),
+    )
+}
+
+fn pages_node(kids: Array) -> Value {
+    let count = kids.len() as i64;
+    Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Pages".into()))
+            .insert("Kids", Value::Array(kids))
+            .insert("Count", Value::Integer(count)),
+    )
+}
+
+fn page_with(contents: Value, resources: Value) -> Value {
+    Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Page".into()))
+            .insert("Parent", Value::Ref(2, 0))
+            .insert("Contents", contents)
+            .insert("Resources", resources),
+    )
+}
+
+fn contents_stream(content: &[u8]) -> Value {
+    Value::Stream(Dict::new(), StreamData::Owned(content.to_vec()))
+}
+
+/// Catalog object 1 → `/Pages` object 2 → single page object 3, plus any
+/// additional objects supplied by the test.
+fn single_page_document(contents: Value, resources: Value, extra: Vec<Object>) -> Document {
+    let mut objects = vec![
+        Object::new(1, 0, catalog_with_pages(Value::Ref(2, 0))),
+        Object::new(2, 0, pages_node(Array::new().push(Value::Ref(3, 0)))),
+        Object::new(3, 0, page_with(contents, resources)),
+    ];
+    objects.extend(extra);
+    document_from_objects(objects)
+}
+
+fn resources_with_font_and_xobjects(font: Value, xobjects: &[(&str, i64)]) -> Dict {
+    let mut map = Dict::new();
+    for (name, num) in xobjects {
+        map = map.insert(*name, Value::Ref(*num, 0));
+    }
+    resources_with_font("F1", font).insert("XObject", Value::Dict(map))
+}
+
+fn form_xobject(content: &[u8], resources: Option<Dict>) -> Value {
+    let mut dict = Dict::new()
+        .insert("Type", Value::Name("XObject".into()))
+        .insert("Subtype", Value::Name("Form".into()))
+        .insert("FormType", Value::Integer(1))
+        .insert(
+            "BBox",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(0))
+                    .push(Value::Integer(0))
+                    .push(Value::Integer(100))
+                    .push(Value::Integer(100)),
+            ),
+        );
+    if let Some(resources) = resources {
+        dict = dict.insert("Resources", Value::Dict(resources));
+    }
+    Value::Stream(dict, StreamData::Owned(content.to_vec()))
+}
+
+fn image_xobject() -> Value {
+    Value::Stream(
+        Dict::new()
+            .insert("Type", Value::Name("XObject".into()))
+            .insert("Subtype", Value::Name("Image".into()))
+            .insert("Width", Value::Integer(1))
+            .insert("Height", Value::Integer(1))
+            .insert("ColorSpace", Value::Name("DeviceGray".into()))
+            .insert("BitsPerComponent", Value::Integer(8)),
+        StreamData::Owned(vec![0]),
+    )
+}
+
+#[test]
+fn page_tree_cycle_does_not_hang_and_finds_reachable_page() {
+    let objects = vec![
+        Object::new(1, 0, catalog_with_pages(Value::Ref(2, 0))),
+        Object::new(
+            2,
+            0,
+            pages_node(Array::new().push(Value::Ref(2, 0)).push(Value::Ref(3, 0))),
+        ),
+        Object::new(
+            3,
+            0,
+            page_with(
+                contents_stream(b"BT /F1 12 Tf (Reachable) Tj ET"),
+                Value::Dict(resources_with_font("F1", winansi_type1_font())),
+            ),
+        ),
+    ];
+    let document = document_from_objects(objects);
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("Reachable"));
+    assert!(document.extract_page_text(1).is_none());
+    assert_eq!(
+        document.try_extract_page_text(1),
+        Err(TextExtractionError::PageNotFound)
+    );
+}
+
+#[test]
+fn page_tree_deeper_than_limit_returns_not_found() {
+    let layers = MAX_PAGE_TREE_DEPTH + 2;
+    let mut objects = vec![Object::new(1, 0, catalog_with_pages(Value::Ref(2, 0)))];
+    for layer in 0..layers {
+        let num = 2 + layer as i64;
+        objects.push(Object::new(
+            num,
+            0,
+            pages_node(Array::new().push(Value::Ref(num + 1, 0))),
+        ));
+    }
+    let page_num = 2 + layers as i64;
+    objects.push(Object::new(
+        page_num,
+        0,
+        page_with(
+            contents_stream(b"BT /F1 12 Tf (TooDeep) Tj ET"),
+            Value::Dict(resources_with_font("F1", winansi_type1_font())),
+        ),
+    ));
+    let document = document_from_objects(objects);
+
+    assert!(document.extract_page_text(0).is_none());
+    assert_eq!(
+        document.try_extract_page_text(0),
+        Err(TextExtractionError::PageNotFound)
+    );
+}
+
+#[test]
+fn parent_chain_cycle_terminates_and_own_resources_still_apply() {
+    let font_resources = Value::Dict(resources_with_font("F1", winansi_type1_font()));
+    let own_page = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Page".into()))
+            .insert("Parent", Value::Ref(5, 0))
+            .insert("Contents", contents_stream(b"BT /F1 12 Tf (Own) Tj ET"))
+            .insert("Resources", font_resources),
+    );
+    // Page 4 has no /Resources; its /Parent points at object 5 whose /Parent
+    // points back at page 4, forming a cycle.
+    let page_without_resources = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Page".into()))
+            .insert("Parent", Value::Ref(5, 0))
+            .insert("Contents", contents_stream(b"BT /F1 12 Tf (Missing) Tj ET")),
+    );
+    let cyclic_parent = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Pages".into()))
+            .insert("Parent", Value::Ref(4, 0)),
+    );
+    let objects = vec![
+        Object::new(1, 0, catalog_with_pages(Value::Ref(2, 0))),
+        Object::new(
+            2,
+            0,
+            pages_node(Array::new().push(Value::Ref(3, 0)).push(Value::Ref(4, 0))),
+        ),
+        Object::new(3, 0, own_page),
+        Object::new(4, 0, page_without_resources),
+        Object::new(5, 0, cyclic_parent),
+    ];
+    let document = document_from_objects(objects);
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("Own"));
+    assert!(document.extract_page_text(1).is_none());
+    assert_eq!(
+        document.try_extract_page_text(1),
+        Err(TextExtractionError::MalformedContent)
+    );
+}
+
+#[test]
+fn page_contents_stream_count_over_limit_returns_content_too_large() {
+    let mut contents = Array::new();
+    for _ in 0..=MAX_CONTENT_STREAMS {
+        contents = contents.push(contents_stream(b""));
+    }
+    let document =
+        single_page_document(Value::Array(contents), Value::Dict(Dict::new()), Vec::new());
+
+    assert_eq!(
+        document.try_extract_page_text(0),
+        Err(TextExtractionError::ContentTooLarge)
+    );
+    assert!(document.extract_page_text(0).is_none());
+}
+
+#[test]
+fn page_contents_byte_size_over_limit_returns_content_too_large() {
+    let oversized = Value::Stream(
+        Dict::new(),
+        StreamData::Owned(vec![b' '; MAX_CONTENT_BYTES + 1]),
+    );
+    let document = single_page_document(oversized, Value::Dict(Dict::new()), Vec::new());
+
+    assert_eq!(
+        document.try_extract_page_text(0),
+        Err(TextExtractionError::ContentTooLarge)
+    );
+    assert!(document.extract_page_text(0).is_none());
+}
+
+#[test]
+fn form_stream_budget_is_shared_with_page_content_streams() {
+    let mut contents = Array::new();
+    for _ in 0..MAX_CONTENT_STREAMS - 1 {
+        contents = contents.push(contents_stream(b""));
+    }
+    contents = contents.push(contents_stream(b"/Fm Do"));
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Fm", 10)]);
+    let form = form_xobject(b"BT /F1 12 Tf (Form) Tj ET", None);
+    let document = single_page_document(
+        Value::Array(contents),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, form)],
+    );
+
+    assert_eq!(
+        document.try_extract_page_text(0),
+        Err(TextExtractionError::ContentTooLarge)
+    );
+    assert!(document.extract_page_text(0).is_none());
+}
+
+#[test]
+fn form_xobject_with_own_resources_is_extracted() {
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Fm", 10)]);
+    let form = form_xobject(
+        b"BT /F2 12 Tf (Form) Tj ET",
+        Some(resources_with_font("F2", winansi_type1_font())),
+    );
+    let document = single_page_document(
+        contents_stream(b"BT /F1 12 Tf (Page) Tj ET /Fm Do"),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, form)],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("PageForm"));
+}
+
+#[test]
+fn form_without_resources_inherits_caller_resources() {
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Fm", 10)]);
+    let form = form_xobject(b"BT /F1 12 Tf (Inherited) Tj ET", None);
+    let document = single_page_document(
+        contents_stream(b"/Fm Do"),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, form)],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("Inherited"));
+}
+
+#[test]
+fn nested_form_xobject_text_is_extracted_in_order() {
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("A", 10), ("B", 11)]);
+    let form_a = form_xobject(b"BT /F1 12 Tf (A) Tj ET /B Do BT /F1 12 Tf (C) Tj ET", None);
+    let form_b = form_xobject(b"BT /F1 12 Tf (B) Tj ET", None);
+    let document = single_page_document(
+        contents_stream(b"/A Do"),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, form_a), Object::new(11, 0, form_b)],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("ABC"));
+}
+
+#[test]
+fn cyclic_form_xobject_references_terminate() {
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("A", 10), ("B", 11)]);
+    let form_a = form_xobject(b"BT /F1 12 Tf (A) Tj ET /B Do", None);
+    let form_b = form_xobject(b"BT /F1 12 Tf (B) Tj ET /A Do", None);
+    let document = single_page_document(
+        contents_stream(b"/A Do"),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, form_a), Object::new(11, 0, form_b)],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("AB"));
+}
+
+#[test]
+fn image_xobject_is_skipped_without_losing_text() {
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Im1", 10)]);
+    let document = single_page_document(
+        contents_stream(b"BT /F1 12 Tf (A) Tj ET /Im1 Do /Missing Do BT /F1 12 Tf (B) Tj ET"),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, image_xobject())],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("AB"));
 }

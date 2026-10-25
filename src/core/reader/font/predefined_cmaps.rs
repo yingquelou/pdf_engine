@@ -2,6 +2,13 @@
 //!
 //! These CMaps map character codes to CIDs for common CJK character sets.
 //! Data is compactly represented as code ranges with CID offsets.
+//!
+//! **Approximation warning**: the tables below are compact approximations, not
+//! the full Adobe ordering data from ISO 32000-1 Annexes E–H. ASCII codes are
+//! passed through and double-byte ranges receive sequential CIDs starting at
+//! 0x0100; this is enough to round-trip text written by this crate, but those
+//! CIDs do not match Adobe's published ordering for arbitrary third-party
+//! fonts that use predefined CJK CMaps.
 
 use std::collections::BTreeMap;
 
@@ -16,6 +23,9 @@ pub struct PredefinedCMap {
 }
 
 /// Resolve a predefined CMap by name.
+///
+/// The returned mappings are compact approximations (see the module docs),
+/// not the complete Adobe ordering tables.
 pub fn resolve_predefined_cmap(name: &str) -> FontResult<PredefinedCMap> {
     match name {
         "Adobe-GB1" => Ok(build_adobe_gb1()),

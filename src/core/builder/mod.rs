@@ -29,8 +29,8 @@ mod types;
 
 pub use types::{
     CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, DashPattern, Font,
-    FontDescriptor, FontEncoding, FontProgram, GraphicsState, GraphicsStateFont, ImageData,
-    PageSize, Type3Font, Type3Glyph,
+    FontDescriptor, FontEncoding, FontProgram, FontWidths, GraphicsState, GraphicsStateFont,
+    ImageData, PageSize, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::ContentStream;
@@ -64,8 +64,9 @@ fn push_two_byte_codes(bytes: &mut Vec<u8>, codes: impl IntoIterator<Item = u16>
     }
 }
 
-/// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序、子集标记
-/// 与三种子集字形列表都相同才算同一字体对象；Type 3 字体还比较字形定义。
+/// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序、子集标记、
+/// 三种子集字形列表与 `/Widths` 都相同才算同一字体对象；Type 3 字体还比较
+/// 字形定义。
 fn same_font(a: &Font, b: &Font) -> bool {
     a.name == b.name
         && a.size.to_bits() == b.size.to_bits()
@@ -75,6 +76,7 @@ fn same_font(a: &Font, b: &Font) -> bool {
         && a.subset_glyphs == b.subset_glyphs
         && a.subset_type1_glyphs == b.subset_type1_glyphs
         && a.subset_cff_glyphs == b.subset_cff_glyphs
+        && a.widths == b.widths
         && a.type3 == b.type3
 }
 
@@ -144,7 +146,9 @@ impl PdfBuilder {
     /// 仍输出字面量 `BT /F<n> <size> Tf x y Td (text) Tj ET`（`(` `)` `\`
     /// 由 [`ContentStream`] 转义），其他字节输出十六进制字符串
     /// `BT ... <hex> Tj ET`。无法映射的字符写成 `?`；编码名无法识别时
-    /// 退回原始 UTF-8 字节。坐标原点在页面左下角，单位 pt。
+    /// 此调用退回原始 UTF-8 字节，但该字体在 [`PdfBuilder::build`] 阶段会
+    /// 因未知 `/Encoding` 名报 [`WriteError::InvalidObject`]。
+    /// 坐标原点在页面左下角，单位 pt。
     pub fn text(&mut self, page: usize, font: &Font, x: f64, y: f64, s: &str) -> &mut Self {
         let p = match self.pages.get_mut(page) {
             Some(p) => p,

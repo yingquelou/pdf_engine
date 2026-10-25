@@ -22,7 +22,7 @@ mod type3;
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;
-pub use font::Font;
+pub use font::{Font, FontWidths};
 pub use graphics_state::{DashPattern, GraphicsState, GraphicsStateFont};
 pub use image::{ColorSpace, ImageData};
 pub use program::FontProgram;

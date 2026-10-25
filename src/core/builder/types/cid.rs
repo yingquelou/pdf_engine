@@ -244,6 +244,17 @@ pub struct CidFont {
     ///
     /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
     pub subset_cids: Option<Vec<u16>>,
+    /// 可选的 `/CIDToGIDMap`（CIDFontType2 专用）。
+    ///
+    /// 数组按 CID 索引给出 TrueType glyph ID，写出为 2 字节大端流
+    /// （覆盖 CID 0..len-1），并在 CIDFont 字典写 `/CIDToGIDMap` 引用。
+    /// 为 `None` 时不写该条目，读端按 Identity 处理。仅
+    /// [`CidFontSubtype::CIDFontType2`] 允许设置，其他子类型在
+    /// [`PdfBuilder::build`] 返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    ///
+    /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+    pub cid_to_gid: Option<Vec<u16>>,
     /// 字符码 → Unicode 映射，写出时生成 Type 0 字体的 `/ToUnicode` CMap。
     ///
     /// 键是**内容流中的源字符码**（即使经自定义 CMap 映射到不同 CID）；
@@ -286,6 +297,7 @@ impl CidFont {
             encoding: None,
             predefined_encoding: None,
             subset_cids: None,
+            cid_to_gid: None,
             to_unicode: BTreeMap::new(),
             to_unicode_bytes: BTreeMap::new(),
         }
@@ -350,6 +362,19 @@ impl CidFont {
     /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
     pub fn with_subset_cids(mut self, cids: &[u16]) -> Self {
         self.subset_cids = Some(cids.to_vec());
+        self
+    }
+
+    /// 设置 `/CIDToGIDMap` 映射（链式构造）。
+    ///
+    /// 数组第 `cid` 项给出该 CID 对应的 TrueType glyph ID，写出为 2 字节
+    /// 大端流。仅 [`CidFontSubtype::CIDFontType2`] 允许设置，其他子类型
+    /// 在 [`PdfBuilder::build`] 返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    ///
+    /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+    pub fn with_cid_to_gid_map(mut self, mapping: &[u16]) -> Self {
+        self.cid_to_gid = Some(mapping.to_vec());
         self
     }
 

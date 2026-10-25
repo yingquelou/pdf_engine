@@ -26,15 +26,28 @@ impl FontProgram {
         }
     }
 
-    /// 按字体程序内容生成确定性的六字母子集标签（PDF 32000-1 §9.6.4）。
+    /// 按字体程序内容与子集判别字节生成确定性的六字母子集标签
+    /// （PDF 32000-1 §9.6.4）。
     ///
     /// 使用 FNV-1a 64 位哈希按 26 进制展开为 6 个大写字母，同一程序
-    /// 总是得到同一标签，便于重复构建与测试。
-    pub(crate) fn subset_tag(&self) -> String {
+    /// 与同一判别字节总是得到同一标签，便于重复构建与测试。
+    ///
+    /// `discriminator` 用于区分同一字体程序的不同子集请求（例如保留的
+    /// gid 或字形名列表），否则不同子集会共享同一 `/BaseFont` 标签，
+    /// 违反 §9.6.4 对同文件内标签唯一性的要求。程序字节与判别字节之间
+    /// 写入长度前缀，避免两者边界产生哈希碰撞。
+    pub(crate) fn subset_tag_with(&self, discriminator: &[u8]) -> String {
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for &byte in self.data() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        let mut mix = |bytes: &[u8]| {
+            for &byte in bytes {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        mix(self.data());
+        if !discriminator.is_empty() {
+            mix(&(discriminator.len() as u64).to_be_bytes());
+            mix(discriminator);
         }
         let mut tag = [b'A'; 6];
         let mut value = hash;
