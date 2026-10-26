@@ -56,16 +56,35 @@ impl CidCMap {
         let mut sorted_codes: Vec<_> = cid_mappings.iter().collect();
         sorted_codes.sort_by_key(|entry| entry.0);
 
+        // Code width comes from the declared codespace; codes outside every
+        // codespace fall back to the smallest width that can hold them.
+        let code_length = |code: u32| -> usize {
+            codespace_ranges
+                .iter()
+                .find(|&&(low, high, _)| (low..=high).contains(&code))
+                .map(|&(_, _, length)| length)
+                .unwrap_or(match code {
+                    0..=0xFF => 1,
+                    0x100..=0xFFFF => 2,
+                    0x1_0000..=0xFF_FFFF => 3,
+                    _ => 4,
+                })
+        };
+
         let mut i = 0;
         while i < sorted_codes.len() {
             let start_code = *sorted_codes[i].0;
             let start_cid = *sorted_codes[i].1;
+            let length = code_length(start_code);
             let mut j = i + 1;
 
             while j < sorted_codes.len() {
                 let expected_code = start_code + (j - i) as u32;
                 let expected_cid = start_cid + (j - i) as u16;
-                if *sorted_codes[j].0 == expected_code && *sorted_codes[j].1 == expected_cid {
+                if *sorted_codes[j].0 == expected_code
+                    && *sorted_codes[j].1 == expected_cid
+                    && code_length(*sorted_codes[j].0) == length
+                {
                     j += 1;
                 } else {
                     break;
@@ -73,7 +92,6 @@ impl CidCMap {
             }
 
             let end_code = *sorted_codes[j - 1].0;
-            let length = if start_code <= 0xFF { 1 } else { 2 };
 
             ranges.push(CidRange {
                 length,
@@ -416,31 +434,23 @@ fn subtract_range(existing: &CidRange, cut: &CidRange) -> Vec<CidRange> {
 }
 
 impl ToUnicodeMap {
-    /// Parse a standalone ToUnicode CMap; a `/usecmap` base is rejected because
-    /// there is no resolver available. Production paths use [`Self::parse_inheriting`].
+    /// Parse a standalone ToUnicode CMap.
     #[cfg(test)]
     pub fn parse(data: &[u8]) -> FontResult<Self> {
-        let parsed = parse_to_unicode_sections(data)?;
-        if let Some(base) = &parsed.base {
-            return Err(FontError::Invalid(format!(
-                "invalid ToUnicode CMap: usecmap base /{base} cannot be resolved without a CMap resolver"
-            )));
-        }
-        parsed.finish()
+        Ok(Self {
+            mappings: parse_to_unicode_sections(data)?,
+        })
     }
 
-    /// Parse an embedded ToUnicode CMap that may inherit a base CMap through
-    /// `/BaseName usecmap`. Mappings defined here take precedence over
-    /// inherited ones.
-    pub fn parse_inheriting(
-        data: &[u8],
-        resolve: impl FnOnce(&str) -> FontResult<ToUnicodeMap>,
-    ) -> FontResult<Self> {
-        let parsed = parse_to_unicode_sections(data)?;
-        match parsed.base.clone() {
-            Some(name) => parsed.merge_into(resolve(&name)?),
-            None => parsed.finish(),
-        }
+    /// Parse a ToUnicode CMap leniently for text extraction.
+    ///
+    /// Unsupported constructs such as a `/usecmap` base that cannot be
+    /// resolved are ignored: mappings defined in this stream are still used.
+    /// Returns `None` when the stream itself is malformed.
+    pub fn parse_lenient(data: &[u8]) -> Option<Self> {
+        Some(Self {
+            mappings: parse_to_unicode_sections(data).ok()?,
+        })
     }
 
     pub fn unicode_for(&self, source_code: &[u8]) -> Option<&str> {
@@ -499,17 +509,9 @@ fn utf16be_to_string(bytes: &[u8]) -> FontResult<String> {
         .map_err(|_| invalid_cmap("ToUnicode destination has invalid UTF-16BE"))
 }
 
-fn insert_unicode(
-    mappings: &mut BTreeMap<Vec<u8>, String>,
-    source: Vec<u8>,
-    unicode: String,
-) -> FontResult<()> {
-    if mappings.insert(source, unicode).is_some() {
-        return Err(invalid_cmap(
-            "ToUnicode source code is mapped more than once",
-        ));
-    }
-    Ok(())
+fn insert_unicode(mappings: &mut BTreeMap<Vec<u8>, String>, source: Vec<u8>, unicode: String) {
+    // The spec does not forbid overlapping mappings; a later entry wins.
+    mappings.insert(source, unicode);
 }
 
 fn increment_source(source: &[u8], offset: usize) -> FontResult<Vec<u8>> {
@@ -720,36 +722,13 @@ fn hex_value(byte: u8) -> u8 {
     }
 }
 
-/// Raw sections of an embedded ToUnicode CMap before a possible `usecmap` merge.
-struct ParsedToUnicodeMap {
-    mappings: BTreeMap<Vec<u8>, String>,
-    base: Option<String>,
-}
-
-impl ParsedToUnicodeMap {
-    fn finish(self) -> FontResult<ToUnicodeMap> {
-        Ok(ToUnicodeMap {
-            mappings: self.mappings,
-        })
-    }
-
-    fn merge_into(self, base: ToUnicodeMap) -> FontResult<ToUnicodeMap> {
-        // Local mappings take precedence over inherited ones.
-        let mut mappings = base.mappings;
-        for (source, unicode) in self.mappings {
-            mappings.insert(source, unicode);
-        }
-        Ok(ToUnicodeMap { mappings })
-    }
-}
-
-fn parse_to_unicode_sections(data: &[u8]) -> FontResult<ParsedToUnicodeMap> {
+fn parse_to_unicode_sections(data: &[u8]) -> FontResult<BTreeMap<Vec<u8>, String>> {
     if data.len() > MAX_CMAP_BYTES {
         return Err(invalid_cmap("ToUnicode stream exceeds the 16 MiB limit"));
     }
     let tokens = tokenize(data)?;
     let mut mappings = BTreeMap::new();
-    let mut base = None;
+    let mut saw_base = false;
     let mut index = 0;
     while index < tokens.len() {
         let Token::Word(operator) = &tokens[index] else {
@@ -775,7 +754,7 @@ fn parse_to_unicode_sections(data: &[u8]) -> FontResult<ParsedToUnicodeMap> {
                         .get(cursor + 1)
                         .ok_or_else(|| invalid_cmap("truncated bfchar destination"))?;
                     let unicode = unicode_destination(destination)?;
-                    insert_unicode(&mut mappings, source_bytes.clone(), unicode)?;
+                    insert_unicode(&mut mappings, source_bytes.clone(), unicode);
                     cursor += 2;
                 }
                 require_end_marker(&tokens, cursor, "endbfchar")?;
@@ -823,7 +802,7 @@ fn parse_to_unicode_sections(data: &[u8]) -> FontResult<ParsedToUnicodeMap> {
                                 let source = increment_source(source_bytes, offset)?;
                                 let destination = increment_destination(first_destination, offset)?;
                                 let unicode = utf16be_to_string(&destination)?;
-                                insert_unicode(&mut mappings, source, unicode)?;
+                                insert_unicode(&mut mappings, source, unicode);
                             }
                             cursor += 1;
                         }
@@ -835,7 +814,7 @@ fn parse_to_unicode_sections(data: &[u8]) -> FontResult<ParsedToUnicodeMap> {
                                 })?;
                                 let unicode = unicode_destination(destination)?;
                                 let source = increment_source(source_bytes, offset)?;
-                                insert_unicode(&mut mappings, source, unicode)?;
+                                insert_unicode(&mut mappings, source, unicode);
                                 cursor += 1;
                             }
                             if !matches!(tokens.get(cursor), Some(Token::Word(marker)) if marker == "]")
@@ -857,22 +836,29 @@ fn parse_to_unicode_sections(data: &[u8]) -> FontResult<ParsedToUnicodeMap> {
                 index = cursor + 1;
             }
             "usecmap" => {
-                if base.is_some() {
+                if saw_base {
                     return Err(invalid_cmap(
                         "ToUnicode CMap contains more than one usecmap",
                     ));
                 }
-                let base_name = match tokens.get(index.wrapping_sub(1)) {
-                    Some(Token::Word(name)) => name.clone(),
+                // Only the syntax is validated; the base CMap cannot be
+                // resolved from the font dictionary, so its mappings are not
+                // inherited during text extraction.
+                match (
+                    index.checked_sub(2).and_then(|i| tokens.get(i)),
+                    tokens.get(index.wrapping_sub(1)),
+                ) {
+                    (Some(Token::Word(slash)), Some(Token::Word(name)))
+                        if slash == "/" && name != "/" => {}
                     _ => return Err(invalid_cmap("usecmap has no base CMap name")),
-                };
-                base = Some(base_name);
+                }
+                saw_base = true;
                 index += 1;
             }
             _ => index += 1,
         }
     }
-    Ok(ParsedToUnicodeMap { mappings, base })
+    Ok(mappings)
 }
 
 fn invalid_cmap(message: &str) -> FontError {
@@ -1023,32 +1009,29 @@ mod tests {
     fn rejects_malformed_tounicode_mappings() {
         assert!(ToUnicodeMap::parse(b"1 beginbfchar <01> <D800> endbfchar").is_err());
         assert!(ToUnicodeMap::parse(b"1 beginbfchar <01> <0041> <02> <0042> endbfchar").is_err());
-        assert!(ToUnicodeMap::parse(b"2 beginbfchar <01> <0041> <01> <0042> endbfchar").is_err());
         assert!(ToUnicodeMap::parse(b"1 beginbfrange <FE> <FF> <FFFF> endbfrange").is_err());
         assert!(ToUnicodeMap::parse(b"1 beginbfrange <01> <02> [<0041>] endbfrange").is_err());
+        // usecmap 的基名必须写成带斜杠的名称对象。
+        assert!(ToUnicodeMap::parse(b"Base usecmap 1 beginbfchar <01> <0041> endbfchar").is_err());
     }
 
     #[test]
-    fn tounicode_usecmap_inherits_and_overrides() {
-        let base_source = b"2 beginbfchar <01> <0041> <02> <0042> endbfchar";
-        let base = ToUnicodeMap::parse(base_source).unwrap();
-        let derived_source = b"/Base usecmap 1 beginbfchar <02> <0058> endbfchar";
-        let derived = ToUnicodeMap::parse_inheriting(derived_source, |name| match name {
-            "Base" => Ok(base.clone()),
-            other => panic!("unexpected base {other}"),
-        })
-        .unwrap();
-        assert_eq!(derived.unicode_for(&[0x01]), Some("A"));
-        assert_eq!(derived.unicode_for(&[0x02]), Some("X"));
+    fn tounicode_duplicate_source_uses_last_mapping() {
+        let map = ToUnicodeMap::parse(b"2 beginbfchar <01> <0041> <01> <0042> endbfchar").unwrap();
+        assert_eq!(map.unicode_for(&[0x01]), Some("B"));
     }
 
     #[test]
-    fn tounicode_usecmap_rejects_unknown_base() {
+    fn tounicode_usecmap_keeps_local_mappings_without_inheriting_base() {
+        let source = b"/Base usecmap 1 beginbfchar <02> <0058> endbfchar";
+        let map = ToUnicodeMap::parse(source).expect("本地映射应可用");
+        assert_eq!(map.unicode_for(&[0x02]), Some("X"));
+    }
+
+    #[test]
+    fn tounicode_lenient_parse_keeps_local_mappings_when_base_is_unknown() {
         let source = b"/Unknown usecmap 1 beginbfchar <01> <0041> endbfchar";
-        assert!(ToUnicodeMap::parse(source).is_err());
-        assert!(
-            ToUnicodeMap::parse_inheriting(source, |_| { Err(invalid_cmap("unknown base")) })
-                .is_err()
-        );
+        let map = ToUnicodeMap::parse_lenient(source).expect("本地映射应可用");
+        assert_eq!(map.unicode_for(&[0x01]), Some("A"));
     }
 }

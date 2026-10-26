@@ -21,6 +21,7 @@ mod standard14_metrics;
 mod truetype;
 mod type0;
 mod type1_program;
+mod type1c;
 mod type3;
 
 pub use cff::{
@@ -30,16 +31,20 @@ pub use cff::{
 // builder 单元测试复用 CFF 合成样本（仅测试构建可见）。
 #[cfg(test)]
 pub(crate) use cff::fixtures;
-pub use cid::{CidFontType2, CidSystemInfo};
+pub use cid::{CidFontType2, CidSystemInfo, DefaultVerticalMetrics, VerticalMetrics};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 pub use encoding::{EncodingMapping, PredefinedEncoding, SimpleFontEncoding, strip_subset_tag};
+pub(crate) use simple::SimpleFontToUnicode;
 pub use simple::Type1Font;
 pub use truetype::{
     CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph, subset_truetype,
+    subset_truetype_with_mapping,
 };
 pub use type0::{CidDescendant, Type0DecodedCode, Type0Font};
+pub(crate) use type1_program::font_file_lengths;
+
 pub use type1_program::{
     Type1BuiltinEncoding, Type1CharString, Type1FontProgram, Type1Header, Type1PathSegment,
     Type1Seac, subset_type1,

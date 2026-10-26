@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::core::types::{Array, Dict, Document, StreamData, Value};
 
+use super::cff::{fixtures, name_keyed_fixtures};
 use super::{
-    FontError, FontProgramSource, PredefinedEncoding, SfntFlavor, code_for_char, parse_descriptor,
-    strip_subset_tag,
+    CffPathSegment, FontError, FontProgramSource, PredefinedEncoding, SfntFlavor, code_for_char,
+    parse_descriptor, strip_subset_tag,
 };
 
 fn descriptor(entries: Vec<(&str, Value)>) -> Dict {
@@ -92,7 +93,9 @@ fn truetype_sfnt() -> Vec<u8> {
     bytes
 }
 
-fn truetype_font_with_program(
+fn font_with_program(
+    font_subtype: &str,
+    base_font: &str,
     file_key: &str,
     stream_subtype: Option<&str>,
     data: Vec<u8>,
@@ -108,10 +111,22 @@ fn truetype_font_with_program(
     Value::Dict(
         Dict::new()
             .insert("Type", Value::Name("Font".into()))
-            .insert("Subtype", Value::Name("TrueType".into()))
-            .insert("BaseFont", Value::Name("Arial".into()))
+            .insert("Subtype", Value::Name(font_subtype.into()))
+            .insert("BaseFont", Value::Name(base_font.into()))
             .insert("FontDescriptor", Value::Dict(descriptor)),
     )
+}
+
+fn truetype_font_with_program(
+    file_key: &str,
+    stream_subtype: Option<&str>,
+    data: Vec<u8>,
+) -> Value {
+    font_with_program("TrueType", "Arial", file_key, stream_subtype, data)
+}
+
+fn type1_font_with_program(file_key: &str, stream_subtype: Option<&str>, data: Vec<u8>) -> Value {
+    font_with_program("Type1", "EmbeddedSans", file_key, stream_subtype, data)
 }
 
 fn simple_font(subtype: &str, base_font: &str, encoding: Option<Value>) -> Value {
@@ -233,6 +248,87 @@ fn descriptor_rejects_non_stream_cid_set() {
     let document = Document::new();
     let invalid = descriptor(vec![("CIDSet", Value::Name("Invalid".into()))]);
     assert!(parse_descriptor(&document, &invalid).is_err());
+}
+
+#[test]
+fn descriptor_parses_style_lang_and_fd_overrides() {
+    let document = Document::new();
+    let parsed = parse_descriptor(
+        &document,
+        &descriptor(vec![
+            (
+                "Style",
+                Value::Dict(Dict::new().insert(
+                    "Panose",
+                    Value::HexString("020B05020300000000000000".into()),
+                )),
+            ),
+            ("Lang", Value::Name("zh-CN".into())),
+            (
+                "FD",
+                Value::Dict(Dict::new().insert(
+                    "Proportional",
+                    Value::Dict(descriptor(vec![
+                        ("Ascent", Value::Float(750.0)),
+                        ("Flags", Value::Integer(32)),
+                    ])),
+                )),
+            ),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.style_panose,
+        Some([
+            0x02, 0x0B, 0x05, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        ])
+    );
+    assert_eq!(parsed.lang.as_deref(), Some("zh-CN"));
+    let overrides = parsed.fd.as_ref().expect("/FD");
+    let proportional = overrides.get("Proportional").expect("Proportional");
+    assert_eq!(proportional.get("Ascent"), Some(&Value::Float(750.0)));
+    assert_eq!(proportional.get("Flags"), Some(&Value::Integer(32)));
+}
+
+#[test]
+fn descriptor_accepts_literal_string_panose() {
+    let document = Document::new();
+    let parsed = parse_descriptor(
+        &document,
+        &descriptor(vec![(
+            "Style",
+            Value::Dict(Dict::new().insert("Panose", Value::String("0123456789ab".into()))),
+        )]),
+    )
+    .unwrap();
+    assert_eq!(parsed.style_panose, Some(*b"0123456789ab"));
+}
+
+#[test]
+fn descriptor_rejects_invalid_style_and_fd_entries() {
+    let document = Document::new();
+    let invalid = [
+        descriptor(vec![("Style", Value::Integer(1))]),
+        descriptor(vec![(
+            "Style",
+            Value::Dict(Dict::new().insert("Panose", Value::HexString("020B05".into()))),
+        )]),
+        descriptor(vec![(
+            "Style",
+            Value::Dict(Dict::new().insert("Panose", Value::Integer(1))),
+        )]),
+        descriptor(vec![("FD", Value::Name("Invalid".into()))]),
+        descriptor(vec![(
+            "FD",
+            Value::Dict(Dict::new().insert("Proportional", Value::Integer(1))),
+        )]),
+    ];
+    for dict in invalid {
+        assert!(
+            parse_descriptor(&document, &dict).is_err(),
+            "应拒绝无效的 Style/FD 条目: {dict:?}"
+        );
+    }
 }
 
 #[test]
@@ -388,4 +484,93 @@ fn truetype_font_rejects_fontfile3_program_without_subtype() {
         document.truetype_font(&font),
         Err(FontError::Invalid(_))
     ));
+}
+
+#[test]
+fn type1c_program_resolves_names_widths_and_outlines() {
+    let font = type1_font_with_program(
+        "FontFile3",
+        Some("Type1C"),
+        name_keyed_fixtures::name_keyed_cff_custom_charset(0),
+    );
+    let document = Document::new();
+    let program = document.type1c_program(&font).unwrap().unwrap();
+
+    assert_eq!(program.glyph_count(), 4);
+    assert_eq!(program.glyph_name(0), Some(".notdef"));
+    assert_eq!(program.glyph_name(1), Some("Alpha"));
+    assert_eq!(program.glyph_for_name("Gamma"), Some(3));
+    assert_eq!(program.glyph_for_name("Delta"), None);
+    assert_eq!(program.units_per_em(), 2000);
+    assert_eq!(program.glyph_width(1), Some(600.0));
+
+    let glyph = program.outline(1).unwrap();
+    assert_eq!(glyph.width, 600.0);
+    assert_eq!(
+        glyph.segments,
+        vec![
+            CffPathSegment::MoveTo { x: 100.0, y: 0.0 },
+            CffPathSegment::LineTo { x: 300.0, y: 0.0 },
+            CffPathSegment::ClosePath,
+        ]
+    );
+}
+
+#[test]
+fn type1c_program_resolves_default_and_predefined_charsets() {
+    let document = Document::new();
+
+    let default = type1_font_with_program("FontFile3", Some("Type1C"), fixtures::name_keyed_cff());
+    let program = document.type1c_program(&default).unwrap().unwrap();
+    assert_eq!(program.glyph_name(0), Some(".notdef"));
+    assert_eq!(program.glyph_name(1), Some("space"));
+    assert_eq!(program.glyph_for_name("space"), Some(1));
+
+    let expert = type1_font_with_program(
+        "FontFile3",
+        Some("Type1C"),
+        name_keyed_fixtures::name_keyed_cff_predefined_charset(1, 3),
+    );
+    let program = document.type1c_program(&expert).unwrap().unwrap();
+    assert_eq!(program.glyph_name(2), Some("exclamsmall"));
+}
+
+#[test]
+fn type1c_program_rejects_cid_keyed_wrong_subtype_and_malformed_programs() {
+    let document = Document::new();
+
+    let cid_keyed = type1_font_with_program("FontFile3", Some("Type1C"), fixtures::cid_keyed_cff());
+    let error = document.type1c_program(&cid_keyed).unwrap_err();
+    assert!(matches!(
+        &error,
+        FontError::Invalid(message) if message.contains("CID-keyed")
+    ));
+
+    let wrong_subtype = type1_font_with_program(
+        "FontFile3",
+        Some("CIDFontType0C"),
+        fixtures::cid_keyed_cff(),
+    );
+    let error = document.type1c_program(&wrong_subtype).unwrap_err();
+    assert!(matches!(
+        &error,
+        FontError::Invalid(message) if message.contains("requires /Subtype /Type1C")
+    ));
+
+    let malformed = type1_font_with_program("FontFile3", Some("Type1C"), vec![1, 0, 4, 9]);
+    assert!(matches!(
+        document.type1c_program(&malformed),
+        Err(FontError::Invalid(_))
+    ));
+
+    // A Type 1 font that embeds a /FontFile program is handled by
+    // `type1_program`, not by the CFF parser.
+    let font_file = type1_font_with_program("FontFile", None, b"not-cff".to_vec());
+    assert!(document.type1c_program(&font_file).unwrap().is_none());
+
+    let no_program = simple_font("Type1", "Helvetica", None);
+    assert!(document.type1c_program(&no_program).unwrap().is_none());
+
+    let truetype = simple_font("TrueType", "Arial", None);
+    assert!(document.type1c_program(&truetype).unwrap().is_none());
 }

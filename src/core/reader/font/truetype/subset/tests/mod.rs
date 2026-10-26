@@ -1,5 +1,5 @@
 use super::super::TrueTypeFont;
-use super::subset_truetype;
+use super::{subset_truetype, subset_truetype_with_mapping};
 use crate::core::reader::font::FontError;
 
 mod cmap;

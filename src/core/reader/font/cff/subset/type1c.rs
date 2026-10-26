@@ -36,10 +36,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use super::dict::{dict_longint, rewrite_dict, rewrite_dict_skipping, walk_dict};
-use super::strings::{
+use super::super::strings::{
     EXPERT_CHARSET_SIDS, EXPERT_SUBSET_CHARSET_SIDS, ISO_ADOBE_CHARSET_LEN, STANDARD_STRINGS,
 };
+use super::dict::{dict_longint, rewrite_dict, rewrite_dict_skipping, walk_dict};
 use super::{
     OP_CHAR_STRINGS, OP_CHARSET, OP_ENCODING, OP_PRIVATE, OP_SUBRS, build_charset, invalid_subset,
     write_index,

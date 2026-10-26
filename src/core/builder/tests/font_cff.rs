@@ -45,7 +45,8 @@ fn cff_subset_glyphs_rewrite_fontfile3() {
         .expect("BaseFont");
     let expected = format!(
         "{}+Helvetica",
-        FontProgram::CFF(program).subset_tag_with(&[3, 0, 0, 0, 4, b'B', b'e', b't', b'a'])
+        FontProgram::CFF(program)
+            .subset_tag_for_name("Helvetica", &[3, 0, 0, 0, 4, b'B', b'e', b't', b'a'])
     );
     assert_eq!(base_font, expected);
 }

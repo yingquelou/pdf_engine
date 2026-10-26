@@ -1,7 +1,7 @@
 //! content 模块测试。
 
 use super::*;
-use crate::core::types::PdfFeature;
+use crate::core::types::{Dict, Value};
 
 #[test]
 fn begin_end_text_roundtrip() {
@@ -114,24 +114,18 @@ fn set_text_rise_writes_ts_operator() {
 }
 
 #[test]
-fn transparency_triggers_feature() {
+fn ext_g_state_serializes_gs_without_inline_transparency_operators() {
     let mut s = ContentStream::new();
-    s.set_fill_alpha(0.5);
-    s.set_stroke_alpha(0.3);
-    s.set_blend_mode("Multiply");
-    let _ = s.to_bytes();
-    assert!(s.features().contains(PdfFeature::Transparency));
-}
-
-#[test]
-fn plain_text_stream_has_no_transparency() {
-    let mut s = ContentStream::new();
-    s.begin_text()
-        .set_font("F1", 12.0)
-        .show_text("hi")
-        .end_text();
-    let _ = s.to_bytes();
-    assert!(!s.features().contains(PdfFeature::Transparency));
+    s.set_ext_g_state("GS1");
+    let bytes = s.to_bytes();
+    assert_eq!(bytes, b"/GS1 gs\n");
+    let text = String::from_utf8_lossy(&bytes);
+    for inline in [" ca\n", " CA\n", " BM\n"] {
+        assert!(
+            !text.contains(inline),
+            "content stream must not emit inline {inline:?}: {text}"
+        );
+    }
 }
 
 #[test]
@@ -236,6 +230,8 @@ fn clipping_variants() {
 #[test]
 fn color_variants() {
     let mut s = ContentStream::new();
+    s.push(Op::SetStrokeGray { gray: 0.25 });
+    s.push(Op::SetFillGray { gray: 0.75 });
     s.push(Op::SetStrokeRGB {
         r: 1.0,
         g: 0.0,
@@ -270,6 +266,8 @@ fn color_variants() {
     });
     let bytes = s.to_bytes();
     let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("0.25 G\n"));
+    assert!(text.contains("0.75 g\n"));
     assert!(text.contains("1.0 0.0 0.0 RG\n"));
     assert!(text.contains("0.0 0.0 1.0 rg\n"));
     assert!(text.contains("1.0 0.0 0.0 0.0 K\n"));
@@ -280,6 +278,45 @@ fn color_variants() {
     assert!(text.contains("0.5 sc\n"));
     assert!(text.contains("0.1 0.2 SCN\n"));
     assert!(text.contains("0.1 0.2 scn\n"));
+}
+
+#[test]
+fn cmyk_stream_methods_emit_uppercase_and_lowercase_operators() {
+    let mut s = ContentStream::new();
+    s.set_stroke_cmyk(0.1, 0.2, 0.3, 0.4)
+        .set_fill_cmyk(0.5, 0.6, 0.7, 0.8);
+    let text = String::from_utf8_lossy(&s.to_bytes()).into_owned();
+    assert!(text.contains("0.1 0.2 0.3 0.4 K\n"));
+    assert!(text.contains("0.5 0.6 0.7 0.8 k\n"));
+}
+
+#[test]
+fn gray_stream_methods_emit_uppercase_and_lowercase_operators() {
+    let mut s = ContentStream::new();
+    s.set_stroke_gray(0.2).set_fill_gray(0.6);
+    let text = String::from_utf8_lossy(&s.to_bytes()).into_owned();
+    assert_eq!(text, "0.2 G\n0.6 g\n");
+}
+
+#[test]
+fn shading_and_pattern_operators_serialize() {
+    let mut s = ContentStream::new();
+    s.set_fill_color_space("Pattern")
+        .paint_shading("Sh1")
+        .set_fill_pattern("P1")
+        .set_stroke_pattern("P2");
+    let text = String::from_utf8_lossy(&s.to_bytes()).into_owned();
+    assert_eq!(text, "/Pattern cs\n/Sh1 sh\n/P1 scn\n/P2 SCN\n");
+}
+
+#[test]
+fn uncolored_pattern_components_serialize_before_name() {
+    let mut s = ContentStream::new();
+    s.set_fill_color_space("Pattern")
+        .set_fill_pattern_with_components(vec![0.2, 0.4, 0.6], "P1")
+        .set_stroke_pattern_with_components(vec![0.5], "P2");
+    let text = String::from_utf8_lossy(&s.to_bytes()).into_owned();
+    assert_eq!(text, "/Pattern cs\n0.2 0.4 0.6 /P1 scn\n0.5 /P2 SCN\n");
 }
 
 #[test]
@@ -308,4 +345,38 @@ fn ext_g_state_and_flatness_operators() {
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("/GS1 gs\n"));
     assert!(text.contains("0.5 i\n"));
+}
+
+#[test]
+fn marked_content_operators_without_properties() {
+    let mut s = ContentStream::new();
+    s.begin_marked_content("P")
+        .marked_content_point("Artifact")
+        .end_marked_content();
+    assert_eq!(s.to_bytes(), b"/P BMC\n/Artifact MP\nEMC\n");
+}
+
+#[test]
+fn marked_content_properties_name_and_inline_dict() {
+    let mut s = ContentStream::new();
+    s.begin_marked_content_properties("OC", MarkedContentProperties::Name("Layer1".into()));
+    let props = Dict::new()
+        .insert("Lang", Value::String("en".into()))
+        .insert("MCID", Value::Integer(3));
+    s.begin_marked_content_properties("Span", MarkedContentProperties::Dict(props));
+    s.marked_content_point_properties("Artifact", MarkedContentProperties::Name("Props1".into()));
+    s.end_marked_content().end_marked_content();
+    assert_eq!(
+        s.to_bytes(),
+        b"/OC /Layer1 BDC\n/Span << /Lang (en) /MCID 3 >> BDC\n/Artifact /Props1 DP\nEMC\nEMC\n"
+    );
+}
+
+#[test]
+fn optional_content_enum_serializes_through_marked_content_operators() {
+    let mut s = ContentStream::new();
+    s.optional_content(OptionalContent::Begin("Layer1".into()))
+        .optional_content(OptionalContent::PropertyDict("P".into(), "Props1".into()))
+        .optional_content(OptionalContent::End);
+    assert_eq!(s.to_bytes(), b"/OC /Layer1 BDC\n/P /Props1 DP\nEMC\n");
 }

@@ -3,7 +3,7 @@
 //! 一维输入 n 维输出：`y_k = C0_k + (C1_k − C0_k) · x^N`。
 //! 规范要求 m = 1（一维输入）。
 
-use super::{err, parse_numbers, required_number, Result};
+use super::{Result, err, parse_numbers, required_number};
 use crate::core::types::{Dict, Value};
 
 /// Type 2 指数插值函数。
@@ -41,7 +41,10 @@ impl ExponentialFunction {
             None | Some(Value::Null) => vec![1.0],
             Some(v) => parse_numbers(v, "C1")?,
         };
-        let n_out = c0.len().max(c1.len()).max(range.as_ref().map_or(1, |r| r.len()));
+        let n_out = c0
+            .len()
+            .max(c1.len())
+            .max(range.as_ref().map_or(1, |r| r.len()));
         if c0.is_empty() || c1.is_empty() {
             return err("/C0 and /C1 must not be empty");
         }

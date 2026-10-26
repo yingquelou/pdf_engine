@@ -80,6 +80,27 @@ pub(super) fn type3_font_dict(
                 font.name, glyph.name
             )));
         }
+        // /Widths 由字形宽度直接写出（PDF 32000-1 Table 112），
+        // 非有限或负值无法表示为有效数值对象。
+        if !glyph.width.is_finite() || glyph.width < 0.0 {
+            return Err(WriteError::InvalidObject(format!(
+                "Type 3 font {} has an invalid width for glyph {:?}: {}",
+                font.name, glyph.name, glyph.width
+            )));
+        }
+    }
+    for (label, values) in [
+        ("FontBBox", type3.font_bbox.as_slice()),
+        ("FontMatrix", type3.font_matrix.as_slice()),
+    ] {
+        for value in values {
+            if !value.is_finite() {
+                return Err(WriteError::InvalidObject(format!(
+                    "Type 3 font {} has an invalid {label} value: {value}",
+                    font.name
+                )));
+            }
+        }
     }
     let Some(encoding) = font.encoding.to_value() else {
         return Err(WriteError::InvalidObject(format!(

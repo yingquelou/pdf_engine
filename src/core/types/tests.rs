@@ -28,6 +28,16 @@ fn feature_thresholds_match_iso_32000() {
     assert!(!PdfVersion::V1_0.supports(PdfFeature::EncryptionRC4));
     assert!(PdfVersion::V1_1.supports(PdfFeature::EncryptionRC4));
 
+    // ImageMaskEntry / Shading：1.3 引入
+    assert!(!PdfVersion::V1_2.supports(PdfFeature::ImageMaskEntry));
+    assert!(PdfVersion::V1_3.supports(PdfFeature::ImageMaskEntry));
+    assert!(!PdfVersion::V1_2.supports(PdfFeature::Shading));
+    assert!(PdfVersion::V1_3.supports(PdfFeature::Shading));
+
+    // TilingPattern：1.2 引入
+    assert!(!PdfVersion::V1_1.supports(PdfFeature::TilingPattern));
+    assert!(PdfVersion::V1_2.supports(PdfFeature::TilingPattern));
+
     // 最低版本与 supports 一一对应
     assert_eq!(PdfFeature::XRefStream.min_version(), PdfVersion::V1_5);
     assert_eq!(PdfFeature::ObjectStream.min_version(), PdfVersion::V1_5);
@@ -35,7 +45,40 @@ fn feature_thresholds_match_iso_32000() {
     assert_eq!(PdfFeature::JBIG2Decode.min_version(), PdfVersion::V1_4);
     assert_eq!(PdfFeature::JPXDecode.min_version(), PdfVersion::V1_5);
     assert_eq!(PdfFeature::Transparency.min_version(), PdfVersion::V1_4);
+    assert_eq!(PdfFeature::ImageMaskEntry.min_version(), PdfVersion::V1_3);
+    assert_eq!(PdfFeature::TilingPattern.min_version(), PdfVersion::V1_2);
+    assert_eq!(PdfFeature::Shading.min_version(), PdfVersion::V1_3);
     assert_eq!(PdfFeature::OptionalContent.min_version(), PdfVersion::V1_5);
+}
+
+/// 图案特性扫描：`/PatternType 1` 记为平铺图案，`/PatternType 2` 与
+/// `/ShadingType` 记为渐变；流字典中的嵌套项也能识别。
+#[test]
+fn feature_scan_detects_tiling_and_shading_patterns() {
+    let mut features = FeatureProfile::new();
+    let tiling = Dict::new()
+        .insert("Type", Value::Name("Pattern".into()))
+        .insert("PatternType", Value::Integer(1));
+    scan_dict_features(&mut features, &tiling);
+    assert!(features.contains(PdfFeature::TilingPattern));
+    assert!(!features.contains(PdfFeature::Shading));
+
+    let mut features = FeatureProfile::new();
+    let shading_pattern = Dict::new().insert("PatternType", Value::Integer(2));
+    scan_dict_features(&mut features, &shading_pattern);
+    assert!(features.contains(PdfFeature::Shading));
+    assert!(!features.contains(PdfFeature::TilingPattern));
+
+    let mut features = FeatureProfile::new();
+    let nested = Dict::new().insert(
+        "Resources",
+        Value::Stream(
+            Dict::new().insert("ShadingType", Value::Integer(2)),
+            StreamData::Owned(Vec::new()),
+        ),
+    );
+    scan_dict_features(&mut features, &nested);
+    assert!(features.contains(PdfFeature::Shading));
 }
 
 /// 便捷包装必须与能力模型一致；2.0 支持全部已建模特性。
@@ -65,6 +108,7 @@ fn convenience_wrappers_track_capability_model() {
     assert!(PdfVersion::V2_0.supports(PdfFeature::JBIG2Decode));
     assert!(PdfVersion::V2_0.supports(PdfFeature::JPXDecode));
     assert!(PdfVersion::V2_0.supports(PdfFeature::Transparency));
+    assert!(PdfVersion::V2_0.supports(PdfFeature::ImageMaskEntry));
     assert!(PdfVersion::V2_0.supports(PdfFeature::OptionalContent));
 }
 

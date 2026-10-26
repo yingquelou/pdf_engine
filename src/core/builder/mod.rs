@@ -27,13 +27,22 @@ mod assemble;
 mod tests;
 mod types;
 
+pub(crate) use types::OpenTypeFlavor;
+pub(crate) use types::Pattern;
+pub(crate) use types::mesh_color_ranges;
 pub use types::{
-    CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth, ColorSpace, DashPattern, Font,
-    FontDescriptor, FontEncoding, FontProgram, FontWidths, GraphicsState, GraphicsStateFont,
-    ImageData, PageSize, Type3Font, Type3Glyph,
+    AxialShading, CalGray, CalRGB, CalculatorFunction, CidEncoding, CidFont, CidFontSubtype,
+    CidSystemInfo, CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading,
+    DashPattern, DeviceN, ExponentialFunction, Font, FontDescriptor, FontEncoding, FontProgram,
+    FontWidths, FormXObject, FreeFormMeshShading, Function, FunctionShading, GraphicsState,
+    GraphicsStateFont, GroupXObject, ICCBased, ImageData, ImageMask, Indexed, Lab,
+    LatticeMeshShading, MeshVertex, OptionalContentGroup, PageSize, PaintType, RadialShading,
+    SampledFunction, Separation, Shading, ShadingPattern, SoftMask, SoftMaskSubtype,
+    StitchingFunction, TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType,
+    Type3Font, Type3Glyph,
 };
 
-use crate::core::content::ContentStream;
+use crate::core::content::{ContentStream, MarkedContentProperties};
 use crate::core::reader::font::predefined_cmaps::resolve_predefined_cmap;
 use crate::core::types::PdfVersion;
 use crate::core::writer::{DocumentWriter, WriteError};
@@ -53,6 +62,16 @@ struct PageBuild {
     images: Vec<ImageData>,
     /// 该页用到的图形状态参数（按首次出现顺序，资源名 `/GS<n>`）。
     graphics_states: Vec<GraphicsState>,
+    /// 该页绘制的 Form XObject 句柄（按首次绘制顺序，资源名 `/Fm<n>`）。
+    forms: Vec<usize>,
+    /// 该页使用的可选内容组句柄（按首次标记顺序，资源名 `/OC<n>`）。
+    optional_content: Vec<usize>,
+    /// 该页绘制的渐变句柄（按首次绘制顺序，资源名 `/Sh<n>`）。
+    shadings: Vec<usize>,
+    /// 该页填充的着色图案句柄（按首次使用顺序，资源名 `/P<n>`）。
+    patterns: Vec<usize>,
+    /// 页组属性字典（`/Group`）；提供时整页作为透明组合成。
+    group: Option<GroupXObject>,
 }
 
 /// 把 16-bit 字符码（或 Identity 语义下的 CID）按 2 字节大端序
@@ -101,6 +120,17 @@ fn same_font(a: &Font, b: &Font) -> bool {
 pub struct PdfBuilder {
     version: PdfVersion,
     pages: Vec<PageBuild>,
+    /// 文档级 Form XObject 池；`PdfBuilder::form_xobject` 返回其索引。
+    forms: Vec<FormXObject>,
+    /// 文档级可选内容组池；`PdfBuilder::optional_content_group` 返回其索引。
+    optional_content_groups: Vec<OptionalContentGroup>,
+    /// 文档级函数池；`PdfBuilder::function` 返回其索引。
+    functions: Vec<Function>,
+    /// 文档级渐变池；`PdfBuilder::shading` 返回其索引。
+    shadings: Vec<Shading>,
+    /// 文档级图案池；`PdfBuilder::shading_pattern` / `tiling_pattern`
+    /// 返回其索引。
+    patterns: Vec<Pattern>,
 }
 
 impl Default for PdfBuilder {
@@ -115,6 +145,11 @@ impl PdfBuilder {
         Self {
             version: PdfVersion::default(),
             pages: Vec::new(),
+            forms: Vec::new(),
+            optional_content_groups: Vec::new(),
+            functions: Vec::new(),
+            shadings: Vec::new(),
+            patterns: Vec::new(),
         }
     }
 
@@ -123,6 +158,11 @@ impl PdfBuilder {
         Self {
             version: v,
             pages: Vec::new(),
+            forms: Vec::new(),
+            optional_content_groups: Vec::new(),
+            functions: Vec::new(),
+            shadings: Vec::new(),
+            patterns: Vec::new(),
         }
     }
 
@@ -136,6 +176,11 @@ impl PdfBuilder {
             cid_fonts: Vec::new(),
             images: Vec::new(),
             graphics_states: Vec::new(),
+            forms: Vec::new(),
+            optional_content: Vec::new(),
+            shadings: Vec::new(),
+            patterns: Vec::new(),
+            group: None,
         });
         idx
     }
@@ -217,6 +262,263 @@ impl PdfBuilder {
             .concat_matrix([w, 0.0, 0.0, h, x, y])
             .draw_xobject(format!("Im{}", iidx + 1))
             .restore_state();
+        self
+    }
+
+    /// 注册一个可复用的 Form XObject，返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfBuilder::draw_form`] 使用。表单内容流不附加
+    /// `/Resources`，按规范使用绘制页的资源字典；内容只含路径等
+    /// 无资源操作符时完全自包含。
+    pub fn form_xobject(&mut self, form: &FormXObject) -> usize {
+        let idx = self.forms.len();
+        self.forms.push(form.clone());
+        idx
+    }
+
+    /// 在指定页绘制已注册的 Form XObject。
+    ///
+    /// `matrix` 为绘制时的 CTM `[a b c d e f]`，生成
+    /// `q <matrix> cm /Fm<n> Do Q`。同一表单在一页内只登记一次资源名，
+    /// 多次绘制复用同一 `/Fm<n>` 与对象号；未知句柄或页索引被忽略。
+    pub fn draw_form(&mut self, page: usize, form: usize, matrix: [f64; 6]) -> &mut Self {
+        if form >= self.forms.len() {
+            return self;
+        }
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let idx = match p.forms.iter().position(|&f| f == form) {
+            Some(i) => i,
+            None => {
+                p.forms.push(form);
+                p.forms.len() - 1
+            }
+        };
+        p.content
+            .save_state()
+            .concat_matrix(matrix)
+            .draw_xobject(format!("Fm{}", idx + 1))
+            .restore_state();
+        self
+    }
+
+    /// 为指定页设置页组属性字典（页字典 `/Group`，PDF 1.4）。
+    ///
+    /// 页组把整页内容作为一个透明组合成，颜色空间、隔离（`/I`）与
+    /// 挖空（`/K`）语义同 [`GroupXObject`]。参数在 [`PdfBuilder::build`]
+    /// 阶段校验：非法取值返回 [`WriteError::InvalidObject`]；目标版本低于
+    /// 1.4 时返回 [`WriteError::UnsupportedVersion`] 且不写出任何字节。
+    /// 未知页索引被忽略；重复设置以后一次为准。
+    pub fn set_page_group(&mut self, page: usize, group: &GroupXObject) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.group = Some(group.clone());
+        }
+        self
+    }
+
+    /// 注册一个可选内容组（`/OCG`，PDF 1.5），返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfBuilder::begin_optional_content`] 使用。只有页面实际
+    /// 标记过的组才写出 `/OCG` 对象与目录 `/OCProperties` 配置；组名称与
+    /// `/Intent` 在 [`PdfBuilder::build`] 阶段校验，非法值返回
+    /// [`WriteError::InvalidObject`]。
+    pub fn optional_content_group(&mut self, group: &OptionalContentGroup) -> usize {
+        let idx = self.optional_content_groups.len();
+        self.optional_content_groups.push(group.clone());
+        idx
+    }
+
+    /// 注册一个 PDF 函数（§7.10 Type 0/2/3/4），返回文档级句柄。
+    ///
+    /// 句柄供 [`GraphicsState::with_transfer_function`] 等引用函数的配置
+    /// 使用。只有被实际引用的函数才写出对象：Type 0/4 写成流对象，
+    /// Type 2/3 写成直接字典；Type 3 的子函数在组装阶段递归生成。
+    /// 函数参数在 [`PdfBuilder::build`] 阶段校验，非法值返回
+    /// [`WriteError::InvalidObject`]。
+    pub fn function(&mut self, function: &Function) -> usize {
+        let idx = self.functions.len();
+        self.functions.push(function.clone());
+        idx
+    }
+
+    /// 注册一个渐变（§8.7.4.2，Type 1/2/3），返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfBuilder::paint_shading`] 使用。只有页面实际绘制的渐变
+    /// 才写出对象并登记到该页 `/Shading` 资源字典；参数在构建阶段校验，
+    /// 非法值返回 [`WriteError::InvalidObject`]。
+    pub fn shading(&mut self, shading: &Shading) -> usize {
+        let idx = self.shadings.len();
+        self.shadings.push(shading.clone());
+        idx
+    }
+
+    /// 注册一个着色图案（PatternType 2，§8.7.2），返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfBuilder::fill_rect_with_pattern`] 使用。图案字典内联
+    /// 引用其渐变；只有页面实际使用的图案才写出对象并登记到该页
+    /// `/Pattern` 资源字典。
+    pub fn shading_pattern(&mut self, pattern: &ShadingPattern) -> usize {
+        let idx = self.patterns.len();
+        self.patterns
+            .push(Pattern::Shading(Box::new(pattern.clone())));
+        idx
+    }
+
+    /// 注册一个平铺图案（PatternType 1，§8.7.3），返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfBuilder::fill_rect_with_pattern`] 使用。当前仅支持
+    /// 彩色图案（`/PaintType 1`）。图案以流对象写出：图块内容独立于
+    /// 页面内容，`/Resources` 未提供时写空字典，因此图案内目前无法
+    /// 引用构建器管理的字体或图片。只有页面实际使用的图案才写出对象
+    /// 并登记到该页 `/Pattern` 资源字典。平铺图案自 PDF 1.2 引入，
+    /// 低于该版本的目标版本在构建时返回
+    /// [`WriteError::UnsupportedVersion`]。
+    pub fn tiling_pattern(&mut self, pattern: &TilingPattern) -> usize {
+        let idx = self.patterns.len();
+        self.patterns
+            .push(Pattern::Tiling(Box::new(pattern.clone())));
+        idx
+    }
+
+    /// 在指定页用已注册的渐变填充当前裁剪区域（`/Sh<n> sh`）。
+    ///
+    /// 同一渐变在一页内只登记一次资源名，重复调用复用同一 `/Sh<n>`
+    /// 与对象号；未知句柄或页索引被忽略。渐变属于 PDF 1.3 特性，低于
+    /// 1.3 的目标版本在构建时返回 [`WriteError::UnsupportedVersion`]。
+    pub fn paint_shading(&mut self, page: usize, shading: usize) -> &mut Self {
+        if shading >= self.shadings.len() {
+            return self;
+        }
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let idx = match p.shadings.iter().position(|&h| h == shading) {
+            Some(i) => i,
+            None => {
+                p.shadings.push(shading);
+                p.shadings.len() - 1
+            }
+        };
+        p.content.paint_shading(format!("Sh{}", idx + 1));
+        self
+    }
+
+    /// 在指定页用图案填充矩形：`/Pattern cs /P<n> scn x y w h re f`。
+    ///
+    /// 图案句柄可来自 [`PdfBuilder::shading_pattern`] 或
+    /// [`PdfBuilder::tiling_pattern`]。矩形的定位由图案矩阵与填充区域
+    /// 共同决定；同一图案在一页内复用同一 `/P<n>` 资源名。未知句柄或页
+    /// 索引被忽略。着色图案属于 PDF 1.3 特性，平铺图案属于 PDF 1.2
+    /// 特性；目标版本不足时构建返回 [`WriteError::UnsupportedVersion`]。
+    pub fn fill_rect_with_pattern(
+        &mut self,
+        page: usize,
+        pattern: usize,
+        rect: [f64; 4],
+    ) -> &mut Self {
+        if pattern >= self.patterns.len() {
+            return self;
+        }
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let idx = match p.patterns.iter().position(|&h| h == pattern) {
+            Some(i) => i,
+            None => {
+                p.patterns.push(pattern);
+                p.patterns.len() - 1
+            }
+        };
+        p.content
+            .set_fill_color_space("Pattern")
+            .set_fill_pattern(format!("P{}", idx + 1))
+            .rect(rect[0], rect[1], rect[2], rect[3])
+            .fill();
+        self
+    }
+
+    /// 在指定页用无色平铺图案填充矩形：`/Pattern cs c1 … cn /P<n> scn … re f`。
+    ///
+    /// 图案句柄必须来自 [`PdfBuilder::tiling_pattern`]，且图案须由
+    /// [`TilingPattern::uncolored`] 创建。`components` 按图案字典的
+    /// `/ColorSpace` 解释，数量必须与颜色空间分量数一致且有限；否则
+    /// 该调用被忽略。资源名复用与版本门控同
+    /// [`PdfBuilder::fill_rect_with_pattern`]。
+    pub fn fill_rect_with_uncolored_pattern(
+        &mut self,
+        page: usize,
+        pattern: usize,
+        components: &[f64],
+        rect: [f64; 4],
+    ) -> &mut Self {
+        let expected = match self.patterns.get(pattern) {
+            Some(Pattern::Tiling(pattern)) if pattern.paint_type == PaintType::Uncolored => {
+                pattern.color_space.as_ref().map(ColorSpace::channels)
+            }
+            _ => None,
+        };
+        let Some(expected) = expected else {
+            return self;
+        };
+        if components.len() != expected || components.iter().any(|value| !value.is_finite()) {
+            return self;
+        }
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let idx = match p.patterns.iter().position(|&h| h == pattern) {
+            Some(i) => i,
+            None => {
+                p.patterns.push(pattern);
+                p.patterns.len() - 1
+            }
+        };
+        p.content
+            .set_fill_color_space("Pattern")
+            .set_fill_pattern_with_components(components.to_vec(), format!("P{}", idx + 1))
+            .rect(rect[0], rect[1], rect[2], rect[3])
+            .fill();
+        self
+    }
+
+    /// 在指定页开始一段可选内容：`/OC /OC<n> BDC`。
+    ///
+    /// 组句柄必须是 [`PdfBuilder::optional_content_group`] 的返回值；同页
+    /// 首次使用分配 `/OC<n>` 资源名，后续复用。必须以
+    /// [`PdfBuilder::end_optional_content`] 结束。未知组句柄或页索引被忽略。
+    /// 目标版本低于 1.5 时构建返回 [`WriteError::UnsupportedVersion`]。
+    pub fn begin_optional_content(&mut self, page: usize, group: usize) -> &mut Self {
+        if group >= self.optional_content_groups.len() {
+            return self;
+        }
+        let p = match self.pages.get_mut(page) {
+            Some(p) => p,
+            None => return self,
+        };
+        let idx = match p.optional_content.iter().position(|&g| g == group) {
+            Some(i) => i,
+            None => {
+                p.optional_content.push(group);
+                p.optional_content.len() - 1
+            }
+        };
+        p.content.begin_marked_content_properties(
+            "OC",
+            MarkedContentProperties::Name(format!("OC{}", idx + 1)),
+        );
+        self
+    }
+
+    /// 结束当前可选内容段（`EMC`）。未知页索引被忽略。
+    pub fn end_optional_content(&mut self, page: usize) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.end_marked_content();
+        }
         self
     }
 

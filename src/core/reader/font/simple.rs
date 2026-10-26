@@ -6,7 +6,8 @@ use crate::core::types::{Array, Dict, Document, Value};
 
 use super::{
     FontDescriptorMetrics, FontError, FontResult, PredefinedEncoding, SimpleFontEncoding,
-    default_encoding, number, parse_descriptor, predefined_encoding, standard14_metrics,
+    cid_cmap::ToUnicodeMap, default_encoding, number, parse_descriptor, predefined_encoding,
+    standard14_metrics,
 };
 
 /// Resolved metrics from a simple Type 1 font dictionary.
@@ -36,6 +37,35 @@ impl Type1Font {
             .as_ref()
             .and_then(|descriptor| descriptor.missing_width)
             .or_else(|| standard14_width(&self.base_font, code))
+    }
+}
+
+/// Optional `/ToUnicode` mapping for a simple font.
+#[derive(Debug, Clone)]
+pub(crate) struct SimpleFontToUnicode {
+    map: ToUnicodeMap,
+}
+
+impl SimpleFontToUnicode {
+    pub(crate) fn unicode_for(&self, code: u8) -> Option<&str> {
+        self.map.unicode_for(&[code])
+    }
+}
+
+impl Document {
+    /// Resolve a simple font's optional `/ToUnicode` CMap.
+    ///
+    /// Returns `None` when the entry is absent or unusable; text extraction
+    /// then falls back to the built-in or declared encoding.
+    pub(crate) fn simple_font_to_unicode(&self, value: &Value) -> Option<SimpleFontToUnicode> {
+        let value = self.resolve_value(value).ok()?;
+        let dict = value.as_dict()?;
+        let to_unicode = self.resolve_value(dict.get("ToUnicode")?).ok()?;
+        if !matches!(to_unicode, Value::Stream(_, _)) {
+            return None;
+        }
+        let bytes = self.decode_stream_bytes(&to_unicode).ok()?;
+        ToUnicodeMap::parse_lenient(&bytes).map(|map| SimpleFontToUnicode { map })
     }
 }
 

@@ -6,8 +6,8 @@ use md5::{Digest, Md5};
 use pdf_engine::core;
 use pdf_engine::core::reader::Parser;
 use pdf_engine::core::reader::font::{
-    EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor, Type1BuiltinEncoding,
-    Type1PathSegment, strip_subset_tag,
+    CffPathSegment, EncodingMapping, FontProgramSource, PredefinedEncoding, SfntFlavor,
+    Type1BuiltinEncoding, Type1PathSegment, strip_subset_tag,
 };
 use pdf_engine::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value, XrefKind,
@@ -2419,6 +2419,24 @@ fn sample_sfnt_font() -> Vec<u8> {
     sfnt
 }
 
+/// 合成一个最小的 CFF-flavored OpenType 程序：`OTTO` 版本标签 + 单个
+/// `CFF ` 表。写端只校验版本标签，载荷用于断言字节原样嵌入。
+fn sample_opentype_cff_sfnt() -> Vec<u8> {
+    let payload = b"sample-cff-table";
+    let mut sfnt = Vec::new();
+    sfnt.extend_from_slice(b"OTTO");
+    sfnt.extend_from_slice(&1u16.to_be_bytes()); // numTables
+    sfnt.extend_from_slice(&16u16.to_be_bytes()); // searchRange
+    sfnt.extend_from_slice(&0u16.to_be_bytes()); // entrySelector
+    sfnt.extend_from_slice(&0u16.to_be_bytes()); // rangeShift
+    sfnt.extend_from_slice(b"CFF "); // table tag
+    sfnt.extend_from_slice(&0u32.to_be_bytes()); // checksum
+    sfnt.extend_from_slice(&28u32.to_be_bytes()); // offset
+    sfnt.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    sfnt.extend_from_slice(payload);
+    sfnt
+}
+
 #[test]
 fn truetype_font_program_resolves_and_parses_fontfile2() {
     let doc = Document::new();
@@ -3699,6 +3717,2331 @@ fn builder_embeds_truetype_font_program_roundtrip() {
     assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
 }
 
+/// 写入 → 重新解析：TrueType-flavored OpenType 程序按 ISO 32000-1 §9.9
+/// 写入 `/FontFile2`，字体保持 `/Subtype /TrueType`，文本可提取。
+#[test]
+fn builder_opentype_truetype_program_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, FontProgram, PageSize, PdfBuilder};
+
+    let sfnt = sample_sfnt_font(); // 版本标签 0x00010000
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::OpenType(sfnt.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Test");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "TrueType");
+    let embedded = reparsed
+        .truetype_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile2);
+    assert_eq!(embedded.data, sfnt);
+
+    let parsed = reparsed
+        .truetype_font(&font_dict)
+        .expect("should parse program")
+        .expect("should have program");
+    assert_eq!(parsed.glyph_id_for_unicode(0x41).unwrap(), Some(2));
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Test"));
+}
+
+/// 写入 → 重新解析：CFF-flavored OpenType 程序写到 `/FontFile3`
+/// `/Subtype /OpenType`，字体子类型为 Type1，文本可提取。
+#[test]
+fn builder_opentype_cff_program_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, FontEncoding, FontProgram, PageSize, PdfBuilder};
+
+    let program = sample_opentype_cff_sfnt();
+    let font = Font::helvetica(12.0)
+        .with_encoding(FontEncoding::named("WinAnsiEncoding"))
+        .with_font_program(FontProgram::OpenType(program.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "Open");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type1");
+    let embedded = reparsed
+        .type1_font_program(&font_dict)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile3);
+    assert_eq!(embedded.subtype.as_deref(), Some("OpenType"));
+    assert_eq!(embedded.data, program);
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Open"));
+}
+
+/// 写入 → 重新解析：CMYK 图片 XObject 应声明 `/ColorSpace /DeviceCMYK`，
+/// 流字节原样保留，页面内容流经 `Do` 引用该图片且文本仍可提取。
+#[test]
+fn builder_cmyk_image_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, ImageData, PageSize, PdfBuilder};
+
+    let pixels = vec![255, 0, 0, 0, 0, 255, 0, 0];
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceCMYK,
+        bits: 8,
+        data: pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "CMYK");
+    builder.image(page, 72.0, 600.0, 100.0, 50.0, &img);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let Value::Ref(image_num, _) = xobjects.get("Im1").expect("Im1 resource") else {
+        panic!("Im1 should be an indirect reference");
+    };
+    let image_object = reparsed
+        .get_object(*image_num)
+        .expect("get object")
+        .expect("image object should exist");
+    let Value::Stream(dict, _) = &image_object.value else {
+        panic!("image should be a stream");
+    };
+    assert_eq!(dict.get("Subtype").and_then(Value::as_name), Some("Image"));
+    assert_eq!(
+        dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceCMYK")
+    );
+    assert_eq!(dict.get("Width").and_then(Value::as_integer), Some(2));
+    assert_eq!(dict.get("Height").and_then(Value::as_integer), Some(1));
+    assert_eq!(
+        dict.get("BitsPerComponent").and_then(Value::as_integer),
+        Some(8)
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&image_object.value)
+            .expect("decode image"),
+        pixels
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    let content_text = String::from_utf8_lossy(&content);
+    assert!(content_text.contains("/Im1 Do"), "{content_text}");
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("CMYK"));
+}
+
+/// 写入 → 重新解析：带 `/Decode`、`/Interpolate` 与 `/SMask` 的图片应
+/// 写出软蒙版流对象并在基图中引用；蒙版为同尺寸 DeviceGray 图片，
+/// 像素与文本经解析器往返后保持可读。
+#[test]
+fn builder_soft_mask_image_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, ImageData, PageSize, PdfBuilder};
+
+    let mask_pixels = vec![0, 64, 128, 255];
+    let mask = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: mask_pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let pixels = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+    let img = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: pixels.clone(),
+        decode: Some(vec![0.0, 1.0, 1.0, 0.0, 0.0, 1.0]),
+        interpolate: true,
+        smask: Some(Box::new(mask)),
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "IMG");
+    builder.image(page, 72.0, 600.0, 100.0, 100.0, &img);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+
+    let image_object = reparsed
+        .get_object(xobjects.get("Im1").and_then(Value::as_ref).unwrap().0)
+        .expect("get object")
+        .expect("image object should exist");
+    let Value::Stream(dict, _) = &image_object.value else {
+        panic!("image should be a stream");
+    };
+    assert_eq!(dict.get("Subtype").and_then(Value::as_name), Some("Image"));
+    assert_eq!(
+        dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceRGB")
+    );
+    let decode = dict
+        .get("Decode")
+        .and_then(Value::as_array)
+        .expect("should carry Decode array");
+    let decode_values: Vec<f64> = decode
+        .0
+        .iter()
+        .map(|value| match value {
+            Value::Float(f) => *f,
+            Value::Integer(i) => *i as f64,
+            other => panic!("Decode entry should be numeric, got {}", other.type_name()),
+        })
+        .collect();
+    assert_eq!(decode_values, vec![0.0, 1.0, 1.0, 0.0, 0.0, 1.0]);
+    assert!(
+        matches!(dict.get("Interpolate"), Some(Value::Bool(true))),
+        "应写出 /Interpolate true"
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&image_object.value)
+            .expect("decode image"),
+        pixels
+    );
+
+    let mask_num = dict
+        .get("SMask")
+        .and_then(Value::as_ref)
+        .expect("image should reference an SMask")
+        .0;
+    let mask_object = reparsed
+        .get_object(mask_num)
+        .expect("get mask object")
+        .expect("mask object should exist");
+    let Value::Stream(mask_dict, _) = &mask_object.value else {
+        panic!("mask should be a stream");
+    };
+    assert_eq!(
+        mask_dict.get("Subtype").and_then(Value::as_name),
+        Some("Image")
+    );
+    assert_eq!(
+        mask_dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceGray")
+    );
+    assert_eq!(mask_dict.get("Width").and_then(Value::as_integer), Some(2));
+    assert_eq!(mask_dict.get("Height").and_then(Value::as_integer), Some(2));
+    assert_eq!(
+        mask_dict
+            .get("BitsPerComponent")
+            .and_then(Value::as_integer),
+        Some(8)
+    );
+    assert!(mask_dict.get("SMask").is_none(), "软蒙版不得再嵌套蒙版");
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&mask_object.value)
+            .expect("decode mask"),
+        mask_pixels
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    let content_text = String::from_utf8_lossy(&content);
+    assert!(content_text.contains("/Im1 Do"), "{content_text}");
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("IMG"));
+}
+
+/// 写入 → 重新解析：Stencil 蒙版、显式蒙版引用与 Colour Key 蒙版
+/// 应分别写出 `/ImageMask true`（无 ColorSpace）、`/Mask` 间接引用
+/// （指向独立的 1 位蒙版流）与 `/Mask` 整数区间数组。
+#[test]
+fn builder_image_masks_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, ImageData, ImageMask, PageSize, PdfBuilder};
+
+    let stencil_pixels = vec![0b1010_1010];
+    let stencil = ImageData {
+        width: 8,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: stencil_pixels.clone(),
+        decode: Some(vec![1.0, 0.0]),
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    let explicit_mask_pixels = vec![0b1010_1010, 0b0101_0101];
+    let explicit_mask = ImageData {
+        width: 4,
+        height: 2,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: explicit_mask_pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    let base_pixels = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    let explicit = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: base_pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: Some(ImageMask::explicit(explicit_mask)),
+    };
+    let keyed = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0u8, 10, 20, 30, 40, 50],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: Some(ImageMask::color_key(vec![0, 10, 20, 30, 40, 50])),
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "MASK");
+    builder.image(page, 72.0, 600.0, 100.0, 100.0, &stencil);
+    builder.image(page, 72.0, 480.0, 100.0, 100.0, &explicit);
+    builder.image(page, 72.0, 360.0, 100.0, 100.0, &keyed);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let image_object = |name: &str| -> Object {
+        let num = xobjects
+            .get(name)
+            .and_then(Value::as_ref)
+            .unwrap_or_else(|| panic!("{name} should be a reference"))
+            .0;
+        reparsed
+            .get_object(num)
+            .expect("get object")
+            .unwrap_or_else(|| panic!("{name} object should exist"))
+    };
+    let stream_dict = |name: &str, object: &Object| -> Dict {
+        match &object.value {
+            Value::Stream(dict, _) => dict.clone(),
+            other => panic!("{name} should be a stream, got {}", other.type_name()),
+        }
+    };
+
+    let stencil_object = image_object("Im1");
+    let stencil_dict = stream_dict("Im1", &stencil_object);
+    assert!(
+        matches!(stencil_dict.get("ImageMask"), Some(Value::Bool(true))),
+        "Stencil 蒙版应写出 /ImageMask true"
+    );
+    assert!(
+        stencil_dict.get("ColorSpace").is_none(),
+        "Stencil 蒙版不得带 /ColorSpace"
+    );
+    assert_eq!(
+        stencil_dict
+            .get("BitsPerComponent")
+            .and_then(Value::as_integer),
+        Some(1)
+    );
+    let stencil_decode: Vec<f64> = stencil_dict
+        .get("Decode")
+        .and_then(Value::as_array)
+        .expect("stencil decode")
+        .0
+        .iter()
+        .map(|value| match value {
+            Value::Float(f) => *f,
+            Value::Integer(i) => *i as f64,
+            other => panic!("Decode entry should be numeric, got {}", other.type_name()),
+        })
+        .collect();
+    assert_eq!(stencil_decode, vec![1.0, 0.0]);
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&stencil_object.value)
+            .expect("decode stencil"),
+        stencil_pixels
+    );
+
+    let explicit_object = image_object("Im2");
+    let explicit_dict = stream_dict("Im2", &explicit_object);
+    assert_eq!(
+        explicit_dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceRGB")
+    );
+    let mask_num = explicit_dict
+        .get("Mask")
+        .and_then(Value::as_ref)
+        .expect("显式蒙版应写出 /Mask 间接引用")
+        .0;
+    let mask_object = reparsed
+        .get_object(mask_num)
+        .expect("get mask object")
+        .expect("mask object should exist");
+    let Value::Stream(mask_dict, _) = &mask_object.value else {
+        panic!("mask should be a stream");
+    };
+    assert!(matches!(
+        mask_dict.get("ImageMask"),
+        Some(Value::Bool(true))
+    ));
+    assert!(
+        mask_dict.get("ColorSpace").is_none(),
+        "显式蒙版不得带 /ColorSpace"
+    );
+    assert_eq!(mask_dict.get("Width").and_then(Value::as_integer), Some(4));
+    assert_eq!(mask_dict.get("Height").and_then(Value::as_integer), Some(2));
+    assert_eq!(
+        mask_dict
+            .get("BitsPerComponent")
+            .and_then(Value::as_integer),
+        Some(1)
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&mask_object.value)
+            .expect("decode mask"),
+        explicit_mask_pixels
+    );
+
+    let keyed_object = image_object("Im3");
+    let keyed_dict = stream_dict("Im3", &keyed_object);
+    assert_eq!(
+        keyed_dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceRGB")
+    );
+    let ranges: Vec<i64> = keyed_dict
+        .get("Mask")
+        .and_then(Value::as_array)
+        .expect("Colour Key 蒙版应写出 /Mask 数组")
+        .0
+        .iter()
+        .map(|value| value.as_integer().expect("range entry is an integer"))
+        .collect();
+    assert_eq!(ranges, vec![0, 10, 20, 30, 40, 50]);
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    let content_text = String::from_utf8_lossy(&content);
+    for name in ["/Im1 Do", "/Im2 Do", "/Im3 Do"] {
+        assert!(
+            content_text.contains(name),
+            "missing {name}: {content_text}"
+        );
+    }
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("MASK"));
+}
+
+/// 写入 → 重新解析：Lab 与 ICCBased（CalRGB 备用空间）图片应写出
+/// CIE-Based 颜色空间数组、ICC 配置文件流，并保持像素与文本可提取。
+#[test]
+fn builder_cie_color_spaces_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        CalRGB, ColorSpace, Font, ICCBased, ImageData, Lab, PageSize, PdfBuilder,
+    };
+
+    let lab_pixels = vec![50, 128, 128];
+    let lab_img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::Lab(Lab {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: Some([0.0, 0.0, 0.0]),
+            range: Some([-128.0, 127.0, -128.0, 127.0]),
+        }),
+        bits: 8,
+        data: lab_pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let profile: Vec<u8> = (0..128).map(|v| v as u8).collect();
+    let icc_pixels = vec![10, 20, 30, 40, 50, 60];
+    let icc_img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::ICCBased(ICCBased {
+            n: 3,
+            data: profile.clone(),
+            alternate: Some(Box::new(ColorSpace::CalRGB(CalRGB {
+                white_point: [0.9505, 1.0, 1.089],
+                black_point: None,
+                gamma: Some([2.2, 2.2, 2.2]),
+                matrix: None,
+            }))),
+            range: Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+        }),
+        bits: 8,
+        data: icc_pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "CIE");
+    builder.image(page, 72.0, 600.0, 50.0, 50.0, &lab_img);
+    builder.image(page, 150.0, 600.0, 50.0, 50.0, &icc_img);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+
+    let lab_object = reparsed
+        .get_object(xobjects.get("Im1").and_then(Value::as_ref).unwrap().0)
+        .expect("get object")
+        .expect("Lab image object should exist");
+    let Value::Stream(lab_dict, _) = &lab_object.value else {
+        panic!("Lab image should be a stream");
+    };
+    let lab_space = lab_dict
+        .get("ColorSpace")
+        .and_then(Value::as_array)
+        .expect("Lab ColorSpace should be an array");
+    assert_eq!(lab_space.0[0].as_name(), Some("Lab"));
+    let lab_cs = lab_space.0[1].as_dict().expect("Lab parameters dict");
+    let white_point = lab_cs
+        .get("WhitePoint")
+        .and_then(Value::as_array)
+        .expect("Lab WhitePoint");
+    assert_eq!(white_point.0.len(), 3);
+    assert!(matches!(white_point.0[1], Value::Float(v) if v == 1.0));
+    let range = lab_cs
+        .get("Range")
+        .and_then(Value::as_array)
+        .expect("Lab Range");
+    let range_values: Vec<i64> = range.0.iter().filter_map(Value::as_integer).collect();
+    assert_eq!(range_values, vec![-128, 127, -128, 127]);
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&lab_object.value)
+            .expect("decode Lab image"),
+        lab_pixels
+    );
+
+    let icc_image_object = reparsed
+        .get_object(xobjects.get("Im2").and_then(Value::as_ref).unwrap().0)
+        .expect("get object")
+        .expect("ICCBased image object should exist");
+    let Value::Stream(icc_image_dict, _) = &icc_image_object.value else {
+        panic!("ICCBased image should be a stream");
+    };
+    let icc_space = icc_image_dict
+        .get("ColorSpace")
+        .and_then(Value::as_array)
+        .expect("ICCBased ColorSpace should be an array");
+    assert_eq!(icc_space.0[0].as_name(), Some("ICCBased"));
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&icc_image_object.value)
+            .expect("decode ICC image"),
+        icc_pixels
+    );
+
+    let icc_stream_num = icc_space.0[1].as_ref().expect("ICC profile reference").0;
+    let icc_profile_object = reparsed
+        .get_object(icc_stream_num)
+        .expect("get ICC object")
+        .expect("ICC profile stream should exist");
+    let Value::Stream(icc_dict, _) = &icc_profile_object.value else {
+        panic!("ICC profile should be a stream");
+    };
+    assert_eq!(icc_dict.get("N").and_then(Value::as_integer), Some(3));
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&icc_profile_object.value)
+            .expect("decode ICC profile"),
+        profile
+    );
+    let alternate = icc_dict
+        .get("Alternate")
+        .and_then(Value::as_array)
+        .expect("ICCBased alternate should be an array");
+    assert_eq!(alternate.0[0].as_name(), Some("CalRGB"));
+    assert!(
+        alternate.0[1]
+            .as_dict()
+            .and_then(|dict| dict.get("Gamma"))
+            .and_then(Value::as_array)
+            .is_some()
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("CIE"));
+}
+
+/// 写入 → 重新解析：Indexed 图片应写出 `[/Indexed base hival 调色板]`，
+/// 调色板以十六进制串保留，像素与文本仍可读取。
+#[test]
+fn builder_indexed_image_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, ImageData, Indexed, PageSize, PdfBuilder};
+
+    let lookup = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11];
+    let pixels = vec![0, 1];
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::Indexed(Indexed::new(ColorSpace::DeviceRGB, 1, lookup.clone())),
+        bits: 8,
+        data: pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "IDX");
+    builder.image(page, 72.0, 600.0, 100.0, 50.0, &img);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let image_object = reparsed
+        .get_object(xobjects.get("Im1").and_then(Value::as_ref).unwrap().0)
+        .expect("get object")
+        .expect("indexed image object should exist");
+    let Value::Stream(dict, _) = &image_object.value else {
+        panic!("indexed image should be a stream");
+    };
+    let space = dict
+        .get("ColorSpace")
+        .and_then(Value::as_array)
+        .expect("Indexed ColorSpace should be an array");
+    assert_eq!(space.0.len(), 4);
+    assert_eq!(space.0[0].as_name(), Some("Indexed"));
+    assert_eq!(space.0[1].as_name(), Some("DeviceRGB"));
+    assert_eq!(space.0[2].as_integer(), Some(1));
+    assert_eq!(
+        space.0[3],
+        Value::HexString("DEADBEEF0011".into()),
+        "调色板应按字节顺序写成大写十六进制"
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&image_object.value)
+            .expect("decode indexed image"),
+        pixels
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    assert!(
+        String::from_utf8_lossy(&content).contains("/Im1 Do"),
+        "content should paint the indexed image"
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("IDX"));
+}
+
+/// 写入 → 重新解析：Separation 与 DeviceN 图片的色彩空间数组应带色料名、
+/// 备用空间与 tint 变换函数（Type 2 内联、Type 0 独立流）；像素流可解码，
+/// 文本仍可提取。
+#[test]
+fn builder_separation_and_devicen_images_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, DeviceN, ExponentialFunction, Font, Function, ImageData, PageSize, PdfBuilder,
+        SampledFunction, Separation,
+    };
+
+    let separation = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::Separation(Separation::new(
+            "Orange",
+            ColorSpace::DeviceCMYK,
+            Function::Exponential(
+                ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                    .with_c0(vec![0.0, 0.0, 0.0, 0.0])
+                    .with_c1(vec![0.0, 0.4, 0.8, 0.0]),
+            ),
+        )),
+        bits: 8,
+        data: vec![0x00, 0xFF],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let devicen = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceN(DeviceN::new(
+            vec!["Orange".to_string(), "Green".to_string()],
+            ColorSpace::DeviceRGB,
+            Function::Sampled(SampledFunction::new(
+                vec![0.0, 1.0, 0.0, 1.0],
+                vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                vec![2, 2],
+                8,
+                vec![0.0; 12],
+            )),
+        )),
+        bits: 8,
+        data: vec![0x10, 0x20, 0x30, 0x40],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "SPOT");
+    builder.image(page, 72.0, 600.0, 100.0, 50.0, &separation);
+    builder.image(page, 72.0, 500.0, 100.0, 50.0, &devicen);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let image_object = |name: &str| {
+        let number = xobjects.get(name).and_then(Value::as_ref).unwrap().0;
+        reparsed
+            .get_object(number)
+            .expect("get object")
+            .expect("image object should exist")
+    };
+
+    let separation_object = image_object("Im1");
+    let Value::Stream(separation_dict, _) = &separation_object.value else {
+        panic!("separation image should be a stream");
+    };
+    let separation_space = separation_dict
+        .get("ColorSpace")
+        .and_then(Value::as_array)
+        .expect("Separation ColorSpace should be an array");
+    assert_eq!(separation_space.0.len(), 4);
+    assert_eq!(separation_space.0[0].as_name(), Some("Separation"));
+    assert_eq!(separation_space.0[1].as_name(), Some("Orange"));
+    assert_eq!(separation_space.0[2].as_name(), Some("DeviceCMYK"));
+    let tint = separation_space.0[3]
+        .as_dict()
+        .expect("Type 2 tint transform should be an inline dictionary");
+    assert_eq!(
+        tint.get("FunctionType").and_then(Value::as_integer),
+        Some(2)
+    );
+    let c1 = tint.get("C1").and_then(Value::as_array).expect("C1");
+    assert_eq!(c1.0[1], Value::Float(0.4));
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&separation_object.value)
+            .expect("decode separation image"),
+        vec![0x00, 0xFF]
+    );
+
+    let devicen_object = image_object("Im2");
+    let Value::Stream(devicen_dict, _) = &devicen_object.value else {
+        panic!("DeviceN image should be a stream");
+    };
+    let devicen_space = devicen_dict
+        .get("ColorSpace")
+        .and_then(Value::as_array)
+        .expect("DeviceN ColorSpace should be an array");
+    assert_eq!(devicen_space.0.len(), 4);
+    assert_eq!(devicen_space.0[0].as_name(), Some("DeviceN"));
+    let names = devicen_space.0[1]
+        .as_array()
+        .expect("DeviceN names should be an array");
+    let names: Vec<&str> = names.0.iter().filter_map(Value::as_name).collect();
+    assert_eq!(names, vec!["Orange", "Green"]);
+    assert_eq!(devicen_space.0[2].as_name(), Some("DeviceRGB"));
+    let (function_num, _) = devicen_space.0[3]
+        .as_ref()
+        .expect("Type 0 tint transform should be an indirect stream");
+    let function_object = reparsed
+        .get_object(function_num)
+        .expect("get function object")
+        .expect("function stream should exist");
+    let Value::Stream(function_dict, _) = &function_object.value else {
+        panic!("Type 0 function should be a stream");
+    };
+    assert_eq!(
+        function_dict
+            .get("FunctionType")
+            .and_then(Value::as_integer),
+        Some(0)
+    );
+    let size = function_dict
+        .get("Size")
+        .and_then(Value::as_array)
+        .expect("Size");
+    let size: Vec<i64> = size.0.iter().filter_map(Value::as_integer).collect();
+    assert_eq!(size, vec![2, 2]);
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&function_object.value)
+            .expect("decode sampled function")
+            .len(),
+        12,
+        "2×2 采样点 × 3 个输出"
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&devicen_object.value)
+            .expect("decode devicen image"),
+        vec![0x10, 0x20, 0x30, 0x40]
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("SPOT"));
+}
+
+/// 写入 → 重新解析：渐变应写入页面 `/Shading` 资源，渐变字典带
+/// `/ShadingType`、`/Coords`、`/Domain`、`/Extend` 与内联 Type 2 函数；
+/// 着色图案写入 `/Pattern` 资源，`PatternType 2` 字典内联径向渐变；
+/// 页面内容含 `sh`、`/Pattern cs` 与 `scn`，文本仍可提取。
+#[test]
+fn builder_shading_and_pattern_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AxialShading, ColorSpace, ExponentialFunction, Font, Function, PageSize, PdfBuilder,
+        RadialShading, Shading, ShadingPattern,
+    };
+
+    let exponential = |c0: Vec<f64>, c1: Vec<f64>| {
+        Function::Exponential(
+            ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                .with_c0(c0)
+                .with_c1(c1),
+        )
+    };
+    let axial = Shading::Axial(
+        AxialShading::new(
+            ColorSpace::DeviceGray,
+            [0.0, 0.0, 200.0, 0.0],
+            exponential(vec![0.0], vec![1.0]),
+        )
+        .with_domain([0.0, 1.0])
+        .with_extend([true, false]),
+    );
+    let radial = Shading::Radial(
+        RadialShading::new(
+            ColorSpace::DeviceRGB,
+            [50.0, 50.0, 0.0, 50.0, 50.0, 80.0],
+            exponential(vec![1.0, 0.0, 0.0], vec![0.0, 0.0, 1.0]),
+        )
+        .with_extend([true, true]),
+    );
+    let pattern = ShadingPattern::new(radial).with_matrix([1.0, 0.0, 0.0, 1.0, 10.0, 20.0]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "GRAD");
+    let axial_handle = builder.shading(&axial);
+    builder.paint_shading(page, axial_handle);
+    builder.paint_shading(page, axial_handle);
+    let pattern_handle = builder.shading_pattern(&pattern);
+    builder.fill_rect_with_pattern(page, pattern_handle, [72.0, 500.0, 120.0, 80.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("page resources");
+    let shadings = resources
+        .get("Shading")
+        .and_then(Value::as_dict)
+        .expect("page should have Shading resources");
+    let patterns = resources
+        .get("Pattern")
+        .and_then(Value::as_dict)
+        .expect("page should have Pattern resources");
+
+    let shading_num = shadings.get("Sh1").and_then(Value::as_ref).unwrap().0;
+    let shading_object = reparsed
+        .get_object(shading_num)
+        .expect("get shading object")
+        .expect("shading object should exist");
+    let shading_dict = shading_object.value.as_dict().expect("shading dict");
+    assert_eq!(
+        shading_dict.get("ShadingType").and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        shading_dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceGray")
+    );
+    let coords: Vec<Value> = shading_dict
+        .get("Coords")
+        .and_then(Value::as_array)
+        .expect("Coords")
+        .0
+        .clone();
+    assert_eq!(coords, [0.0, 0.0, 200.0, 0.0].map(Value::Float).to_vec());
+    let domain = shading_dict
+        .get("Domain")
+        .and_then(Value::as_array)
+        .expect("Domain");
+    assert_eq!(domain.0, vec![Value::Float(0.0), Value::Float(1.0)]);
+    let extend = shading_dict
+        .get("Extend")
+        .and_then(Value::as_array)
+        .expect("Extend");
+    assert_eq!(extend.0, vec![Value::Bool(true), Value::Bool(false)]);
+    let axial_function = shading_dict
+        .get("Function")
+        .and_then(Value::as_dict)
+        .expect("Type 2 function should be inline");
+    assert_eq!(
+        axial_function
+            .get("FunctionType")
+            .and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        axial_function
+            .get("C0")
+            .and_then(Value::as_array)
+            .map(|a| a.0.clone()),
+        Some(vec![Value::Float(0.0)])
+    );
+    assert_eq!(
+        axial_function
+            .get("C1")
+            .and_then(Value::as_array)
+            .map(|a| a.0.clone()),
+        Some(vec![Value::Float(1.0)])
+    );
+
+    let pattern_num = patterns.get("P1").and_then(Value::as_ref).unwrap().0;
+    let pattern_object = reparsed
+        .get_object(pattern_num)
+        .expect("get pattern object")
+        .expect("pattern object should exist");
+    let pattern_dict = pattern_object.value.as_dict().expect("pattern dict");
+    assert_eq!(
+        pattern_dict.get("Type").and_then(Value::as_name),
+        Some("Pattern")
+    );
+    assert_eq!(
+        pattern_dict.get("PatternType").and_then(Value::as_integer),
+        Some(2)
+    );
+    let matrix = pattern_dict
+        .get("Matrix")
+        .and_then(Value::as_array)
+        .expect("Matrix");
+    assert_eq!(
+        matrix.0,
+        [1.0, 0.0, 0.0, 1.0, 10.0, 20.0].map(Value::Float).to_vec()
+    );
+    let inline = pattern_dict
+        .get("Shading")
+        .and_then(Value::as_dict)
+        .expect("pattern shading should be inline");
+    assert_eq!(
+        inline.get("ShadingType").and_then(Value::as_integer),
+        Some(3)
+    );
+    assert_eq!(
+        inline.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceRGB")
+    );
+    let radial_coords: Vec<Value> = inline
+        .get("Coords")
+        .and_then(Value::as_array)
+        .expect("radial Coords")
+        .0
+        .clone();
+    assert_eq!(
+        radial_coords,
+        [50.0, 50.0, 0.0, 50.0, 50.0, 80.0]
+            .map(Value::Float)
+            .to_vec()
+    );
+    let radial_extend = inline
+        .get("Extend")
+        .and_then(Value::as_array)
+        .expect("Extend");
+    assert_eq!(radial_extend.0, vec![Value::Bool(true), Value::Bool(true)]);
+    let radial_function = inline
+        .get("Function")
+        .and_then(Value::as_dict)
+        .expect("radial function");
+    assert_eq!(
+        radial_function
+            .get("C0")
+            .and_then(Value::as_array)
+            .map(|a| a.0.clone()),
+        Some(vec![
+            Value::Float(1.0),
+            Value::Float(0.0),
+            Value::Float(0.0)
+        ])
+    );
+    assert_eq!(
+        radial_function
+            .get("C1")
+            .and_then(Value::as_array)
+            .map(|a| a.0.clone()),
+        Some(vec![
+            Value::Float(0.0),
+            Value::Float(0.0),
+            Value::Float(1.0)
+        ])
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert_eq!(content.matches("/Sh1 sh").count(), 2, "{content}");
+    assert!(content.contains("/Pattern cs"), "{content}");
+    assert!(content.contains("/P1 scn"), "{content}");
+    assert!(content.contains("72.0 500.0 120.0 80.0 re"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("GRAD"));
+}
+
+/// 写入 → 重新解析：Type 4 自由三角网格渐变应写成流对象，字典给出
+/// 位深、`/BitsPerFlag` 与 `/Decode`；顶点按 MSB-first 位流编码，
+/// 解码后的字节与量化结果一致，页面用 `sh` 绘制且文本仍可提取。
+#[test]
+fn builder_free_form_mesh_shading_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, Font, FreeFormMeshShading, MeshVertex, PageSize, PdfBuilder, Shading,
+    };
+
+    let mesh = FreeFormMeshShading::new(
+        ColorSpace::DeviceRGB,
+        vec![
+            MeshVertex::new(10.0, 20.0, vec![0.0, 0.0, 0.0]),
+            MeshVertex::new(90.0, 20.0, vec![1.0, 0.0, 0.0]),
+            MeshVertex::new(50.0, 80.0, vec![0.0, 0.0, 1.0]),
+        ],
+    )
+    .with_decode([0.0, 100.0, 0.0, 100.0])
+    .with_bits(8, 8, 8);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "MESH");
+    let handle = builder.shading(&Shading::FreeForm(mesh));
+    builder.paint_shading(page, handle);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("page resources");
+    let shadings = resources
+        .get("Shading")
+        .and_then(Value::as_dict)
+        .expect("page should have Shading resources");
+    let shading_num = shadings.get("Sh1").and_then(Value::as_ref).unwrap().0;
+    let shading_object = reparsed
+        .get_object(shading_num)
+        .expect("get shading object")
+        .expect("shading object should exist");
+    let shading_dict = shading_object
+        .value
+        .as_dict()
+        .expect("mesh shading should be a stream dictionary");
+    assert_eq!(
+        shading_dict.get("ShadingType").and_then(Value::as_integer),
+        Some(4)
+    );
+    assert_eq!(
+        shading_dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceRGB")
+    );
+    assert_eq!(
+        shading_dict
+            .get("BitsPerCoordinate")
+            .and_then(Value::as_integer),
+        Some(8)
+    );
+    assert_eq!(
+        shading_dict
+            .get("BitsPerComponent")
+            .and_then(Value::as_integer),
+        Some(8)
+    );
+    assert_eq!(
+        shading_dict.get("BitsPerFlag").and_then(Value::as_integer),
+        Some(8)
+    );
+    let decode: Vec<Value> = shading_dict
+        .get("Decode")
+        .and_then(Value::as_array)
+        .expect("Decode")
+        .0
+        .clone();
+    assert_eq!(
+        decode,
+        [0.0, 100.0, 0.0, 100.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
+            .map(Value::Float)
+            .to_vec()
+    );
+
+    let payload = reparsed
+        .decode_stream_bytes(&shading_object.value)
+        .expect("decode mesh payload");
+    assert_eq!(
+        payload,
+        vec![
+            0, 26, 51, 0, 0, 0, // flag 0、x=10→26、y=20→51、黑色
+            0, 230, 51, 255, 0, 0, // x=90→230、红色
+            0, 128, 204, 0, 0, 255, // x=50→128、y=80→204、蓝色
+        ]
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Sh1 sh"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("MESH"));
+}
+
+/// 写入 → 重新解析：Type 6（Coons）与 Type 7（张量积）网格渐变应写成
+/// 流对象，包含 `/BitsPerFlag`、`/Decode` 与按 MSB-first 打包的网格片
+/// 数据；页面两个 `/Shading` 资源分别由 `sh` 绘制，文本仍可提取。
+#[test]
+fn builder_patch_mesh_shading_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, CoonsPatch, CoonsPatchShading, Font, PageSize, PdfBuilder, Shading,
+        TensorProductPatch, TensorProductPatchShading,
+    };
+
+    let coons_points = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [20.0, 0.0],
+        [30.0, 0.0],
+        [30.0, 10.0],
+        [30.0, 20.0],
+        [30.0, 30.0],
+        [20.0, 30.0],
+        [10.0, 30.0],
+        [0.0, 30.0],
+        [0.0, 20.0],
+        [0.0, 10.0],
+    ];
+    let tensor_points = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [20.0, 0.0],
+        [30.0, 0.0],
+        [0.0, 10.0],
+        [10.0, 10.0],
+        [20.0, 10.0],
+        [30.0, 10.0],
+        [0.0, 20.0],
+        [10.0, 20.0],
+        [20.0, 20.0],
+        [30.0, 20.0],
+        [0.0, 30.0],
+        [10.0, 30.0],
+        [20.0, 30.0],
+        [30.0, 30.0],
+    ];
+    let colors = || {
+        [
+            vec![0.0, 0.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ]
+    };
+    let coons = CoonsPatchShading::new(
+        ColorSpace::DeviceRGB,
+        vec![CoonsPatch::new(coons_points, colors())],
+    )
+    .with_bits(8, 8, 8);
+    let tensor = TensorProductPatchShading::new(
+        ColorSpace::DeviceRGB,
+        vec![TensorProductPatch::new(tensor_points, colors())],
+    )
+    .with_bits(8, 8, 8);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "PATCH");
+    let coons_handle = builder.shading(&Shading::Coons(coons));
+    let tensor_handle = builder.shading(&Shading::TensorProduct(tensor));
+    builder.paint_shading(page, coons_handle);
+    builder.paint_shading(page, tensor_handle);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let shadings = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("Shading"))
+        .and_then(Value::as_dict)
+        .expect("page should have Shading resources");
+
+    for (name, expected_type, expected_len) in [("Sh1", 6, 37), ("Sh2", 7, 45)] {
+        let shading_num = shadings.get(name).and_then(Value::as_ref).unwrap().0;
+        let shading_object = reparsed
+            .get_object(shading_num)
+            .expect("get shading object")
+            .expect("shading object should exist");
+        let dict = shading_object
+            .value
+            .as_dict()
+            .expect("patch shading should be a stream dictionary");
+        assert_eq!(
+            dict.get("ShadingType").and_then(Value::as_integer),
+            Some(expected_type)
+        );
+        assert_eq!(dict.get("BitsPerFlag").and_then(Value::as_integer), Some(8));
+        assert_eq!(
+            dict.get("BitsPerCoordinate").and_then(Value::as_integer),
+            Some(8)
+        );
+        assert_eq!(
+            dict.get("BitsPerComponent").and_then(Value::as_integer),
+            Some(8)
+        );
+        assert_eq!(
+            dict.get("Length").and_then(Value::as_integer),
+            Some(expected_len)
+        );
+        let decode = dict
+            .get("Decode")
+            .and_then(Value::as_array)
+            .expect("Decode");
+        assert_eq!(
+            decode.0[..4].to_vec(),
+            [0.0, 30.0, 0.0, 30.0].map(Value::Float).to_vec()
+        );
+        let payload = reparsed
+            .decode_stream_bytes(&shading_object.value)
+            .expect("decode patch payload");
+        assert_eq!(payload.len(), expected_len as usize);
+        assert_eq!(payload[0], 0, "每个网格片的标志位应为 0");
+        assert!(payload.iter().any(|&byte| byte != 0), "网格数据不应全为零");
+    }
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Sh1 sh"), "{content}");
+    assert!(content.contains("/Sh2 sh"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("PATCH"));
+}
+
+/// 写入 → 重新解析：平铺图案应作为流对象写出 `/Type /Pattern`、
+/// `/PatternType 1`、`/PaintType 1`、`/TilingType`、`/BBox`、`/XStep`、
+/// `/YStep`、`/Resources` 与图块内容流；页面 `/Pattern` 资源以 `/P1`
+/// 引用且重复填充复用同一资源，文本仍可提取。
+#[test]
+fn builder_tiling_pattern_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder, TilingPattern, TilingType};
+    use pdf_engine::core::content::ContentStream;
+
+    let mut tile = ContentStream::new();
+    tile.set_fill_rgb(0.2, 0.4, 0.6)
+        .rect(0.0, 0.0, 6.0, 6.0)
+        .fill();
+    let pattern = TilingPattern::new([0.0, 0.0, 12.0, 12.0], 12.0, 12.0, tile)
+        .with_tiling_type(TilingType::ConstantSpacingAndSpeed)
+        .with_matrix([1.0, 0.0, 0.0, 1.0, 3.0, 4.0]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "TILE");
+    let handle = builder.tiling_pattern(&pattern);
+    builder.fill_rect_with_pattern(page, handle, [72.0, 500.0, 120.0, 80.0]);
+    builder.fill_rect_with_pattern(page, handle, [72.0, 300.0, 120.0, 80.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("page resources");
+    let patterns = resources
+        .get("Pattern")
+        .and_then(Value::as_dict)
+        .expect("page should have Pattern resources");
+    let pattern_num = patterns.get("P1").and_then(Value::as_ref).unwrap().0;
+    assert!(
+        patterns.get("P2").is_none(),
+        "重复填充应复用 /P1: {patterns:?}"
+    );
+
+    let pattern_object = reparsed
+        .get_object(pattern_num)
+        .expect("get pattern object")
+        .expect("pattern object should exist");
+    let Value::Stream(pattern_dict, _) = &pattern_object.value else {
+        panic!("tiling pattern should be a stream");
+    };
+    assert_eq!(
+        pattern_dict.get("Type").and_then(Value::as_name),
+        Some("Pattern")
+    );
+    assert_eq!(
+        pattern_dict.get("PatternType").and_then(Value::as_integer),
+        Some(1)
+    );
+    assert_eq!(
+        pattern_dict.get("PaintType").and_then(Value::as_integer),
+        Some(1)
+    );
+    assert_eq!(
+        pattern_dict.get("TilingType").and_then(Value::as_integer),
+        Some(3)
+    );
+    let bbox = pattern_dict
+        .get("BBox")
+        .and_then(Value::as_array)
+        .expect("BBox");
+    assert_eq!(bbox.0, [0.0, 0.0, 12.0, 12.0].map(Value::Float).to_vec());
+    assert_eq!(pattern_dict.get("XStep"), Some(&Value::Float(12.0)));
+    assert_eq!(pattern_dict.get("YStep"), Some(&Value::Float(12.0)));
+    let matrix = pattern_dict
+        .get("Matrix")
+        .and_then(Value::as_array)
+        .expect("Matrix");
+    assert_eq!(
+        matrix.0,
+        [1.0, 0.0, 0.0, 1.0, 3.0, 4.0].map(Value::Float).to_vec()
+    );
+    let pattern_resources = pattern_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("pattern Resources");
+    assert!(pattern_resources.0.is_empty(), "{pattern_resources:?}");
+
+    let tile_content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&pattern_object.value)
+            .expect("decode pattern stream"),
+    )
+    .into_owned();
+    assert!(tile_content.contains("0.2 0.4 0.6 rg"), "{tile_content}");
+    assert!(
+        tile_content.contains("0.0 0.0 6.0 6.0 re"),
+        "{tile_content}"
+    );
+    assert!(tile_content.contains("re\nf\n"), "{tile_content}");
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Pattern cs"), "{content}");
+    assert_eq!(content.matches("/P1 scn").count(), 2, "{content}");
+    assert!(content.contains("72.0 500.0 120.0 80.0 re"), "{content}");
+    assert!(content.contains("72.0 300.0 120.0 80.0 re"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("TILE"));
+}
+
+/// 写入 → 重新解析：无色平铺图案应写出 `/PaintType 2` 与 `/ColorSpace`，
+/// 图块内容不含颜色操作符；页面内容以 `c1 … cn /P1 scn` 提供填充色，
+/// 文本仍可提取。
+#[test]
+fn builder_uncolored_tiling_pattern_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, PageSize, PdfBuilder, TilingPattern};
+    use pdf_engine::core::content::ContentStream;
+
+    let mut tile = ContentStream::new();
+    tile.rect(0.0, 0.0, 6.0, 6.0).fill();
+    let pattern = TilingPattern::uncolored(
+        [0.0, 0.0, 12.0, 12.0],
+        12.0,
+        12.0,
+        ColorSpace::DeviceRGB,
+        tile,
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "SPOT");
+    let handle = builder.tiling_pattern(&pattern);
+    builder.fill_rect_with_uncolored_pattern(
+        page,
+        handle,
+        &[0.2, 0.4, 0.6],
+        [72.0, 500.0, 120.0, 80.0],
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("page resources");
+    let patterns = resources
+        .get("Pattern")
+        .and_then(Value::as_dict)
+        .expect("page should have Pattern resources");
+    let pattern_num = patterns.get("P1").and_then(Value::as_ref).unwrap().0;
+
+    let pattern_object = reparsed
+        .get_object(pattern_num)
+        .expect("get pattern object")
+        .expect("pattern object should exist");
+    let Value::Stream(pattern_dict, _) = &pattern_object.value else {
+        panic!("tiling pattern should be a stream");
+    };
+    assert_eq!(
+        pattern_dict.get("PaintType").and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        pattern_dict.get("PatternType").and_then(Value::as_integer),
+        Some(1)
+    );
+    assert_eq!(
+        pattern_dict.get("ColorSpace").and_then(Value::as_name),
+        Some("DeviceRGB")
+    );
+
+    let tile_content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&pattern_object.value)
+            .expect("decode pattern stream"),
+    )
+    .into_owned();
+    assert_eq!(
+        tile_content, "0.0 0.0 6.0 6.0 re\nf\n",
+        "无色图案的图块不应包含颜色操作符"
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Pattern cs"), "{content}");
+    assert!(content.contains("0.2 0.4 0.6 /P1 scn"), "{content}");
+    assert!(content.contains("72.0 500.0 120.0 80.0 re"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("SPOT"));
+}
+
+/// 写入 → 重新解析：Form XObject 应写出 `/Subtype /Form` 字典与内容流，
+/// 页面资源用 `/Fm1` 引用并由 `Do` 绘制；表单未写 `/Resources` 时继承
+/// 页面资源，内部文本仍可提取。
+#[test]
+fn builder_form_xobject_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, FormXObject, PageSize, PdfBuilder};
+    use pdf_engine::core::content::ContentStream;
+
+    let mut inner = ContentStream::new();
+    inner
+        .save_state()
+        .set_fill_rgb(0.2, 0.4, 0.6)
+        .rect(0.0, 0.0, 100.0, 50.0)
+        .fill()
+        .restore_state()
+        .begin_text()
+        .set_font("F1", 12.0)
+        .move_next_line(10.0, 20.0)
+        .show_text("Inner")
+        .end_text();
+    let form = FormXObject::new([0.0, 0.0, 100.0, 50.0], inner)
+        .with_matrix([1.0, 0.0, 0.0, 1.0, 5.0, 5.0]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "FORM");
+    let handle = builder.form_xobject(&form);
+    builder.draw_form(page, handle, [2.0, 0.0, 0.0, 2.0, 72.0, 600.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let form_object = reparsed
+        .get_object(xobjects.get("Fm1").and_then(Value::as_ref).unwrap().0)
+        .expect("get object")
+        .expect("form object should exist");
+    let Value::Stream(dict, _) = &form_object.value else {
+        panic!("form should be a stream");
+    };
+    assert_eq!(dict.get("Subtype").and_then(Value::as_name), Some("Form"));
+    assert_eq!(dict.get("FormType").and_then(Value::as_integer), Some(1));
+    let bbox = dict
+        .get("BBox")
+        .and_then(Value::as_array)
+        .expect("BBox should be an array");
+    let bbox_values: Vec<i64> = bbox.0.iter().filter_map(Value::as_integer).collect();
+    assert_eq!(bbox_values, vec![0, 0, 100, 50]);
+    let matrix = dict
+        .get("Matrix")
+        .and_then(Value::as_array)
+        .expect("Matrix should be an array");
+    let matrix_values: Vec<i64> = matrix.0.iter().filter_map(Value::as_integer).collect();
+    assert_eq!(matrix_values, vec![1, 0, 0, 1, 5, 5]);
+    assert!(
+        dict.get("Resources").is_none(),
+        "表单未写 /Resources，应继承页面资源"
+    );
+
+    let stream_bytes = reparsed
+        .decode_stream_bytes(&form_object.value)
+        .expect("decode form stream");
+    let stream_text = String::from_utf8_lossy(&stream_bytes);
+    assert!(
+        stream_text.contains("0.0 0.0 100.0 50.0 re"),
+        "{stream_text}"
+    );
+    assert!(stream_text.contains("/F1 12.0 Tf"), "{stream_text}");
+    assert!(stream_text.contains("(Inner) Tj"), "{stream_text}");
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    let content_text = String::from_utf8_lossy(&content);
+    assert!(content_text.contains("/Fm1 Do"), "{content_text}");
+    assert!(
+        content_text.contains("2.0 0.0 0.0 2.0 72.0 600.0 cm"),
+        "{content_text}"
+    );
+
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    assert!(extracted.contains("FORM"), "{extracted}");
+    assert!(
+        extracted.contains("Inner"),
+        "表单内文本应经 Do 提取: {extracted}"
+    );
+}
+
+/// 写入 → 重新解析：标记内容操作符（`BMC`/`BDC`/`EMC`/`MP`/`DP`）应写入
+/// 表单内容流，属性名与内联字典原样保留，标记范围内的文本仍可提取。
+#[test]
+fn builder_marked_content_operators_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{Font, FormXObject, PageSize, PdfBuilder};
+    use pdf_engine::core::content::{ContentStream, MarkedContentProperties};
+    use pdf_engine::core::types::{Dict, Value};
+
+    let properties = Dict::new()
+        .insert("Lang", Value::String("en".into()))
+        .insert("MCID", Value::Integer(0));
+    let mut inner = ContentStream::new();
+    inner
+        .begin_marked_content("P")
+        .begin_marked_content_properties("Span", MarkedContentProperties::Dict(properties))
+        .begin_text()
+        .set_font("F1", 12.0)
+        .move_next_line(10.0, 20.0)
+        .show_text("Marked")
+        .end_text()
+        .end_marked_content()
+        .end_marked_content()
+        .begin_marked_content_properties("OC", MarkedContentProperties::Name("Layer1".into()))
+        .marked_content_point_properties("Artifact", MarkedContentProperties::Name("Props1".into()))
+        .end_marked_content();
+    let form = FormXObject::new([0.0, 0.0, 100.0, 50.0], inner);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "OUTER");
+    let handle = builder.form_xobject(&form);
+    builder.draw_form(page, handle, [1.0, 0.0, 0.0, 1.0, 72.0, 600.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let form_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Subtype"))
+                .and_then(Value::as_name)
+                == Some("Form")
+        })
+        .expect("should find form object");
+    let stream_text = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&form_object.value)
+            .expect("decode form stream"),
+    )
+    .into_owned();
+    for expected in [
+        "/P BMC\n",
+        "/Span << /Lang (en) /MCID 0 >> BDC\n",
+        "EMC\n",
+        "/OC /Layer1 BDC\n",
+        "/Artifact /Props1 DP\n",
+        "(Marked) Tj",
+    ] {
+        assert!(
+            stream_text.contains(expected),
+            "missing {expected:?} in form stream: {stream_text}"
+        );
+    }
+
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    assert!(extracted.contains("OUTER"), "{extracted}");
+    assert!(
+        extracted.contains("Marked"),
+        "标记内容范围内的文本应可提取: {extracted}"
+    );
+}
+
+/// 写入 → 重新解析：可选内容组应写出 `/OCG`、页资源 `/Properties` 与
+/// 目录 `/OCProperties`，`/OC name BDC ... EMC` 标记范围内的文本仍可提取，
+/// 组名称、`/Intent` 与默认可见性可经读端类型化还原。
+#[test]
+fn builder_optional_content_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{Font, OptionalContentGroup, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::optional_content::BaseState;
+    use pdf_engine::core::types::Value;
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let visible = builder.optional_content_group(&OptionalContentGroup::new("Visible Layer"));
+    let hidden = builder.optional_content_group(
+        &OptionalContentGroup::new("Hidden Layer")
+            .with_visibility(false)
+            .with_intent("View"),
+    );
+    builder.begin_optional_content(page, visible);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "VISIBLE");
+    builder.end_optional_content(page);
+    builder.begin_optional_content(page, hidden);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "HIDDEN");
+    builder.end_optional_content(page);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 680.0, "PLAIN");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_dict = first_page_dict(&reparsed);
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("/Resources");
+    let properties = resources
+        .get("Properties")
+        .and_then(Value::as_dict)
+        .expect("page /Properties");
+    let visible_object = properties
+        .get("OC1")
+        .and_then(Value::as_ref)
+        .expect("OC1 reference")
+        .0;
+    let hidden_object = properties
+        .get("OC2")
+        .and_then(Value::as_ref)
+        .expect("OC2 reference")
+        .0;
+    assert_ne!(visible_object, hidden_object);
+
+    let parsed = reparsed
+        .optional_content_properties()
+        .expect("parse /OCProperties")
+        .expect("expected /OCProperties");
+    assert_eq!(parsed.groups.len(), 2);
+    assert_eq!(parsed.groups[0].object, visible_object);
+    assert_eq!(parsed.groups[0].name, "Visible Layer");
+    assert!(parsed.groups[0].intent.is_empty());
+    assert_eq!(parsed.groups[1].object, hidden_object);
+    assert_eq!(parsed.groups[1].name, "Hidden Layer");
+    assert_eq!(parsed.groups[1].intent, ["View"]);
+    assert_eq!(parsed.is_visible(visible_object), Some(true));
+    assert_eq!(parsed.is_visible(hidden_object), Some(false));
+    let configuration = parsed.default.as_ref().expect("default configuration");
+    assert_eq!(configuration.base_state, BaseState::On);
+    assert!(configuration.on.contains(&visible_object));
+    assert!(configuration.off.contains(&hidden_object));
+    assert_eq!(configuration.order, [visible_object, hidden_object]);
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("/Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/OC /OC1 BDC\n"), "{content}");
+    assert!(content.contains("/OC /OC2 BDC\n"), "{content}");
+    assert_eq!(content.matches("EMC\n").count(), 2, "{content}");
+
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    for text in ["VISIBLE", "HIDDEN", "PLAIN"] {
+        assert!(extracted.contains(text), "{text} missing: {extracted}");
+    }
+}
+
+/// 写入 → 重新解析：ExtGState `/TR` 应写出 Type 2 直接字典、Type 0 流对象
+/// 与 Type 3 拼接函数（内联子函数），读端可再次构造并求值，文本提取不受影响。
+#[test]
+fn builder_transfer_functions_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        ExponentialFunction, Font, Function, GraphicsState, PageSize, PdfBuilder, SampledFunction,
+        StitchingFunction,
+    };
+    use pdf_engine::core::functions::Function as ReaderFunction;
+
+    // Type 2：y = x²。
+    let exponential = Function::Exponential(
+        ExponentialFunction::new(vec![0.0, 1.0], 2.0)
+            .with_c0(vec![0.0])
+            .with_c1(vec![1.0])
+            .with_range(vec![0.0, 1.0]),
+    );
+    // Type 0：5 个 8 位样本，线性插值。
+    let sampled = Function::Sampled(SampledFunction::new(
+        vec![0.0, 1.0],
+        vec![0.0, 1.0],
+        vec![5],
+        8,
+        vec![0.0, 64.0, 128.0, 191.0, 255.0],
+    ));
+    // Type 3：前半段恒等，后半段放大 2 倍。
+    let stitching = Function::Stitching(
+        StitchingFunction::new(
+            vec![0.0, 1.0],
+            vec![
+                Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+                Function::Exponential(
+                    ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                        .with_c0(vec![0.0])
+                        .with_c1(vec![2.0])
+                        .with_range(vec![0.0, 2.0]),
+                ),
+            ],
+            vec![0.5],
+        )
+        .with_encode(vec![0.0, 1.0, 0.0, 1.0]),
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    for function in [&exponential, &sampled, &stitching] {
+        let handle = builder.function(function);
+        builder.set_graphics_state(page, &GraphicsState::new().with_transfer_function(handle));
+    }
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "TR");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_dict = first_page_dict(&reparsed);
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("/Resources");
+    let states = reparsed
+        .ext_g_states(resources)
+        .expect("parse /ExtGState resources");
+
+    let exp = ReaderFunction::from_value(
+        states
+            .get("GS1")
+            .expect("GS1")
+            .transfer
+            .as_ref()
+            .expect("/TR"),
+        None,
+    )
+    .expect("parse type 2 /TR");
+    assert_eq!(exp.function_type(), 2);
+    assert!((exp.eval(&[0.5]).expect("eval")[0] - 0.25).abs() < 1e-9);
+
+    let transfer = states
+        .get("GS2")
+        .expect("GS2")
+        .transfer
+        .as_ref()
+        .expect("/TR");
+    assert!(
+        matches!(transfer, Value::Stream(_, _)),
+        "Type 0 /TR should resolve to a stream, got {transfer:?}"
+    );
+    let dict = transfer.as_dict().expect("function stream dict");
+    let samples = reparsed
+        .decode_stream_bytes(transfer)
+        .expect("decode sample stream");
+    let sampled_reader = ReaderFunction::from_dict(dict, Some(&samples)).expect("parse type 0 /TR");
+    assert_eq!(sampled_reader.function_type(), 0);
+    let interpolated = sampled_reader.eval(&[0.5]).expect("eval")[0];
+    assert!(
+        (interpolated - 128.0 / 255.0).abs() < 1e-9,
+        "unexpected interpolation: {interpolated}"
+    );
+    assert_eq!(sampled_reader.eval(&[0.0]).expect("eval"), vec![0.0]);
+    assert_eq!(sampled_reader.eval(&[1.0]).expect("eval"), vec![1.0]);
+
+    let stitch = ReaderFunction::from_value(
+        states
+            .get("GS3")
+            .expect("GS3")
+            .transfer
+            .as_ref()
+            .expect("/TR"),
+        None,
+    )
+    .expect("parse type 3 /TR");
+    assert_eq!(stitch.function_type(), 3);
+    // 段内输入先归一到 [0,1]：0.25 → 0.5（恒等），0.75 → 0.5 → 1.0（放大 2 倍）。
+    assert!((stitch.eval(&[0.25]).expect("eval")[0] - 0.5).abs() < 1e-9);
+    assert!((stitch.eval(&[0.75]).expect("eval")[0] - 1.0).abs() < 1e-9);
+
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    assert!(extracted.contains("TR"), "{extracted}");
+}
+
+/// 写入 → 重新解析：Group XObject 的 `/Group` 字典应写出
+/// `/Type /Group`、`/S /Transparency`、组颜色空间与 `/I`，表单仍可绘制
+/// 并经 `Do` 提取内部文本。
+#[test]
+fn builder_group_xobject_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, Font, FormXObject, GroupXObject, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::content::ContentStream;
+
+    let mut inner = ContentStream::new();
+    inner
+        .begin_text()
+        .set_font("F1", 12.0)
+        .move_next_line(10.0, 20.0)
+        .show_text("Group")
+        .end_text();
+    let form = FormXObject::new([0.0, 0.0, 100.0, 50.0], inner).with_group(
+        GroupXObject::transparency()
+            .with_color_space(ColorSpace::DeviceRGB)
+            .with_isolated(true),
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "GROUP");
+    let handle = builder.form_xobject(&form);
+    builder.draw_form(page, handle, [1.0, 0.0, 0.0, 1.0, 72.0, 600.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let form_object = reparsed
+        .get_object(xobjects.get("Fm1").and_then(Value::as_ref).unwrap().0)
+        .expect("get object")
+        .expect("form object should exist");
+    let Value::Stream(dict, _) = &form_object.value else {
+        panic!("form should be a stream");
+    };
+    let group = dict
+        .get("Group")
+        .and_then(Value::as_dict)
+        .expect("form should carry a Group dictionary");
+    assert_eq!(group.get("Type").and_then(Value::as_name), Some("Group"));
+    assert_eq!(
+        group.get("S").and_then(Value::as_name),
+        Some("Transparency")
+    );
+    assert_eq!(group.get("CS").and_then(Value::as_name), Some("DeviceRGB"));
+    assert!(
+        matches!(group.get("I"), Some(Value::Bool(true))),
+        "isolated 组应写 /I true"
+    );
+    assert!(group.get("K").is_none(), "未设置 knockout 时不应写 /K");
+
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    assert!(extracted.contains("GROUP"), "{extracted}");
+    assert!(
+        extracted.contains("Group"),
+        "组内文本应经 Do 提取: {extracted}"
+    );
+}
+
+/// 写入 → 重新解析：页字典应携带 `/Group` 透明组字典，页面文本仍可提取。
+#[test]
+fn builder_page_group_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, GroupXObject, PageSize, PdfBuilder};
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "PAGE");
+    builder.set_page_group(
+        page,
+        &GroupXObject::transparency()
+            .with_color_space(ColorSpace::DeviceRGB)
+            .with_isolated(true)
+            .with_knockout(true),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let group = page_dict
+        .get("Group")
+        .and_then(Value::as_dict)
+        .expect("page should carry a Group dictionary");
+    assert_eq!(group.get("Type").and_then(Value::as_name), Some("Group"));
+    assert_eq!(
+        group.get("S").and_then(Value::as_name),
+        Some("Transparency")
+    );
+    assert_eq!(group.get("CS").and_then(Value::as_name), Some("DeviceRGB"));
+    assert!(
+        matches!(group.get("I"), Some(Value::Bool(true))),
+        "isolated 页组应写 /I true"
+    );
+    assert!(
+        matches!(group.get("K"), Some(Value::Bool(true))),
+        "knockout 页组应写 /K true"
+    );
+
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    assert!(extracted.contains("PAGE"), "{extracted}");
+}
+
+/// 写入 → 重新解析：ExtGState `/SMask` 应被读端解析为类型化软蒙版，
+/// `/G` 指向带 `/Group` 的 Form 流且不登记为页面 XObject 资源；
+/// 页面文本仍可提取。
+#[test]
+fn builder_soft_mask_graphics_state_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, Font, FormXObject, GraphicsState, GroupXObject, PageSize, PdfBuilder, SoftMask,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::graphics_state::SoftMaskSubtype;
+
+    let mut mask_content = ContentStream::new();
+    mask_content
+        .set_fill_gray(0.5)
+        .rect(0.0, 0.0, 50.0, 50.0)
+        .fill();
+    let mask_form = FormXObject::new([0.0, 0.0, 50.0, 50.0], mask_content)
+        .with_group(GroupXObject::transparency().with_color_space(ColorSpace::DeviceGray));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let handle = builder.form_xobject(&mask_form);
+    builder.set_graphics_state(
+        page,
+        &GraphicsState::new()
+            .with_fill_alpha(0.5)
+            .with_soft_mask(SoftMask::luminosity(handle).with_backdrop([0.0, 0.5, 1.0])),
+    );
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "Mask");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_dict = first_page_dict(&reparsed);
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("/Resources");
+    let states = reparsed
+        .ext_g_states(resources)
+        .expect("parse /ExtGState resources");
+    let gs = states.get("GS1").expect("GS1 graphics state");
+    let raw_mask = gs.soft_mask.as_ref().expect("GS1 should carry /SMask");
+    let mask = reparsed.soft_mask(raw_mask).expect("typed soft mask");
+
+    assert_eq!(mask.subtype, SoftMaskSubtype::Luminosity);
+    assert_eq!(mask.backdrop, Some(vec![0.0, 0.5, 1.0]));
+    let Value::Ref(group_num, _) = &mask.group else {
+        panic!("/G should be an indirect reference");
+    };
+    let group_object = reparsed
+        .get_object(*group_num)
+        .expect("group lookup")
+        .expect("group object");
+    let Value::Stream(group_dict, _) = &group_object.value else {
+        panic!("/G should reference a stream");
+    };
+    assert_eq!(
+        group_dict.get("Subtype").and_then(Value::as_name),
+        Some("Form")
+    );
+    assert_eq!(
+        group_dict
+            .get("Group")
+            .and_then(Value::as_dict)
+            .and_then(|group| group.get("S"))
+            .and_then(Value::as_name),
+        Some("Transparency")
+    );
+    assert!(
+        !reparsed
+            .decode_stream_bytes(&group_object.value)
+            .expect("decode group stream")
+            .is_empty(),
+        "软蒙版表单应有内容流"
+    );
+
+    // 软蒙版表单不是页面绘制资源；页面只经 /GS1 gs 应用透明度。
+    let page_xobjects = resources
+        .get("XObject")
+        .and_then(Value::as_dict)
+        .map(|xobjects| xobjects.0.len())
+        .unwrap_or(0);
+    assert_eq!(page_xobjects, 0, "软蒙版表单不应登记为页面 XObject");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Mask"));
+}
+
 /// 写入 → 重新解析： 子集字体应写出 `TAG+Name` 形式的 BaseFont，
 /// 读端剥离标签后仍能解析嵌入程序并提取文本。
 #[test]
@@ -3830,6 +6173,50 @@ fn builder_embeds_cff_font_program_roundtrip() {
     assert_eq!(embedded.data, cff);
 }
 
+/// 写入 → 重新解析：简单字体的 `/FontFile3` `/Subtype /Type1C` 应可解析为
+/// name-keyed CFF，按 charset/String INDEX 还原字形名并给出轮廓。
+#[test]
+fn builder_embeds_name_keyed_cff_and_reader_resolves_glyph_names() {
+    use pdf_engine::core::builder::{Font, FontProgram, PageSize, PdfBuilder};
+
+    let cff = sample_name_keyed_cff_program();
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::CFF(cff));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "A");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type1");
+    let program = reparsed
+        .type1c_program(&font_dict)
+        .expect("should parse Type1C")
+        .expect("should have Type1C program");
+    assert!(!program.is_cid_keyed());
+    assert_eq!(program.glyph_count(), 2);
+    assert_eq!(program.glyph_name(0), Some(".notdef"));
+    assert_eq!(program.glyph_name(1), Some("Alpha"));
+    assert_eq!(program.glyph_for_name("Alpha"), Some(1));
+    assert_eq!(program.glyph_for_name("missing"), None);
+    assert_eq!(program.units_per_em(), 1000);
+    assert_eq!(program.glyph_width(1), Some(600.0));
+
+    let outline = program.outline(1).expect("glyph outline");
+    assert_eq!(outline.width, 600.0);
+    assert_eq!(
+        outline.segments,
+        vec![
+            CffPathSegment::MoveTo { x: 100.0, y: 0.0 },
+            CffPathSegment::LineTo { x: 300.0, y: 0.0 },
+            CffPathSegment::ClosePath,
+        ]
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("A"));
+}
+
 /// 写入 → 重新解析： CIDFont 的系统信息、宽度与描述符（含 `/CIDSet`）
 /// 应可从生成的文档还原。
 #[test]
@@ -3885,6 +6272,137 @@ fn builder_cid_font_descriptor_roundtrips_through_parser() {
     assert_eq!(metrics.cid_is_present(15), Some(true));
 }
 
+/// 写入 → 重新解析：CIDFont 的 `/DW2` 与 `/W2` 垂直度量应能还原，
+/// 未列出的 CID 按 `/DW2` 与水平宽度的一半回退。
+#[test]
+fn builder_cid_font_vertical_metrics_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth, FontDescriptor,
+        PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::reader::font::{DefaultVerticalMetrics, VerticalMetrics};
+
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_widths(vec![CidWidth::Single(3, 600.0)])
+    .with_default_vertical_metrics(900.0, -800.0)
+    .with_vertical_metrics(vec![
+        CidVerticalMetrics::Single(1, -500.0, 250.0, 700.0),
+        CidVerticalMetrics::Range(5, 6, -600.0, 300.0, 800.0),
+    ]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid(page, index, 72.0, 700.0, &[1]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType2");
+    let parsed = reparsed
+        .cid_font_type2(&descendant)
+        .expect("should parse CIDFontType2")
+        .expect("should be CIDFontType2");
+    assert_eq!(
+        parsed.default_vertical_metrics(),
+        DefaultVerticalMetrics {
+            v_y: 900.0,
+            w1_y: -800.0
+        }
+    );
+    assert_eq!(
+        parsed.vertical_metrics_for_cid(1),
+        VerticalMetrics {
+            w1_y: -500.0,
+            v1x: 250.0,
+            v1y: 700.0
+        }
+    );
+    assert_eq!(
+        parsed.vertical_metrics_for_cid(6),
+        VerticalMetrics {
+            w1_y: -600.0,
+            v1x: 300.0,
+            v1y: 800.0
+        }
+    );
+    // CID 3 无 /W2：v_x 取水平宽度的一半，其余取 /DW2。
+    assert_eq!(
+        parsed.vertical_metrics_for_cid(3),
+        VerticalMetrics {
+            w1_y: -800.0,
+            v1x: 300.0,
+            v1y: 900.0
+        }
+    );
+}
+
+/// 写入 → 重新解析：CIDFont 描述符的 `/Style /Panose`、`/Lang` 与 `/FD`
+/// 字形类覆盖应原样保留。
+#[test]
+fn builder_cid_font_descriptor_style_lang_fd_roundtrip() {
+    use std::collections::BTreeMap;
+
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "Proportional".to_string(),
+        FontDescriptor::new()
+            .with_ascent(750.0)
+            .with_descent(-250.0),
+    );
+    let descriptor = FontDescriptor::new()
+        .with_style_panose([
+            0x02, 0x0B, 0x05, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        .with_lang("zh-CN")
+        .with_fd(overrides);
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        descriptor,
+        12.0,
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid(page, index, 72.0, 700.0, &[1]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType2");
+    let parsed = reparsed
+        .cid_font_type2(&descendant)
+        .expect("should parse CIDFontType2")
+        .expect("should be CIDFontType2");
+    let descriptor = parsed.descriptor();
+    assert_eq!(
+        descriptor.style_panose,
+        Some([
+            0x02, 0x0B, 0x05, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        ])
+    );
+    assert_eq!(descriptor.lang.as_deref(), Some("zh-CN"));
+    let fd = descriptor.fd.as_ref().expect("/FD");
+    let proportional = fd.get("Proportional").expect("Proportional 覆盖");
+    assert_eq!(proportional.get("Ascent"), Some(&Value::Float(750.0)));
+    assert_eq!(proportional.get("Descent"), Some(&Value::Float(-250.0)));
+}
+
 /// 写入 → 重新解析： CIDFontType2 嵌入的 TrueType 程序应作为 `/FontFile2`
 /// 保存，读端可还原原始字节并继续解析 CIDFont。
 #[test]
@@ -3926,6 +6444,67 @@ fn builder_cid_font_type2_embeds_truetype_program_roundtrip() {
         .expect("should be CIDFontType2");
     assert_eq!(parsed.system_info().registry, "Adobe");
     assert_eq!(parsed.system_info().ordering, "Identity");
+}
+
+/// 写入 → 重新解析：CIDFontType2 的 TrueType 程序按 CID 子集化后，
+/// `/CIDToGIDMap` 应按新 gid 重建，读端 CID→glyph 解析与文本提取保持一致。
+#[test]
+fn builder_cid_font_type2_subset_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, FontProgram, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::reader::font::TrueTypeFont;
+
+    let sfnt = sample_sfnt_font();
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::TrueType(sfnt.clone()))
+    .with_cid_to_gid_map(&[0, 1, 2])
+    .with_subset_cids(&[2]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid_unicode(page, index, 72.0, 700.0, &[(2, "A")]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType2");
+    let base_font = descendant
+        .as_dict()
+        .and_then(|dict| dict.get("BaseFont"))
+        .and_then(Value::as_name)
+        .expect("BaseFont");
+    assert!(
+        base_font.contains('+'),
+        "子集 BaseFont 应带标签前缀: {base_font}"
+    );
+
+    let embedded = reparsed
+        .cid_font_type2_program(&descendant)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile2);
+    assert_ne!(embedded.data, sfnt, "嵌入程序应为子集");
+    assert!(embedded.data.len() < sfnt.len(), "子集程序应更短");
+    let subset = TrueTypeFont::parse(embedded.data).expect("子集程序应可解析");
+    assert_eq!(subset.glyph_count(), 2, "应只保留 glyph 0 与原 gid 2");
+
+    let parsed = reparsed
+        .cid_font_type2(&descendant)
+        .expect("should parse CIDFontType2")
+        .expect("should be CIDFontType2");
+    assert_eq!(parsed.glyph_id_for_cid(2), Some(1), "CID 2 应指向新 gid 1");
+    assert_eq!(parsed.glyph_id_for_cid(0), Some(0));
+    assert_eq!(parsed.glyph_id_for_cid(1), Some(0), "未保留的 CID 应归零");
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("A"));
 }
 
 /// 写入 → 重新解析： CIDFontType0 嵌入的 CFF 程序应作为 `/FontFile3`
@@ -3971,6 +6550,52 @@ fn builder_cid_font_type0_embeds_cff_program_roundtrip() {
     let program = parsed.font_program().expect("should keep program");
     assert_eq!(program.subtype.as_deref(), Some("CIDFontType0C"));
     assert_eq!(program.data, cff);
+}
+
+/// 写入 → 重新解析 → 提取：CIDFontType0 嵌入 CFF-flavored OpenType
+/// 程序时应写 `/FontFile3` `/Subtype /OpenType`，文本经 ToUnicode 还原。
+#[test]
+fn builder_cid_font_type0_opentype_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, FontProgram, PageSize, PdfBuilder,
+    };
+
+    let program = sample_opentype_cff_sfnt();
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType0,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::OpenType(program.clone()));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid_unicode(page, index, 72.0, 700.0, &[(7, "Hi")]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType0");
+    let embedded = reparsed
+        .cid_font_type0_program(&descendant)
+        .expect("should resolve program")
+        .expect("should have program");
+    assert_eq!(embedded.source, FontProgramSource::FontFile3);
+    assert_eq!(embedded.subtype.as_deref(), Some("OpenType"));
+    assert_eq!(embedded.data, program);
+
+    let parsed = reparsed
+        .cid_font_type0(&descendant)
+        .expect("should parse CIDFontType0")
+        .expect("should be CIDFontType0");
+    let embedded = parsed.font_program().expect("should keep program");
+    assert_eq!(embedded.subtype.as_deref(), Some("OpenType"));
+    assert_eq!(embedded.data, program);
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Hi"));
 }
 
 /// 写入 → 重新解析 → 提取：builder 为 CIDFont 写出的 `/ToUnicode`
@@ -4308,6 +6933,110 @@ fn builder_type3_glyph_metrics_roundtrip_with_text_extraction() {
     assert_eq!(parsed.width_for(66), Some(600.0));
 
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
+}
+
+/// 合成一个最小 name-keyed CFF 程序：2 个字形（`.notdef` 与 `Alpha`）、
+/// charset format 0（GID 1 → SID 391）以及提供 `Alpha` 的 String INDEX。
+/// 所有 DICT 操作数与偏移用定长 longint 编码，偏移可单趟计算。
+fn sample_name_keyed_cff_program() -> Vec<u8> {
+    fn longint(value: i32) -> Vec<u8> {
+        let mut out = vec![29];
+        out.extend_from_slice(&value.to_be_bytes());
+        out
+    }
+    fn shortint(value: i16) -> Vec<u8> {
+        let mut out = vec![28];
+        out.extend_from_slice(&value.to_be_bytes());
+        out
+    }
+    fn index(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        if entries.is_empty() {
+            return out;
+        }
+        let mut offsets = vec![1u32];
+        let mut total = 1u32;
+        for entry in entries {
+            total += entry.len() as u32;
+            offsets.push(total);
+        }
+        out.push(1); // offSize：本夹具的偏移都小于 0xFF
+        for offset in offsets {
+            out.push(offset as u8);
+        }
+        for entry in entries {
+            out.extend_from_slice(entry);
+        }
+        out
+    }
+
+    let charstring = {
+        let mut cs = shortint(600); // width 操作数（nominalWidthX 为 0）
+        cs.extend(shortint(100));
+        cs.extend(shortint(0));
+        cs.push(21); // rmoveto
+        cs.extend(shortint(200));
+        cs.extend(shortint(0));
+        cs.push(5); // rlineto
+        cs.push(14); // endchar
+        cs
+    };
+    let private = {
+        let mut p = shortint(500);
+        p.push(20); // defaultWidthX
+        p.extend(shortint(0));
+        p.push(21); // nominalWidthX
+        p
+    };
+    let header = [1u8, 0, 4, 1];
+    let name_index = index(&[b"NKTest".to_vec()]);
+    let string_index = index(&[b"Alpha".to_vec()]);
+    let gsubr_index = index(&[]);
+    let charset = vec![0, 0x01, 0x87]; // format 0：GID 1 → SID 391
+    let charstrings = index(&[vec![14], charstring]);
+
+    let top_dict =
+        |charset_off: i32, char_strings_off: i32, private_size: i32, private_off: i32| {
+            let mut out = Vec::new();
+            out.extend(longint(charset_off));
+            out.push(15); // charset
+            out.extend(longint(char_strings_off));
+            out.push(17); // CharStrings
+            out.extend(longint(private_size));
+            out.extend(longint(private_off));
+            out.push(18); // Private
+            out
+        };
+    let placeholder = top_dict(0, 0, private.len() as i32, 0);
+    let top_index_size = index(std::slice::from_ref(&placeholder)).len();
+    let prefix =
+        header.len() + name_index.len() + top_index_size + string_index.len() + gsubr_index.len();
+    let charset_offset = prefix as i32;
+    let private_offset = (prefix + charset.len()) as i32;
+    let char_strings_offset = (prefix + charset.len() + private.len()) as i32;
+    let top_dict = top_dict(
+        charset_offset,
+        char_strings_offset,
+        private.len() as i32,
+        private_offset,
+    );
+    assert_eq!(
+        index(std::slice::from_ref(&top_dict)).len(),
+        top_index_size,
+        "Top DICT 长度不应随偏移取值变化"
+    );
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&header);
+    out.extend(name_index);
+    out.extend(index(&[top_dict]));
+    out.extend(string_index);
+    out.extend(gsubr_index);
+    out.extend(charset);
+    out.extend(private);
+    out.extend(charstrings);
+    out
 }
 
 /// 合成一个最小 CID-keyed CFF 程序：3 个字形（CID 0/7/9）、单个 Font
@@ -4755,6 +7484,27 @@ fn builder_graphics_state_roundtrips_through_parser() {
         .expect("font object");
     let font_dict = font_object.value.as_dict().expect("font dictionary");
     assert_eq!(font_dict.get("Type").and_then(Value::as_name), Some("Font"));
+
+    // ISO 32000-1 Table A.1 无 ca/CA/BM 操作符：三者只能存在于
+    // ExtGState 字典，内容流仅经 `/GS1 gs` 应用。
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream");
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    let content_text = String::from_utf8_lossy(&content);
+    assert!(content_text.contains("/GS1 gs\n"), "{content_text}");
+    for inline in [" ca", " CA", " BM"] {
+        assert!(
+            !content_text.contains(inline),
+            "内容流不得内联 {inline:?}: {content_text}"
+        );
+    }
 
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Hello"));
 }

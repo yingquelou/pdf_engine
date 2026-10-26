@@ -65,6 +65,27 @@ fn includes_composite_component_closure() {
 }
 
 #[test]
+fn reports_old_to_new_glyph_mapping() {
+    let bytes = fixture_font(1, true);
+
+    let (subset_bytes, mapping) = subset_truetype_with_mapping(&bytes, &[3]).unwrap();
+    assert_eq!(TrueTypeFont::parse(subset_bytes).unwrap().glyph_count(), 2);
+    assert_eq!(mapping.get(&0), Some(&0));
+    assert_eq!(mapping.get(&3), Some(&1));
+    assert_eq!(mapping.len(), 2);
+
+    // 复合字形会把组件一并纳入映射，即使调用方未请求该组件。
+    let (composite_bytes, composite) = subset_truetype_with_mapping(&bytes, &[2]).unwrap();
+    assert_eq!(
+        TrueTypeFont::parse(composite_bytes).unwrap().glyph_count(),
+        3
+    );
+    assert_eq!(composite.get(&0), Some(&0));
+    assert_eq!(composite.get(&2), Some(&1));
+    assert_eq!(composite.get(&3), Some(&2), "组件字形也应出现在映射中");
+}
+
+#[test]
 fn rejects_out_of_range_glyphs_and_handles_empty_request() {
     let bytes = fixture_font(1, true);
 

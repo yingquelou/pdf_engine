@@ -70,9 +70,94 @@ fn cff_font_program_is_embedded() {
 }
 
 #[test]
+fn type1_fontfile_declares_table_127_lengths() {
+    let program = sample_type1_program();
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::Type1(program.clone()));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type1");
+    let (stream_dict, bytes) = embedded_program_stream(&doc, &font_dict, "FontFile");
+    let entry = |key: &str| {
+        stream_dict
+            .get(key)
+            .and_then(Value::as_integer)
+            .unwrap_or_else(|| panic!("missing {key}"))
+    };
+    let length1 = entry("Length1") as usize;
+    let length2 = entry("Length2") as usize;
+    let length3 = entry("Length3") as usize;
+
+    assert_eq!(length1 + length2 + length3, bytes.len(), "三段应覆盖整个流");
+    let marker = b"currentfile eexec\n";
+    let expected_length1 = program
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("eexec marker")
+        + marker.len();
+    assert_eq!(
+        length1, expected_length1,
+        "Length1 应覆盖明文头与 eexec 分隔符"
+    );
+    assert!(
+        bytes[length1 + length2..]
+            .iter()
+            .take(512)
+            .all(|&byte| byte == b'0'),
+        "加密段之后应为 512 零守卫"
+    );
+    assert!(length3 >= 512, "尾部固定内容应包含零守卫");
+}
+
+#[test]
+fn truetype_fontfile2_declares_length1_only() {
+    let program = sample_truetype_program();
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::TrueType(program));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "TrueType");
+    let (stream_dict, bytes) = embedded_program_stream(&doc, &font_dict, "FontFile2");
+    assert_eq!(
+        stream_dict.get("Length1").and_then(Value::as_integer),
+        Some(bytes.len() as i64),
+        "Length1 应为 TrueType 程序字节数"
+    );
+    assert!(stream_dict.get("Length2").is_none());
+    assert!(stream_dict.get("Length3").is_none());
+}
+
+#[test]
+fn cff_fontfile3_omits_font_program_length_entries() {
+    let program = vec![0x01, 0x00, 0x04, 0x05];
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::CFF(program.clone()));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "Type1");
+    let (stream_dict, bytes) = embedded_program_stream(&doc, &font_dict, "FontFile3");
+    assert_eq!(bytes, program);
+    for key in ["Length1", "Length2", "Length3"] {
+        assert!(
+            stream_dict.get(key).is_none(),
+            "FontFile3 不应写 {key}: {stream_dict:?}"
+        );
+    }
+}
+
+#[test]
 fn subset_font_prefixes_base_font_with_six_letters() {
     let program = FontProgram::TrueType(vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x0A]);
-    let tag = program.subset_tag_with(&[]);
+    let tag = program.subset_tag_for_name("Helvetica", &[]);
     assert_eq!(tag.len(), 6, "子集标签应为六个字母");
     assert!(
         tag.bytes().all(|byte| byte.is_ascii_uppercase()),
@@ -125,6 +210,22 @@ fn subset_tag_with_discriminator_separates_different_subsets() {
 }
 
 #[test]
+fn subset_tag_includes_font_name() {
+    let program = FontProgram::TrueType(vec![0x00, 0x01, 0x00, 0x00]);
+    let same_name = program.subset_tag_for_name("Helvetica", &[1, 0, 2]);
+    assert_eq!(
+        same_name,
+        program.subset_tag_for_name("Helvetica", &[1, 0, 2]),
+        "同名字与同子集应得到同一标签"
+    );
+    assert_ne!(
+        same_name,
+        program.subset_tag_for_name("BuilderSans", &[1, 0, 2]),
+        "同一程序与子集在不同 BaseFont 名下应得到不同标签"
+    );
+}
+
+#[test]
 fn subset_without_font_program_keeps_base_font() {
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -153,6 +254,12 @@ fn subset_glyphs_rewrite_truetype_fontfile2() {
 
     let (_, font_dict) = find_font_object(&doc, "TrueType");
     let (declared_length, bytes) = embedded_program(&doc, &font_dict, "FontFile2");
+    let (stream_dict, _) = embedded_program_stream(&doc, &font_dict, "FontFile2");
+    assert_eq!(
+        stream_dict.get("Length1").and_then(Value::as_integer),
+        Some(bytes.len() as i64),
+        "子集程序的 Length1 应与重写后字节一致"
+    );
     assert_ne!(bytes, program, "嵌入程序应被重写为子集");
     assert!(
         bytes.len() < program.len(),
@@ -181,7 +288,7 @@ fn subset_glyphs_rewrite_truetype_fontfile2() {
         .expect("BaseFont");
     let expected = format!(
         "{}+Helvetica",
-        FontProgram::TrueType(program).subset_tag_with(&[1, 0, 2])
+        FontProgram::TrueType(program).subset_tag_for_name("Helvetica", &[1, 0, 2])
     );
     assert_eq!(base_font, expected);
 }
@@ -318,6 +425,21 @@ fn type1_subset_glyphs_rewrite_fontfile() {
 
     let (_, font_dict) = find_font_object(&doc, "Type1");
     let (declared_length, bytes) = embedded_program(&doc, &font_dict, "FontFile");
+    let (stream_dict, _) = embedded_program_stream(&doc, &font_dict, "FontFile");
+    let length_sum: i64 = ["Length1", "Length2", "Length3"]
+        .iter()
+        .map(|key| {
+            stream_dict
+                .get(key)
+                .and_then(Value::as_integer)
+                .unwrap_or_else(|| panic!("missing {key}"))
+        })
+        .sum();
+    assert_eq!(
+        length_sum,
+        bytes.len() as i64,
+        "子集程序的 Length1/2/3 应覆盖整个流"
+    );
     assert_ne!(bytes, program, "嵌入程序应被重写为子集");
     assert!(
         bytes.len() < program.len(),
@@ -352,7 +474,7 @@ fn type1_subset_glyphs_rewrite_fontfile() {
         .expect("BaseFont");
     let expected = format!(
         "{}+Helvetica",
-        FontProgram::Type1(program).subset_tag_with(&[2, 0, 0, 0, 1, b'A'])
+        FontProgram::Type1(program).subset_tag_for_name("Helvetica", &[2, 0, 0, 0, 1, b'A'])
     );
     assert_eq!(base_font, expected);
 }
@@ -441,6 +563,131 @@ fn subset_glyphs_and_type1_subset_glyphs_cannot_be_combined() {
     assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
     assert!(error.to_string().contains("cannot be combined"), "{error}");
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn opentype_cff_program_writes_fontfile3_with_opentype_subtype() {
+    let program = sample_opentype_sfnt(b"OTTO", b"sample-cff-table");
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::OpenType(program.clone()));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    // CFF-flavored OpenType 的字体子类型为 Type1（ISO 32000-1 §9.6.2）。
+    let (_, font_dict) = find_font_object(&doc, "Type1");
+    let (stream_dict, bytes) = embedded_program_stream(&doc, &font_dict, "FontFile3");
+    assert_eq!(
+        stream_dict.get("Subtype").and_then(Value::as_name),
+        Some("OpenType"),
+        "FontFile3 流应声明 /Subtype /OpenType"
+    );
+    assert_eq!(bytes, program, "嵌入程序应与输入字节一致");
+    for key in ["Length1", "Length2", "Length3"] {
+        assert!(
+            stream_dict.get(key).is_none(),
+            "FontFile3 不应写 {key}: {stream_dict:?}"
+        );
+    }
+}
+
+#[test]
+fn opentype_truetype_program_writes_fontfile2_with_length1() {
+    let program = sample_truetype_program(); // 版本标签 0x00010000
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::OpenType(program.clone()));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "TrueType");
+    let (stream_dict, bytes) = embedded_program_stream(&doc, &font_dict, "FontFile2");
+    assert_eq!(bytes, program);
+    assert_eq!(
+        stream_dict.get("Length1").and_then(Value::as_integer),
+        Some(bytes.len() as i64),
+        "FontFile2 应写 Table 127 的 Length1"
+    );
+    assert!(stream_dict.get("Length2").is_none());
+    assert!(stream_dict.get("Length3").is_none());
+}
+
+#[test]
+fn opentype_program_accepts_apple_true_flavor() {
+    let program = sample_opentype_sfnt(b"true", b"sample-cff-table");
+    let font = Font::helvetica(12.0).with_font_program(FontProgram::OpenType(program.clone()));
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, font_dict) = find_font_object(&doc, "TrueType");
+    let (_, bytes) = embedded_program_stream(&doc, &font_dict, "FontFile2");
+    assert_eq!(bytes, program);
+}
+
+#[test]
+fn opentype_program_rejects_unsupported_sfnt_flavor() {
+    for program in [
+        sample_opentype_sfnt(b"OTF ", b"payload"),
+        sample_opentype_sfnt(b"typ1", b"payload"),
+        vec![0x00, 0x01, 0x00],
+    ] {
+        let font = Font::helvetica(12.0).with_font_program(FontProgram::OpenType(program));
+
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &font, 10.0, 10.0, "A");
+
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("非法 SFNT 版本标签应被拒绝");
+        assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+        assert!(
+            error.to_string().contains("unsupported SFNT flavor"),
+            "{error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
+fn opentype_program_rejects_subset_requests() {
+    let program = sample_opentype_sfnt(b"OTTO", b"sample-cff-table");
+    let cases = [
+        (
+            Font::helvetica(12.0)
+                .with_font_program(FontProgram::OpenType(program.clone()))
+                .with_subset_glyphs(&[1]),
+            "subset_glyphs",
+        ),
+        (
+            Font::helvetica(12.0)
+                .with_font_program(FontProgram::OpenType(program.clone()))
+                .with_subset_type1_glyphs(&["A"]),
+            "subset_type1_glyphs",
+        ),
+        (
+            Font::helvetica(12.0)
+                .with_font_program(FontProgram::OpenType(program.clone()))
+                .with_subset_cff_glyphs(&["A"]),
+            "subset_cff_glyphs",
+        ),
+    ];
+    for (font, expected) in cases {
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &font, 10.0, 10.0, "A");
+
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("OpenType 程序不支持子集化");
+        assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(error.to_string().contains("OpenType"), "{error}");
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
 }
 
 #[test]

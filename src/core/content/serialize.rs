@@ -1,9 +1,10 @@
 //! 操作符到内容流字节的序列化。
 
+use crate::core::types::Value;
 use crate::core::writer::format_float;
 
 use super::stream::ContentStream;
-use super::types::{Op, TextArrayItem};
+use super::types::{MarkedContentProperties, Op, TextArrayItem};
 
 impl ContentStream {
     pub(super) fn serialize_one(op: &Op, out: &mut Vec<u8>) {
@@ -238,6 +239,14 @@ impl ContentStream {
             Op::Clip => w.emit_op_space(b"W"),
             Op::ClipEvenOdd => w.emit_op_space(b"W*"),
 
+            Op::SetStrokeGray { gray } => {
+                w.emit_float(*gray);
+                w.emit_op_space(b"G");
+            }
+            Op::SetFillGray { gray } => {
+                w.emit_float(*gray);
+                w.emit_op_space(b"g");
+            }
             Op::SetStrokeRGB { r, g, b } => {
                 w.emit_float(*r);
                 w.emit_byte(b' ');
@@ -320,25 +329,80 @@ impl ContentStream {
                 }
                 w.emit_op_space(b"scn");
             }
+            Op::SetStrokeColorPattern(name) => {
+                w.emit_byte(b'/');
+                w.emit(name.as_bytes());
+                w.emit_op_space(b"SCN");
+            }
+            Op::SetFillColorPattern(name) => {
+                w.emit_byte(b'/');
+                w.emit(name.as_bytes());
+                w.emit_op_space(b"scn");
+            }
+            Op::SetStrokeColorPatternWithComponents { values, name } => {
+                for (i, v) in values.iter().enumerate() {
+                    if i > 0 {
+                        w.emit_byte(b' ');
+                    }
+                    w.emit_float(*v);
+                }
+                if !values.is_empty() {
+                    w.emit_byte(b' ');
+                }
+                w.emit_byte(b'/');
+                w.emit(name.as_bytes());
+                w.emit_op_space(b"SCN");
+            }
+            Op::SetFillColorPatternWithComponents { values, name } => {
+                for (i, v) in values.iter().enumerate() {
+                    if i > 0 {
+                        w.emit_byte(b' ');
+                    }
+                    w.emit_float(*v);
+                }
+                if !values.is_empty() {
+                    w.emit_byte(b' ');
+                }
+                w.emit_byte(b'/');
+                w.emit(name.as_bytes());
+                w.emit_op_space(b"scn");
+            }
+
+            Op::BeginMarkedContent { tag } => {
+                w.emit_byte(b'/');
+                w.emit(tag.as_bytes());
+                w.emit_op_space(b"BMC");
+            }
+            Op::BeginMarkedContentProperties { tag, properties } => {
+                w.emit_byte(b'/');
+                w.emit(tag.as_bytes());
+                w.emit_byte(b' ');
+                w.emit_properties(properties);
+                w.emit_op_space(b"BDC");
+            }
+            Op::MarkedContentPoint { tag } => {
+                w.emit_byte(b'/');
+                w.emit(tag.as_bytes());
+                w.emit_op_space(b"MP");
+            }
+            Op::MarkedContentPointProperties { tag, properties } => {
+                w.emit_byte(b'/');
+                w.emit(tag.as_bytes());
+                w.emit_byte(b' ');
+                w.emit_properties(properties);
+                w.emit_op_space(b"DP");
+            }
+            Op::EndMarkedContent => w.emit_op(b"EMC"),
 
             Op::DrawXObject(name) => {
                 w.emit_byte(b'/');
                 w.emit(name.as_bytes());
                 w.emit_op_space(b"Do");
             }
-
-            Op::SetFillAlpha(v) => {
-                w.emit_float(*v);
-                w.emit_op_space(b"ca");
-            }
-            Op::SetStrokeAlpha(v) => {
-                w.emit_float(*v);
-                w.emit_op_space(b"CA");
-            }
-            Op::SetBlendMode(mode) => {
+            Op::PaintShading(name) => {
                 w.emit_byte(b'/');
-                w.emit(mode.as_bytes());
-                w.emit_op_space(b"BM");
+                w.emit(name.as_bytes());
+                w.emit_op_space(b"sh");
             }
         }
     }
@@ -377,6 +441,20 @@ impl<'a> Writer<'a> {
         self.0.push(b' ');
         self.0.extend_from_slice(kw);
         self.0.push(b'\n');
+    }
+    /// 输出标记内容属性表：资源名 `/name` 或内联字典 `<< ... >>`。
+    fn emit_properties(&mut self, properties: &MarkedContentProperties) {
+        match properties {
+            MarkedContentProperties::Name(name) => {
+                self.0.push(b'/');
+                self.0.extend_from_slice(name.as_bytes());
+            }
+            MarkedContentProperties::Dict(dict) => {
+                let mut out = String::new();
+                crate::core::writer::write_value(&Value::Dict(dict.clone()), &mut out);
+                self.0.extend_from_slice(out.as_bytes());
+            }
+        }
     }
     /// 输出转义后的文本字面量 `(s)`，内部处理 `( ) \` 等转义。
     fn emit_literal(&mut self, s: &str) {

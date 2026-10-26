@@ -44,6 +44,8 @@ impl FeatureProfile {
 /// - `/Type /XRef` → XRefStream
 /// - `/Type /ObjStm` → ObjectStream
 /// - `/Filter` 中的 JPXDecode → JPXDecode，JBIG2Decode → JBIG2Decode
+/// - `/ShadingType` 或 `/PatternType 2` → Shading
+/// - `/PatternType 1` → TilingPattern
 /// - `/SMask`、`/SMaskInData`、`/ca`、`/CA`、`/BM` → Transparency
 /// - `/OCProperties` 键存在 → OptionalContent
 /// - `/Encrypt` 键存在 → EncryptionRC4
@@ -76,6 +78,21 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 图像过滤器（JPX/JBIG2，其余通用过滤器不记）
     if let Some(f) = image_filter_feature(d) {
         features.insert(f);
+    }
+    // 图案：/PatternType 1 为平铺图案（PDF 1.2），/PatternType 2 为
+    // 着色图案，依赖 PDF 1.3 的渐变。
+    match d.get("PatternType").and_then(|v| v.as_integer()) {
+        Some(1) => {
+            features.insert(PdfFeature::TilingPattern);
+        }
+        Some(2) => {
+            features.insert(PdfFeature::Shading);
+        }
+        _ => {}
+    }
+    // 独立渐变字典（Type 1–7）。
+    if d.0.contains_key("ShadingType") {
+        features.insert(PdfFeature::Shading);
     }
     // 透明度相关键
     for key in ["SMask", "SMaskInData", "ca", "CA", "BM"] {

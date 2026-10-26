@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use crate::core::types::{Document, Value};
 
 use super::{
-    CffOutlineParser, CidSystemInfo, FontDescriptorMetrics, FontError, FontResult, RawCffBackend,
-    TtfParserCffBackend, UnavailableCffBackend, cid::parse_cid_metrics,
-    embedded_program::EmbeddedFontProgram,
+    CffOutlineParser, CidSystemInfo, DefaultVerticalMetrics, FontDescriptorMetrics, FontError,
+    FontResult, RawCffBackend, TtfParserCffBackend, UnavailableCffBackend, VerticalMetrics,
+    cid::parse_cid_metrics, embedded_program::EmbeddedFontProgram,
 };
 
 /// Parsed metrics and embedded program for a PDF CIDFontType0 descendant.
@@ -23,6 +23,8 @@ pub struct CidFontType0 {
     system_info: CidSystemInfo,
     default_width: f64,
     widths: BTreeMap<u16, f64>,
+    default_vertical_metrics: DefaultVerticalMetrics,
+    vertical_metrics: BTreeMap<u16, VerticalMetrics>,
     descriptor: FontDescriptorMetrics,
     font_program: Option<EmbeddedFontProgram>,
 }
@@ -46,6 +48,26 @@ impl CidFontType0 {
     /// Return the horizontal width for a CID using `/W` and `/DW`.
     pub fn width_for_cid(&self, cid: u16) -> f64 {
         self.widths.get(&cid).copied().unwrap_or(self.default_width)
+    }
+
+    /// Return `/DW2`, defaulting to `[880, -1000]` when omitted.
+    pub fn default_vertical_metrics(&self) -> DefaultVerticalMetrics {
+        self.default_vertical_metrics
+    }
+
+    /// Return the vertical metrics for a CID.
+    ///
+    /// `/W2` entries take precedence. Otherwise `w1_y` and `v_y` fall back to
+    /// `/DW2`, and `v_x` defaults to half the glyph's horizontal width.
+    pub fn vertical_metrics_for_cid(&self, cid: u16) -> VerticalMetrics {
+        self.vertical_metrics
+            .get(&cid)
+            .copied()
+            .unwrap_or(VerticalMetrics {
+                w1_y: self.default_vertical_metrics.w1_y,
+                v1x: self.width_for_cid(cid) / 2.0,
+                v1y: self.default_vertical_metrics.v_y,
+            })
     }
 
     /// Return the parsed `/FontDescriptor` metrics.
@@ -157,6 +179,8 @@ impl Document {
             system_info: metrics.system_info,
             default_width: metrics.default_width,
             widths: metrics.widths,
+            default_vertical_metrics: metrics.default_vertical_metrics,
+            vertical_metrics: metrics.vertical_metrics,
             descriptor: metrics.descriptor,
             font_program,
         }))
@@ -168,7 +192,9 @@ mod tests {
     use crate::core::reader::font::cff::fixtures;
     use crate::core::types::{Array, Dict, Document, StreamData, Value};
 
-    use super::super::{EmbeddedFontProgram, FontProgramSource};
+    use super::super::{
+        DefaultVerticalMetrics, EmbeddedFontProgram, FontProgramSource, VerticalMetrics,
+    };
     use super::outline_backend;
 
     fn cid_system_info() -> Value {
@@ -272,6 +298,57 @@ mod tests {
         assert_eq!(
             font.font_program().unwrap().subtype.as_deref(),
             Some("OpenType")
+        );
+    }
+
+    #[test]
+    fn parses_vertical_metrics_from_dw2_and_w2() {
+        let document = Document::new();
+        let font = cid_font(vec![
+            (
+                "DW2",
+                Value::Array(
+                    Array::new()
+                        .push(Value::Integer(900))
+                        .push(Value::Integer(-850)),
+                ),
+            ),
+            (
+                "W2",
+                Value::Array(
+                    Array::new().push(Value::Integer(2)).push(Value::Array(
+                        Array::new()
+                            .push(Value::Integer(-400))
+                            .push(Value::Integer(150))
+                            .push(Value::Integer(650)),
+                    )),
+                ),
+            ),
+        ]);
+
+        let font = document.cid_font_type0(&font).unwrap().unwrap();
+        assert_eq!(
+            font.default_vertical_metrics(),
+            DefaultVerticalMetrics {
+                v_y: 900.0,
+                w1_y: -850.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(2),
+            VerticalMetrics {
+                w1_y: -400.0,
+                v1x: 150.0,
+                v1y: 650.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(3),
+            VerticalMetrics {
+                w1_y: -850.0,
+                v1x: 500.0,
+                v1y: 900.0
+            }
         );
     }
 

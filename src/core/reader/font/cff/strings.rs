@@ -5,10 +5,11 @@
 //! String INDEX；391 起才由 String INDEX 提供。预定义 charset 0/1/2
 //! （ISOAdobe/Expert/ExpertSubset）则直接给出顺序排列的 SID 表。
 //!
-//! 这里只保存常量数据，解析/重写逻辑见 [`super::type1c`]。
+//! 这里只保存常量数据：读端字形名解析见 [`super::raw`]，name-keyed
+//! 子集重写见 [`super::subset`]。
 
 /// Adobe TN #5176 附录 A 的 391 个标准字符串（SID 即下标）。
-pub(super) const STANDARD_STRINGS: &[&str] = &[
+pub(crate) const STANDARD_STRINGS: &[&str] = &[
     ".notdef",
     "space",
     "exclam",
@@ -403,10 +404,10 @@ pub(super) const STANDARD_STRINGS: &[&str] = &[
 ];
 
 /// 预定义 charset 0（ISOAdobe）覆盖的 GID 数：GID i 的 SID 即 i。
-pub(super) const ISO_ADOBE_CHARSET_LEN: usize = 229;
+pub(crate) const ISO_ADOBE_CHARSET_LEN: usize = 229;
 
 /// 预定义 charset 1（Expert）的 GID → SID 表（GID 0 隐含为 SID 0）。
-pub(super) const EXPERT_CHARSET_SIDS: &[u16] = &[
+pub(crate) const EXPERT_CHARSET_SIDS: &[u16] = &[
     0, 1, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 13, 14, 15, 99, 239, 240, 241, 242,
     243, 244, 245, 246, 247, 248, 27, 28, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
     260, 261, 262, 263, 264, 265, 266, 109, 110, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276,
@@ -419,7 +420,7 @@ pub(super) const EXPERT_CHARSET_SIDS: &[u16] = &[
 ];
 
 /// 预定义 charset 2（ExpertSubset）的 GID → SID 表（GID 0 隐含为 SID 0）。
-pub(super) const EXPERT_SUBSET_CHARSET_SIDS: &[u16] = &[
+pub(crate) const EXPERT_SUBSET_CHARSET_SIDS: &[u16] = &[
     0, 1, 231, 232, 235, 236, 237, 238, 13, 14, 15, 99, 239, 240, 241, 242, 243, 244, 245, 246,
     247, 248, 27, 28, 249, 250, 251, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264,
     265, 266, 109, 110, 267, 268, 269, 270, 272, 300, 301, 302, 305, 314, 315, 158, 155, 163, 320,

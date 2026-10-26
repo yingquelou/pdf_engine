@@ -3,7 +3,7 @@
 //! 把定义域切成 n 段（/Bounds 为 n−1 个内部分点），每段线性映射
 //! （/Encode）到对应子函数的输入；逐段调用子函数求值。
 
-use super::{err, parse_numbers, FunctionError, Result};
+use super::{FunctionError, Result, err, parse_numbers};
 use crate::core::types::{Dict, StreamData, Value};
 
 /// Type 3 拼接函数。
@@ -134,15 +134,13 @@ impl StitchingFunction {
 /// （Type 0/4 子函数）；`StreamData::Ref` / `Value::Ref` 无法在无
 /// `Document` 上下文时取流字节，报错。
 fn build_sub_function(value: &Value, depth: usize) -> Result<super::Function> {
-    let dict = value
-        .as_dict()
-        .ok_or_else(|| FunctionError(format!("invalid /Functions element: {}", value.type_name())))?;
+    let dict = value.as_dict().ok_or_else(|| {
+        FunctionError(format!("invalid /Functions element: {}", value.type_name()))
+    })?;
     let stream = match value {
         Value::Stream(_, StreamData::Owned(b)) => Some(b.as_slice()),
         Value::Stream(_, StreamData::Ref { .. }) => {
-            return err(
-                "sub-function stream data is a file reference; resolve via Document first",
-            )
+            return err("sub-function stream data is a file reference; resolve via Document first");
         }
         _ => None,
     };

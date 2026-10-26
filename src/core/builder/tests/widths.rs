@@ -95,6 +95,24 @@ fn widths_negative_nan_or_infinite_are_invalid_object() {
 }
 
 #[test]
+fn non_embedded_non_standard_font_without_widths_is_invalid_object() {
+    let mut font = Font::helvetica(12.0);
+    font.name = "BuilderSans".to_string();
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+
+    let error = build_error(b);
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("requires explicit /Widths"),
+        "非标准 14 简单字体未提供 /Widths 时应失败: {error}"
+    );
+    assert!(error.to_string().contains("with_widths"), "{error}");
+}
+
+#[test]
 fn embedded_non_standard_font_without_widths_is_invalid_object() {
     let mut font =
         Font::helvetica(12.0).with_font_program(FontProgram::Type1(sample_type1_program()));

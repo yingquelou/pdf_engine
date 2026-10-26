@@ -6,7 +6,7 @@
 //! （`/Order` 3 三次插值暂不支持，构造时报错），输出经 /Decode 映射并
 //! 截断到 /Range。
 
-use super::{err, parse_numbers, FunctionError, Result};
+use super::{FunctionError, Result, err, parse_numbers};
 use crate::core::types::Dict;
 
 /// Type 0 采样函数。
@@ -40,10 +40,7 @@ impl SampledFunction {
             .ok_or_else(|| FunctionError("missing required key /Size".into()))
             .and_then(|v| parse_numbers(v, "Size"))?;
         if size.len() != m {
-            return err(format!(
-                "/Size must have {m} value(s), got {}",
-                size.len()
-            ));
+            return err(format!("/Size must have {m} value(s), got {}", size.len()));
         }
         let size: Vec<usize> = size
             .iter()
@@ -84,10 +81,9 @@ impl SampledFunction {
 
         // /Encode：默认 [0, size_j - 1] 每维
         let encode = match dict.get("Encode") {
-            None | Some(crate::core::types::Value::Null) => size
-                .iter()
-                .map(|&s| (0.0, (s - 1) as f64))
-                .collect(),
+            None | Some(crate::core::types::Value::Null) => {
+                size.iter().map(|&s| (0.0, (s - 1) as f64)).collect()
+            }
             Some(_) => {
                 let e = super::parse_pairs(dict, "Encode")?;
                 if e.len() != m {
@@ -112,7 +108,10 @@ impl SampledFunction {
                 // /Decode 允许 lo > hi 的反向映射，保持原顺序
                 let d = super::parse_pairs(dict, "Decode")?;
                 if d.len() != n_out {
-                    return err(format!("/Decode must have {n_out} pair(s), got {}", d.len()));
+                    return err(format!(
+                        "/Decode must have {n_out} pair(s), got {}",
+                        d.len()
+                    ));
                 }
                 d
             }

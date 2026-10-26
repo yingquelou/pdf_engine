@@ -1,16 +1,13 @@
 //! `ContentStream` 容器与链式高层绘制 API。
 
-use crate::core::types::{FeatureProfile, PdfFeature};
-
-use super::types::{LineCap, LineJoin, Op, TextArrayItem};
+use super::types::{
+    LineCap, LineJoin, MarkedContentProperties, Op, OptionalContent, TextArrayItem,
+};
 
 /// 内容流：操作符序列容器 + 高层绘制 API + 字节序列化。
 #[derive(Debug, Clone, Default)]
 pub struct ContentStream {
     ops: Vec<Op>,
-    /// 已记录的高版本特性（在 [`ContentStream::to_bytes`] 序列化过程中
-    /// 按 Op 变体自动填充，而非在 push 时——避免未序列化时漏记）。
-    features: FeatureProfile,
 }
 
 impl ContentStream {
@@ -34,34 +31,11 @@ impl ContentStream {
         self.ops.is_empty()
     }
 
-    /// 暴露已记录的高版本特性。
-    ///
-    /// 只有在调用过 [`ContentStream::to_bytes`] 之后，此方法才会包含
-    /// 透明度等高版本特性——序列化是唯一填充路径。
-    pub fn features(&self) -> &FeatureProfile {
-        &self.features
-    }
-
     /// 把操作符序列序列化为 PDF 内容流字节。
     ///
     /// 每个操作符输出其参数（经 `format_float` 格式化）+ 操作符关键字，
-    /// 后跟一个换行。序列化同时把高版本特性写入 [`Self::features`]。
+    /// 后跟一个换行。
     pub fn to_bytes(&mut self) -> Vec<u8> {
-        // 第一阶段：收集需要插入的高版本特性（纯不可变遍历）。
-        let mut features_to_add = FeatureProfile::new();
-        for op in self.ops.iter() {
-            match op {
-                Op::SetFillAlpha(_) | Op::SetStrokeAlpha(_) | Op::SetBlendMode(_) => {
-                    features_to_add.insert(PdfFeature::Transparency);
-                }
-                _ => {}
-            }
-        }
-        // 第二阶段：统一合并特性（现在 self 可可变借用）。
-        for f in features_to_add.iter() {
-            self.features.insert(*f);
-        }
-        // 第三阶段：纯不可变序列化。
         let mut out = Vec::new();
         for op in self.ops.iter() {
             Self::serialize_one(op, &mut out);
@@ -196,6 +170,12 @@ impl ContentStream {
         self
     }
 
+    /// 用命名渐变填充当前裁剪区域：`/name sh`。
+    pub fn paint_shading(&mut self, name: impl Into<String>) -> &mut Self {
+        self.push(Op::PaintShading(name.into()));
+        self
+    }
+
     /// 绘制直线：`x1 y1 m x2 y2 l S`。
     pub fn line(&mut self, x1: f64, y1: f64, x2: f64, y2: f64) -> &mut Self {
         self.push(Op::MoveTo { x: x1, y: y1 });
@@ -240,6 +220,18 @@ impl ContentStream {
         self
     }
 
+    /// 设置描边颜色（灰度）：`gray G`。
+    pub fn set_stroke_gray(&mut self, gray: f64) -> &mut Self {
+        self.push(Op::SetStrokeGray { gray });
+        self
+    }
+
+    /// 设置填充颜色（灰度）：`gray g`。
+    pub fn set_fill_gray(&mut self, gray: f64) -> &mut Self {
+        self.push(Op::SetFillGray { gray });
+        self
+    }
+
     /// 设置描边颜色（RGB）：`r g b RG`。
     pub fn set_stroke_rgb(&mut self, r: f64, g: f64, b: f64) -> &mut Self {
         self.push(Op::SetStrokeRGB { r, g, b });
@@ -249,6 +241,68 @@ impl ContentStream {
     /// 设置填充颜色（RGB）：`r g b rg`。
     pub fn set_fill_rgb(&mut self, r: f64, g: f64, b: f64) -> &mut Self {
         self.push(Op::SetFillRGB { r, g, b });
+        self
+    }
+
+    /// 设置描边颜色（CMYK）：`c m y k K`。
+    pub fn set_stroke_cmyk(&mut self, c: f64, m: f64, y: f64, k: f64) -> &mut Self {
+        self.push(Op::SetStrokeCMYK { c, m, y, k });
+        self
+    }
+
+    /// 设置填充颜色（CMYK）：`c m y k k`。
+    pub fn set_fill_cmyk(&mut self, c: f64, m: f64, y: f64, k: f64) -> &mut Self {
+        self.push(Op::SetFillCMYK { c, m, y, k });
+        self
+    }
+
+    /// 设置描边颜色空间（命名资源）：`/name CS`。
+    pub fn set_stroke_color_space(&mut self, name: impl Into<String>) -> &mut Self {
+        self.push(Op::SetStrokeColorSpace(name.into()));
+        self
+    }
+
+    /// 设置填充颜色空间（命名资源）：`/name cs`。
+    pub fn set_fill_color_space(&mut self, name: impl Into<String>) -> &mut Self {
+        self.push(Op::SetFillColorSpace(name.into()));
+        self
+    }
+
+    /// 以命名图案设置描边色：`/name SCN`。
+    pub fn set_stroke_pattern(&mut self, name: impl Into<String>) -> &mut Self {
+        self.push(Op::SetStrokeColorPattern(name.into()));
+        self
+    }
+
+    /// 以命名图案设置填充色：`/name scn`。
+    pub fn set_fill_pattern(&mut self, name: impl Into<String>) -> &mut Self {
+        self.push(Op::SetFillColorPattern(name.into()));
+        self
+    }
+
+    /// 以无色图案设置描边色：`c1 … cn /name SCN`。
+    pub fn set_stroke_pattern_with_components(
+        &mut self,
+        values: impl Into<Vec<f64>>,
+        name: impl Into<String>,
+    ) -> &mut Self {
+        self.push(Op::SetStrokeColorPatternWithComponents {
+            values: values.into(),
+            name: name.into(),
+        });
+        self
+    }
+
+    /// 以无色图案设置填充色：`c1 … cn /name scn`。
+    pub fn set_fill_pattern_with_components(
+        &mut self,
+        values: impl Into<Vec<f64>>,
+        name: impl Into<String>,
+    ) -> &mut Self {
+        self.push(Op::SetFillColorPatternWithComponents {
+            values: values.into(),
+            name: name.into(),
+        });
         self
     }
 
@@ -294,21 +348,55 @@ impl ContentStream {
         self
     }
 
-    /// 设置填充不透明度（`ca`）；自动记录 `PdfFeature::Transparency`。
-    pub fn set_fill_alpha(&mut self, a: f64) -> &mut Self {
-        self.push(Op::SetFillAlpha(a));
+    /// 开始标记内容序列：`/tag BMC`（PDF 14.6）。
+    pub fn begin_marked_content(&mut self, tag: impl Into<String>) -> &mut Self {
+        self.push(Op::BeginMarkedContent { tag: tag.into() });
         self
     }
 
-    /// 设置描边不透明度（`CA`）；自动记录 `PdfFeature::Transparency`。
-    pub fn set_stroke_alpha(&mut self, a: f64) -> &mut Self {
-        self.push(Op::SetStrokeAlpha(a));
+    /// 开始带属性表的标记内容序列：`/tag properties BDC`（PDF 14.6）。
+    pub fn begin_marked_content_properties(
+        &mut self,
+        tag: impl Into<String>,
+        properties: MarkedContentProperties,
+    ) -> &mut Self {
+        self.push(Op::BeginMarkedContentProperties {
+            tag: tag.into(),
+            properties,
+        });
         self
     }
 
-    /// 设置混合模式（`/mode BM`）；自动记录 `PdfFeature::Transparency`。
-    pub fn set_blend_mode(&mut self, mode: impl Into<String>) -> &mut Self {
-        self.push(Op::SetBlendMode(mode.into()));
+    /// 标记内容点：`/tag MP`（PDF 14.6）。
+    pub fn marked_content_point(&mut self, tag: impl Into<String>) -> &mut Self {
+        self.push(Op::MarkedContentPoint { tag: tag.into() });
+        self
+    }
+
+    /// 带属性表的标记内容点：`/tag properties DP`（PDF 14.6）。
+    pub fn marked_content_point_properties(
+        &mut self,
+        tag: impl Into<String>,
+        properties: MarkedContentProperties,
+    ) -> &mut Self {
+        self.push(Op::MarkedContentPointProperties {
+            tag: tag.into(),
+            properties,
+        });
+        self
+    }
+
+    /// 结束当前标记内容序列：`EMC`（PDF 14.6）。
+    pub fn end_marked_content(&mut self) -> &mut Self {
+        self.push(Op::EndMarkedContent);
+        self
+    }
+
+    /// 按 [`OptionalContent`] 简化表示输出可选内容标记：
+    /// `Begin` → `/OC /name BDC`，`PropertyDict` → `tag /name DP`，
+    /// `End` → `EMC`。
+    pub fn optional_content(&mut self, content: OptionalContent) -> &mut Self {
+        self.push(content.into());
         self
     }
 }

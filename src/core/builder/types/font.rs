@@ -170,6 +170,11 @@ impl Font {
     }
 
     /// 嵌入字体程序（链式构造）。
+    ///
+    /// [`FontProgram::OpenType`] 按 SFNT 版本标签处理：CFF 轮廓（`OTTO`）
+    /// 写 `/FontFile3` `/Subtype /OpenType` 且字体子类型保持 Type1；
+    /// TrueType 轮廓（`0x00010000`/`true`）按 ISO 32000-1 §9.9 写
+    /// `/FontFile2` 并把字体子类型切为 TrueType。
     pub fn with_font_program(mut self, program: FontProgram) -> Self {
         self.font_program = Some(program);
         self

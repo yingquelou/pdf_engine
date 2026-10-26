@@ -78,6 +78,68 @@ fn type3_font_rejects_explicit_widths() {
 }
 
 #[test]
+fn type3_font_rejects_invalid_glyph_widths() {
+    for width in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        let type3 = Type3Font::new().glyph(Type3Glyph::new(65, "A", width, b"500 0 d0"));
+        let font = Font::type3(12.0, type3);
+
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &font, 10.0, 10.0, "A");
+
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("非法字形宽度应构建失败");
+        assert!(
+            matches!(&error, WriteError::InvalidObject(_)),
+            "错误应为 InvalidObject: {error}"
+        );
+        assert!(
+            error.to_string().contains("invalid width"),
+            "错误信息应指出字形宽度: {error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
+fn type3_font_rejects_non_finite_bbox_or_matrix() {
+    for (bbox, matrix, label) in [
+        (
+            [0.0, f64::NAN, 1000.0, 900.0],
+            [0.001, 0.0, 0.0, 0.001, 0.0, 0.0],
+            "FontBBox",
+        ),
+        (
+            [0.0, 0.0, 1000.0, 900.0],
+            [0.001, 0.0, 0.0, f64::INFINITY, 0.0, 0.0],
+            "FontMatrix",
+        ),
+    ] {
+        let type3 = Type3Font::new()
+            .with_bbox(bbox)
+            .with_matrix(matrix)
+            .glyph(Type3Glyph::new(65, "A", 500.0, b"500 0 d0"));
+        let font = Font::type3(12.0, type3);
+
+        let mut b = PdfBuilder::new();
+        let p = b.page(PageSize::A4);
+        b.text(p, &font, 10.0, 10.0, "A");
+
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("非有限几何参数应构建失败");
+        assert!(
+            matches!(&error, WriteError::InvalidObject(_)),
+            "错误应为 InvalidObject: {error}"
+        );
+        assert!(
+            error.to_string().contains(label),
+            "错误信息应指出 {label}: {error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
 fn type3_font_writes_char_procs_widths_and_encoding() {
     let type3 = Type3Font::new()
         .with_bbox([0.0, -200.0, 1000.0, 900.0])

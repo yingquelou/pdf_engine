@@ -113,6 +113,12 @@ pub enum PdfFeature {
     JPXDecode,
     /// 透明度（`/ca` `/CA` `/BM`、透明组），PDF 1.4 引入。
     Transparency,
+    /// 图像 `/Mask` 条目（显式蒙版或颜色键蒙版），PDF 1.3 引入。
+    ImageMaskEntry,
+    /// 平铺图案（`/PatternType 1` 图案流），PDF 1.2 引入。
+    TilingPattern,
+    /// 平滑渐变（`/ShadingType 1–7`、`sh` 操作符与着色图案），PDF 1.3 引入。
+    Shading,
     /// 可选内容（`/OCProperties`），PDF 1.5 引入。
     OptionalContent,
 }
@@ -122,6 +128,8 @@ impl PdfFeature {
     pub fn min_version(self) -> PdfVersion {
         match self {
             PdfFeature::EncryptionRC4 => PdfVersion::V1_1,
+            PdfFeature::TilingPattern => PdfVersion::V1_2,
+            PdfFeature::ImageMaskEntry | PdfFeature::Shading => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode | PdfFeature::Transparency => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -140,6 +148,9 @@ impl fmt::Display for PdfFeature {
             PdfFeature::JBIG2Decode => "JBIG2Decode filter",
             PdfFeature::JPXDecode => "JPXDecode filter",
             PdfFeature::Transparency => "transparency",
+            PdfFeature::ImageMaskEntry => "image Mask entry",
+            PdfFeature::TilingPattern => "tiling pattern",
+            PdfFeature::Shading => "shading",
             PdfFeature::OptionalContent => "optional content",
         };
         write!(f, "{name}")

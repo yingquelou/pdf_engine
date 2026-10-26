@@ -66,6 +66,19 @@ pub enum CidWidth {
     Range(u16, u16, f64),
 }
 
+/// `/W2` 垂直度量条目（PDF 32000-1 §9.7.4.3）。
+///
+/// 每个 CID 携带 `w1_y`（位置向量的垂直分量）与 `v_x`/`v_y`（垂直
+/// 位移向量的分量）。未在 `/W2` 中列出的 CID 按 `/DW2` 回退，其中
+/// `v_x` 取该 CID 水平宽度的一半。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CidVerticalMetrics {
+    /// 单个 CID 的 `w1_y v_x v_y` 三元组。
+    Single(u16, f64, f64, f64),
+    /// CID 区间 `[first, last]` 共用一个三元组。
+    Range(u16, u16, f64, f64, f64),
+}
+
 /// Type 0 字体的嵌入 CMap 编码配置（PDF 32000-1 §9.7.5）。
 ///
 /// 字符码按大端序写入内容流，再由映射转换为 CID。2 字节码走
@@ -190,14 +203,23 @@ pub struct CidFont {
     pub default_width: f64,
     /// `/W` 宽度条目。
     pub widths: Vec<CidWidth>,
+    /// `/DW2` 默认垂直度量 `[v_y, w1_y]`（默认 `[880, -1000]`）。
+    ///
+    /// `v_y` 是字形原点的垂直位移，`w1_y` 是位置向量垂直分量的默认值。
+    /// 与默认值相同时省略 `/DW2`；非有限值会使构建返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    pub default_vertical_metrics: [f64; 2],
+    /// `/W2` 垂直度量条目。
+    pub vertical_metrics: Vec<CidVerticalMetrics>,
     /// 字号（pt），用于内容流 `Tf` 操作符。
     pub size: f64,
     /// 可选的嵌入字体程序。
     ///
-    /// CIDFontType2 接受 [`FontProgram::TrueType`]（写为 `/FontFile2`），
-    /// CIDFontType0 接受 [`FontProgram::CFF`]（写为 `/FontFile3`，流
-    /// `/Subtype /CIDFontType0C`）；类型不匹配时 [`PdfBuilder::build`]
-    /// 返回错误。
+    /// CIDFontType2 接受 [`FontProgram::TrueType`] 与 TrueType-flavored
+    /// [`FontProgram::OpenType`]（写为 `/FontFile2`），CIDFontType0 接受
+    /// [`FontProgram::CFF`]（写为 `/FontFile3`，流 `/Subtype /CIDFontType0C`）
+    /// 与 CFF-flavored `OpenType`（流 `/Subtype /OpenType`）；类型或
+    /// 轮廓不匹配时 [`PdfBuilder::build`] 返回错误。
     pub font_program: Option<FontProgram>,
     /// 可选的自定义编码 CMap（非 Identity）。
     ///
@@ -292,6 +314,8 @@ impl CidFont {
             descriptor,
             default_width: 1000.0,
             widths: Vec::new(),
+            default_vertical_metrics: [880.0, -1000.0],
+            vertical_metrics: Vec::new(),
             size,
             font_program: None,
             encoding: None,
@@ -340,6 +364,25 @@ impl CidFont {
     /// 添加宽度条目。
     pub fn with_widths(mut self, widths: Vec<CidWidth>) -> Self {
         self.widths = widths;
+        self
+    }
+
+    /// 设置默认垂直度量 `/DW2`（链式构造）。
+    ///
+    /// 参数按 `/DW2 [v_y w1_y]` 的顺序给出。非有限值会使
+    /// [`PdfBuilder::build`](crate::core::builder::PdfBuilder::build)
+    /// 返回 [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    pub fn with_default_vertical_metrics(mut self, v_y: f64, w1_y: f64) -> Self {
+        self.default_vertical_metrics = [v_y, w1_y];
+        self
+    }
+
+    /// 添加垂直度量条目 `/W2`（链式构造）。
+    ///
+    /// 区间条目的 `first` 须不大于 `last`，且全部数值须为有限数，否则
+    /// 构建返回 [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    pub fn with_vertical_metrics(mut self, metrics: Vec<CidVerticalMetrics>) -> Self {
+        self.vertical_metrics = metrics;
         self
     }
 
@@ -393,6 +436,32 @@ impl CidFont {
                         .push(Value::Integer(i64::from(*first)))
                         .push(Value::Integer(i64::from(*last)))
                         .push(Value::Float(*width));
+                }
+            }
+        }
+        Value::Array(arr)
+    }
+
+    /// 构建 `/W2` 数组值。
+    pub(crate) fn vertical_metrics_to_value(&self) -> Value {
+        let mut arr = Array::new();
+        for entry in &self.vertical_metrics {
+            match entry {
+                CidVerticalMetrics::Single(cid, w1y, v1x, v1y) => {
+                    arr = arr.push(Value::Integer(i64::from(*cid))).push(Value::Array(
+                        Array::new()
+                            .push(Value::Float(*w1y))
+                            .push(Value::Float(*v1x))
+                            .push(Value::Float(*v1y)),
+                    ));
+                }
+                CidVerticalMetrics::Range(first, last, w1y, v1x, v1y) => {
+                    arr = arr
+                        .push(Value::Integer(i64::from(*first)))
+                        .push(Value::Integer(i64::from(*last)))
+                        .push(Value::Float(*w1y))
+                        .push(Value::Float(*v1x))
+                        .push(Value::Float(*v1y));
                 }
             }
         }

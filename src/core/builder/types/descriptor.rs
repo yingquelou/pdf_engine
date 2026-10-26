@@ -1,5 +1,8 @@
 //! 字体描述符度量（FontDescriptor）。
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
 use crate::core::types::{Array, Dict, Value};
 
 /// 字体描述符度量（FontDescriptor metrics）。
@@ -45,6 +48,18 @@ pub struct FontDescriptor {
     pub missing_width: Option<f64>,
     /// `/CharSet` 字符集名称字符串（简单字体）。
     pub char_set: Option<String>,
+    /// `/Style` 中的 `/Panose` 12 字节分类数据（PDF 32000-1 §9.8.3.2）。
+    ///
+    /// 前两字节为 OS/2 `sFamilyClass` 的家族类与子类，后十字节为
+    /// PANOSE 分类号。
+    pub style_panose: Option<[u8; 12]>,
+    /// `/Lang` 语言名称（RFC 3066 或 ISO 639，PDF 1.5）。
+    pub lang: Option<String>,
+    /// `/FD` 字形类覆盖字典（仅 CIDFont，PDF 1.5）。
+    ///
+    /// 键为字形类名（如 `Proportional`、`HRoman`，见 Table 125），值为覆盖
+    /// 主描述符度量的字体描述符；写出时不包含嵌套 `/FD`。
+    pub fd: Option<BTreeMap<String, FontDescriptor>>,
     /// `/CIDSet` 位数组（MSB first），按 CID 索引标记哪些 CID 存在。
     /// 仅用于 CIDFont 描述符。
     pub cid_set: Option<Vec<u8>>,
@@ -78,6 +93,9 @@ impl FontDescriptor {
             max_width: None,
             missing_width: None,
             char_set: None,
+            style_panose: None,
+            lang: None,
+            fd: None,
             cid_set: None,
         }
     }
@@ -190,6 +208,24 @@ impl FontDescriptor {
         self
     }
 
+    /// 设置 `/Style` 的 `/Panose` 12 字节分类数据。
+    pub fn with_style_panose(mut self, panose: [u8; 12]) -> Self {
+        self.style_panose = Some(panose);
+        self
+    }
+
+    /// 设置 `/Lang` 语言名称。
+    pub fn with_lang(mut self, lang: impl Into<String>) -> Self {
+        self.lang = Some(lang.into());
+        self
+    }
+
+    /// 设置 `/FD` 字形类覆盖字典。
+    pub fn with_fd(mut self, fd: BTreeMap<String, FontDescriptor>) -> Self {
+        self.fd = Some(fd);
+        self
+    }
+
     /// 设置 CIDSet 位数组（CIDFont `/CIDSet`）。
     ///
     /// 位数组按 MSB-first 编码，第 `cid` 位表示 CID `cid` 是否存在。
@@ -218,6 +254,10 @@ impl FontDescriptor {
 
     /// 转换为 PDF 字典值。
     pub(crate) fn to_value(&self) -> Value {
+        self.to_value_with_fd(true)
+    }
+
+    fn to_value_with_fd(&self, include_fd: bool) -> Value {
         let mut dict = Dict::new().insert("Type", Value::Name("FontDescriptor".into()));
         if let Some(name) = &self.font_name {
             dict = dict.insert("FontName", Value::Name(name.clone()));
@@ -282,6 +322,22 @@ impl FontDescriptor {
         if let Some(char_set) = &self.char_set {
             dict = dict.insert("CharSet", Value::String(char_set.clone()));
         }
+        if let Some(panose) = &self.style_panose {
+            dict = dict.insert(
+                "Style",
+                Value::Dict(Dict::new().insert("Panose", Value::HexString(panose_hex(panose)))),
+            );
+        }
+        if let Some(lang) = &self.lang {
+            dict = dict.insert("Lang", Value::Name(lang.clone()));
+        }
+        if include_fd && let Some(fd) = &self.fd {
+            let mut overrides = Dict::new();
+            for (class, descriptor) in fd {
+                overrides = overrides.insert(class.clone(), descriptor.to_value_with_fd(false));
+            }
+            dict = dict.insert("FD", Value::Dict(overrides));
+        }
         // /CIDSet 作为流对象写出（此处仅返回字典项，流由 assemble 单独处理）
         // 注意：CIDSet 是流，不能直接嵌入字典值，由 assemble.rs 单独构造
         Value::Dict(dict)
@@ -291,4 +347,12 @@ impl FontDescriptor {
     pub(crate) fn cid_set_data(&self) -> Option<&[u8]> {
         self.cid_set.as_deref()
     }
+}
+
+fn panose_hex(panose: &[u8; 12]) -> String {
+    let mut hex = String::with_capacity(24);
+    for byte in panose {
+        let _ = write!(hex, "{byte:02X}");
+    }
+    hex
 }

@@ -1,5 +1,7 @@
 //! Font descriptor metrics shared by simple and CID-keyed fonts.
 
+use std::collections::BTreeMap;
+
 use crate::core::types::{Dict, Document, PdfTextString, Value};
 
 use super::{FontError, FontResult, number};
@@ -48,6 +50,19 @@ pub struct FontDescriptorMetrics {
     pub missing_width: Option<f64>,
     /// Descriptor `/CharSet` text, when present.
     pub char_set: Option<String>,
+    /// Descriptor `/Style` `/Panose` classification bytes, when present.
+    ///
+    /// ISO 32000-1 §9.8.3.2 defines `/Panose` as the only `Style` entry: a
+    /// 12-byte string with the OS/2 family class/subclass and the PANOSE
+    /// number.
+    pub style_panose: Option<[u8; 12]>,
+    /// Descriptor `/Lang` language name, when present.
+    pub lang: Option<String>,
+    /// Descriptor `/FD` glyph-class overrides (CIDFonts), keyed by class name.
+    ///
+    /// Values are kept as raw dictionaries: ISO 32000-1 §9.8.3.3 lets each
+    /// class override any metric entry in the main descriptor.
+    pub fd: Option<BTreeMap<String, Dict>>,
     /// Decoded `/CIDSet` bit array (most-significant bit first), when present.
     pub cid_set: Option<Vec<u8>>,
 }
@@ -142,8 +157,51 @@ pub(super) fn parse_descriptor(
         max_width: optional_number(document, dict, "MaxWidth")?,
         missing_width: optional_number(document, dict, "MissingWidth")?,
         char_set: optional_text(document, dict, "CharSet")?,
+        style_panose: optional_style_panose(document, dict)?,
+        lang: optional_name(document, dict, "Lang")?,
+        fd: optional_fd(document, dict)?,
         cid_set: optional_cid_set(document, dict)?,
     })
+}
+
+fn optional_style_panose(document: &Document, dict: &Dict) -> FontResult<Option<[u8; 12]>> {
+    let Some(value) = optional_value(document, dict, "Style")? else {
+        return Ok(None);
+    };
+    let style = value
+        .as_dict()
+        .ok_or_else(|| FontError::Invalid("/FontDescriptor /Style is not a dictionary".into()))?;
+    let Some(panose) = style.get("Panose") else {
+        return Ok(None);
+    };
+    let panose = document.resolve_value(panose)?;
+    let bytes = match panose {
+        Value::HexString(value) => hex_bytes(&value),
+        Value::String(value) => Some(value.into_bytes()),
+        _ => None,
+    }
+    .ok_or_else(|| FontError::Invalid("invalid /FontDescriptor /Style /Panose".into()))?;
+    bytes.try_into().map(Some).map_err(|_| {
+        FontError::Invalid("/FontDescriptor /Style /Panose must contain 12 bytes".into())
+    })
+}
+
+fn optional_fd(document: &Document, dict: &Dict) -> FontResult<Option<BTreeMap<String, Dict>>> {
+    let Some(value) = optional_value(document, dict, "FD")? else {
+        return Ok(None);
+    };
+    let fd = value
+        .as_dict()
+        .ok_or_else(|| FontError::Invalid("/FontDescriptor /FD is not a dictionary".into()))?;
+    let mut classes = BTreeMap::new();
+    for (class, descriptor) in &fd.0 {
+        let descriptor = document.resolve_value(descriptor)?;
+        let descriptor = descriptor.as_dict().ok_or_else(|| {
+            FontError::Invalid(format!("/FontDescriptor /FD /{class} is not a dictionary"))
+        })?;
+        classes.insert(class.clone(), descriptor.clone());
+    }
+    Ok(Some(classes))
 }
 
 fn optional_name(document: &Document, dict: &Dict, key: &str) -> FontResult<Option<String>> {

@@ -49,7 +49,7 @@ pub(super) fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
                 while pos < input.len() && is_regular(input[pos]) {
                     pos += 1;
                 }
-                let name = String::from_utf8_lossy(&input[start..pos]).into_owned();
+                let name = decode_name_escapes(&input[start..pos]);
                 tokens.push(CsToken::Name(name));
             }
             b'[' => {
@@ -82,13 +82,123 @@ pub(super) fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
                     pos += 1;
                 }
                 let kw = String::from_utf8_lossy(&input[start..pos]).into_owned();
-                if !kw.is_empty() {
+                if kw == "BI" {
+                    // Inline images embed arbitrary binary bytes between `ID`
+                    // and `EI`; skipping the whole span prevents image data
+                    // from being tokenized as text operators or from opening a
+                    // string/comment that swallows the following content.
+                    pos = skip_inline_image(input, pos);
+                } else if !kw.is_empty() {
                     tokens.push(CsToken::Keyword(kw));
                 }
             }
         }
     }
     tokens
+}
+
+/// Decode `#xx` escapes in a PDF name (ISO 32000-1 7.3.5).
+///
+/// Invalid escapes are kept literally, matching the spec's guidance that
+/// malformed `#` sequences are treated as ordinary characters.
+fn decode_name_escapes(raw: &[u8]) -> String {
+    let mut decoded = Vec::with_capacity(raw.len());
+    let mut index = 0;
+    while index < raw.len() {
+        if raw[index] == b'#'
+            && let (Some(high), Some(low)) = (
+                raw.get(index + 1).copied().and_then(hex_value),
+                raw.get(index + 2).copied().and_then(hex_value),
+            )
+        {
+            decoded.push(high * 16 + low);
+            index += 3;
+            continue;
+        }
+        decoded.push(raw[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Skip an inline image starting just after the `BI` keyword.
+///
+/// Scans the image dictionary for the `ID` keyword, then discards the binary
+/// image data up to the closing `EI`. Returns the index just past `EI`, or the
+/// end of the input when the image is truncated.
+fn skip_inline_image(input: &[u8], mut pos: usize) -> usize {
+    while pos < input.len() {
+        skip_ws_and_comments(input, &mut pos);
+        if pos >= input.len() {
+            return pos;
+        }
+        match input[pos] {
+            b'(' => {
+                let (_, next) = parse_literal_string(input, pos);
+                pos = next;
+            }
+            b'<' => {
+                if input.get(pos + 1) == Some(&b'<') {
+                    pos += 2;
+                } else {
+                    let (_, next) = parse_hex_string(input, pos);
+                    pos = next;
+                }
+            }
+            b'/' => {
+                pos += 1;
+                while pos < input.len() && is_regular(input[pos]) && !is_delimiter(input[pos]) {
+                    pos += 1;
+                }
+            }
+            _ if is_delimiter(input[pos]) => pos += 1,
+            _ => {
+                let start = pos;
+                while pos < input.len() && is_regular(input[pos]) && !is_delimiter(input[pos]) {
+                    pos += 1;
+                }
+                if &input[start..pos] == b"ID" {
+                    if pos >= input.len() {
+                        return pos;
+                    }
+                    if is_whitespace(input[pos]) {
+                        return skip_inline_image_data(input, pos + 1);
+                    }
+                }
+            }
+        }
+    }
+    pos
+}
+
+/// Find the `EI` terminator of inline image data.
+///
+/// PDF requires `EI` to be preceded by white space and followed by white
+/// space, a delimiter, or end of input (ISO 32000-1 8.9.7).
+fn skip_inline_image_data(input: &[u8], start: usize) -> usize {
+    let mut pos = start;
+    while pos + 1 < input.len() {
+        if input[pos] == b'E' && input[pos + 1] == b'I' {
+            let preceded_by_space = pos > 0 && is_whitespace(input[pos - 1]);
+            let followed_by_separator = pos + 2 >= input.len()
+                || is_whitespace(input[pos + 2])
+                || is_delimiter(input[pos + 2]);
+            if preceded_by_space && followed_by_separator {
+                return pos + 2;
+            }
+        }
+        pos += 1;
+    }
+    input.len()
 }
 
 fn skip_ws_and_comments(input: &[u8], pos: &mut usize) {

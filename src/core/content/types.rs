@@ -1,5 +1,7 @@
 //! 内容流操作符与参数类型。
 
+use crate::core::types::Dict;
+
 /// 文本数组项（`TJ` 操作符参数）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextArrayItem {
@@ -51,17 +53,45 @@ impl LineJoin {
     }
 }
 
+/// 标记内容属性表（`BDC`/`DP` 的第二个操作数，ISO 32000-1 §14.6）。
+///
+/// 属性表可以是页资源字典 `/Properties` 中的名称条目，或内联字典。
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarkedContentProperties {
+    /// 属性表资源名（不含前导 `/`），如 `"MC0"`。
+    Name(String),
+    /// 内联属性字典，如 `<< /MCID 0 >>`。
+    Dict(Dict),
+}
+
 /// 可选内容组（`/OC`、`/DP`）的简化表示。
 #[derive(Debug, Clone, PartialEq)]
 pub enum OptionalContent {
-    /// `/OC /GroupName BDC ... EMC` —— 内嵌内容标记。
+    /// `/OC /GroupName BDC ... EMC` —— 开始可选内容组。
     ///
-    /// 本引擎只记录名称，嵌套 BDC 的语义验证由调用方负责。
+    /// 本引擎只记录名称，组配置字典（`/OCProperties`）与嵌套 BDC 的
+    /// 语义验证由调用方负责。
     Begin(String),
-    /// `/DP /GroupName /DPName` —— 属性字典引用（简化形式）。
+    /// `tag /PropertyName DP` —— 引用命名属性字典的标记内容点。
     PropertyDict(String, String),
-    /// `EMC` —— 结束可选内容组。
+    /// `EMC` —— 结束标记内容组。
     End,
+}
+
+impl From<OptionalContent> for Op {
+    fn from(value: OptionalContent) -> Self {
+        match value {
+            OptionalContent::Begin(group) => Op::BeginMarkedContentProperties {
+                tag: "OC".into(),
+                properties: MarkedContentProperties::Name(group),
+            },
+            OptionalContent::PropertyDict(tag, property) => Op::MarkedContentPointProperties {
+                tag,
+                properties: MarkedContentProperties::Name(property),
+            },
+            OptionalContent::End => Op::EndMarkedContent,
+        }
+    }
 }
 
 /// 内容流操作符（类型化表示）。
@@ -191,6 +221,12 @@ pub enum Op {
     ClipEvenOdd,
 
     // ── 基本颜色（PDF 1.0；scn/SCN 为 1.2） ────────────
+    SetStrokeGray {
+        gray: f64,
+    },
+    SetFillGray {
+        gray: f64,
+    },
     SetStrokeRGB {
         r: f64,
         g: f64,
@@ -220,19 +256,55 @@ pub enum Op {
     /// 用当前 `SetStrokeColorSpace` 的颜色数组设置描边颜色。
     SetStrokeColor(Vec<f64>),
     SetFillColor(Vec<f64>),
-    /// `scn`：color 数组 + 可选 name 参数（pattern 分支不在本次范围内）。
+    /// `SCN`/`scn`：数字颜色分量（图案名称分支见 `SetStrokeColorPattern`
+    /// 与 `SetFillColorPattern`）。
     SetStrokeColorN {
         values: Vec<f64>,
     },
     SetFillColorN {
         values: Vec<f64>,
     },
+    /// 以命名图案设置描边色：`/name SCN`（彩色图案，PDF 1.3）。
+    SetStrokeColorPattern(String),
+    /// 以命名图案设置填充色：`/name scn`（彩色图案，PDF 1.3）。
+    SetFillColorPattern(String),
+    /// 以无色图案设置描边色：`c1 … cn /name SCN`，分量按图案的
+    /// `/ColorSpace` 解释。
+    SetStrokeColorPatternWithComponents {
+        values: Vec<f64>,
+        name: String,
+    },
+    /// 以无色图案设置填充色：`c1 … cn /name scn`，分量按图案的
+    /// `/ColorSpace` 解释。
+    SetFillColorPatternWithComponents {
+        values: Vec<f64>,
+        name: String,
+    },
+
+    // ── 标记内容（PDF 1.2，ISO 32000-1 §14.6） ────────
+    /// 开始标记内容序列：`/tag BMC`。
+    BeginMarkedContent {
+        tag: String,
+    },
+    /// 开始带属性表的标记内容序列：`/tag properties BDC`。
+    BeginMarkedContentProperties {
+        tag: String,
+        properties: MarkedContentProperties,
+    },
+    /// 标记内容点：`/tag MP`。
+    MarkedContentPoint {
+        tag: String,
+    },
+    /// 带属性表的标记内容点：`/tag properties DP`。
+    MarkedContentPointProperties {
+        tag: String,
+        properties: MarkedContentProperties,
+    },
+    /// 结束当前标记内容序列：`EMC`。
+    EndMarkedContent,
 
     // ── XObject Do（PDF 1.0） ──────────────────────────
     DrawXObject(String),
-
-    // ── 透明度（PDF 1.4；PdfFeature::Transparency） ────
-    SetFillAlpha(f64),
-    SetStrokeAlpha(f64),
-    SetBlendMode(String),
+    /// 用命名渐变填充当前裁剪区域：`/name sh`（PDF 1.3）。
+    PaintShading(String),
 }

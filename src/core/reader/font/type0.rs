@@ -175,27 +175,16 @@ impl Document {
                 ));
             }
         };
-        let to_unicode = match dict.get("ToUnicode") {
-            Some(value) => {
-                let value = self.resolve_value(value)?;
-                if !matches!(value, Value::Stream(_, _)) {
-                    return Err(FontError::Invalid(
-                        "Type 0 /ToUnicode is not a CMap stream".into(),
-                    ));
-                }
-                let bytes = self.decode_stream_bytes(&value).map_err(|error| {
-                    FontError::Invalid(format!(
-                        "failed to decode Type 0 /ToUnicode CMap stream: {error}"
-                    ))
-                })?;
-                Some(ToUnicodeMap::parse_inheriting(&bytes, |base| {
-                    Err(FontError::Invalid(format!(
-                        "ToUnicode CMap references unknown base /{base}"
-                    )))
-                })?)
+        // `/ToUnicode` 是可选的文本映射；流损坏、引用不可解析或含无法
+        // 解析的 `/usecmap` 时退化为按编码解码，而不是让整个字体不可用。
+        let to_unicode = dict.get("ToUnicode").and_then(|value| {
+            let value = self.resolve_value(value).ok()?;
+            if !matches!(value, Value::Stream(_, _)) {
+                return None;
             }
-            None => None,
-        };
+            let bytes = self.decode_stream_bytes(&value).ok()?;
+            ToUnicodeMap::parse_lenient(&bytes)
+        });
 
         let descendants = dict
             .get("DescendantFonts")
@@ -387,13 +376,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_tounicode_values_and_streams() {
+    fn ignores_invalid_tounicode_values_and_streams() {
         let document = Document::new();
         let non_stream = type0_font_with_to_unicode(
             Value::Name("Identity-H".into()),
             Some(Value::Name("Identity-H".into())),
         );
-        assert!(document.type0_font(&non_stream).is_err());
+        let font = document.type0_font(&non_stream).unwrap().unwrap();
+        assert_eq!(font.decode_codes(&[0, 0x41]).unwrap()[0].unicode, None);
 
         let malformed = type0_font_with_to_unicode(
             Value::Name("Identity-H".into()),
@@ -402,7 +392,12 @@ mod tests {
                 StreamData::Owned(b"1 beginbfchar <41> <D800> endbfchar".to_vec()),
             )),
         );
-        assert!(document.type0_font(&malformed).is_err());
+        let font = document.type0_font(&malformed).unwrap().unwrap();
+        assert_eq!(
+            font.decode_codes(&[0, 0x41]).unwrap()[0].unicode,
+            None,
+            "损坏的 ToUnicode 应被忽略而不是让字体不可用"
+        );
     }
 
     #[test]

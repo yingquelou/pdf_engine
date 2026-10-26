@@ -11,9 +11,10 @@ fn sampled_1d(values: &[u8], size: usize) -> Function {
             ("FunctionType", num(0)),
             ("Domain", nums(&[0.0, 1.0])),
             ("Range", nums(&[0.0, 1.0])),
-            ("Size", Value::Array(crate::core::types::Array(vec![Value::Integer(
-                size as i64,
-            )]))),
+            (
+                "Size",
+                Value::Array(crate::core::types::Array(vec![Value::Integer(size as i64)])),
+            ),
             ("BitsPerSample", num(8)),
         ]),
         Some(values),

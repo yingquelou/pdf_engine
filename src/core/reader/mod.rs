@@ -72,6 +72,7 @@ pub mod font;
 pub mod graphics_state;
 mod lexer;
 mod object;
+pub mod optional_content;
 mod parser;
 mod security;
 #[cfg(test)]

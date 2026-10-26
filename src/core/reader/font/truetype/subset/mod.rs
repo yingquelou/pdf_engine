@@ -26,6 +26,8 @@
 //! `post`, `kern`, `GDEF`, `GSUB`, and `GPOS`, along with every other table
 //! outside the whitelist.
 
+use std::collections::BTreeMap;
+
 use super::super::FontError;
 
 mod cmap;
@@ -70,10 +72,24 @@ const REWRITTEN_TABLES: [&[u8; 4]; 9] = [
 /// original-glyph order, and the rewritten `cmap`, `hmtx`, `loca`, `glyf`, and
 /// optional `vhea`/`vmtx` tables refer to those new IDs.
 pub fn subset_truetype(data: &[u8], glyph_ids: &[u16]) -> Result<Vec<u8>, FontError> {
+    subset_truetype_with_mapping(data, glyph_ids).map(|(subset, _)| subset)
+}
+
+/// Build a TrueType subset and return the old-to-new glyph ID mapping.
+///
+/// The mapping covers every retained glyph, including glyph 0 and glyphs
+/// pulled in through composite-glyph components. Callers that rewrite
+/// external glyph-indexed data (such as a CIDFont's `/CIDToGIDMap`) use it
+/// to translate the original IDs to their subset positions.
+pub fn subset_truetype_with_mapping(
+    data: &[u8],
+    glyph_ids: &[u16],
+) -> Result<(Vec<u8>, BTreeMap<u16, u16>), FontError> {
     let source = SourceFont::parse(data)?;
     let mapping = source.retained_glyphs(glyph_ids)?;
     let tables = source.build_tables(&mapping)?;
-    assemble_sfnt(source.flavor, tables)
+    let subset = assemble_sfnt(source.flavor, tables)?;
+    Ok((subset, mapping))
 }
 
 fn invalid_subset(message: impl Into<String>) -> FontError {

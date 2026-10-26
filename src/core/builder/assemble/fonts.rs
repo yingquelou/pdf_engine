@@ -1,15 +1,18 @@
 //! 普通字体字典与字体程序嵌入（含 TrueType / Type 1 / name-keyed CFF 子集）。
 
-use crate::core::builder::{Font, FontEncoding, FontProgram, FontWidths};
+use crate::core::builder::{Font, FontEncoding, FontProgram, FontWidths, OpenTypeFlavor};
 use crate::core::reader::font::{
-    strip_subset_tag, subset_cff_type1c, subset_truetype, subset_type1,
+    font_file_lengths, strip_subset_tag, subset_cff_type1c, subset_truetype, subset_type1,
 };
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
 
 /// 构造普通（非 Type 3）字体字典，并在 `doc` 中写出描述符与字体程序流。
 ///
-/// `/Subtype` 由嵌入程序类型决定；请求字形子集时先重写程序字节，
+/// `/Subtype` 由嵌入程序类型决定：TrueType 轮廓（含 TrueType-flavored
+/// OpenType）为 `TrueType`，其余为 `Type1`；OpenType 程序按 SFNT 版本
+/// 标签写 `/FontFile2`（TrueType 轮廓）或 `/FontFile3` `/Subtype /OpenType`
+/// （CFF 轮廓）。请求字形子集时先重写程序字节，
 /// `/BaseFont` 的六字母标签仍按原始程序推导（PDF 32000-1 §9.6.4）。
 /// 简单字体字典按 Table 111 写出 `/FirstChar`、`/LastChar` 与 `/Widths`；
 /// 描述符缺失的 Table 122 必需项由
@@ -29,10 +32,24 @@ pub(super) fn font_dict(
             f.name
         )));
     }
-    // 嵌入 TrueType 程序时 `/Subtype` 必须是 TrueType；
-    // Type 1 与 CFF（FontFile3 /Type1C）都使用 Type1 子类型。
-    let subtype = match &f.font_program {
-        Some(FontProgram::TrueType(_)) => "TrueType",
+    // OpenType 程序的 SFNT 版本标签决定轮廓类型；非法标签不写出任何对象。
+    let open_type_flavor = match &f.font_program {
+        Some(program @ FontProgram::OpenType(_)) => {
+            Some(program.open_type_flavor().ok_or_else(|| {
+                WriteError::InvalidObject(format!(
+                    "OpenType font program for /BaseFont {} has an unsupported SFNT flavor; \
+                     expected OTTO, 0x00010000, or 'true'",
+                    f.name
+                ))
+            })?)
+        }
+        _ => None,
+    };
+    // 嵌入程序决定字体 `/Subtype`：TrueType 轮廓（含 TrueType-flavored
+    // OpenType）为 TrueType；Type 1、CFF 与 CFF-flavored OpenType 为 Type1。
+    let subtype = match (&f.font_program, open_type_flavor) {
+        (Some(FontProgram::TrueType(_)), _) => "TrueType",
+        (Some(FontProgram::OpenType(_)), Some(OpenTypeFlavor::TrueType)) => "TrueType",
         _ => "Type1",
     };
     // 三种子集字形列表互斥：分别针对 TrueType gid、Type 1 字形名与
@@ -81,6 +98,13 @@ pub(super) fn font_dict(
                     f.name
                 )));
             }
+            Some(FontProgram::OpenType(_)) => {
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_cff_glyphs requires an embedded CFF font program, \
+                     but /BaseFont {} embeds an OpenType program",
+                    f.name
+                )));
+            }
             None => {
                 return Err(WriteError::InvalidObject(format!(
                     "subset_cff_glyphs requires an embedded CFF font program, \
@@ -108,6 +132,13 @@ pub(super) fn font_dict(
                     f.name
                 )));
             }
+            Some(FontProgram::OpenType(_)) => {
+                return Err(WriteError::InvalidObject(format!(
+                    "subset_type1_glyphs requires an embedded Type 1 font program, \
+                     but /BaseFont {} embeds an OpenType program",
+                    f.name
+                )));
+            }
             None => {
                 return Err(WriteError::InvalidObject(format!(
                     "subset_type1_glyphs requires an embedded Type 1 font program, \
@@ -122,7 +153,7 @@ pub(super) fn font_dict(
     let base_font = match (&f.font_program, f.subset) {
         (Some(program), true) => format!(
             "{}+{}",
-            program.subset_tag_with(&subset_discriminator(f)),
+            program.subset_tag_for_name(&f.name, &subset_discriminator(f)),
             f.name
         ),
         _ => f.name.clone(),
@@ -131,10 +162,11 @@ pub(super) fn font_dict(
     if let Some(widths) = &f.widths {
         validate_widths(f, widths)?;
     }
-    // 嵌入程序的非标准 14 字体必须给出 `/Widths`（Table 111 必需项）。
-    if f.widths.is_none() && f.font_program.is_some() && !is_standard_14(&base_font) {
+    // 非标准 14 简单字体必须给出 `/Widths`（Table 111 必需项），
+    // 无论是否嵌入字体程序。
+    if f.widths.is_none() && !is_standard_14(&base_font) {
         return Err(WriteError::InvalidObject(format!(
-            "embedded font program /BaseFont {} is not one of the standard 14 fonts \
+            "/BaseFont {} is not one of the standard 14 fonts \
              and requires explicit /Widths; call Font::with_widths",
             f.name
         )));
@@ -203,6 +235,7 @@ pub(super) fn font_dict(
                         let kind = match other {
                             FontProgram::Type1(_) => "Type1",
                             FontProgram::CFF(_) => "CFF",
+                            FontProgram::OpenType(_) => "OpenType",
                             FontProgram::TrueType(_) => unreachable!("checked above"),
                         };
                         return Err(WriteError::InvalidObject(format!(
@@ -241,18 +274,24 @@ pub(super) fn font_dict(
             let program_bytes = subset_program.as_deref().unwrap_or_else(|| program.data());
             // builder 构造的 Owned 流按 writer 约定写明文；writer 会把
             // 声明在 Owned 流上的 FlateDecode 视为读端已解压而移除。
+            // Table 127：Type 1 需 Length1/2/3，TrueType 需 Length1；
+            // FontFile3 的 CFF 程序不得带这些条目。
             let stream_dict = match program {
                 FontProgram::Type1(_) => {
                     // /FontFile - Type 1 字体程序
                     descriptor_dict =
                         descriptor_dict.insert("FontFile", Value::Ref(program_ref, 0));
+                    let (length1, length2, length3) = font_file_lengths(program_bytes);
                     Dict::new()
+                        .insert("Length1", Value::Integer(length1 as i64))
+                        .insert("Length2", Value::Integer(length2 as i64))
+                        .insert("Length3", Value::Integer(length3 as i64))
                 }
                 FontProgram::TrueType(_) => {
                     // /FontFile2 - TrueType 字体程序
                     descriptor_dict =
                         descriptor_dict.insert("FontFile2", Value::Ref(program_ref, 0));
-                    Dict::new()
+                    Dict::new().insert("Length1", Value::Integer(program_bytes.len() as i64))
                 }
                 FontProgram::CFF(_) => {
                     // /FontFile3 - CFF 字体程序
@@ -260,6 +299,22 @@ pub(super) fn font_dict(
                         descriptor_dict.insert("FontFile3", Value::Ref(program_ref, 0));
                     Dict::new().insert("Subtype", Value::Name("Type1C".into()))
                 }
+                FontProgram::OpenType(_) => match open_type_flavor {
+                    Some(OpenTypeFlavor::Cff) => {
+                        // /FontFile3 - CFF-flavored OpenType 程序（Table 126）
+                        descriptor_dict =
+                            descriptor_dict.insert("FontFile3", Value::Ref(program_ref, 0));
+                        Dict::new().insert("Subtype", Value::Name("OpenType".into()))
+                    }
+                    Some(OpenTypeFlavor::TrueType) => {
+                        // TrueType-flavored OpenType 按 §9.9 写 /FontFile2，
+                        // 并写 Table 127 要求的 Length1。
+                        descriptor_dict =
+                            descriptor_dict.insert("FontFile2", Value::Ref(program_ref, 0));
+                        Dict::new().insert("Length1", Value::Integer(program_bytes.len() as i64))
+                    }
+                    None => unreachable!("flavor validated at the start of font_dict"),
+                },
             }
             .insert("Length", Value::Integer(program_bytes.len() as i64));
             doc.set_object(Object::new(

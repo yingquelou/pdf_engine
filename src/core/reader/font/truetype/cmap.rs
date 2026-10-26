@@ -10,6 +10,8 @@ pub enum CmapFormat {
     Format2,
     Format4,
     Format6,
+    Format8,
+    Format10,
     Format12,
     Format13,
 }
@@ -20,6 +22,15 @@ const FORMAT2_SUBHEADER_KEYS_START: usize = 6;
 const FORMAT2_SUBHEADERS_START: usize = FORMAT2_SUBHEADER_KEYS_START + 256 * 2;
 /// Size of one format 2 `SubHeader` record.
 const FORMAT2_SUBHEADER_SIZE: usize = 8;
+
+/// Byte offset of the `is32[8192]` bitmap in a format 8 subtable.
+const FORMAT8_IS32_START: usize = 12;
+/// Byte offset of `nGroups` in a format 8 subtable.
+const FORMAT8_GROUP_COUNT_START: usize = FORMAT8_IS32_START + 8192;
+/// First byte of the group array in a format 8 subtable.
+const FORMAT8_GROUPS_START: usize = FORMAT8_GROUP_COUNT_START + 4;
+/// Size of one format 8/12/13 group record.
+const GROUP_SIZE: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Cmap {
@@ -65,6 +76,12 @@ impl Cmap {
                 CmapFormat::Format2 => usize::from(read_u16(data, checked_add(offset, 2)?)?),
                 CmapFormat::Format4 => usize::from(read_u16(data, checked_add(offset, 2)?)?),
                 CmapFormat::Format6 => usize::from(read_u16(data, checked_add(offset, 2)?)?),
+                CmapFormat::Format8 => usize::try_from(read_u32(data, checked_add(offset, 4)?)?)
+                    .map_err(|_| invalid_cmap("format 8 length does not fit this platform"))?,
+                CmapFormat::Format10 => {
+                    usize::try_from(read_u32(data, checked_add(offset, 4)?)?)
+                        .map_err(|_| invalid_cmap("format 10 length does not fit this platform"))?
+                }
                 CmapFormat::Format12 => {
                     usize::try_from(read_u32(data, checked_add(offset, 4)?)?)
                         .map_err(|_| invalid_cmap("format 12 length does not fit this platform"))?
@@ -89,7 +106,7 @@ impl Cmap {
         }
         let Some((_, subtable, format, symbolic)) = selected else {
             return Err(invalid_cmap(
-                "no supported cmap format 0, 2, 4, 6, 12, or 13 subtable",
+                "no supported cmap format 0, 2, 4, 6, 8, 10, 12, or 13 subtable",
             ));
         };
         let cmap = Self {
@@ -130,6 +147,8 @@ impl Cmap {
                 self.format4_glyph(subtable, code)?
             }
             CmapFormat::Format6 => self.format6_glyph(subtable, codepoint)?,
+            CmapFormat::Format8 => self.format8_glyph(subtable, codepoint)?,
+            CmapFormat::Format10 => self.format10_glyph(subtable, codepoint)?,
             CmapFormat::Format12 => self.format12_glyph(subtable, codepoint)?,
             CmapFormat::Format13 => self.format13_glyph(subtable, codepoint)?,
         };
@@ -283,6 +302,76 @@ impl Cmap {
                     .ok_or_else(|| invalid_cmap("format 6 length overflows"))?;
                 if required_length > subtable.len() {
                     return Err(invalid_cmap("format 6 glyph array is truncated"));
+                }
+            }
+            CmapFormat::Format8 => {
+                if subtable.len() < FORMAT8_GROUPS_START {
+                    return Err(invalid_cmap("format 8 subtable is truncated"));
+                }
+                let group_count = usize::try_from(read_u32(subtable, FORMAT8_GROUP_COUNT_START)?)
+                    .map_err(|_| {
+                    invalid_cmap("format 8 group count does not fit this platform")
+                })?;
+                let required_length = FORMAT8_GROUPS_START
+                    .checked_add(
+                        group_count
+                            .checked_mul(GROUP_SIZE)
+                            .ok_or_else(|| invalid_cmap("format 8 group count overflows"))?,
+                    )
+                    .ok_or_else(|| invalid_cmap("format 8 group range overflows"))?;
+                if required_length > subtable.len() {
+                    return Err(invalid_cmap("format 8 groups are truncated"));
+                }
+                let mut previous_end = None;
+                for index in 0..group_count {
+                    let group = FORMAT8_GROUPS_START + index * GROUP_SIZE;
+                    let start = read_u32(subtable, group)?;
+                    let end = read_u32(subtable, group + 4)?;
+                    let start_glyph = read_u32(subtable, group + 8)?;
+                    let final_glyph = start_glyph
+                        .checked_add(end.saturating_sub(start))
+                        .ok_or_else(|| invalid_cmap("format 8 glyph range overflows"))?;
+                    if start > end
+                        || end > 0x10_FFFF
+                        || previous_end.is_some_and(|previous| previous >= start)
+                        || final_glyph >= u32::from(glyph_count)
+                    {
+                        return Err(invalid_cmap("format 8 group is invalid"));
+                    }
+                    previous_end = Some(end);
+                }
+            }
+            CmapFormat::Format10 => {
+                if subtable.len() < 20 {
+                    return Err(invalid_cmap("format 10 subtable is truncated"));
+                }
+                let start = read_u32(subtable, 12)?;
+                let count = read_u32(subtable, 16)?;
+                let count_usize = usize::try_from(count).map_err(|_| {
+                    invalid_cmap("format 10 character count does not fit this platform")
+                })?;
+                let required_length = 20usize
+                    .checked_add(
+                        count_usize
+                            .checked_mul(2)
+                            .ok_or_else(|| invalid_cmap("format 10 character count overflows"))?,
+                    )
+                    .ok_or_else(|| invalid_cmap("format 10 length overflows"))?;
+                if required_length > subtable.len() {
+                    return Err(invalid_cmap("format 10 glyph array is truncated"));
+                }
+                if count > 0 {
+                    let end = start
+                        .checked_add(count - 1)
+                        .ok_or_else(|| invalid_cmap("format 10 character range overflows"))?;
+                    if end > 0x10_FFFF {
+                        return Err(invalid_cmap("format 10 character range exceeds Unicode"));
+                    }
+                }
+                for index in 0..count_usize {
+                    if read_u16(subtable, 20 + index * 2)? >= glyph_count {
+                        return Err(invalid_cmap("format 10 maps to an invalid glyph ID"));
+                    }
                 }
             }
             CmapFormat::Format12 => {
@@ -473,6 +562,57 @@ impl Cmap {
         Ok(Some(glyph))
     }
 
+    /// Look up a code through a format 8 mixed 16/32-bit subtable.
+    ///
+    /// A 16-bit value is mapped directly only when its `is32` bit is clear;
+    /// marked values are the high half of a 32-bit code. Groups then map the
+    /// resulting character code to a glyph ID.
+    fn format8_glyph(&self, subtable: &[u8], codepoint: u32) -> Result<Option<u16>, FontError> {
+        if let Ok(code) = u16::try_from(codepoint)
+            && Self::format8_is_32(subtable, code)?
+        {
+            return Ok(None);
+        }
+        let group_count = usize::try_from(read_u32(subtable, FORMAT8_GROUP_COUNT_START)?)
+            .map_err(|_| invalid_cmap("format 8 group count does not fit this platform"))?;
+        let mut low = 0;
+        let mut high = group_count;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let group = FORMAT8_GROUPS_START + middle * GROUP_SIZE;
+            let start = read_u32(subtable, group)?;
+            let end = read_u32(subtable, group + 4)?;
+            if codepoint < start {
+                high = middle;
+            } else if codepoint > end {
+                low = middle + 1;
+            } else {
+                let start_glyph = read_u32(subtable, group + 8)?;
+                let glyph = start_glyph + (codepoint - start);
+                let glyph = u16::try_from(glyph)
+                    .map_err(|_| invalid_cmap("glyph ID does not fit TrueType glyph range"))?;
+                return Ok(Some(glyph));
+            }
+        }
+        Ok(None)
+    }
+
+    fn format8_is_32(subtable: &[u8], code: u16) -> Result<bool, FontError> {
+        let byte = read_u8(subtable, FORMAT8_IS32_START + (usize::from(code) >> 3))?;
+        Ok(byte & (1 << (code % 8)) != 0)
+    }
+
+    fn format10_glyph(&self, subtable: &[u8], codepoint: u32) -> Result<Option<u16>, FontError> {
+        let start = read_u32(subtable, 12)?;
+        let count = read_u32(subtable, 16)?;
+        if codepoint < start || codepoint >= start.saturating_add(count) {
+            return Ok(None);
+        }
+        let index = usize::try_from(codepoint - start)
+            .map_err(|_| invalid_cmap("format 10 character index does not fit this platform"))?;
+        Ok(Some(read_u16(subtable, 20 + index * 2)?))
+    }
+
     fn format12_glyph(&self, subtable: &[u8], codepoint: u32) -> Result<Option<u16>, FontError> {
         let group_count = usize::try_from(read_u32(subtable, 12)?)
             .map_err(|_| invalid_cmap("format 12 group count does not fit this platform"))?;
@@ -637,6 +777,43 @@ impl Cmap {
                     }
                 }
             }
+            CmapFormat::Format8 => {
+                let group_count = usize::try_from(read_u32(subtable, FORMAT8_GROUP_COUNT_START)?)
+                    .map_err(|_| invalid_cmap("format 8 group count does not fit"))?;
+
+                for index in 0..group_count {
+                    let group = FORMAT8_GROUPS_START + index * GROUP_SIZE;
+                    let start = read_u32(subtable, group)?;
+                    let end = read_u32(subtable, group + 4)?;
+                    let start_glyph = read_u32(subtable, group + 8)?;
+
+                    for codepoint in start..=end {
+                        if let Ok(code) = u16::try_from(codepoint)
+                            && Self::format8_is_32(subtable, code)?
+                        {
+                            continue;
+                        }
+                        let glyph = start_glyph + (codepoint - start);
+                        if let Ok(glyph) = u16::try_from(glyph)
+                            && glyph < glyph_count
+                        {
+                            reverse.entry(glyph).or_insert(codepoint);
+                        }
+                    }
+                }
+            }
+            CmapFormat::Format10 => {
+                let start = read_u32(subtable, 12)?;
+                let count = usize::try_from(read_u32(subtable, 16)?)
+                    .map_err(|_| invalid_cmap("format 10 character count does not fit"))?;
+
+                for index in 0..count {
+                    let glyph = read_u16(subtable, 20 + index * 2)?;
+                    if glyph < glyph_count {
+                        reverse.entry(glyph).or_insert(start + index as u32);
+                    }
+                }
+            }
             CmapFormat::Format12 => {
                 let group_count = usize::try_from(read_u32(subtable, 12)?)
                     .map_err(|_| invalid_cmap("format 12 group count does not fit"))?;
@@ -690,39 +867,55 @@ fn cmap_priority(platform: u16, encoding: u16, format: u16) -> Option<(u8, CmapF
         2 => CmapFormat::Format2,
         4 => CmapFormat::Format4,
         6 => CmapFormat::Format6,
+        8 => CmapFormat::Format8,
+        10 => CmapFormat::Format10,
         12 => CmapFormat::Format12,
         13 => CmapFormat::Format13,
         _ => return None,
     };
     let priority = match (platform, encoding, format) {
         (3, 10, 12) => 0,
+        // Formats 8 and 10 cover the full repertoire like format 12 but are
+        // legacy Apple encodings, so they rank just below it.
+        (3, 10, 8) => 1,
+        (3, 10, 10) => 2,
         // Format 13 follows the same platform rules as format 12 but is a
-        // many-to-one last-resort map, so it ranks just below format 12.
-        (3, 10, 13) => 1,
-        (0, _, 12) => 2,
-        (0, _, 13) => 3,
-        (3, 1, 4) => 4,
-        (0, _, 4) => 5,
+        // many-to-one last-resort map, so it ranks below the one-to-one maps.
+        (3, 10, 13) => 3,
+        (0, _, 12) => 4,
+        (0, _, 8) => 5,
+        (0, _, 10) => 6,
+        (0, _, 13) => 7,
+        (3, 1, 4) => 8,
+        (0, _, 4) => 9,
         // Format 2 is a legacy high-byte map; prefer the full BMP map 4.
-        (3, 1, 2) => 6,
-        (0, _, 2) => 7,
-        (3, 1, 0) => 8,
-        (1, 0, 0) => 9,
-        (0, _, 0) => 10,
-        (3, 1, 6) => 11,
-        (1, 0, 6) => 12,
-        (0, _, 6) => 13,
+        (3, 1, 2) => 10,
+        (0, _, 2) => 11,
+        (3, 1, 0) => 12,
+        (1, 0, 0) => 13,
+        (0, _, 0) => 14,
+        (3, 1, 6) => 15,
+        (1, 0, 6) => 16,
+        (0, _, 6) => 17,
         // Microsoft Symbol (3, 0) subtables rank below every Unicode subtable;
         // they are used only when no Unicode mapping is available. Their
         // relative order is unchanged.
-        (3, 0, 12) => 14,
-        (3, 0, 13) => 15,
-        (3, 0, 4) => 16,
-        (3, 0, 0) => 17,
-        (3, 0, 6) => 18,
+        (3, 0, 12) => 18,
+        (3, 0, 13) => 19,
+        (3, 0, 8) => 20,
+        (3, 0, 10) => 21,
+        (3, 0, 4) => 22,
+        (3, 0, 0) => 23,
+        (3, 0, 6) => 24,
         _ => return None,
     };
     Some((priority, supported_format))
+}
+
+fn read_u8(data: &[u8], offset: usize) -> Result<u8, FontError> {
+    data.get(offset)
+        .copied()
+        .ok_or_else(|| invalid_cmap("unexpected end of cmap data"))
 }
 
 fn read_u16(data: &[u8], offset: usize) -> Result<u16, FontError> {
@@ -755,7 +948,10 @@ fn invalid_cmap(message: &str) -> FontError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cmap, CmapFormat, FORMAT2_SUBHEADER_SIZE, FORMAT2_SUBHEADERS_START};
+    use super::{
+        Cmap, CmapFormat, FORMAT2_SUBHEADER_SIZE, FORMAT2_SUBHEADERS_START,
+        FORMAT8_GROUP_COUNT_START, FORMAT8_GROUPS_START, FORMAT8_IS32_START, GROUP_SIZE,
+    };
 
     fn format4_table() -> Vec<u8> {
         // Two segments: U+0041 maps to glyph 3, and the required U+FFFF sentinel.
@@ -840,6 +1036,41 @@ mod tests {
             data[group..group + 4].copy_from_slice(&start.to_be_bytes());
             data[group + 4..group + 8].copy_from_slice(&end.to_be_bytes());
             data[group + 8..group + 12].copy_from_slice(&glyph.to_be_bytes());
+        }
+        data
+    }
+
+    /// Format 8 subtable whose `is32` bitmap marks `is32_codes`; `groups`
+    /// are `(start, end, start_glyph)` records.
+    fn format8_table(is32_codes: &[u16], groups: &[(u32, u32, u32)]) -> Vec<u8> {
+        let mut data = vec![0; FORMAT8_GROUPS_START + groups.len() * GROUP_SIZE];
+        let length = data.len() as u32;
+        data[..2].copy_from_slice(&8u16.to_be_bytes());
+        data[4..8].copy_from_slice(&length.to_be_bytes());
+        for &code in is32_codes {
+            data[FORMAT8_IS32_START + (usize::from(code) >> 3)] |= 1 << (code % 8);
+        }
+        data[FORMAT8_GROUP_COUNT_START..FORMAT8_GROUPS_START]
+            .copy_from_slice(&(groups.len() as u32).to_be_bytes());
+        for (index, (start, end, glyph)) in groups.iter().enumerate() {
+            let group = FORMAT8_GROUPS_START + index * GROUP_SIZE;
+            data[group..group + 4].copy_from_slice(&start.to_be_bytes());
+            data[group + 4..group + 8].copy_from_slice(&end.to_be_bytes());
+            data[group + 8..group + 12].copy_from_slice(&glyph.to_be_bytes());
+        }
+        data
+    }
+
+    fn format10_table(start: u32, glyphs: &[u16]) -> Vec<u8> {
+        let mut data = vec![0; 20 + glyphs.len() * 2];
+        let length = data.len() as u32;
+        data[..2].copy_from_slice(&10u16.to_be_bytes());
+        data[4..8].copy_from_slice(&length.to_be_bytes());
+        data[12..16].copy_from_slice(&start.to_be_bytes());
+        data[16..20].copy_from_slice(&(glyphs.len() as u32).to_be_bytes());
+        for (index, glyph) in glyphs.iter().enumerate() {
+            let offset = 20 + index * 2;
+            data[offset..offset + 2].copy_from_slice(&glyph.to_be_bytes());
         }
         data
     }
@@ -931,6 +1162,93 @@ mod tests {
         assert_eq!(parsed.format(), CmapFormat::Format12);
         assert_eq!(parsed.glyph_id(&cmap_data, 0x1F600, 8).unwrap(), Some(4));
         assert_eq!(parsed.glyph_id(&cmap_data, 0x41, 8).unwrap(), None);
+    }
+
+    #[test]
+    fn maps_mixed_16_and_32_bit_codes_with_format8() {
+        let subtable = format8_table(
+            &[0x8000],
+            &[(0x41, 0x41, 3), (0x8000, 0x8002, 5), (0x1F600, 0x1F601, 9)],
+        );
+        let cmap_data = unicode_cmap(subtable, 8);
+        let parsed = Cmap::parse(&cmap_data, 16).unwrap();
+        assert_eq!(parsed.format(), CmapFormat::Format8);
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x41, 16).unwrap(), Some(3));
+        // 0x8000 is flagged in is32, so it is not a standalone 16-bit code.
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x8000, 16).unwrap(), None);
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x8001, 16).unwrap(), Some(6));
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x8002, 16).unwrap(), Some(7));
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x1F600, 16).unwrap(), Some(9));
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x1F601, 16).unwrap(), Some(10));
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x1F602, 16).unwrap(), None);
+
+        let reverse = parsed.reverse_cmap(&cmap_data, 16).unwrap();
+        assert_eq!(reverse.get(&3), Some(&0x41));
+        assert_eq!(reverse.get(&6), Some(&0x8001));
+        assert_eq!(reverse.get(&7), Some(&0x8002));
+        assert_eq!(reverse.get(&9), Some(&0x1F600));
+        assert!(!reverse.values().any(|&code| code == 0x8000));
+    }
+
+    #[test]
+    fn maps_trimmed_32_bit_array_with_format10() {
+        let cmap_data = unicode_cmap(format10_table(0x1_0000, &[4, 5, 6]), 10);
+        let parsed = Cmap::parse(&cmap_data, 8).unwrap();
+        assert_eq!(parsed.format(), CmapFormat::Format10);
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x1_0000, 8).unwrap(), Some(4));
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x1_0002, 8).unwrap(), Some(6));
+        assert_eq!(parsed.glyph_id(&cmap_data, 0xFFFF, 8).unwrap(), None);
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x1_0003, 8).unwrap(), None);
+
+        let reverse = parsed.reverse_cmap(&cmap_data, 8).unwrap();
+        assert_eq!(reverse.get(&4), Some(&0x1_0000));
+        assert_eq!(reverse.get(&6), Some(&0x1_0002));
+    }
+
+    #[test]
+    fn prefers_format12_over_format8_and_format8_over_format4() {
+        let cmap_data = multi_records_cmap(&[
+            (3, 10, format8_table(&[], &[(0x41, 0x41, 3)])),
+            (3, 10, format12_table()),
+        ]);
+        let parsed = Cmap::parse(&cmap_data, 8).unwrap();
+        assert_eq!(parsed.format(), CmapFormat::Format12);
+
+        let cmap_data = multi_records_cmap(&[
+            (3, 1, format4_table()),
+            (3, 10, format8_table(&[], &[(0x41, 0x41, 3)])),
+        ]);
+        let parsed = Cmap::parse(&cmap_data, 8).unwrap();
+        assert_eq!(parsed.format(), CmapFormat::Format8);
+        assert_eq!(parsed.glyph_id(&cmap_data, 0x41, 8).unwrap(), Some(3));
+    }
+
+    #[test]
+    fn rejects_invalid_format8_and_format10_tables() {
+        // The group count promises more records than the subtable holds.
+        let mut truncated = format8_table(&[], &[(0x41, 0x41, 3)]);
+        truncated[FORMAT8_GROUP_COUNT_START..FORMAT8_GROUPS_START]
+            .copy_from_slice(&2u32.to_be_bytes());
+        assert!(Cmap::parse(&unicode_cmap(truncated, 8), 8).is_err());
+
+        let overlapping = format8_table(&[], &[(0x41, 0x42, 3), (0x42, 0x43, 4)]);
+        assert!(Cmap::parse(&unicode_cmap(overlapping, 8), 8).is_err());
+
+        let missing_glyph = format8_table(&[], &[(0x41, 0x41, 8)]);
+        assert!(Cmap::parse(&unicode_cmap(missing_glyph, 8), 8).is_err());
+
+        // The glyph array is shorter than numChars promises.
+        let mut truncated = format10_table(0x41, &[3, 4]);
+        truncated.truncate(23);
+        truncated[4..8].copy_from_slice(&23u32.to_be_bytes());
+        assert!(Cmap::parse(&unicode_cmap(truncated, 10), 8).is_err());
+
+        // Character codes must stay inside the Unicode range.
+        let beyond_unicode = format10_table(0x10_FFFF, &[3, 4]);
+        assert!(Cmap::parse(&unicode_cmap(beyond_unicode, 10), 8).is_err());
+
+        let missing_glyph = format10_table(0x41, &[8]);
+        assert!(Cmap::parse(&unicode_cmap(missing_glyph, 10), 8).is_err());
     }
 
     #[test]
@@ -1142,7 +1460,11 @@ mod tests {
     }
 
     fn unicode_cmap(subtable: Vec<u8>, format: u16) -> Vec<u8> {
-        let encoding = if format == 12 || format == 13 { 10 } else { 1 };
+        let encoding = if matches!(format, 8 | 10 | 12 | 13) {
+            10
+        } else {
+            1
+        };
         records_cmap(subtable, 3, encoding)
     }
 

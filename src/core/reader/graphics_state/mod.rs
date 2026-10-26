@@ -3,9 +3,11 @@
 //! [`ExtGState`] exposes every standard entry with type and range checks.
 //! Entries that carry function, halftone or soft-mask objects (`/SMask`,
 //! `/TR`, `/TR2`, `/HT`, `/BG`, `/BG2`, `/UCR`, `/UCR2`) are preserved as
-//! resolved raw values; interpreting them belongs to those features
-//! (7.10, 10.5, 11.5). Unknown entries are kept verbatim in
-//! [`ExtGState::other`] without resolving them.
+//! resolved raw values; [`Document::soft_mask`] additionally parses an
+//! `/SMask` value into a typed [`SoftMask`] dictionary. Interpreting
+//! transfer functions and halftones belongs to those features (7.10, 10.5).
+//! Unknown entries are kept verbatim in [`ExtGState::other`] without
+//! resolving them.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -83,6 +85,28 @@ pub enum BlendMode {
     Name(String),
     /// Ordered fallback list of blend mode names (non-empty).
     Array(Vec<String>),
+}
+
+/// Soft-mask subtype (`/S`, ISO 32000-1 §11.6.5.2 Table 144).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoftMaskSubtype {
+    /// `/Alpha`: use the group's alpha values.
+    Alpha,
+    /// `/Luminosity`: use the group's luminosity.
+    Luminosity,
+}
+
+/// Parsed soft-mask dictionary (`/SMask`, Table 144).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoftMask {
+    /// `/S` subtype.
+    pub subtype: SoftMaskSubtype,
+    /// `/G` transparency group XObject as written (usually a reference).
+    pub group: Value,
+    /// `/BC` backdrop colour components, each within `0..=1`.
+    pub backdrop: Option<Vec<f64>>,
+    /// `/TR` transfer function as written (name `Identity` or a function).
+    pub transfer: Option<Value>,
 }
 
 /// Parsed graphics state parameter dictionary.
@@ -195,6 +219,24 @@ impl Document {
         }
         Ok(states)
     }
+
+    /// Parse an ExtGState `/SMask` value as a soft-mask dictionary.
+    ///
+    /// `value` may be a dictionary or an indirect reference to one.
+    /// `/S` must be `/Alpha` or `/Luminosity`, `/G` must resolve to a
+    /// Form or Image XObject stream, `/BC` components must lie within
+    /// `0..=1`, and a `/TR` name must be `/Identity`. `/G` and `/TR` are
+    /// kept as written so callers can resolve them themselves.
+    pub fn soft_mask(&self, value: &Value) -> Result<SoftMask> {
+        let value = self.resolve_graphics_state_value(value)?;
+        let dict = value.as_dict().ok_or_else(|| {
+            GraphicsStateError::Invalid(format!(
+                "soft mask must be a dictionary, got {}",
+                value.type_name()
+            ))
+        })?;
+        parse_soft_mask(self, dict)
+    }
 }
 
 /// Parse a graphics state parameter dictionary (`Table 58`).
@@ -249,6 +291,77 @@ pub fn parse_ext_g_state(document: &Document, dict: &Dict) -> Result<ExtGState> 
 
 fn invalid(message: impl Into<String>) -> GraphicsStateError {
     GraphicsStateError::Invalid(message.into())
+}
+
+/// Parse a soft-mask dictionary (`Table 144`).
+fn parse_soft_mask(document: &Document, dict: &Dict) -> Result<SoftMask> {
+    let subtype = match entry(document, dict, "S")? {
+        None => return Err(invalid("soft mask /S is required")),
+        Some(Value::Name(name)) if name == "Alpha" => SoftMaskSubtype::Alpha,
+        Some(Value::Name(name)) if name == "Luminosity" => SoftMaskSubtype::Luminosity,
+        Some(_) => return Err(invalid("soft mask /S must be /Alpha or /Luminosity")),
+    };
+
+    let group = dict
+        .get("G")
+        .ok_or_else(|| invalid("soft mask /G is required"))?
+        .clone();
+    let resolved_group = document.resolve_graphics_state_value(&group)?;
+    let Value::Stream(stream_dict, _) = &resolved_group else {
+        return Err(invalid(
+            "soft mask /G must be a Form or Image XObject stream",
+        ));
+    };
+    let subtype_value = stream_dict
+        .get("Subtype")
+        .map(|value| document.resolve_graphics_state_value(value))
+        .transpose()?;
+    match subtype_value.as_ref().and_then(Value::as_name) {
+        Some("Form" | "Image") => {}
+        _ => {
+            return Err(invalid(
+                "soft mask /G must be a Form or Image XObject stream",
+            ));
+        }
+    }
+
+    let backdrop = match entry(document, dict, "BC")? {
+        None => None,
+        Some(value) => {
+            let array = value
+                .as_array()
+                .ok_or_else(|| invalid("soft mask /BC must be an array"))?;
+            if array.is_empty() {
+                return Err(invalid("soft mask /BC must not be empty"));
+            }
+            let mut components = Vec::with_capacity(array.len());
+            for item in array.iter() {
+                let item = document.resolve_graphics_state_value(item)?;
+                let Some(component) = number(&item) else {
+                    return Err(invalid("soft mask /BC entries must be numbers"));
+                };
+                if !(0.0..=1.0).contains(&component) {
+                    return Err(invalid("soft mask /BC entries must be within 0..=1"));
+                }
+                components.push(component);
+            }
+            Some(components)
+        }
+    };
+
+    let transfer = entry(document, dict, "TR")?;
+    if let Some(Value::Name(name)) = &transfer
+        && name.as_str() != "Identity"
+    {
+        return Err(invalid("soft mask /TR name must be /Identity"));
+    }
+
+    Ok(SoftMask {
+        subtype,
+        group,
+        backdrop,
+        transfer,
+    })
 }
 
 fn entry(document: &Document, dict: &Dict, key: &str) -> Result<Option<Value>> {

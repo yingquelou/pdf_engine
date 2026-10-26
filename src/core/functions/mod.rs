@@ -24,7 +24,8 @@ mod sampled;
 mod stitching;
 
 #[cfg(test)]
-mod tests;use crate::core::types::{Dict, StreamData, Value};
+mod tests;
+use crate::core::types::{Dict, StreamData, Value};
 use std::fmt;
 
 /// 函数构造 / 求值失败原因（参数缺失或非法、数据损坏、求值错误）。
@@ -41,6 +42,11 @@ impl std::error::Error for FunctionError {}
 
 pub(crate) fn err<T>(msg: impl Into<String>) -> Result<T> {
     Err(FunctionError(msg.into()))
+}
+
+/// 校验 Type 4 代码流可被计算器解析（写端构建期使用）。
+pub(crate) fn validate_type4_code(code: &[u8]) -> Result<()> {
+    calculator::validate_code(code)
 }
 
 pub(crate) type Result<T> = std::result::Result<T, FunctionError>;
@@ -74,9 +80,7 @@ impl Function {
         let data = match value {
             Value::Stream(_, StreamData::Owned(b)) => Some(b.as_slice()),
             Value::Stream(_, StreamData::Ref { .. }) => {
-                return err(
-                    "function stream data is a file reference; resolve via Document first",
-                )
+                return err("function stream data is a file reference; resolve via Document first");
             }
             _ => stream,
         };
@@ -111,10 +115,9 @@ impl Function {
             2 => Ok(Function::Exponential(
                 exponential::ExponentialFunction::from_dict(dict)?,
             )),
-            3 => Ok(Function::Stitching(stitching::StitchingFunction::from_dict(
-                dict,
-                depth,
-            )?)),
+            3 => Ok(Function::Stitching(
+                stitching::StitchingFunction::from_dict(dict, depth)?,
+            )),
             4 => Ok(Function::Calculator(
                 calculator::CalculatorFunction::from_dict(dict, stream)?,
             )),
@@ -183,7 +186,10 @@ pub(crate) fn parse_numbers(v: &Value, what: &str) -> Result<Vec<f64>> {
             let mut out = Vec::with_capacity(a.len());
             for item in a.iter() {
                 out.push(parse_number(item).ok_or_else(|| {
-                    FunctionError(format!("invalid {what}: non-numeric element {}", item.type_name()))
+                    FunctionError(format!(
+                        "invalid {what}: non-numeric element {}",
+                        item.type_name()
+                    ))
                 })?);
             }
             Ok(out)

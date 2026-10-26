@@ -20,6 +20,39 @@ pub struct CidSystemInfo {
     pub supplement: i64,
 }
 
+/// Default vertical metrics from a CID font's `/DW2` entry.
+///
+/// `/DW2` is `[v_y, w1_y]` (ISO 32000-1 Table 116): `v_y` is the vertical
+/// displacement of the glyph origin and `w1_y` is the default vertical
+/// component of the position vector. The default is `[880, -1000]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DefaultVerticalMetrics {
+    /// `v_y`: vertical displacement of the glyph origin.
+    pub v_y: f64,
+    /// `w1_y`: default vertical component of the position vector.
+    pub w1_y: f64,
+}
+
+impl Default for DefaultVerticalMetrics {
+    fn default() -> Self {
+        Self {
+            v_y: 880.0,
+            w1_y: -1000.0,
+        }
+    }
+}
+
+/// Vertical metrics for one CID from `/W2` (ISO 32000-1 Table 116).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VerticalMetrics {
+    /// `w1_y`: vertical component of the position vector.
+    pub w1_y: f64,
+    /// `v_x`: horizontal component of the vertical displacement.
+    pub v1x: f64,
+    /// `v_y`: vertical component of the vertical displacement.
+    pub v1y: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum CidToGidMap {
     Identity,
@@ -33,6 +66,8 @@ pub struct CidFontType2 {
     system_info: CidSystemInfo,
     default_width: f64,
     widths: BTreeMap<u16, f64>,
+    default_vertical_metrics: DefaultVerticalMetrics,
+    vertical_metrics: BTreeMap<u16, VerticalMetrics>,
     descriptor: FontDescriptorMetrics,
     cid_to_gid: CidToGidMap,
     true_type_font: Option<TrueTypeFont>,
@@ -57,6 +92,26 @@ impl CidFontType2 {
     /// Return the horizontal width for a CID using `/W` and `/DW`.
     pub fn width_for_cid(&self, cid: u16) -> f64 {
         self.widths.get(&cid).copied().unwrap_or(self.default_width)
+    }
+
+    /// Return `/DW2`, defaulting to `[880, -1000]` when omitted.
+    pub fn default_vertical_metrics(&self) -> DefaultVerticalMetrics {
+        self.default_vertical_metrics
+    }
+
+    /// Return the vertical metrics for a CID.
+    ///
+    /// `/W2` entries take precedence. Otherwise `w1_y` and `v_y` fall back to
+    /// `/DW2`, and `v_x` defaults to half the glyph's horizontal width.
+    pub fn vertical_metrics_for_cid(&self, cid: u16) -> VerticalMetrics {
+        self.vertical_metrics
+            .get(&cid)
+            .copied()
+            .unwrap_or(VerticalMetrics {
+                w1_y: self.default_vertical_metrics.w1_y,
+                v1x: self.width_for_cid(cid) / 2.0,
+                v1y: self.default_vertical_metrics.v_y,
+            })
     }
 
     /// Map a CID through `/CIDToGIDMap`, defaulting to identity.
@@ -149,6 +204,8 @@ impl Document {
             system_info: metrics.system_info,
             default_width: metrics.default_width,
             widths: metrics.widths,
+            default_vertical_metrics: metrics.default_vertical_metrics,
+            vertical_metrics: metrics.vertical_metrics,
             descriptor: metrics.descriptor,
             cid_to_gid,
             true_type_font,
@@ -162,6 +219,8 @@ pub(super) struct CidMetrics {
     pub(super) system_info: CidSystemInfo,
     pub(super) default_width: f64,
     pub(super) widths: BTreeMap<u16, f64>,
+    pub(super) default_vertical_metrics: DefaultVerticalMetrics,
+    pub(super) vertical_metrics: BTreeMap<u16, VerticalMetrics>,
     pub(super) descriptor: FontDescriptorMetrics,
 }
 
@@ -205,13 +264,111 @@ pub(super) fn parse_cid_metrics(document: &Document, dict: &Dict) -> FontResult<
         }
         None => BTreeMap::new(),
     };
+    let default_vertical_metrics = parse_default_vertical_metrics(document, dict)?;
+    let vertical_metrics = match dict.get("W2") {
+        Some(value) => {
+            let value = document.resolve_value(value)?;
+            let array = value
+                .as_array()
+                .ok_or_else(|| FontError::Invalid("CID font /W2 is not an array".into()))?;
+            parse_vertical_metrics(document, array)?
+        }
+        None => BTreeMap::new(),
+    };
     Ok(CidMetrics {
         base_font,
         system_info,
         default_width,
         widths,
+        default_vertical_metrics,
+        vertical_metrics,
         descriptor,
     })
+}
+
+fn parse_default_vertical_metrics(
+    document: &Document,
+    dict: &Dict,
+) -> FontResult<DefaultVerticalMetrics> {
+    let Some(value) = dict.get("DW2") else {
+        return Ok(DefaultVerticalMetrics::default());
+    };
+    let value = document.resolve_value(value)?;
+    let array = value
+        .as_array()
+        .ok_or_else(|| FontError::Invalid("CID font /DW2 is not an array".into()))?;
+    if array.len() != 2 {
+        return Err(FontError::Invalid(
+            "CID font /DW2 must contain exactly two numbers".into(),
+        ));
+    }
+    Ok(DefaultVerticalMetrics {
+        v_y: metric_number(document, &array.0[0], "/DW2")?,
+        w1_y: metric_number(document, &array.0[1], "/DW2")?,
+    })
+}
+
+/// Parse `/W2`, which uses the same two entry shapes as `/W` but each CID
+/// carries the `w1_y v_x v_y` triple defined by ISO 32000-1 Table 116.
+fn parse_vertical_metrics(
+    document: &Document,
+    values: &Array,
+) -> FontResult<BTreeMap<u16, VerticalMetrics>> {
+    let mut metrics = BTreeMap::new();
+    let mut index = 0;
+    while index < values.len() {
+        let first = resolve_cid(document, &values.0[index], "/W2")?;
+        let next = values
+            .0
+            .get(index + 1)
+            .ok_or_else(|| FontError::Invalid("CID font /W2 has a truncated entry".into()))?;
+        let next = document.resolve_value(next)?;
+        if let Some(triples) = next.as_array() {
+            if triples.is_empty() || triples.len() % 3 != 0 {
+                return Err(FontError::Invalid(
+                    "CID font /W2 metric array length must be a positive multiple of 3".into(),
+                ));
+            }
+            for (offset, triple) in triples.0.as_chunks::<3>().0.iter().enumerate() {
+                let cid = first
+                    .checked_add(u16::try_from(offset).map_err(|_| {
+                        FontError::Invalid("CID font /W2 metric array is too long".into())
+                    })?)
+                    .ok_or_else(|| FontError::Invalid("CID font /W2 CID overflows".into()))?;
+                let metric = VerticalMetrics {
+                    w1_y: metric_number(document, &triple[0], "/W2")?,
+                    v1x: metric_number(document, &triple[1], "/W2")?,
+                    v1y: metric_number(document, &triple[2], "/W2")?,
+                };
+                metrics.insert(cid, metric);
+            }
+            index += 2;
+        } else {
+            let last = integer_cid(&next, "/W2")?;
+            if last < first {
+                return Err(FontError::Invalid(
+                    "CID font /W2 range ends before it starts".into(),
+                ));
+            }
+            if values.len() < index + 5 {
+                return Err(FontError::Invalid(
+                    "CID font /W2 has a truncated range".into(),
+                ));
+            }
+            let metric = VerticalMetrics {
+                w1_y: metric_number(document, &values.0[index + 2], "/W2")?,
+                v1x: metric_number(document, &values.0[index + 3], "/W2")?,
+                v1y: metric_number(document, &values.0[index + 4], "/W2")?,
+            };
+            // Overlapping `/W2` entries are not forbidden by the spec; a later
+            // entry for the same CID overrides the earlier one.
+            for cid in first..=last {
+                metrics.insert(cid, metric);
+            }
+            index += 5;
+        }
+    }
+    Ok(metrics)
 }
 
 fn parse_cid_system_info(document: &Document, dict: &Dict) -> FontResult<CidSystemInfo> {
@@ -273,7 +430,7 @@ fn parse_widths(document: &Document, values: &Array) -> FontResult<BTreeMap<u16,
     let mut widths = BTreeMap::new();
     let mut index = 0;
     while index < values.len() {
-        let first = resolve_cid(document, &values.0[index])?;
+        let first = resolve_cid(document, &values.0[index], "/W")?;
         let next = values
             .0
             .get(index + 1)
@@ -295,7 +452,7 @@ fn parse_widths(document: &Document, values: &Array) -> FontResult<BTreeMap<u16,
             }
             index += 2;
         } else {
-            let last = integer_cid(&next)?;
+            let last = integer_cid(&next, "/W")?;
             if last < first {
                 return Err(FontError::Invalid(
                     "CID font /W range ends before it starts".into(),
@@ -308,12 +465,10 @@ fn parse_widths(document: &Document, values: &Array) -> FontResult<BTreeMap<u16,
             let width_value = document.resolve_value(width_value)?;
             let width = number(&width_value)
                 .ok_or_else(|| FontError::Invalid("CID font /W width is not finite".into()))?;
+            // Overlapping `/W` entries are not forbidden by the spec; a later
+            // entry for the same CID overrides the earlier one.
             for cid in first..=last {
-                if widths.insert(cid, width).is_some() {
-                    return Err(FontError::Invalid(
-                        "CID font /W assigns a CID more than once".into(),
-                    ));
-                }
+                widths.insert(cid, width);
             }
             index += 3;
         }
@@ -321,18 +476,27 @@ fn parse_widths(document: &Document, values: &Array) -> FontResult<BTreeMap<u16,
     Ok(widths)
 }
 
-fn resolve_cid(document: &Document, value: &Value) -> FontResult<u16> {
-    integer_cid(&document.resolve_value(value)?)
+fn resolve_cid(document: &Document, value: &Value, entry: &str) -> FontResult<u16> {
+    integer_cid(&document.resolve_value(value)?, entry)
 }
 
-fn integer_cid(value: &Value) -> FontResult<u16> {
+fn integer_cid(value: &Value, entry: &str) -> FontResult<u16> {
     match value {
         Value::Integer(cid) => u16::try_from(*cid)
-            .map_err(|_| FontError::Invalid("CID font /W CID is outside 0..=65535".into())),
-        _ => Err(FontError::Invalid(
-            "CID font /W CID is not an integer".into(),
-        )),
+            .map_err(|_| FontError::Invalid(format!("CID font {entry} CID is outside 0..=65535"))),
+        _ => Err(FontError::Invalid(format!(
+            "CID font {entry} CID is not an integer"
+        ))),
     }
+}
+
+fn metric_number(document: &Document, value: &Value, entry: &str) -> FontResult<f64> {
+    let value = document.resolve_value(value)?;
+    number(&value).ok_or_else(|| {
+        FontError::Invalid(format!(
+            "CID font {entry} contains a value that is not finite"
+        ))
+    })
 }
 
 fn insert_width(
@@ -344,17 +508,16 @@ fn insert_width(
     let value = document.resolve_value(value)?;
     let width = number(&value)
         .ok_or_else(|| FontError::Invalid("CID font /W width is not finite".into()))?;
-    if widths.insert(cid, width).is_some() {
-        return Err(FontError::Invalid(
-            "CID font /W assigns a CID more than once".into(),
-        ));
-    }
+    // Later entries win when `/W` assigns the same CID more than once.
+    widths.insert(cid, width);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
+
+    use super::{DefaultVerticalMetrics, VerticalMetrics};
 
     fn cid_system_info() -> Value {
         Value::Dict(
@@ -475,6 +638,35 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_w_entries_use_the_last_value() {
+        let document = Document::new();
+        let font = cid_font(vec![(
+            "W",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(4))
+                    .push(Value::Array(
+                        Array::new()
+                            .push(Value::Integer(500))
+                            .push(Value::Integer(501)),
+                    ))
+                    .push(Value::Integer(5))
+                    .push(Value::Integer(6))
+                    .push(Value::Integer(600)),
+            ),
+        )]);
+
+        let font = document.cid_font_type2(&font).unwrap().unwrap();
+        assert_eq!(font.width_for_cid(4), 500.0);
+        assert_eq!(
+            font.width_for_cid(5),
+            600.0,
+            "后出现的 /W 条目应覆盖先前的 CID 5"
+        );
+        assert_eq!(font.width_for_cid(6), 600.0);
+    }
+
+    #[test]
     fn rejects_invalid_cid_font_tables() {
         let document = Document::new();
         let odd_map = cid_font(vec![(
@@ -500,23 +692,6 @@ mod tests {
             Value::Array(Array::new().push(Value::Integer(4))),
         )]);
         assert!(document.cid_font_type2(&truncated_widths).is_err());
-
-        let duplicate_widths = cid_font(vec![(
-            "W",
-            Value::Array(
-                Array::new()
-                    .push(Value::Integer(4))
-                    .push(Value::Array(
-                        Array::new()
-                            .push(Value::Integer(500))
-                            .push(Value::Integer(501)),
-                    ))
-                    .push(Value::Integer(5))
-                    .push(Value::Integer(6))
-                    .push(Value::Integer(600)),
-            ),
-        )]);
-        assert!(document.cid_font_type2(&duplicate_widths).is_err());
 
         let missing_info = Value::Dict(
             Dict::new()
@@ -719,5 +894,247 @@ mod tests {
             ),
         )]);
         assert!(document.cid_font_type2(&font).is_err());
+    }
+
+    #[test]
+    fn parses_vertical_metrics_from_dw2_and_w2() {
+        let document = Document::new();
+        let font = cid_font(vec![
+            (
+                "W2",
+                Value::Array(
+                    Array::new()
+                        .push(Value::Integer(1))
+                        .push(Value::Array(
+                            Array::new()
+                                .push(Value::Integer(-500))
+                                .push(Value::Integer(250))
+                                .push(Value::Integer(700))
+                                .push(Value::Integer(-600))
+                                .push(Value::Integer(300))
+                                .push(Value::Integer(800)),
+                        ))
+                        .push(Value::Integer(5))
+                        .push(Value::Integer(6))
+                        .push(Value::Integer(-700))
+                        .push(Value::Integer(350))
+                        .push(Value::Integer(900)),
+                ),
+            ),
+            (
+                "DW2",
+                Value::Array(
+                    Array::new()
+                        .push(Value::Integer(900))
+                        .push(Value::Integer(-800)),
+                ),
+            ),
+            (
+                "W",
+                Value::Array(
+                    Array::new()
+                        .push(Value::Integer(2))
+                        .push(Value::Array(Array::new().push(Value::Integer(600)))),
+                ),
+            ),
+        ]);
+
+        let font = document.cid_font_type2(&font).unwrap().unwrap();
+        assert_eq!(
+            font.default_vertical_metrics(),
+            DefaultVerticalMetrics {
+                v_y: 900.0,
+                w1_y: -800.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(1),
+            VerticalMetrics {
+                w1_y: -500.0,
+                v1x: 250.0,
+                v1y: 700.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(2),
+            VerticalMetrics {
+                w1_y: -600.0,
+                v1x: 300.0,
+                v1y: 800.0
+            }
+        );
+        // CID 3 has no /W2 entry: /DW2 supplies w1_y and v_y, while v_x
+        // defaults to half the horizontal width (/DW = 1000 here).
+        assert_eq!(
+            font.vertical_metrics_for_cid(3),
+            VerticalMetrics {
+                w1_y: -800.0,
+                v1x: 500.0,
+                v1y: 900.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(5),
+            VerticalMetrics {
+                w1_y: -700.0,
+                v1x: 350.0,
+                v1y: 900.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(6),
+            VerticalMetrics {
+                w1_y: -700.0,
+                v1x: 350.0,
+                v1y: 900.0
+            }
+        );
+    }
+
+    #[test]
+    fn defaults_vertical_metrics_and_uses_half_width_for_vx() {
+        let document = Document::new();
+        let font = cid_font(vec![(
+            "W",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(7))
+                    .push(Value::Array(Array::new().push(Value::Integer(620)))),
+            ),
+        )]);
+
+        let font = document.cid_font_type2(&font).unwrap().unwrap();
+        assert_eq!(
+            font.default_vertical_metrics(),
+            DefaultVerticalMetrics::default()
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(7),
+            VerticalMetrics {
+                w1_y: -1000.0,
+                v1x: 310.0,
+                v1y: 880.0
+            }
+        );
+        assert_eq!(
+            font.vertical_metrics_for_cid(9),
+            VerticalMetrics {
+                w1_y: -1000.0,
+                v1x: 500.0,
+                v1y: 880.0
+            }
+        );
+    }
+
+    #[test]
+    fn overlapping_w2_entries_use_the_last_value() {
+        let document = Document::new();
+        let font = cid_font(vec![(
+            "W2",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(4))
+                    .push(Value::Array(
+                        Array::new()
+                            .push(Value::Integer(-100))
+                            .push(Value::Integer(200))
+                            .push(Value::Integer(300)),
+                    ))
+                    .push(Value::Integer(4))
+                    .push(Value::Integer(4))
+                    .push(Value::Integer(-400))
+                    .push(Value::Integer(500))
+                    .push(Value::Integer(600)),
+            ),
+        )]);
+
+        let font = document.cid_font_type2(&font).unwrap().unwrap();
+        assert_eq!(
+            font.vertical_metrics_for_cid(4),
+            VerticalMetrics {
+                w1_y: -400.0,
+                v1x: 500.0,
+                v1y: 600.0
+            },
+            "后出现的 /W2 条目应覆盖先前的 CID 4"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_vertical_metrics() {
+        let document = Document::new();
+        let not_array = cid_font(vec![("DW2", Value::Integer(880))]);
+        assert!(document.cid_font_type2(&not_array).is_err());
+
+        let short_dw2 = cid_font(vec![(
+            "DW2",
+            Value::Array(Array::new().push(Value::Integer(880))),
+        )]);
+        assert!(document.cid_font_type2(&short_dw2).is_err());
+
+        let non_numeric_dw2 = cid_font(vec![(
+            "DW2",
+            Value::Array(
+                Array::new()
+                    .push(Value::Name("Tall".into()))
+                    .push(Value::Integer(-1000)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&non_numeric_dw2).is_err());
+
+        let not_array_w2 = cid_font(vec![("W2", Value::Integer(1))]);
+        assert!(document.cid_font_type2(&not_array_w2).is_err());
+
+        let empty_triples = cid_font(vec![(
+            "W2",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(1))
+                    .push(Value::Array(Array::new())),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&empty_triples).is_err());
+
+        let short_triples = cid_font(vec![(
+            "W2",
+            Value::Array(
+                Array::new().push(Value::Integer(1)).push(Value::Array(
+                    Array::new()
+                        .push(Value::Integer(-500))
+                        .push(Value::Integer(250)),
+                )),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&short_triples).is_err());
+
+        let reversed_range = cid_font(vec![(
+            "W2",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(5))
+                    .push(Value::Integer(4))
+                    .push(Value::Integer(-500))
+                    .push(Value::Integer(250))
+                    .push(Value::Integer(700)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&reversed_range).is_err());
+
+        let truncated_range = cid_font(vec![(
+            "W2",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(5))
+                    .push(Value::Integer(6))
+                    .push(Value::Integer(-500)),
+            ),
+        )]);
+        assert!(document.cid_font_type2(&truncated_range).is_err());
+
+        let truncated_entry = cid_font(vec![(
+            "W2",
+            Value::Array(Array::new().push(Value::Integer(5))),
+        )]);
+        assert!(document.cid_font_type2(&truncated_entry).is_err());
     }
 }

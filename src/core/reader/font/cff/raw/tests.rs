@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::core::reader::font::cff::fixtures;
+use crate::core::reader::font::cff::name_keyed_fixtures;
 use crate::core::reader::font::cff::outline::CffPathSegment;
 
 fn name_keyed_font() -> RawCffFont {
@@ -139,4 +140,43 @@ fn rejects_cid_keyed_program_with_predefined_charset() {
 fn reports_unsupported_cff_version() {
     let error = RawCffFont::parse(vec![2, 0, 4, 1]).unwrap_err();
     assert!(error.to_string().contains("CFF major version 2"), "{error}");
+}
+
+#[test]
+fn resolves_name_keyed_glyph_names_from_charset_and_string_index() {
+    let font = RawCffFont::parse(name_keyed_fixtures::name_keyed_cff_custom_charset(0)).unwrap();
+    assert_eq!(font.glyph_count(), 4);
+    assert_eq!(font.glyph_name(0), Some(".notdef"));
+    assert_eq!(font.glyph_name(1), Some("Alpha"));
+    assert_eq!(font.glyph_name(2), Some("Beta"));
+    assert_eq!(font.glyph_name(3), Some("Gamma"));
+    assert_eq!(font.glyph_for_name("Beta"), Some(2));
+    assert_eq!(font.glyph_for_name("missing"), None);
+    assert_eq!(font.glyph_name(4), None);
+}
+
+#[test]
+fn resolves_glyph_names_from_predefined_and_default_charsets() {
+    // No charset operator: CFF defaults to ISOAdobe (GID i -> SID i).
+    let default = RawCffFont::parse(fixtures::name_keyed_cff()).unwrap();
+    assert_eq!(default.glyph_name(0), Some(".notdef"));
+    assert_eq!(default.glyph_name(1), Some("space"));
+    assert_eq!(default.glyph_for_name("space"), Some(1));
+
+    let expert =
+        RawCffFont::parse(name_keyed_fixtures::name_keyed_cff_predefined_charset(1, 3)).unwrap();
+    assert_eq!(expert.glyph_name(1), Some("space"));
+    assert_eq!(expert.glyph_name(2), Some("exclamsmall"));
+    assert_eq!(expert.glyph_for_name("exclamsmall"), Some(2));
+
+    let expert_subset =
+        RawCffFont::parse(name_keyed_fixtures::name_keyed_cff_predefined_charset(2, 3)).unwrap();
+    assert_eq!(expert_subset.glyph_name(2), Some("dollaroldstyle"));
+}
+
+#[test]
+fn name_lookup_is_unavailable_for_cid_keyed_programs() {
+    let font = RawCffFont::parse(fixtures::cid_keyed_cff()).unwrap();
+    assert_eq!(font.glyph_name(0), None);
+    assert_eq!(font.glyph_for_name(".notdef"), None);
 }

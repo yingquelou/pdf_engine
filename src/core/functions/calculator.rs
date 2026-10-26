@@ -5,7 +5,7 @@
 //! 常量），布尔以 0.0/1.0 表示。无循环结构，天然终止；求值时限制栈深
 //! 防御失控数据。
 
-use super::{err, FunctionError, Result};
+use super::{FunctionError, Result, err};
 use crate::core::types::Dict;
 
 /// 求值栈深度上限（防御异常数据；规范未规定上限）。
@@ -26,8 +26,9 @@ impl CalculatorFunction {
     pub(super) fn from_dict(dict: &Dict, stream: Option<&[u8]>) -> Result<Self> {
         let domain = super::parse_ordered_pairs(dict, "Domain")?;
         let range = super::parse_ordered_pairs(dict, "Range")?;
-        let data = stream
-            .ok_or_else(|| FunctionError("type 4 function requires its /Code stream data".into()))?;
+        let data = stream.ok_or_else(|| {
+            FunctionError("type 4 function requires its /Code stream data".into())
+        })?;
         let program = parse_program(data)?;
         Ok(Self {
             domain,
@@ -225,6 +226,11 @@ fn parse_program(code: &[u8]) -> Result<Vec<Instr>> {
     parse_seq(&mut toks.into_iter(), true)
 }
 
+/// 校验 Type 4 代码流可被解析（写端构建期使用）。
+pub(super) fn validate_code(code: &[u8]) -> Result<()> {
+    parse_program(code).map(|_| ())
+}
+
 /// 切分为 token；数值直接解析，其余词视为操作符名（延迟到语法层校验）。
 fn tokenize(code: &[u8]) -> Result<Vec<Tok>> {
     let mut toks = Vec::new();
@@ -339,7 +345,9 @@ fn execute<'a>(prog: &'a [Instr], stack: &mut Vec<Val<'a>>) -> Result<()> {
 fn as_proc<'a>(v: Val<'a>, what: &str) -> Result<&'a [Instr]> {
     match v {
         Val::Proc(p) => Ok(p),
-        Val::Num(_) => Err(FunctionError(format!("typecheck: {what} expects a procedure"))),
+        Val::Num(_) => Err(FunctionError(format!(
+            "typecheck: {what} expects a procedure"
+        ))),
     }
 }
 
@@ -415,22 +423,14 @@ fn apply(op: Operator, stack: &mut Vec<Val>) -> Result<()> {
         // ---- 布尔：整数按位运算，0/1 视为布尔 ----
         Operator::And => binary(stack, |a, b| {
             if a == 0.0 || a == 1.0 {
-                if a != 0.0 && b != 0.0 {
-                    1.0
-                } else {
-                    0.0
-                }
+                if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }
             } else {
                 ((a as i64) & (b as i64)) as f64
             }
         })?,
         Operator::Or => binary(stack, |a, b| {
             if a == 0.0 || a == 1.0 {
-                if a != 0.0 || b != 0.0 {
-                    1.0
-                } else {
-                    0.0
-                }
+                if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }
             } else {
                 ((a as i64) | (b as i64)) as f64
             }

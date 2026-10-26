@@ -23,7 +23,7 @@ use std::fmt;
 
 use crate::core::types::{Dict, Document, StreamData, Value};
 
-use super::font::{SimpleFontEncoding, TrueTypeFont, Type0Font, Type1Font};
+use super::font::{SimpleFontEncoding, SimpleFontToUnicode, TrueTypeFont, Type0Font, Type1Font};
 
 mod tokenizer;
 
@@ -46,6 +46,8 @@ const MAX_PAGE_TREE_DEPTH: usize = 64;
 const MAX_PARENT_CHAIN_DEPTH: usize = 64;
 /// Maximum form XObject nesting depth.
 const MAX_FORM_DEPTH: usize = 32;
+/// Maximum saved text/graphics states from `q` operators.
+const MAX_STATE_DEPTH: usize = 256;
 
 // ── Operand stack & text state ────────────────────────────
 
@@ -75,6 +77,7 @@ enum FontHandle {
         font: Option<Type1Font>,
         encoding: Option<SimpleFontEncoding>,
         builtin: Option<Vec<Option<char>>>,
+        to_unicode: Option<SimpleFontToUnicode>,
     },
 }
 
@@ -82,6 +85,9 @@ struct TextState {
     font_name: Option<String>,
     fonts: HashMap<String, FontHandle>,
     output: String,
+    /// Text parameters saved by `q` and restored by `Q`. Only the selected
+    /// font is modeled, but it is part of the PDF graphics state.
+    font_stack: Vec<Option<String>>,
 }
 
 impl TextState {
@@ -90,12 +96,25 @@ impl TextState {
             font_name: None,
             fonts: HashMap::new(),
             output: String::new(),
+            font_stack: Vec::new(),
         }
     }
 
     fn set_font(&mut self, name: &str) {
         if self.fonts.contains_key(name) {
             self.font_name = Some(name.to_owned());
+        }
+    }
+
+    fn save_state(&mut self) {
+        if self.font_stack.len() < MAX_STATE_DEPTH {
+            self.font_stack.push(self.font_name.clone());
+        }
+    }
+
+    fn restore_state(&mut self) {
+        if let Some(font_name) = self.font_stack.pop() {
+            self.font_name = font_name;
         }
     }
 
@@ -122,9 +141,18 @@ impl TextState {
                 Err(_) => self.output.push_str(&lossy_latin1(bytes)),
             },
             FontHandle::Simple {
-                encoding, builtin, ..
+                encoding,
+                builtin,
+                to_unicode,
+                ..
             } => {
                 for &byte in bytes {
+                    // `/ToUnicode` 是字符码到 Unicode 的权威映射，优先于
+                    // 内置编码与 /Encoding（PDF 32000-1 §9.10.3）。
+                    if let Some(text) = to_unicode.as_ref().and_then(|map| map.unicode_for(byte)) {
+                        self.output.push_str(text);
+                        continue;
+                    }
                     let builtin_char = builtin.as_ref().and_then(|table| table[usize::from(byte)]);
                     match simple_byte_text(byte, builtin_char, encoding.as_ref()) {
                         Some(text) => self.output.push_str(&text),
@@ -250,9 +278,10 @@ struct ExtractionContext<'a> {
     document: &'a Document,
     state: TextState,
     budget: ContentBudget,
-    /// Indirect form XObject references already rendered on this page, keyed
-    /// by `(object number, generation)`. Prevents cyclic form invocations.
-    visited_forms: HashSet<(i64, i64)>,
+    /// Indirect form XObject references currently being executed, keyed by
+    /// `(object number, generation)`. Only the active recursion chain is
+    /// tracked so a form may be drawn repeatedly on the same page.
+    active_forms: HashSet<(i64, i64)>,
     form_depth: usize,
 }
 
@@ -262,7 +291,7 @@ impl<'a> ExtractionContext<'a> {
             document,
             state: TextState::new(),
             budget: ContentBudget::new(),
-            visited_forms: HashSet::new(),
+            active_forms: HashSet::new(),
             form_depth: 0,
         }
     }
@@ -346,12 +375,13 @@ impl<'a> ExtractionContext<'a> {
             return Ok(());
         }
 
-        if let Some(key) = xobject_value.as_ref()
-            && !self.visited_forms.insert(key)
-        {
+        if self.form_depth >= MAX_FORM_DEPTH {
             return Ok(());
         }
-        if self.form_depth >= MAX_FORM_DEPTH {
+        let active_key = xobject_value.as_ref();
+        if let Some(key) = active_key
+            && self.active_forms.contains(&key)
+        {
             return Ok(());
         }
 
@@ -375,9 +405,23 @@ impl<'a> ExtractionContext<'a> {
             Err(_) => return Ok(()),
         };
 
+        // `Do` saves the graphics state (which includes the selected font),
+        // runs the form, and restores it afterwards (ISO 32000-1 8.10.1).
+        // Font resources are restored as well so a form's same-named font
+        // cannot leak into the caller's `Tf` lookups.
+        let saved_font_name = self.state.font_name.clone();
+        let saved_fonts = self.state.fonts.clone();
+        if let Some(key) = active_key {
+            self.active_forms.insert(key);
+        }
         self.form_depth += 1;
         let result = self.extract_from_content(&bytes, &form_resources);
         self.form_depth -= 1;
+        if let Some(key) = active_key {
+            self.active_forms.remove(&key);
+        }
+        self.state.font_name = saved_font_name;
+        self.state.fonts = saved_fonts;
         result
     }
 
@@ -502,6 +546,8 @@ fn execute_operator(kw: &str, operands: &[Operand], state: &mut TextState) {
         "Td" | "TD" | "T*" | "Tm" => {
             state.add_break(BreakKind::Newline);
         }
+        "q" => state.save_state(),
+        "Q" => state.restore_state(),
         _ => {}
     }
 }
@@ -533,6 +579,7 @@ fn resolve_fonts(resources: &Dict, document: &Document, state: &mut TextState) {
             let font = document.type1_font(&font_val).ok().flatten();
             let encoding = document.simple_font_encoding(&font_val).ok().flatten();
             let builtin = true_type_builtin_encoding(document, &font_val);
+            let to_unicode = document.simple_font_to_unicode(&font_val);
             if font.is_some() || encoding.is_some() || font_val.as_dict().is_some() {
                 state.fonts.insert(
                     name.clone(),
@@ -540,6 +587,7 @@ fn resolve_fonts(resources: &Dict, document: &Document, state: &mut TextState) {
                         font,
                         encoding,
                         builtin,
+                        to_unicode,
                     },
                 );
             }

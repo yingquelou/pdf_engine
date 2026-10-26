@@ -106,6 +106,22 @@ fn resources_with_font(name: &str, font: Value) -> Dict {
     Dict::new().insert("Font", Value::Dict(Dict::new().insert(name, font)))
 }
 
+fn differences_type1_font() -> Value {
+    let differences = Array::new()
+        .push(Value::Integer(65))
+        .push(Value::Name("copyright".into()));
+    Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Font".into()))
+            .insert("Subtype", Value::Name("Type1".into()))
+            .insert("BaseFont", Value::Name("Helvetica".into()))
+            .insert(
+                "Encoding",
+                Value::Dict(Dict::new().insert("Differences", Value::Array(differences))),
+            ),
+    )
+}
+
 #[test]
 fn extracts_type1_winansi_text() {
     let document = Document::new();
@@ -116,12 +132,120 @@ fn extracts_type1_winansi_text() {
 }
 
 #[test]
+fn simple_font_to_unicode_takes_precedence_over_encoding() {
+    let document = Document::new();
+    let font = match winansi_type1_font() {
+        Value::Dict(dict) => Value::Dict(dict.insert(
+            "ToUnicode",
+            Value::Stream(
+                Dict::new(),
+                StreamData::Owned(b"1 beginbfchar <41> <4E2D> endbfchar".to_vec()),
+            ),
+        )),
+        other => other,
+    };
+    let resources = resources_with_font("F1", font);
+    let content = b"BT /F1 12 Tf (A) Tj ET";
+
+    assert_eq!(
+        document.extract_text(content, &resources),
+        "中",
+        "简单字体的 /ToUnicode 应优先于 /Encoding"
+    );
+}
+
+#[test]
+fn malformed_simple_font_to_unicode_falls_back_to_encoding() {
+    let document = Document::new();
+    let font = match winansi_type1_font() {
+        Value::Dict(dict) => Value::Dict(dict.insert(
+            "ToUnicode",
+            Value::Stream(
+                Dict::new(),
+                StreamData::Owned(b"1 beginbfchar <41> <D800> endbfchar".to_vec()),
+            ),
+        )),
+        other => other,
+    };
+    let resources = resources_with_font("F1", font);
+
+    assert_eq!(
+        document.extract_text(b"BT /F1 12 Tf (A) Tj ET", &resources),
+        "A"
+    );
+}
+
+#[test]
+fn content_stream_name_escapes_select_font_resources() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", differences_type1_font());
+
+    assert_eq!(
+        document.extract_text(b"BT /F#31 12 Tf (A) Tj ET", &resources),
+        "©",
+        "/F#31 应解码为资源名 F1"
+    );
+}
+
+#[test]
 fn extracts_type0_with_to_unicode() {
     let document = Document::new();
     let resources = resources_with_font("F2", type0_with_to_unicode());
     let content = b"BT /F2 12 Tf <00480065006C006C006F> Tj ET";
     let text = document.extract_text(content, &resources);
     assert_eq!(text, "Hello");
+}
+
+#[test]
+fn type0_to_unicode_with_unknown_usecmap_keeps_local_mappings() {
+    let document = Document::new();
+    let font = match type0_with_to_unicode() {
+        Value::Dict(dict) => Value::Dict(
+            dict.insert(
+                "ToUnicode",
+                Value::Stream(
+                    Dict::new(),
+                    StreamData::Owned(
+                        b"/Unknown usecmap \
+                      4 beginbfchar <0048> <0048> <0065> <0065> \
+                      <006C> <006C> <006F> <006F> endbfchar"
+                            .to_vec(),
+                    ),
+                ),
+            ),
+        ),
+        other => other,
+    };
+    let resources = resources_with_font("F2", font);
+    let content = b"BT /F2 12 Tf <00480065006C006C006F> Tj ET";
+
+    assert_eq!(
+        document.extract_text(content, &resources),
+        "Hello",
+        "无法解析的 usecmap 基名不应丢弃本地映射"
+    );
+}
+
+#[test]
+fn malformed_type0_to_unicode_does_not_disable_the_font() {
+    let document = Document::new();
+    let font = match type0_with_to_unicode() {
+        Value::Dict(dict) => Value::Dict(dict.insert(
+            "ToUnicode",
+            Value::Stream(
+                Dict::new(),
+                StreamData::Owned(b"1 beginbfchar <0041> <D800> endbfchar".to_vec()),
+            ),
+        )),
+        other => other,
+    };
+    let resources = resources_with_font("F2", font);
+
+    assert_eq!(
+        document.extract_text(b"BT /F2 12 Tf <0041> Tj ET", &resources),
+        "\0A",
+        "ToUnicode 损坏时应回落为字符码字节而不是丢弃字体"
+    );
 }
 
 #[test]
@@ -659,6 +783,54 @@ fn cyclic_form_xobject_references_terminate() {
 }
 
 #[test]
+fn repeated_form_xobject_is_extracted_each_time() {
+    let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Fm", 10)]);
+    let form = form_xobject(b"BT /F1 12 Tf (X) Tj ET", None);
+    let document = single_page_document(
+        contents_stream(b"/Fm Do /Fm Do"),
+        Value::Dict(resources),
+        vec![Object::new(10, 0, form)],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("XX"));
+}
+
+#[test]
+fn form_font_selection_does_not_leak_into_caller() {
+    let page_resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Fm", 10)]);
+    let form = form_xobject(
+        b"BT /F1 12 Tf (A) Tj ET",
+        Some(resources_with_font("F1", differences_type1_font())),
+    );
+    let document = single_page_document(
+        contents_stream(b"BT /F1 12 Tf (A) Tj ET /Fm Do BT (A) Tj ET"),
+        Value::Dict(page_resources),
+        vec![Object::new(10, 0, form)],
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("A©A"));
+}
+
+#[test]
+fn q_and_q_restore_selected_font() {
+    let resources = Dict::new().insert(
+        "Font",
+        Value::Dict(
+            Dict::new()
+                .insert("F1", winansi_type1_font())
+                .insert("F2", differences_type1_font()),
+        ),
+    );
+    let document = single_page_document(
+        contents_stream(b"BT /F1 12 Tf (A) Tj ET q BT /F2 12 Tf (A) Tj ET Q BT (A) Tj ET"),
+        Value::Dict(resources),
+        Vec::new(),
+    );
+
+    assert_eq!(document.extract_page_text(0).as_deref(), Some("A©A"));
+}
+
+#[test]
 fn image_xobject_is_skipped_without_losing_text() {
     let resources = resources_with_font_and_xobjects(winansi_type1_font(), &[("Im1", 10)]);
     let document = single_page_document(
@@ -668,4 +840,17 @@ fn image_xobject_is_skipped_without_losing_text() {
     );
 
     assert_eq!(document.extract_page_text(0).as_deref(), Some("AB"));
+}
+
+#[test]
+fn inline_image_data_is_skipped_without_losing_following_text() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    // The image data contains an unmatched "(" that would otherwise consume
+    // the rest of the stream as a literal string.
+    let content = b"BT /F1 12 Tf (A) Tj ET \
+                    BI /W 1 /H 1 /BPC 8 /CS /G ID ( EI \
+                    BT /F1 12 Tf (B) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "AB");
 }

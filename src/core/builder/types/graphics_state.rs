@@ -2,9 +2,12 @@
 //!
 //! 对应 PDF 32000-1 §8.4.5 Table 58。写出端在页面资源字典中登记
 //! `/ExtGState` 子字典，内容流用 `/GS<n> gs` 应用；[`GraphicsState`]
-//! 只覆盖不依赖外部对象的标量参数以及 `/D`、`/BM`、`/Font`。
-//! `/SMask`、`/TR`、`/TR2`、`/HT`、`/BG`、`/BG2`、`/UCR`、`/UCR2`
-//! 需要软遮罩、函数与半色调对象，留待相应特性实现。
+//! 覆盖不依赖外部对象的标量参数、`/D`、`/BM`、`/Font`、`/SMask`
+//! 软蒙版字典与 `/TR` 传递函数。`/TR2`、`/HT`、`/BG`、`/BG2`、`/UCR`、
+//! `/UCR2` 需要半色调等对象，留待相应特性实现。
+//!
+//! `/SMask` 的 `/G` 引用由构建器按文档级 Form XObject 句柄解析为对象号，
+//! 被引用的表单须是透明组（带 `/Group`），并在构建阶段连同表单对象写出。
 
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
@@ -27,6 +30,68 @@ impl DashPattern {
             array: array.into(),
             phase,
         }
+    }
+}
+
+/// 软蒙版子类型（`/S`，ISO 32000-1 §11.6.5.2 Table 144）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoftMaskSubtype {
+    /// `/Alpha`：以蒙版组的透明度作为软蒙版值。
+    Alpha,
+    /// `/Luminosity`：以蒙版组的亮度作为软蒙版值。
+    Luminosity,
+}
+
+impl SoftMaskSubtype {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Alpha => "Alpha",
+            Self::Luminosity => "Luminosity",
+        }
+    }
+}
+
+/// `/SMask` 软蒙版字典（Table 144）。
+///
+/// `/G` 是透明组 Form XObject 的构建器句柄（[`PdfBuilder::form_xobject`]
+/// 的返回值），构建阶段解析为对象引用；引用的表单必须带
+/// [`GroupXObject`](super::GroupXObject)。`/TR` 传递函数需要函数对象
+/// 模型，暂不支持（省略即恒等）。
+///
+/// [`PdfBuilder::form_xobject`]: super::super::PdfBuilder::form_xobject
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoftMask {
+    /// `/S` 子类型。
+    pub subtype: SoftMaskSubtype,
+    /// `/G` 透明组 Form XObject 句柄。
+    pub group: usize,
+    /// `/BC` 背景色分量（每项 0–1）。
+    pub backdrop: Option<Vec<f64>>,
+}
+
+impl SoftMask {
+    /// Alpha 软蒙版，引用指定透明组表单。
+    pub fn alpha(group: usize) -> Self {
+        Self {
+            subtype: SoftMaskSubtype::Alpha,
+            group,
+            backdrop: None,
+        }
+    }
+
+    /// Luminosity 软蒙版，引用指定透明组表单。
+    pub fn luminosity(group: usize) -> Self {
+        Self {
+            subtype: SoftMaskSubtype::Luminosity,
+            group,
+            backdrop: None,
+        }
+    }
+
+    /// 设置 `/BC` 背景色分量。
+    pub fn with_backdrop(mut self, components: impl Into<Vec<f64>>) -> Self {
+        self.backdrop = Some(components.into());
+        self
     }
 }
 
@@ -93,6 +158,10 @@ pub struct GraphicsState {
     pub alpha_is_shape: Option<bool>,
     /// `/TK` 文本挖空。
     pub text_knockout: Option<bool>,
+    /// `/SMask` 软蒙版字典。
+    pub soft_mask: Option<SoftMask>,
+    /// `/TR` 传递函数句柄（[`PdfBuilder::function`] 返回值）。
+    pub transfer_function: Option<usize>,
 }
 
 impl GraphicsState {
@@ -215,13 +284,40 @@ impl GraphicsState {
         self
     }
 
+    /// 设置 `/SMask` 软蒙版字典。
+    pub fn with_soft_mask(mut self, soft_mask: SoftMask) -> Self {
+        self.soft_mask = Some(soft_mask);
+        self
+    }
+
+    /// 设置 `/TR` 传递函数（需先通过 [`PdfBuilder::function`] 注册）。
+    pub fn with_transfer_function(mut self, function: usize) -> Self {
+        self.transfer_function = Some(function);
+        self
+    }
+
     /// 校验并转换为 `/ExtGState` 参数字典。
     ///
     /// `font_num` 是 `/Font` 条目引用的字体字典对象号；有 `/Font`
-    /// 时必须给出，无 `/Font` 时必须为 `None`。
-    pub(crate) fn to_value(&self, font_num: Option<i64>) -> Result<Dict, WriteError> {
+    /// 时必须给出，无 `/Font` 时必须为 `None`。`soft_mask_group_num`
+    /// 同理对应 `/SMask` 的 `/G` 表单对象号。`transfer` 是 `/TR`
+    /// 条目已解析的函数值（直接字典或流对象引用）。
+    pub(crate) fn to_value(
+        &self,
+        font_num: Option<i64>,
+        soft_mask_group_num: Option<i64>,
+        transfer: Option<Value>,
+    ) -> Result<Dict, WriteError> {
         if self.font.is_some() != font_num.is_some() {
             return Err(invalid("/Font entry and its object reference disagree"));
+        }
+        if self.soft_mask.is_some() != soft_mask_group_num.is_some() {
+            return Err(invalid(
+                "/SMask entry and its group object reference disagree",
+            ));
+        }
+        if self.transfer_function.is_some() != transfer.is_some() {
+            return Err(invalid("/TR entry and its function value disagree"));
         }
         let mut dict = Dict::new().insert("Type", Value::Name("ExtGState".into()));
         if let Some(width) = self.line_width {
@@ -329,6 +425,29 @@ impl GraphicsState {
         }
         if let Some(knockout) = self.text_knockout {
             dict = dict.insert("TK", Value::Bool(knockout));
+        }
+        if let Some(transfer) = transfer {
+            dict = dict.insert("TR", transfer);
+        }
+        if let Some(soft_mask) = &self.soft_mask {
+            let group_num =
+                soft_mask_group_num.ok_or_else(|| invalid("/SMask /G reference is missing"))?;
+            let mut mask_dict = Dict::new()
+                .insert("S", Value::Name(soft_mask.subtype.name().into()))
+                .insert("G", Value::Ref(group_num, 0));
+            if let Some(components) = &soft_mask.backdrop {
+                if components.is_empty() {
+                    return Err(invalid("/SMask /BC must not be empty"));
+                }
+                for component in components {
+                    within("SMask /BC", *component, 0.0, 1.0)?;
+                }
+                let array = components.iter().fold(Array::new(), |array, component| {
+                    array.push(Value::Float(*component))
+                });
+                mask_dict = mask_dict.insert("BC", Value::Array(array));
+            }
+            dict = dict.insert("SMask", Value::Dict(mask_dict));
         }
         Ok(dict)
     }

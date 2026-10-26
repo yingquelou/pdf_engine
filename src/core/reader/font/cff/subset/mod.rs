@@ -40,7 +40,6 @@ use super::raw::parse::{
 use crate::core::reader::font::{FontError, FontResult};
 
 mod dict;
-mod strings;
 #[cfg(test)]
 mod tests;
 mod type1c;

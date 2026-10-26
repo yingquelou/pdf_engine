@@ -29,6 +29,11 @@
 //! the `parse_glyph` argument is a **CID** (CIDFontType0 semantics) and is
 //! translated through the charset; for name-keyed programs it is a GID.
 //!
+//! Name-keyed programs additionally expose glyph names: the charset maps a
+//! GID to a SID, SID 0..=390 are the predefined strings from Adobe Technical
+//! Note #5176 and SID 391 and above index the String INDEX. Predefined
+//! charsets (0/1/2) and the default ISOAdobe charset are expanded for lookup.
+//!
 //! # Submodules
 //!
 //! * `parse` - CFF INDEX, DICT, charset, FDSelect and Private DICT helpers;
@@ -51,6 +56,9 @@ use self::parse::{
 };
 use self::tables::{SyntheticTables, units_per_em_from_matrix};
 use super::outline::{CffGlyphOutline, CffOutlineParser};
+use super::strings::{
+    EXPERT_CHARSET_SIDS, EXPERT_SUBSET_CHARSET_SIDS, ISO_ADOBE_CHARSET_LEN, STANDARD_STRINGS,
+};
 use super::ttf_parser::PathBuilder;
 use crate::core::reader::font::{FontError, FontResult};
 
@@ -82,9 +90,11 @@ pub struct RawCffFont {
     cid_count: Option<u16>,
     /// `ROS` operands (Registry SID, Ordering SID, Supplement), when present.
     ros: Option<[u16; 3]>,
-    /// GID -> CID for CID-keyed programs, GID -> SID for name-keyed programs
-    /// with an explicit charset. Index 0 is always 0.
+    /// GID -> CID for CID-keyed programs, GID -> SID for name-keyed programs.
+    /// Predefined and default charsets are expanded. Index 0 is always 0.
     charset: Option<Vec<u16>>,
+    /// Decoded String INDEX entries; SID 391 + index addresses one entry.
+    strings: Vec<String>,
     /// Resolved advance width per GID, in font units.
     widths: Vec<f64>,
     /// Whether the charstring contains a path drawing operator. Glyphs without
@@ -125,6 +135,11 @@ impl RawCffFont {
             .ok_or_else(|| FontError::Invalid("CFF Top DICT INDEX is empty".into()))?;
         let top_dict = parse_top_dict(&data[top_dict_range.clone()])?;
         let string_index = parse_index(&data, top_dict_index.end)?;
+        let strings: Vec<String> = string_index
+            .entries
+            .iter()
+            .map(|range| String::from_utf8_lossy(&data[range.clone()]).into_owned())
+            .collect();
         let _global_subrs = parse_index(&data, string_index.end)?;
 
         let char_strings_offset = top_dict.char_strings.ok_or_else(|| {
@@ -150,17 +165,17 @@ impl RawCffFont {
                     "CID-keyed CFF uses predefined charset {charset_id}; the specification forbids predefined charsets for CID fonts"
                 )));
             }
-            // Predefined charsets. ISOAdobe maps GID to SID directly; Expert and
-            // ExpertSubset are accepted for name-keyed fonts but not expanded
-            // because no SID lookup is exposed.
-            Some(0..=2) => None,
+            // Predefined name-keyed charsets are expanded so glyph names can
+            // be resolved. Glyphs beyond the predefined table keep no name.
+            Some(charset_id @ (0..=2)) => Some(predefined_charset(charset_id, glyph_count)),
             Some(offset) => Some(parse_charset(&data, offset, glyph_count)?),
             None if is_cid_keyed => {
                 return Err(FontError::Invalid(
                     "CID-keyed CFF is missing the required charset offset".into(),
                 ));
             }
-            None => None,
+            // Absent charset defaults to ISOAdobe (GID i -> SID i).
+            None => Some(predefined_charset(0, glyph_count)),
         };
 
         let (fd_select, font_dict_widths) = if is_cid_keyed {
@@ -242,6 +257,7 @@ impl RawCffFont {
             cid_count: top_dict.cid_count,
             ros: top_dict.ros,
             charset,
+            strings,
             widths,
             draws_path,
             tables,
@@ -316,6 +332,35 @@ impl RawCffFont {
             return None;
         }
         self.charset.as_ref()?.get(usize::from(gid)).copied()
+    }
+
+    /// Return the glyph name of a name-keyed program.
+    ///
+    /// Returns `None` for CID-keyed programs, glyph IDs outside the charset,
+    /// and SIDs that neither the predefined strings nor the String INDEX
+    /// define.
+    pub fn glyph_name(&self, gid: u16) -> Option<&str> {
+        if self.is_cid_keyed {
+            return None;
+        }
+        let sid = usize::from(*self.charset.as_ref()?.get(usize::from(gid))?);
+        match STANDARD_STRINGS.get(sid) {
+            Some(name) => Some(name),
+            None => self
+                .strings
+                .get(sid.checked_sub(STANDARD_STRINGS.len())?)
+                .map(String::as_str),
+        }
+    }
+
+    /// Return the glyph ID whose name is `name` in a name-keyed program.
+    ///
+    /// Returns `None` for CID-keyed programs and unknown names.
+    pub fn glyph_for_name(&self, name: &str) -> Option<u16> {
+        if self.is_cid_keyed {
+            return None;
+        }
+        (0..self.glyph_count).find(|&gid| self.glyph_name(gid) == Some(name))
     }
 
     /// Return the advance width of a glyph in font units.
@@ -426,5 +471,21 @@ impl CffOutlineParser for RawCffBackend {
 
     fn glyph_for_cid(&self, cid: u16) -> Option<u16> {
         self.font.glyph_for_cid(cid)
+    }
+}
+
+/// Expand a predefined name-keyed charset into a GID -> SID table.
+///
+/// Glyphs beyond the predefined table keep no name; returns a table no longer
+/// than `glyph_count`.
+fn predefined_charset(charset_id: usize, glyph_count: u16) -> Vec<u16> {
+    let count = usize::from(glyph_count);
+    match charset_id {
+        0 => (0..count.min(ISO_ADOBE_CHARSET_LEN))
+            .map(|gid| gid as u16)
+            .collect(),
+        1 => EXPERT_CHARSET_SIDS[..count.min(EXPERT_CHARSET_SIDS.len())].to_vec(),
+        2 => EXPERT_SUBSET_CHARSET_SIDS[..count.min(EXPERT_SUBSET_CHARSET_SIDS.len())].to_vec(),
+        _ => Vec::new(),
     }
 }

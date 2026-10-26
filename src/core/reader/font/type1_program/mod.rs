@@ -351,6 +351,22 @@ fn decrypt(ciphertext: &[u8], key: u16, skip: usize) -> Vec<u8> {
     plaintext
 }
 
+/// Split a Type 1 program into the `/FontFile` length entries required by
+/// Table 127: clear-text header, `eexec` encrypted section, and trailing
+/// fixed content. Programs without a locatable `eexec` section are reported
+/// entirely as clear text.
+pub(crate) fn font_file_lengths(data: &[u8]) -> (usize, usize, usize) {
+    let mut scanner = Scanner::new(data);
+    if parse_header(&mut scanner).is_err() {
+        return (data.len(), 0, 0);
+    }
+    scanner.skip_single_gap();
+    let length1 = scanner.position.min(data.len());
+    let length2 = eexec_section(&data[length1..]).len();
+    let length3 = data.len() - length1 - length2;
+    (length1, length2, length3)
+}
+
 /// The eexec data ends at the 512-zero guard that precedes `cleartomark`.
 fn eexec_section(data: &[u8]) -> &[u8] {
     let mut run = 0usize;
@@ -812,6 +828,37 @@ mod tests {
     fn parse_header_bytes(bytes: &[u8]) -> FontResult<Type1Header> {
         let mut scanner = Scanner::new(bytes);
         parse_header(&mut scanner)
+    }
+
+    #[test]
+    fn font_file_lengths_split_clear_encrypted_and_fixed_sections() {
+        let program = sample_program(None);
+        let (length1, length2, length3) = font_file_lengths(&program);
+
+        assert_eq!(length1 + length2 + length3, program.len());
+        let eexec_end = program
+            .windows(b"eexec".len())
+            .position(|window| window == b"eexec")
+            .expect("eexec keyword")
+            + b"eexec".len();
+        assert_eq!(
+            length1,
+            eexec_end + 1,
+            "Length1 应覆盖明文头与 eexec 后的单个分隔符"
+        );
+        let guard = program
+            .windows(512)
+            .position(|window| window.iter().all(|&byte| byte == b'0'))
+            .expect("512 零守卫");
+        assert_eq!(length2, guard - length1, "Length2 应为加密段字节数");
+        assert_eq!(length3, program.len() - guard, "Length3 应为尾部固定内容");
+        assert!(length3 > 0);
+    }
+
+    #[test]
+    fn font_file_lengths_without_eexec_are_all_clear_text() {
+        let data = b"%!PS-AdobeFont-1.0: TestFont\n";
+        assert_eq!(font_file_lengths(data), (data.len(), 0, 0));
     }
 
     fn custom_encoding(header: &Type1Header) -> &BTreeMap<u8, String> {

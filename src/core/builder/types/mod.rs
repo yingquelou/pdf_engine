@@ -7,25 +7,53 @@
 //! - `type3`：Type 3 字体与字形；
 //! - `cid`：CIDFont、CID 编码与宽度；
 //! - `program`：嵌入字体程序；
-//! - `image`：图片数据；
-//! - `graphics_state`：图形状态参数（ExtGState）。
+//! - `image`：图片数据与颜色空间；
+//! - `form`：Form XObject 与组属性字典；
+//! - `function`：PDF 函数（Type 0/2/3/4）；
+//! - `graphics_state`：图形状态参数（ExtGState）；
+//! - `optional_content`：可选内容组（OCG）；
+//! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
+//! - `pattern`：平铺图案（Tiling Pattern）与统一图案池。
 
 mod cid;
 mod descriptor;
 mod encoding;
 mod font;
+mod form;
+mod function;
 mod graphics_state;
 mod image;
+mod optional_content;
+mod pattern;
 mod program;
+mod shading;
 mod type3;
 
-pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidWidth};
+pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;
 pub use font::{Font, FontWidths};
-pub use graphics_state::{DashPattern, GraphicsState, GraphicsStateFont};
-pub use image::{ColorSpace, ImageData};
+pub use form::{FormXObject, GroupXObject};
+pub use function::{
+    CalculatorFunction, ExponentialFunction, Function, SampledFunction, StitchingFunction,
+};
+pub use graphics_state::{
+    DashPattern, GraphicsState, GraphicsStateFont, SoftMask, SoftMaskSubtype,
+};
+pub use image::{
+    CalGray, CalRGB, ColorSpace, DeviceN, ICCBased, ImageData, ImageMask, Indexed, Lab, Separation,
+};
+pub use optional_content::OptionalContentGroup;
+pub(crate) use pattern::Pattern;
+pub use pattern::{PaintType, TilingPattern, TilingType};
 pub use program::FontProgram;
+pub(crate) use program::OpenTypeFlavor;
+pub(crate) use shading::mesh_color_ranges;
+pub use shading::{
+    AxialShading, CoonsPatch, CoonsPatchShading, FreeFormMeshShading, FunctionShading,
+    LatticeMeshShading, MeshVertex, RadialShading, Shading, ShadingPattern, TensorProductPatch,
+    TensorProductPatchShading,
+};
 pub use type3::{Type3Font, Type3Glyph};
 
 /// 页面尺寸预设。

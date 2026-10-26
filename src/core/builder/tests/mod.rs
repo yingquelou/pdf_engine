@@ -9,6 +9,12 @@
 //! - `cid`：CIDFont 描述符与内容流；
 //! - `to_unicode`：ToUnicode CMap；
 //! - `encoding`：自定义 CID 编码 CMap；
+//! - `form`：Form XObject 字典与资源；
+//! - `page_group`：页字典组属性（`/Group`）；
+//! - `optional_content`：可选内容组（`/OCG`）与目录 `/OCProperties`；
+//! - `function`：PDF 函数（Type 0/2/3/4）与 ExtGState `/TR`；
+//! - `shading`：渐变（Shading Type 1–5）与着色图案（PatternType 2）；
+//! - `pattern`：平铺图案（PatternType 1）；
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
 mod cid;
@@ -17,7 +23,13 @@ mod encoding;
 mod font;
 mod font_cff;
 mod font_program;
+mod form;
+mod function;
 mod graphics_state;
+mod optional_content;
+mod page_group;
+mod pattern;
+mod shading;
 mod to_unicode;
 mod type3;
 mod widths;
@@ -102,6 +114,24 @@ fn sample_truetype_program() -> Vec<u8> {
     sfnt
 }
 
+/// 合成一个最小的 SFNT 容器：4 字节版本标签 + 单个 `CFF ` 表。
+///
+/// 写端只校验版本标签，不解析表目录；载荷仅用于断言字节原样嵌入。
+fn sample_opentype_sfnt(tag: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut sfnt = Vec::new();
+    sfnt.extend_from_slice(tag);
+    sfnt.extend_from_slice(&1u16.to_be_bytes()); // numTables
+    sfnt.extend_from_slice(&16u16.to_be_bytes()); // searchRange
+    sfnt.extend_from_slice(&0u16.to_be_bytes()); // entrySelector
+    sfnt.extend_from_slice(&0u16.to_be_bytes()); // rangeShift
+    sfnt.extend_from_slice(b"CFF "); // table tag
+    sfnt.extend_from_slice(&0u32.to_be_bytes()); // checksum
+    sfnt.extend_from_slice(&28u32.to_be_bytes()); // offset
+    sfnt.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    sfnt.extend_from_slice(payload);
+    sfnt
+}
+
 /// 在 assemble 产出的 Document 中定位指定子类型的字体字典。
 fn find_font_object(doc: &Document, subtype: &str) -> (i64, Dict) {
     for num in 1..=64 {
@@ -116,8 +146,8 @@ fn find_font_object(doc: &Document, subtype: &str) -> (i64, Dict) {
     panic!("font dict with subtype {subtype} not found");
 }
 
-/// 从字体字典取出 /FontFile2（或 /FontFile、/FontFile3）流，返回声明长度与字节。
-fn embedded_program(doc: &Document, font_dict: &Dict, key: &str) -> (i64, Vec<u8>) {
+/// 从字体字典取出 /FontFile2（或 /FontFile、/FontFile3）流的字典与字节。
+fn embedded_program_stream(doc: &Document, font_dict: &Dict, key: &str) -> (Dict, Vec<u8>) {
     let descriptor_num = font_dict
         .get("FontDescriptor")
         .and_then(Value::as_ref)
@@ -139,14 +169,20 @@ fn embedded_program(doc: &Document, font_dict: &Dict, key: &str) -> (i64, Vec<u8
         .expect("program object");
     match program.value {
         Value::Stream(ref stream_dict, StreamData::Owned(ref bytes)) => {
-            let length = stream_dict
-                .get("Length")
-                .and_then(Value::as_integer)
-                .expect("stream length");
-            (length, bytes.clone())
+            (stream_dict.clone(), bytes.clone())
         }
         _ => panic!("program object should be an Owned stream"),
     }
+}
+
+/// 从字体字典取出 /FontFile2（或 /FontFile、/FontFile3）流，返回声明长度与字节。
+fn embedded_program(doc: &Document, font_dict: &Dict, key: &str) -> (i64, Vec<u8>) {
+    let (stream_dict, bytes) = embedded_program_stream(doc, font_dict, key);
+    let length = stream_dict
+        .get("Length")
+        .and_then(Value::as_integer)
+        .expect("stream length");
+    (length, bytes)
 }
 
 /// 取出字体字典引用的 `/FontDescriptor` 字典。
@@ -293,6 +329,11 @@ fn image_xobject_emitted() {
         color_space: ColorSpace::DeviceRGB,
         bits: 8,
         data: vec![255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::Letter);
@@ -308,6 +349,1104 @@ fn image_xobject_emitted() {
     // 内容流应含 Do
     assert!(s.contains("/Im1 Do"));
     assert!(s.contains("cm"));
+    assert!(!s.contains("/Decode"), "未提供 Decode 时不应写出: {s}");
+    assert!(!s.contains("/Interpolate"), "未启用插值时不应写出: {s}");
+    assert!(!s.contains("/SMask"), "无软蒙版时不应写出: {s}");
+}
+
+#[test]
+fn cmyk_image_xobject_emitted() {
+    // 1x1 CMYK（C 满、M/Y/K 为零）：每像素 4 字节。
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceCMYK,
+        bits: 8,
+        data: vec![255, 0, 0, 0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::Letter);
+    b.image(p, 10.0, 10.0, 20.0, 20.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace /DeviceCMYK"));
+    assert!(s.contains("/BitsPerComponent 8"));
+    assert!(s.contains("/Length 4"), "CMYK 像素应原样写出 4 字节: {s}");
+}
+
+#[test]
+fn cmyk_image_data_length_mismatch_is_invalid_object() {
+    let img = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceCMYK,
+        bits: 8,
+        // RGB 尺寸的缓冲：2*2*3 = 12，而 CMYK 需要 16。
+        data: vec![0; 12],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::Letter);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("CMYK 图片数据长度不匹配应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("does not match expected 16"),
+        "{error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn image_with_unsupported_bits_is_invalid_object() {
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 3,
+        data: vec![0; 1],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::Letter);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("BitsPerComponent 仅允许 1/2/4/8/16");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("bits per component 3"),
+        "{error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn image_writes_decode_and_interpolate_entries() {
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![10, 20, 30],
+        decode: Some(vec![0.0, 1.0, 1.0, 0.0, 0.0, 0.5]),
+        interpolate: true,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/Decode [0.0 1.0 1.0 0.0 0.0 0.5]"), "{s}");
+    assert!(s.contains("/Interpolate true"), "{s}");
+}
+
+fn assert_image_rejected(img: ImageData, expected: &str) {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("非法图片参数应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(error.to_string().contains(expected), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn invalid_image_decode_fails_the_build() {
+    let base = || ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0; 3],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    assert_image_rejected(
+        base().with_decode(vec![0.0, 1.0]),
+        "Decode must contain 6 numbers for a 3-component image, got 2",
+    );
+    assert_image_rejected(
+        base().with_decode(vec![0.0, f64::NAN, 0.0, 1.0, 0.0, 1.0]),
+        "Decode must contain finite numbers",
+    );
+}
+
+#[test]
+fn image_with_smask_writes_soft_mask_object_and_reference() {
+    let mask = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0, 64, 128, 255],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let img = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0; 12],
+        decode: None,
+        interpolate: false,
+        smask: Some(Box::new(mask)),
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    b.image(p, 20.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert_eq!(
+        s.matches("/Subtype /Image").count(),
+        2,
+        "基图与软蒙版各一个流对象: {s}"
+    );
+    assert_eq!(s.matches("/SMask ").count(), 1, "{s}");
+    assert!(s.contains("/ColorSpace /DeviceGray"), "{s}");
+    // 每次绘制分配独立资源名，但重复绘制复用同一基图对象号。
+    assert_eq!(s.matches("/Im1 Do").count(), 1, "{s}");
+    assert_eq!(s.matches("/Im2 Do").count(), 1, "{s}");
+    let resources = &s[s.find("/XObject <<").expect("应写出 XObject 资源字典")..];
+    let base_ref = resources
+        .split("/Im1 ")
+        .nth(1)
+        .and_then(|rest| rest.split(" /Im2 ").next())
+        .expect("应写出 Im1 资源引用");
+    assert!(
+        resources.contains(&format!("/Im2 {base_ref}")),
+        "重复绘制应复用同一基图对象: {s}"
+    );
+    assert!(!s.contains("/Im3 "), "蒙版不应登记为页面资源: {s}");
+    assert_eq!(s.matches("/Length 4").count(), 1, "蒙版 4 字节: {s}");
+}
+
+#[test]
+fn invalid_smask_parameters_fail_the_build() {
+    fn gray_mask(width: u32, height: u32, data: Vec<u8>) -> ImageData {
+        ImageData {
+            width,
+            height,
+            color_space: ColorSpace::DeviceGray,
+            bits: 8,
+            data,
+            decode: None,
+            interpolate: false,
+            smask: None,
+            image_mask: false,
+            mask: None,
+        }
+    }
+    fn base_with(mask: ImageData) -> ImageData {
+        ImageData {
+            width: 2,
+            height: 2,
+            color_space: ColorSpace::DeviceRGB,
+            bits: 8,
+            data: vec![0; 12],
+            decode: None,
+            interpolate: false,
+            smask: Some(Box::new(mask)),
+            image_mask: false,
+            mask: None,
+        }
+    }
+
+    assert_image_rejected(
+        base_with(gray_mask(1, 1, vec![0])),
+        "SMask dimensions 1x1 do not match image 2x2",
+    );
+    assert_image_rejected(
+        base_with(ImageData {
+            width: 2,
+            height: 2,
+            color_space: ColorSpace::DeviceRGB,
+            bits: 8,
+            data: vec![0; 12],
+            decode: None,
+            interpolate: false,
+            smask: None,
+            image_mask: false,
+            mask: None,
+        }),
+        "SMask color space must be DeviceGray",
+    );
+    assert_image_rejected(
+        base_with(gray_mask(2, 2, vec![0; 4]).with_smask(gray_mask(2, 2, vec![0; 4]))),
+        "SMask must not contain another SMask",
+    );
+    assert_image_rejected(
+        base_with(gray_mask(2, 2, vec![0; 3])),
+        "SMask: data length 3 does not match expected 4",
+    );
+}
+
+#[test]
+fn smask_requires_pdf_1_4() {
+    let mask = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0],
+        decode: None,
+        interpolate: false,
+        smask: Some(Box::new(mask)),
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("PDF 1.3 must reject SMask");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(_)),
+        "错误应为 UnsupportedVersion: {error}"
+    );
+    assert!(
+        error.to_string().contains("transparency"),
+        "错误信息应说明透明度特性: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let mut out = Vec::new();
+    b.build(&mut out).expect("PDF 1.4 supports SMask");
+    assert!(String::from_utf8_lossy(&out).contains("/SMask "));
+}
+
+#[test]
+fn stencil_image_mask_writes_image_mask_and_omits_color_space() {
+    let img = ImageData {
+        width: 8,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: vec![0b1010_1010],
+        decode: Some(vec![1.0, 0.0]),
+        interpolate: true,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ImageMask true"), "{s}");
+    assert!(!s.contains("/ColorSpace"), "图像蒙版不得写 ColorSpace: {s}");
+    assert!(s.contains("/BitsPerComponent 1"), "{s}");
+    assert!(s.contains("/Decode [1.0 0.0]"), "{s}");
+    assert!(s.contains("/Interpolate true"), "{s}");
+    assert!(s.contains("/Im1 Do"), "{s}");
+}
+
+#[test]
+fn explicit_mask_writes_mask_reference_and_stencil_object() {
+    let mask = ImageData {
+        width: 4,
+        height: 2,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: vec![0b1111_0000, 0b0000_1111],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    let img = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0; 12],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: Some(ImageMask::explicit(mask)),
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace /DeviceRGB"), "{s}");
+    let mask_num = s
+        .split("/Mask ")
+        .nth(1)
+        .and_then(|rest| rest.split(" 0 R").next())
+        .expect("基图应写出 /Mask 引用");
+    let start = s
+        .find(&format!("\n{mask_num} 0 obj"))
+        .unwrap_or_else(|| panic!("蒙版对象 {mask_num} 应存在: {s}"));
+    let mask_object = &s[start..start + s[start..].find("endobj").expect("endobj")];
+    assert!(mask_object.contains("/ImageMask true"), "{mask_object}");
+    assert!(!mask_object.contains("/ColorSpace"), "{mask_object}");
+    assert!(mask_object.contains("/Width 4"), "{mask_object}");
+    assert!(mask_object.contains("/Height 2"), "{mask_object}");
+    assert!(mask_object.contains("/BitsPerComponent 1"), "{mask_object}");
+}
+
+#[test]
+fn colour_key_mask_writes_integer_ranges() {
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![10, 20, 30, 40, 50, 60],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: Some(ImageMask::color_key(vec![0, 10, 20, 30, 40, 50])),
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/Mask [0 10 20 30 40 50]"), "{s}");
+}
+
+#[test]
+fn invalid_image_mask_parameters_fail_the_build() {
+    let base = || ImageData {
+        width: 8,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: vec![0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    assert_image_rejected(
+        ImageData {
+            bits: 8,
+            data: vec![0; 8],
+            ..base()
+        },
+        "image mask requires BitsPerComponent 1",
+    );
+    assert_image_rejected(
+        ImageData {
+            color_space: ColorSpace::DeviceRGB,
+            ..base()
+        },
+        "image mask color space must be DeviceGray",
+    );
+    assert_image_rejected(
+        base().with_decode(vec![0.0, 0.5]),
+        "image mask Decode must be [0 1] or [1 0]",
+    );
+    let smask = ImageData {
+        width: 8,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0; 8],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    assert_image_rejected(
+        ImageData {
+            smask: Some(Box::new(smask)),
+            ..base()
+        },
+        "image mask must not have an SMask",
+    );
+    assert_image_rejected(
+        ImageData {
+            mask: Some(ImageMask::color_key(vec![0, 1])),
+            ..base()
+        },
+        "image mask must not have a Mask entry",
+    );
+}
+
+#[test]
+fn invalid_explicit_and_colour_key_masks_fail_the_build() {
+    let base = || ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0; 6],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let plain_gray = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0; 2],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    assert_image_rejected(
+        base().with_mask(ImageMask::explicit(plain_gray)),
+        "Mask image must be an image mask (ImageMask true)",
+    );
+    let broken_mask = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0; 2],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    assert_image_rejected(
+        base().with_mask(ImageMask::explicit(broken_mask)),
+        "Mask: image mask requires BitsPerComponent 1",
+    );
+    assert_image_rejected(
+        base().with_mask(ImageMask::color_key(vec![0, 1])),
+        "color key Mask must contain 6 integers for a 3-component image, got 2",
+    );
+    assert_image_rejected(
+        base().with_mask(ImageMask::color_key(vec![0, 1, 2, 3, 4, 300])),
+        "color key Mask ranges must satisfy 0 <= min <= max <= 255",
+    );
+    assert_image_rejected(
+        base().with_mask(ImageMask::color_key(vec![0, 10, 20, 15, 0, 255])),
+        "color key Mask ranges must satisfy 0 <= min <= max <= 255",
+    );
+}
+
+#[test]
+fn image_mask_entry_requires_pdf_1_3() {
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0; 6],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: Some(ImageMask::color_key(vec![0, 255, 0, 255, 0, 255])),
+    };
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("PDF 1.2 must reject /Mask");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(_)),
+        "错误应为 UnsupportedVersion: {error}"
+    );
+    assert!(
+        error.to_string().contains("image Mask entry"),
+        "错误信息应说明 /Mask 特性: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let mut out = Vec::new();
+    b.build(&mut out).expect("PDF 1.3 supports /Mask");
+    assert!(String::from_utf8_lossy(&out).contains("/Mask ["));
+
+    // `/ImageMask true` 本身自 PDF 1.0 起可用，不触发 1.3 门控。
+    let stencil = ImageData {
+        width: 8,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: vec![0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &stencil);
+    let mut out = Vec::new();
+    b.build(&mut out).expect("PDF 1.2 supports stencil masks");
+    assert!(String::from_utf8_lossy(&out).contains("/ImageMask true"));
+}
+
+#[test]
+fn cal_gray_image_writes_white_black_and_gamma() {
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::CalGray(CalGray {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: Some([0.0, 0.0, 0.0]),
+            gamma: Some(2.2),
+        }),
+        bits: 8,
+        data: vec![0, 255],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 10.0, 10.0, 20.0, 20.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace [/CalGray <<"), "{s}");
+    assert!(s.contains("/WhitePoint [0.9505 1.0 1.089]"), "{s}");
+    assert!(s.contains("/BlackPoint [0.0 0.0 0.0]"), "{s}");
+    assert!(s.contains("/Gamma 2.2"), "{s}");
+}
+
+#[test]
+fn cal_rgb_image_writes_gamma_and_matrix() {
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::CalRGB(CalRGB {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: None,
+            gamma: Some([2.2, 2.2, 2.2]),
+            matrix: Some([0.5, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5]),
+        }),
+        bits: 8,
+        data: vec![1, 2, 3],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace [/CalRGB <<"), "{s}");
+    assert!(s.contains("/Gamma [2.2 2.2 2.2]"), "{s}");
+    assert!(
+        s.contains("/Matrix [0.5 0.0 0.0 0.0 0.5 0.0 0.0 0.0 0.5]"),
+        "{s}"
+    );
+    assert!(!s.contains("/BlackPoint"), "未提供的黑点应省略: {s}");
+}
+
+#[test]
+fn lab_image_writes_range() {
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::Lab(Lab {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: None,
+            range: Some([-128.0, 127.0, -128.0, 127.0]),
+        }),
+        bits: 8,
+        data: vec![128, 0, 0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace [/Lab <<"), "{s}");
+    assert!(s.contains("/Range [-128.0 127.0 -128.0 127.0]"), "{s}");
+    assert!(s.contains("/WhitePoint [0.9505 1.0 1.089]"), "{s}");
+}
+
+#[test]
+fn icc_based_image_writes_profile_stream_and_alternative() {
+    let profile = vec![0, 1, 2, 3];
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::ICCBased(ICCBased {
+            n: 3,
+            data: profile,
+            alternate: Some(Box::new(ColorSpace::DeviceRGB)),
+            range: Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+        }),
+        bits: 8,
+        data: vec![1, 2, 3, 4, 5, 6],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace [/ICCBased "), "{s}");
+    assert!(s.contains(" 0 R]"), "ICCBased 应引用配置文件流: {s}");
+    assert!(s.contains("/N 3"), "{s}");
+    assert!(s.contains("/Alternate /DeviceRGB"), "{s}");
+    assert!(s.contains("/Range [0.0 1.0 0.0 1.0 0.0 1.0]"), "{s}");
+    assert!(s.contains("/Length 4"), "配置文件 4 字节原样写入: {s}");
+}
+
+#[test]
+fn indexed_image_writes_base_hival_and_lookup_hex() {
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::Indexed(Indexed::new(
+            ColorSpace::DeviceRGB,
+            1,
+            vec![0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00],
+        )),
+        bits: 8,
+        data: vec![0, 1],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/ColorSpace [/Indexed /DeviceRGB 1 <FF000000FF00>]"),
+        "{s}"
+    );
+    assert!(s.contains("/BitsPerComponent 8"), "{s}");
+}
+
+#[test]
+fn indexed_image_embeds_cie_base_definition() {
+    let img = ImageData {
+        width: 3,
+        height: 1,
+        color_space: ColorSpace::Indexed(Indexed::new(
+            ColorSpace::CalGray(CalGray {
+                white_point: [0.9505, 1.0, 1.089],
+                black_point: None,
+                gamma: Some(2.2),
+            }),
+            2,
+            vec![0x00, 0x80, 0xFF],
+        )),
+        bits: 8,
+        data: vec![0, 1, 2],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ColorSpace [/Indexed [/CalGray <<"), "{s}");
+    assert!(s.contains("/Gamma 2.2"), "{s}");
+    assert!(s.contains("2 <0080FF>]"), "{s}");
+}
+
+#[test]
+fn separation_image_writes_colorant_alternate_and_tint_transform() {
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::Separation(Separation::new(
+            "Orange",
+            ColorSpace::DeviceCMYK,
+            Function::Exponential(
+                ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                    .with_c0(vec![0.0, 0.0, 0.0, 0.0])
+                    .with_c1(vec![0.0, 0.4, 0.8, 0.0]),
+            ),
+        )),
+        bits: 8,
+        data: vec![0x20, 0xE0],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/ColorSpace [/Separation /Orange /DeviceCMYK <<"),
+        "{s}"
+    );
+    assert!(s.contains("/FunctionType 2"), "{s}");
+    assert!(s.contains("/Domain [0.0 1.0]"), "{s}");
+    assert!(s.contains("/C0 [0.0 0.0 0.0 0.0]"), "{s}");
+    assert!(s.contains("/C1 [0.0 0.4 0.8 0.0]"), "{s}");
+}
+
+#[test]
+fn device_n_image_writes_names_and_sampled_tint_transform() {
+    let img = ImageData {
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceN(DeviceN::new(
+            vec!["Orange".to_string(), "Green".to_string()],
+            ColorSpace::DeviceRGB,
+            Function::Sampled(SampledFunction::new(
+                vec![0.0, 1.0, 0.0, 1.0],
+                vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                vec![2, 1],
+                8,
+                vec![0.0; 6],
+            )),
+        )),
+        bits: 8,
+        data: vec![0x10, 0x20, 0x30, 0x40],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/ColorSpace [/DeviceN [/Orange /Green] /DeviceRGB "),
+        "{s}"
+    );
+    assert!(s.contains("/FunctionType 0"), "{s}");
+    assert!(s.contains("/Domain [0.0 1.0 0.0 1.0]"), "{s}");
+    assert!(s.contains("/Range [0.0 1.0 0.0 1.0 0.0 1.0]"), "{s}");
+    assert!(s.contains("/Size [2 1]"), "{s}");
+    assert!(s.contains("/BitsPerSample 8"), "{s}");
+    assert!(s.contains("/Length 6"), "6 个采样点各 1 字节: {s}");
+}
+
+#[test]
+fn device_n_allows_repeated_none_colorant() {
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceN(DeviceN::new(
+            vec!["None".to_string(), "None".to_string()],
+            ColorSpace::DeviceGray,
+            Function::Calculator(CalculatorFunction::new(
+                vec![0.0, 1.0, 0.0, 1.0],
+                vec![0.0, 1.0],
+                b"pop pop 0",
+            )),
+        )),
+        bits: 8,
+        data: vec![0x00, 0xFF],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/ColorSpace [/DeviceN [/None /None] /DeviceGray "),
+        "{s}"
+    );
+    assert!(s.contains("/FunctionType 4"), "{s}");
+}
+
+#[test]
+fn invalid_indexed_parameters_fail_the_build() {
+    // 调色板长度必须为 (hival + 1) × 基础空间通道数。
+    assert_color_space_rejected(
+        ColorSpace::Indexed(Indexed::new(ColorSpace::DeviceRGB, 1, vec![0; 5])),
+        "Indexed lookup must contain 6 bytes",
+    );
+    // 嵌套 Indexed 不是合法的 base。
+    assert_color_space_rejected(
+        ColorSpace::Indexed(Indexed::new(
+            ColorSpace::Indexed(Indexed::new(ColorSpace::DeviceGray, 0, vec![0])),
+            0,
+            vec![0],
+        )),
+        "Indexed base must not be another Indexed color space",
+    );
+    // base 参数错误应带上下文向上传播。
+    assert_color_space_rejected(
+        ColorSpace::Indexed(Indexed::new(
+            ColorSpace::Lab(Lab {
+                white_point: [f64::NAN, 1.0, 1.0],
+                black_point: None,
+                range: None,
+            }),
+            0,
+            vec![0, 0, 0],
+        )),
+        "Indexed base: Lab WhitePoint must contain 3 finite numbers",
+    );
+}
+
+fn assert_color_space_rejected(color_space: ColorSpace, expected: &str) {
+    let img = ImageData {
+        width: 1,
+        height: 1,
+        color_space,
+        bits: 8,
+        data: vec![0; 4],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &img);
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("非法颜色空间应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(error.to_string().contains(expected), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn invalid_cie_color_space_parameters_fail_the_build() {
+    assert_color_space_rejected(
+        ColorSpace::CalGray(CalGray {
+            white_point: [f64::NAN, 1.0, 1.0],
+            black_point: None,
+            gamma: None,
+        }),
+        "CalGray WhitePoint must contain 3 finite numbers",
+    );
+    assert_color_space_rejected(
+        ColorSpace::CalGray(CalGray {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: None,
+            gamma: Some(0.0),
+        }),
+        "CalGray Gamma must be a finite positive number",
+    );
+    assert_color_space_rejected(
+        ColorSpace::CalRGB(CalRGB {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: None,
+            gamma: Some([1.0, -1.0, 1.0]),
+            matrix: None,
+        }),
+        "CalRGB Gamma must contain 3 finite positive numbers",
+    );
+    assert_color_space_rejected(
+        ColorSpace::CalRGB(CalRGB {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: None,
+            gamma: None,
+            matrix: Some([f64::INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+        }),
+        "CalRGB Matrix must contain 9 finite numbers",
+    );
+    assert_color_space_rejected(
+        ColorSpace::Lab(Lab {
+            white_point: [0.9505, 1.0, 1.089],
+            black_point: None,
+            range: Some([0.0, -1.0, -100.0, 100.0]),
+        }),
+        "Lab Range minimum must not exceed maximum",
+    );
+}
+
+#[test]
+fn invalid_icc_based_parameters_fail_the_build() {
+    assert_color_space_rejected(
+        ColorSpace::ICCBased(ICCBased::new(2, vec![0])),
+        "ICCBased N must be 1, 3 or 4",
+    );
+    assert_color_space_rejected(
+        ColorSpace::ICCBased(ICCBased::new(3, Vec::new())),
+        "ICCBased profile data must not be empty",
+    );
+    assert_color_space_rejected(
+        ColorSpace::ICCBased(ICCBased {
+            n: 3,
+            data: vec![0],
+            alternate: None,
+            range: Some(vec![0.0, 1.0, 0.0, 1.0]),
+        }),
+        "ICCBased Range must contain 6 numbers",
+    );
+    assert_color_space_rejected(
+        ColorSpace::ICCBased(ICCBased {
+            n: 3,
+            data: vec![0],
+            alternate: Some(Box::new(ColorSpace::DeviceCMYK)),
+            range: None,
+        }),
+        "ICCBased Alternate has 4 components, expected 3",
+    );
+    assert_color_space_rejected(
+        ColorSpace::ICCBased(ICCBased {
+            n: 3,
+            data: vec![0],
+            alternate: Some(Box::new(ColorSpace::ICCBased(ICCBased::new(3, vec![1])))),
+            range: None,
+        }),
+        "ICCBased Alternate must not be another ICCBased color space",
+    );
+}
+
+#[test]
+fn invalid_separation_and_device_n_color_spaces_fail_the_build() {
+    assert_color_space_rejected(
+        ColorSpace::Separation(Separation::new(
+            "",
+            ColorSpace::DeviceGray,
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "Separation colorant must not be empty",
+    );
+    assert_color_space_rejected(
+        ColorSpace::Separation(Separation::new(
+            "Orange",
+            ColorSpace::Indexed(Indexed::new(ColorSpace::DeviceRGB, 0, vec![0, 0, 0])),
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "Separation alternate color space must be a device or CIE-based color space",
+    );
+    assert_color_space_rejected(
+        ColorSpace::Separation(Separation::new(
+            "Orange",
+            ColorSpace::DeviceCMYK,
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "Separation tint transform must produce 4 output(s)",
+    );
+    assert_color_space_rejected(
+        ColorSpace::DeviceN(DeviceN::new(
+            Vec::new(),
+            ColorSpace::DeviceGray,
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "DeviceN must have at least one colorant",
+    );
+    assert_color_space_rejected(
+        ColorSpace::DeviceN(DeviceN::new(
+            vec!["All".to_string()],
+            ColorSpace::DeviceGray,
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "DeviceN must not use the reserved colorant name All",
+    );
+    assert_color_space_rejected(
+        ColorSpace::DeviceN(DeviceN::new(
+            vec!["Orange".to_string(), "Orange".to_string()],
+            ColorSpace::DeviceGray,
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "DeviceN colorant names must be distinct, got duplicate Orange",
+    );
+    assert_color_space_rejected(
+        ColorSpace::DeviceN(DeviceN::new(
+            vec!["Orange".to_string(), "Green".to_string()],
+            ColorSpace::DeviceGray,
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "DeviceN tint transform must take 2 input(s), got 1",
+    );
+    assert_color_space_rejected(
+        ColorSpace::DeviceN(DeviceN::new(
+            vec!["Orange".to_string()],
+            ColorSpace::Separation(Separation::new(
+                "Orange",
+                ColorSpace::DeviceGray,
+                Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+            )),
+            Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+        )),
+        "DeviceN alternate color space must be a device or CIE-based color space",
+    );
 }
 
 #[test]
