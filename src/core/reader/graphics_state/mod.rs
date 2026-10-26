@@ -169,7 +169,7 @@ pub struct ExtGState {
 }
 
 impl Document {
-    fn resolve_graphics_state_value(&self, value: &Value) -> Result<Value> {
+    pub(crate) fn resolve_graphics_state_value(&self, value: &Value) -> Result<Value> {
         match value {
             Value::Ref(num, generation) => {
                 let object = self
@@ -510,9 +510,15 @@ fn optional_font(document: &Document, dict: &Dict) -> Result<Option<ExtGStateFon
         return Err(invalid("/Font must contain a font and a size".to_string()));
     }
     let font = parts.0[0].clone();
-    let resolved_font = document.resolve_graphics_state_value(&font)?;
-    if resolved_font.as_dict().is_none() {
-        return Err(invalid("/Font font entry must resolve to a dictionary"));
+    // Table 58: the first element is either a font resource name or a
+    // direct/indirect font dictionary; only the dictionary form is resolved.
+    if !matches!(font, Value::Name(_)) {
+        let resolved_font = document.resolve_graphics_state_value(&font)?;
+        if resolved_font.as_dict().is_none() {
+            return Err(invalid(
+                "/Font font entry must be a name or resolve to a dictionary",
+            ));
+        }
     }
     let size_value = document.resolve_graphics_state_value(&parts.0[1])?;
     let Some(size) = number(&size_value) else {

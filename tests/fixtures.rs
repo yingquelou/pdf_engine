@@ -91,3 +91,58 @@ fn corrupted_pdf_returns_typed_error_not_panic() {
     // Should either fail to parse or return an error during parsing, not panic
     let _ = parse_buf(&buf);
 }
+
+#[test]
+fn pdflatex_4_pages_all_content_ops_parse() {
+    use pdf_engine::core::reader::page_content::PageContentError;
+    let doc = parse_buf(&read_fixture("pdflatex-4-pages.pdf")).unwrap();
+    for page_index in 0..4 {
+        let ops = doc
+            .page_content_ops(page_index)
+            .unwrap_or_else(|e| panic!("page {} failed: {:?}", page_index, e));
+        assert!(!ops.is_empty(), "page {} parsed zero operators", page_index);
+    }
+    // Page 4 should return PageNotFound
+    let result = doc.page_content_ops(4);
+    assert!(matches!(result, Err(PageContentError::PageNotFound)));
+}
+
+#[test]
+fn pdflatex_4_pages_state_machine_runs() {
+    let doc = parse_buf(&read_fixture("pdflatex-4-pages.pdf")).unwrap();
+    for page_index in 0..4 {
+        let ops = doc.page_content_ops(page_index).expect("content ops parse");
+        let trace = doc
+            .page_content_state_trace(page_index)
+            .unwrap_or_else(|e| panic!("page {} state machine failed: {:?}", page_index, e));
+        assert_eq!(
+            trace.len(),
+            ops.len(),
+            "page {} should snapshot once per operator",
+            page_index
+        );
+        // Initial state follows Table 57 defaults until operators change it.
+        assert_eq!(trace[0].line_width, 1.0);
+    }
+    let final_state = doc.page_content_state(0).expect("final state");
+    assert!(final_state.ctm.iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn pdflatex_4_pages_marked_content_pairs_with_spans() {
+    let doc = parse_buf(&read_fixture("pdflatex-4-pages.pdf")).unwrap();
+    for page_index in 0..4 {
+        let ops = doc.page_content_ops(page_index).expect("content ops parse");
+        let sections = doc
+            .page_marked_content(page_index)
+            .unwrap_or_else(|e| panic!("page {} marked content failed: {e}", page_index));
+        for section in &sections {
+            assert!(section.end <= ops.len(), "section /{} span", section.tag);
+            if section.point {
+                assert_eq!(section.end, section.start + 1);
+            }
+        }
+        // Pairing is deterministic across repeat passes.
+        assert_eq!(sections, doc.page_marked_content(page_index).unwrap());
+    }
+}

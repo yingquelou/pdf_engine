@@ -9,6 +9,10 @@ pub enum CsToken {
     Keyword(String),
     ArrayOpen,
     ArrayClose,
+    /// `<< ... >>` dictionary literal; carries the raw bytes between the
+    /// angle-bracket pairs so consumers (e.g. BDC property lists) can parse
+    /// the entries instead of dropping them.
+    Dictionary(Vec<u8>),
 }
 
 pub fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
@@ -28,15 +32,9 @@ pub fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
             }
             b'<' => {
                 if input.get(pos + 1) == Some(&b'<') {
-                    pos += 2;
-                    while pos < input.len()
-                        && !(input[pos] == b'>' && input.get(pos + 1) == Some(&b'>'))
-                    {
-                        pos += 1;
-                    }
-                    if pos < input.len() {
-                        pos += 2;
-                    }
+                    let (inner, next) = take_dictionary(input, pos);
+                    tokens.push(CsToken::Dictionary(inner));
+                    pos = next;
                 } else {
                     let (s, next) = parse_hex_string(input, pos);
                     tokens.push(CsToken::HexString(s));
@@ -46,7 +44,7 @@ pub fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
             b'/' => {
                 pos += 1;
                 let start = pos;
-                while pos < input.len() && is_regular(input[pos]) {
+                while pos < input.len() && is_regular(input[pos]) && !is_delimiter(input[pos]) {
                     pos += 1;
                 }
                 let name = decode_name_escapes(&input[start..pos]);
@@ -130,8 +128,49 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-/// Skip an inline image starting just after the `BI` keyword.
+/// Extract the raw bytes of a `<< ... >>` dictionary literal.
 ///
+/// `start` points at the first `<`. Nested dictionaries increase the depth;
+/// literal and hex strings are consumed wholesale so their contents cannot
+/// fake a `>>` terminator. An unterminated dictionary is taken leniently to
+/// the end of input (content streams are untrusted).
+fn take_dictionary(input: &[u8], start: usize) -> (Vec<u8>, usize) {
+    let mut pos = start + 2;
+    let inner_start = pos;
+    let mut depth = 1usize;
+    while pos < input.len() {
+        match input[pos] {
+            b'(' => {
+                let (_, next) = parse_literal_string(input, pos);
+                pos = next;
+            }
+            b'<' => {
+                if input.get(pos + 1) == Some(&b'<') {
+                    depth += 1;
+                    pos += 2;
+                } else {
+                    let (_, next) = parse_hex_string(input, pos);
+                    pos = next;
+                }
+            }
+            b'>' => {
+                if input.get(pos + 1) == Some(&b'>') {
+                    depth -= 1;
+                    pos += 2;
+                    if depth == 0 {
+                        return (input[inner_start..pos - 2].to_vec(), pos);
+                    }
+                } else {
+                    pos += 1;
+                }
+            }
+            _ => pos += 1,
+        }
+    }
+    (input[inner_start..].to_vec(), pos)
+}
+
+/// Skip an inline image starting just after the `BI` keyword.///
 /// Scans the image dictionary for the `ID` keyword, then discards the binary
 /// image data up to the closing `EI`. Returns the index just past `EI`, or the
 /// end of the input when the image is truncated.

@@ -74,6 +74,7 @@ pub mod graphics_state;
 mod lexer;
 mod object;
 pub mod optional_content;
+pub mod page_content;
 mod parser;
 mod security;
 #[cfg(test)]

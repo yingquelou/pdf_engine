@@ -5,7 +5,7 @@
 
 use super::{InlineImage, Op, TextElement};
 use crate::core::reader::text::tokenizer::{CsToken, tokenize_content_stream};
-use crate::core::types::Value;
+use crate::core::types::{Array, Dict, Value};
 
 /// Errors that can occur during content stream parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,10 +124,11 @@ fn parse_inline_image(
         }
     }
 
-    // Find the raw data between ID and EI in the original input
-    // We need to locate the ID keyword in the input, then find EI
+    // Find the raw data between ID and EI in the original input.
+    // The tokenizer already consumed the image data and the closing EI,
+    // so `pos` (one past the ID token) points at the next content token.
     let id_pos = find_keyword_in_input(input, b"ID", start);
-    let ei_pos = find_keyword_in_input(input, b"EI", pos);
+    let ei_pos = id_pos.and_then(|id| find_keyword_in_input(input, b"EI", id + 2));
 
     let data = if let (Some(id), Some(ei)) = (id_pos, ei_pos) {
         // Data starts after "ID " (3 bytes) and ends before " EI"
@@ -141,9 +142,6 @@ fn parse_inline_image(
     } else {
         Vec::new()
     };
-
-    // Skip past EI
-    pos += 1;
 
     Ok((InlineImage { dict, data }, pos))
 }
@@ -191,15 +189,15 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         "j" => Ok(Op::SetLineJoin(expect_integer(&operands[0], "j", 0)?)),
         "M" => Ok(Op::SetMiterLimit(expect_number(&operands[0], "M", 0)?)),
         "d" => {
-            if operands.len() != 2 {
+            let (dash_array, next) = expect_number_array(operands, "d", 0)?;
+            if operands.len() != next + 1 {
                 return Err(ContentStreamError::InvalidOperandCount {
                     operator: "d".into(),
                     expected: "2".into(),
                     actual: operands.len(),
                 });
             }
-            let dash_array = expect_number_array(&operands[0], "d", 0)?;
-            let phase = expect_number(&operands[1], "d", 1)?;
+            let phase = expect_number(&operands[next], "d", next)?;
             Ok(Op::SetDashPattern(dash_array, phase))
         }
         "ri" => Ok(Op::SetRenderingIntent(expect_name(&operands[0], "ri", 0)?)),
@@ -330,11 +328,39 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         "CS" => Ok(Op::SetStrokeColorSpace(expect_name(&operands[0], "CS", 0)?)),
         "cs" => Ok(Op::SetFillColorSpace(expect_name(&operands[0], "cs", 0)?)),
         "SC" => Ok(Op::SetStrokeColor(expect_numbers_variadic(operands, "SC")?)),
-        "SCN" => Ok(Op::SetStrokeColorN(expect_numbers_variadic(
-            operands, "SCN",
-        )?)),
+        "SCN" => {
+            if let Some(CsToken::Name(pattern)) = operands.last() {
+                let components = expect_numbers_variadic(&operands[..operands.len() - 1], "SCN")?;
+                if components.is_empty() {
+                    Ok(Op::SetStrokeColorPattern(pattern.clone()))
+                } else {
+                    Ok(Op::SetStrokeColorPatternWithComponents(
+                        components,
+                        pattern.clone(),
+                    ))
+                }
+            } else {
+                Ok(Op::SetStrokeColorN(expect_numbers_variadic(
+                    operands, "SCN",
+                )?))
+            }
+        }
         "sc" => Ok(Op::SetFillColor(expect_numbers_variadic(operands, "sc")?)),
-        "scn" => Ok(Op::SetFillColorN(expect_numbers_variadic(operands, "scn")?)),
+        "scn" => {
+            if let Some(CsToken::Name(pattern)) = operands.last() {
+                let components = expect_numbers_variadic(&operands[..operands.len() - 1], "scn")?;
+                if components.is_empty() {
+                    Ok(Op::SetFillColorPattern(pattern.clone()))
+                } else {
+                    Ok(Op::SetFillColorPatternWithComponents(
+                        components,
+                        pattern.clone(),
+                    ))
+                }
+            } else {
+                Ok(Op::SetFillColorN(expect_numbers_variadic(operands, "scn")?))
+            }
+        }
         "G" => Ok(Op::SetStrokeGray(expect_number(&operands[0], "G", 0)?)),
         "g" => Ok(Op::SetFillGray(expect_number(&operands[0], "g", 0)?)),
         "RG" => {
@@ -399,6 +425,122 @@ fn token_to_value(token: &CsToken) -> Result<Value> {
         CsToken::Keyword(k) => Ok(Value::Name(k.clone())),
         CsToken::ArrayOpen => Ok(Value::Array(Default::default())),
         CsToken::ArrayClose => Ok(Value::Array(Default::default())),
+        CsToken::Dictionary(inner) => Ok(Value::Dict(parse_dictionary_inner(inner))),
+    }
+}
+
+/// Build a [`Dict`] from the raw inner bytes of a `<< ... >>` literal.
+///
+/// Used for inline property lists (BDC/DP, ISO 32000-1 14.6.2). Parsing is
+/// lenient: a key without a parsable value is skipped, and unknown keywords
+/// become names. Literal strings keep their raw bytes one-per-char so
+/// `PdfTextString` can decode PDFDocEncoding or UTF-16BE later; hex strings
+/// keep uppercase hex characters, matching the document parser's convention.
+pub(crate) fn parse_dictionary_inner(inner: &[u8]) -> Dict {
+    let tokens = tokenize_content_stream(inner);
+    let mut dict = Dict::new();
+    let mut pos = 0;
+    while pos < tokens.len() {
+        let CsToken::Name(key) = &tokens[pos] else {
+            pos += 1;
+            continue;
+        };
+        let key = key.clone();
+        pos += 1;
+        let Some(value) = take_dictionary_value(&tokens, &mut pos) else {
+            continue;
+        };
+        dict = dict.insert(key, value);
+    }
+    dict
+}
+
+/// Read one value starting at `*pos`, advancing past it.
+fn take_dictionary_value(tokens: &[CsToken], pos: &mut usize) -> Option<Value> {
+    // `num gen R` indirect reference form.
+    if let (
+        Some(CsToken::Number(num)),
+        Some(CsToken::Number(generation)),
+        Some(CsToken::Keyword(k)),
+    ) = (tokens.get(*pos), tokens.get(*pos + 1), tokens.get(*pos + 2))
+        && k == "R"
+    {
+        *pos += 3;
+        return Some(Value::Ref(*num as i64, *generation as i64));
+    }
+    let token = tokens.get(*pos)?;
+    let value = match token {
+        CsToken::Name(name) => Value::Name(name.clone()),
+        CsToken::Keyword(k) => match k.as_str() {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => return None,
+        },
+        CsToken::Number(n) => Value::Float(*n),
+        CsToken::LiteralString(bytes) => Value::String(bytes.iter().map(|&b| b as char).collect()),
+        CsToken::HexString(bytes) => {
+            let mut hex = String::with_capacity(bytes.len() * 2);
+            for byte in bytes {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{byte:02X}");
+            }
+            Value::HexString(hex)
+        }
+        CsToken::ArrayOpen => {
+            *pos += 1;
+            let mut items = Vec::new();
+            while let Some(t) = tokens.get(*pos) {
+                if matches!(t, CsToken::ArrayClose) {
+                    *pos += 1;
+                    break;
+                }
+                if let (
+                    Some(CsToken::Number(object)),
+                    Some(CsToken::Number(generation)),
+                    Some(CsToken::Keyword(keyword)),
+                ) = (tokens.get(*pos), tokens.get(*pos + 1), tokens.get(*pos + 2))
+                    && keyword == "R"
+                {
+                    items.push(Value::Ref(*object as i64, *generation as i64));
+                    *pos += 3;
+                    continue;
+                }
+                if let Some(v) = take_array_element(t) {
+                    items.push(v);
+                }
+                *pos += 1;
+            }
+            return Some(Value::Array(Array(items)));
+        }
+        CsToken::Dictionary(inner) => {
+            *pos += 1;
+            return Some(Value::Dict(parse_dictionary_inner(inner)));
+        }
+        CsToken::ArrayClose => return None,
+    };
+    *pos += 1;
+    Some(value)
+}
+
+fn take_array_element(token: &CsToken) -> Option<Value> {
+    match token {
+        CsToken::Number(n) => Some(Value::Float(*n)),
+        CsToken::LiteralString(bytes) => {
+            Some(Value::String(bytes.iter().map(|&b| b as char).collect()))
+        }
+        CsToken::HexString(bytes) => {
+            let mut hex = String::with_capacity(bytes.len() * 2);
+            for byte in bytes {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{byte:02X}");
+            }
+            Some(Value::HexString(hex))
+        }
+        CsToken::Name(n) => Some(Value::Name(n.clone())),
+        CsToken::Keyword(k) if k == "true" => Some(Value::Bool(true)),
+        CsToken::Keyword(k) if k == "false" => Some(Value::Bool(false)),
+        CsToken::Dictionary(inner) => Some(Value::Dict(parse_dictionary_inner(inner))),
+        _ => None,
     }
 }
 
@@ -469,27 +611,73 @@ fn expect_numbers_variadic(tokens: &[CsToken], operator: &str) -> Result<Vec<f64
         .collect()
 }
 
-fn expect_number_array(_token: &CsToken, operator: &str, index: usize) -> Result<Vec<f64>> {
-    // For now, we don't support arrays in the tokenizer output
-    // This would need to be extended to parse array tokens
-    Err(ContentStreamError::InvalidOperandValue {
-        operator: operator.into(),
-        operand_index: index,
-        message: "array operands not yet supported".into(),
-    })
-}
-
-fn expect_text_array(
-    _tokens: &[CsToken],
+/// Split one `[ ... ]` array literal off the front of `tokens`.
+///
+/// Returns the tokens between the brackets and the index just past `]`.
+/// Nested arrays are not valid PDF content-stream operands, so the first
+/// `ArrayClose` ends the array.
+fn take_array<'a>(
+    tokens: &'a [CsToken],
     operator: &str,
     index: usize,
-) -> Result<Vec<TextElement>> {
-    // Similar to above, arrays need special handling
-    Err(ContentStreamError::InvalidOperandValue {
-        operator: operator.into(),
-        operand_index: index,
-        message: "array operands not yet supported".into(),
-    })
+) -> Result<(&'a [CsToken], usize)> {
+    if !matches!(tokens.first(), Some(CsToken::ArrayOpen)) {
+        return Err(ContentStreamError::InvalidOperandValue {
+            operator: operator.into(),
+            operand_index: index,
+            message: "expected array".into(),
+        });
+    }
+    let close = tokens[1..]
+        .iter()
+        .position(|t| matches!(t, CsToken::ArrayClose))
+        .map(|p| p + 1)
+        .ok_or_else(|| ContentStreamError::InvalidOperandValue {
+            operator: operator.into(),
+            operand_index: index,
+            message: "unterminated array".into(),
+        })?;
+    Ok((&tokens[1..close], close + 1))
+}
+
+/// Parse a leading numeric array operand; returns the values and the index
+/// just past the closing bracket.
+fn expect_number_array(
+    tokens: &[CsToken],
+    operator: &str,
+    index: usize,
+) -> Result<(Vec<f64>, usize)> {
+    let (inner, next) = take_array(tokens, operator, index)?;
+    let values = inner
+        .iter()
+        .enumerate()
+        .map(|(i, t)| expect_number(t, operator, i))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((values, next))
+}
+
+fn expect_text_array(tokens: &[CsToken], operator: &str, index: usize) -> Result<Vec<TextElement>> {
+    let (inner, next) = take_array(tokens, operator, index)?;
+    if next != tokens.len() {
+        return Err(ContentStreamError::InvalidOperandCount {
+            operator: operator.into(),
+            expected: "1".into(),
+            actual: 2,
+        });
+    }
+    inner
+        .iter()
+        .enumerate()
+        .map(|(i, t)| match t {
+            CsToken::LiteralString(s) | CsToken::HexString(s) => Ok(TextElement::String(s.clone())),
+            CsToken::Number(n) => Ok(TextElement::Adjustment(*n)),
+            _ => Err(ContentStreamError::InvalidOperandValue {
+                operator: operator.into(),
+                operand_index: i,
+                message: "expected string or number in text array".into(),
+            }),
+        })
+        .collect()
 }
 
 fn expect_properties(tokens: &[CsToken], operator: &str, index: usize) -> Result<Value> {

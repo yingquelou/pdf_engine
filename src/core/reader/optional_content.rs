@@ -2,8 +2,10 @@
 //!
 //! [`Document::optional_content_properties`] parses the catalog's
 //! `/OCProperties` entry into typed optional content groups (OCGs) and the
-//! default configuration dictionary. Visibility is exposed as data only:
-//! the reader does not yet suppress marked content or XObjects by group.
+//! default configuration dictionary. Text extraction (`14.6` marked content,
+//! see [`crate::core::reader::content::MarkedSection`]) suppresses sections
+//! whose group the default configuration turns off; XObjects are not yet
+//! filtered by group.
 
 use std::fmt;
 

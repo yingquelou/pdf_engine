@@ -854,3 +854,202 @@ fn inline_image_data_is_skipped_without_losing_following_text() {
 
     assert_eq!(document.extract_text(content, &resources), "AB");
 }
+
+// ── Marked content & optional content (C4) ────────────────
+
+fn oc_properties_document(on: &[i64], off: &[i64]) -> Document {
+    let mut on_array = Array::new();
+    for object in on {
+        on_array = on_array.push(Value::Ref(*object, 0));
+    }
+    let mut off_array = Array::new();
+    for object in off {
+        off_array = off_array.push(Value::Ref(*object, 0));
+    }
+    let groups: Vec<i64> = on.iter().chain(off).copied().collect();
+    let mut ocgs = Array::new();
+    let mut objects = Vec::new();
+    for object in &groups {
+        ocgs = ocgs.push(Value::Ref(*object, 0));
+        objects.push(Object::new(
+            *object,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("OCG".into()))
+                    .insert("Name", Value::String(format!("Group {object}"))),
+            ),
+        ));
+    }
+    let catalog = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Catalog".into()))
+            .insert(
+                "OCProperties",
+                Value::Dict(
+                    Dict::new().insert("OCGs", Value::Array(ocgs)).insert(
+                        "D",
+                        Value::Dict(
+                            Dict::new()
+                                .insert("BaseState", Value::Name("ON".into()))
+                                .insert("ON", Value::Array(on_array))
+                                .insert("OFF", Value::Array(off_array)),
+                        ),
+                    ),
+                ),
+            ),
+    );
+    objects.insert(0, Object::new(1, 0, catalog));
+    document_from_objects(objects)
+}
+
+fn marked_resources(properties: &[(&str, Value)]) -> Dict {
+    let mut map = Dict::new();
+    for (name, value) in properties {
+        map = map.insert(*name, value.clone());
+    }
+    resources_with_font("F1", winansi_type1_font()).insert("Properties", Value::Dict(map))
+}
+
+#[test]
+fn actual_text_replaces_all_shows_in_section() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf /Span <</ActualText (R)>> BDC (orig) Tj (more) Tj ET EMC \
+                    BT /F1 12 Tf (tail) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "Rtail");
+}
+
+#[test]
+fn actual_text_decodes_hex_string_property() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    // <FEFF0066> is UTF-16BE "f".
+    let content = b"BT /F1 12 Tf /S <</ActualText <FEFF0066>>> BDC (gone) Tj ET EMC \
+                    BT /F1 12 Tf (oo) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "foo");
+}
+
+#[test]
+fn bdc_property_name_resolves_through_properties_resource() {
+    let document = document_from_objects(vec![
+        Object::new(1, 0, catalog_with_pages(Value::Ref(2, 0))),
+        Object::new(
+            6,
+            0,
+            Value::Dict(Dict::new().insert("ActualText", Value::String("via-name".into()))),
+        ),
+    ]);
+    let resources = marked_resources(&[("P0", Value::Ref(6, 0))]);
+    let content = b"BT /F1 12 Tf /Span /P0 BDC (orig) Tj ET EMC";
+
+    assert_eq!(document.extract_text(content, &resources), "via-name");
+}
+
+#[test]
+fn hidden_ocg_section_is_not_extracted() {
+    let document = oc_properties_document(&[], &[5]);
+    let resources = marked_resources(&[("MC0", Value::Ref(5, 0))]);
+    let content = b"/P <</OC /MC0>> BDC BT /F1 12 Tf (gone) Tj ET EMC \
+                    BT /F1 12 Tf (kept) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "kept");
+}
+
+#[test]
+fn visible_ocg_section_is_extracted() {
+    let document = oc_properties_document(&[5], &[]);
+    let resources = marked_resources(&[("MC0", Value::Ref(5, 0))]);
+    let content = b"/P <</OC /MC0>> BDC BT /F1 12 Tf (shown) Tj ET EMC";
+
+    assert_eq!(document.extract_text(content, &resources), "shown");
+}
+
+#[test]
+fn hidden_ocg_property_resolved_by_direct_reference() {
+    let document = oc_properties_document(&[], &[5]);
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"/P <</OC 5 0 R>> BDC BT /F1 12 Tf (gone) Tj ET EMC \
+                    BT /F1 12 Tf (kept) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "kept");
+}
+
+#[test]
+fn bdc_name_pointing_at_ocg_dictionary_filters_hidden_group() {
+    let document = oc_properties_document(&[], &[5]);
+    let resources = marked_resources(&[("MC0", Value::Ref(5, 0))]);
+    let content = b"/OC /MC0 BDC BT /F1 12 Tf (gone) Tj ET EMC \
+                    BT /F1 12 Tf (kept) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "kept");
+}
+
+#[test]
+fn nested_section_inherits_hidden_state_from_parent() {
+    let document = oc_properties_document(&[], &[5]);
+    let resources = marked_resources(&[("MC0", Value::Ref(5, 0))]);
+    let content = b"/Outer <</OC /MC0>> BDC /Inner BMC \
+                      BT /F1 12 Tf (gone) Tj ET EMC EMC";
+
+    assert_eq!(document.extract_text(content, &resources), "");
+}
+
+#[test]
+fn unbalanced_emc_does_not_break_extraction() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf (a) Tj ET EMC BT /F1 12 Tf (b) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "ab");
+}
+
+#[test]
+fn unclosed_marked_section_in_form_does_not_leak_to_caller() {
+    let catalog = Value::Dict(
+        Dict::new()
+            .insert("Type", Value::Name("Catalog".into()))
+            .insert(
+                "OCProperties",
+                Value::Dict(
+                    Dict::new()
+                        .insert("OCGs", Value::Array(Array::new().push(Value::Ref(5, 0))))
+                        .insert(
+                            "D",
+                            Value::Dict(
+                                Dict::new()
+                                    .insert("BaseState", Value::Name("ON".into()))
+                                    .insert(
+                                        "OFF",
+                                        Value::Array(Array::new().push(Value::Ref(5, 0))),
+                                    ),
+                            ),
+                        ),
+                ),
+            ),
+    );
+    let document = document_from_objects(vec![
+        Object::new(1, 0, catalog),
+        Object::new(
+            5,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("OCG".into()))
+                    .insert("Name", Value::String("Group 5".into())),
+            ),
+        ),
+        Object::new(
+            10,
+            0,
+            form_xobject(b"/H <</OC /MC0>> BDC BT /F1 12 Tf (gone) Tj ET", None),
+        ),
+    ]);
+    let resources = marked_resources(&[("MC0", Value::Ref(5, 0)), ("Frm", Value::Ref(10, 0))]);
+    let content = b"BT /F1 12 Tf (before) Tj ET /Frm Do \
+                    BT /F1 12 Tf (after) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "beforeafter");
+}

@@ -13,6 +13,12 @@
 //! - **Fallback**: raw bytes interpreted as Latin-1 when no font metadata
 //!   is available.
 //!
+//! Marked content (14.6) affects the output: `BMC`/`BDC` sections resolve
+//! their property lists (inline dictionary or `/Properties` name), a section
+//! whose optional-content group (8.11.2) is off by the default configuration
+//! is not extracted, and `/ActualText` replaces the section's shown text.
+//! Unbalanced `EMC` is ignored.
+//!
 //! The extractor uses an operand stack: non-operator tokens (numbers,
 //! strings, names, arrays) are pushed onto the stack; when an operator
 //! keyword is encountered, it consumes the relevant operands. This matches
@@ -21,6 +27,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::core::reader::content::{parse_dictionary_inner, text_value};
+use crate::core::reader::optional_content::OptionalContentProperties;
 use crate::core::types::{Dict, Document, StreamData, Value};
 
 use super::font::{SimpleFontEncoding, SimpleFontToUnicode, TrueTypeFont, Type0Font, Type1Font};
@@ -57,6 +65,7 @@ enum Operand {
     String(Vec<u8>),
     Name(String),
     Array(Vec<Operand>),
+    Dict(Dict),
 }
 
 fn token_to_operand(token: &CsToken) -> Option<Operand> {
@@ -64,6 +73,7 @@ fn token_to_operand(token: &CsToken) -> Option<Operand> {
         CsToken::Number(n) => Some(Operand::Number(*n)),
         CsToken::LiteralString(b) | CsToken::HexString(b) => Some(Operand::String(b.clone())),
         CsToken::Name(n) => Some(Operand::Name(n.clone())),
+        CsToken::Dictionary(inner) => Some(Operand::Dict(parse_dictionary_inner(inner))),
         _ => None,
     }
 }
@@ -81,6 +91,19 @@ enum FontHandle {
     },
 }
 
+/// One open `BMC`/`BDC` marked-content section while extracting text.
+#[derive(Debug, Clone)]
+struct MarkedFrame {
+    /// `true` when this section (or an enclosing one) belongs to an
+    /// optional-content group that the default configuration turns off.
+    hidden: bool,
+    /// `/ActualText` replacing the section's rendered text, when present.
+    actual_text: Option<String>,
+    /// `true` once `actual_text` has been emitted (later shows in the
+    /// section are dropped — the replacement covers the whole section).
+    actual_emitted: bool,
+}
+
 struct TextState {
     font_name: Option<String>,
     fonts: HashMap<String, FontHandle>,
@@ -88,6 +111,8 @@ struct TextState {
     /// Text parameters saved by `q` and restored by `Q`. Only the selected
     /// font is modeled, but it is part of the PDF graphics state.
     font_stack: Vec<Option<String>>,
+    /// Open marked-content sections (`BMC`/`BDC` … `EMC` nesting).
+    marked: Vec<MarkedFrame>,
 }
 
 impl TextState {
@@ -97,7 +122,26 @@ impl TextState {
             fonts: HashMap::new(),
             output: String::new(),
             font_stack: Vec::new(),
+            marked: Vec::new(),
         }
+    }
+
+    fn begin_marked(&mut self, hidden: bool, actual_text: Option<String>) {
+        let parent_hidden = self.marked.last().is_some_and(|frame| frame.hidden);
+        self.marked.push(MarkedFrame {
+            hidden: parent_hidden || hidden,
+            actual_text,
+            actual_emitted: false,
+        });
+    }
+
+    /// Close the innermost section; unbalanced `EMC` is ignored.
+    fn end_marked(&mut self) {
+        self.marked.pop();
+    }
+
+    fn marked_hidden(&self) -> bool {
+        self.marked.last().is_some_and(|frame| frame.hidden)
     }
 
     fn set_font(&mut self, name: &str) {
@@ -119,6 +163,19 @@ impl TextState {
     }
 
     fn show_bytes(&mut self, bytes: &[u8]) {
+        if let Some(frame) = self.marked.last_mut() {
+            if frame.hidden {
+                return;
+            }
+            if frame.actual_text.is_some() {
+                if !frame.actual_emitted {
+                    frame.actual_emitted = true;
+                    self.output
+                        .push_str(frame.actual_text.as_deref().unwrap_or_default());
+                }
+                return;
+            }
+        }
         let Some(font_name) = &self.font_name else {
             self.output.push_str(&lossy_latin1(bytes));
             return;
@@ -164,7 +221,7 @@ impl TextState {
     }
 
     fn add_break(&mut self, kind: BreakKind) {
-        if self.output.is_empty() {
+        if self.marked_hidden() || self.output.is_empty() {
             return;
         }
         let last = self.output.as_bytes().last().copied();
@@ -283,6 +340,9 @@ struct ExtractionContext<'a> {
     /// tracked so a form may be drawn repeatedly on the same page.
     active_forms: HashSet<(i64, i64)>,
     form_depth: usize,
+    /// Catalog `/OCProperties`, loaded once so `BMC`/`BDC` sections can be
+    /// filtered against the default optional-content configuration.
+    oc_properties: Option<OptionalContentProperties>,
 }
 
 impl<'a> ExtractionContext<'a> {
@@ -293,6 +353,66 @@ impl<'a> ExtractionContext<'a> {
             budget: ContentBudget::new(),
             active_forms: HashSet::new(),
             form_depth: 0,
+            oc_properties: document.optional_content_properties().ok().flatten(),
+        }
+    }
+
+    /// Open a marked-content section for `BMC` (no operand) or `BDC`
+    /// (inline dictionary or `/Properties` resource name).
+    fn open_marked(&mut self, property_operand: Option<&Operand>, resources: &Dict) {
+        let properties = match property_operand {
+            Some(Operand::Dict(dict)) => Some(dict.clone()),
+            Some(Operand::Name(name)) => resolve_property_list(self.document, resources, name),
+            _ => None,
+        };
+        let group_object = match property_operand {
+            // A name whose `/Properties` entry is the OCG dictionary itself
+            // marks the group directly (the pattern written by this crate's
+            // optional-content builder).
+            Some(Operand::Name(name))
+                if properties.as_ref().is_some_and(|dict| {
+                    dict.get("Type").and_then(Value::as_name) == Some("OCG")
+                        && dict.get("OC").is_none()
+                }) =>
+            {
+                property_entry_reference(self.document, resources, name)
+            }
+            _ => properties
+                .as_ref()
+                .and_then(|dict| self.ocg_object_number(dict, resources)),
+        };
+        let hidden = group_object.is_some_and(|object| {
+            self.oc_properties
+                .as_ref()
+                .and_then(|properties| properties.is_visible(object))
+                == Some(false)
+        });
+        let actual_text = properties
+            .as_ref()
+            .and_then(|dict| dict.get("ActualText"))
+            .and_then(text_value);
+        self.state.begin_marked(hidden, actual_text);
+    }
+
+    /// Resolve a property list `/OC` entry to the OCG object number.
+    ///
+    /// Direct references are already object numbers; names are looked up in
+    /// the `/Properties` resource (per 14.6.2 the entry there is the OCG
+    /// reference itself). Inline OCG dictionaries and OCMDs cannot be
+    /// identified, leaving visibility unfiltered.
+    fn ocg_object_number(&self, properties: &Dict, resources: &Dict) -> Option<i64> {
+        match properties.get("OC")? {
+            Value::Ref(object, _) => Some(*object),
+            Value::Name(name) => match resources
+                .get("Properties")
+                .and_then(|value| resolve_value(self.document, value))?
+                .as_dict()?
+                .get(name)?
+            {
+                Value::Ref(object, _) => Some(*object),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -320,12 +440,16 @@ impl<'a> ExtractionContext<'a> {
                     operands.push(array);
                 }
                 CsToken::Keyword(kw) => {
-                    if kw == "Do" {
-                        if let Some(Operand::Name(name)) = operands.last() {
-                            self.draw_form(name, resources)?;
+                    match kw.as_str() {
+                        "Do" => {
+                            if let Some(Operand::Name(name)) = operands.last() {
+                                self.draw_form(name, resources)?;
+                            }
                         }
-                    } else {
-                        execute_operator(kw, &operands, &mut self.state);
+                        "BMC" => self.open_marked(None, resources),
+                        "BDC" => self.open_marked(operands.last(), resources),
+                        "EMC" => self.state.end_marked(),
+                        _ => execute_operator(kw, &operands, &mut self.state),
                     }
                     operands.clear();
                 }
@@ -411,6 +535,9 @@ impl<'a> ExtractionContext<'a> {
         // cannot leak into the caller's `Tf` lookups.
         let saved_font_name = self.state.font_name.clone();
         let saved_fonts = self.state.fonts.clone();
+        // Marked-content sections are lexically scoped to one stream; an
+        // unclosed `BMC` in a form must not leak into the caller.
+        let saved_marked = std::mem::take(&mut self.state.marked);
         if let Some(key) = active_key {
             self.active_forms.insert(key);
         }
@@ -422,6 +549,7 @@ impl<'a> ExtractionContext<'a> {
         }
         self.state.font_name = saved_font_name;
         self.state.fonts = saved_fonts;
+        self.state.marked = saved_marked;
         result
     }
 
@@ -623,6 +751,25 @@ fn resolve_value(document: &Document, value: &Value) -> Option<Value> {
             .map(|o| o.value),
         _ => Some(value.clone()),
     }
+}
+
+/// Resolve a `BDC` property *name* operand to its property list dictionary
+/// through the `/Properties` resource (ISO 32000-1 14.6.2).
+fn resolve_property_list(document: &Document, resources: &Dict, name: &str) -> Option<Dict> {
+    let properties = resources
+        .get("Properties")
+        .and_then(|value| resolve_value(document, value))?;
+    let entry = properties.as_dict()?.get(name)?;
+    resolve_value(document, entry).and_then(|value| value.as_dict().cloned())
+}
+
+/// The indirect object number a `/Properties` resource entry points at.
+fn property_entry_reference(document: &Document, resources: &Dict, name: &str) -> Option<i64> {
+    let properties = resources
+        .get("Properties")
+        .and_then(|value| resolve_value(document, value))?;
+    let entry = properties.as_dict()?.get(name)?;
+    entry.as_ref().map(|(object, _)| object)
 }
 
 // ── Document-level API ────────────────────────────────────

@@ -5,12 +5,31 @@
 
 use crate::core::types::Value;
 
+mod marked;
 mod parser;
+mod state;
+
+#[cfg(test)]
+mod marked_tests;
+
+#[cfg(test)]
+mod state_tests;
 
 #[cfg(test)]
 mod tests;
 
+pub use marked::{
+    MAX_MARKED_DEPTH, MarkedContentError, MarkedSection, collect_marked_sections,
+    resolve_marked_visibility,
+};
 pub use parser::{ContentStreamError, parse_content_stream};
+
+pub(crate) use marked::text_value;
+pub(crate) use parser::parse_dictionary_inner;
+pub use state::{
+    ColorValue, ContentGraphicsState, ContentStateError, ContentStateRunner, IDENTITY_MATRIX,
+    MAX_SAVE_DEPTH, concat_matrices, run_content_state,
+};
 
 /// A single content stream operator with its operands.
 #[derive(Debug, Clone, PartialEq)]
@@ -142,8 +161,16 @@ pub enum Op {
     SetStrokeColorN(Vec<f64>),
     /// `sc` — set fill color (device-specific)
     SetFillColor(Vec<f64>),
-    /// `scn` — set fill color (pattern or device-specific)
+    /// `scn` — set fill color (device-specific components)
     SetFillColorN(Vec<f64>),
+    /// `SCN` with a trailing pattern name — set stroke pattern colour
+    SetStrokeColorPattern(String),
+    /// `SCN` with components and a trailing pattern name
+    SetStrokeColorPatternWithComponents(Vec<f64>, String),
+    /// `scn` with a trailing pattern name — set fill pattern colour
+    SetFillColorPattern(String),
+    /// `scn` with components and a trailing pattern name
+    SetFillColorPatternWithComponents(Vec<f64>, String),
     /// `G` — set stroke gray
     SetStrokeGray(f64),
     /// `g` — set fill gray

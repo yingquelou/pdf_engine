@@ -6219,8 +6219,9 @@ fn builder_marked_content_operators_roundtrip_through_parser() {
 }
 
 /// 写入 → 重新解析：可选内容组应写出 `/OCG`、页资源 `/Properties` 与
-/// 目录 `/OCProperties`，`/OC name BDC ... EMC` 标记范围内的文本仍可提取，
-/// 组名称、`/Intent` 与默认可见性可经读端类型化还原。
+/// 目录 `/OCProperties`；`/OC name BDC ... EMC` 标记范围内，默认可见组
+/// 的文本仍可提取、默认隐藏组的文本被过滤，组名称、`/Intent` 与
+/// 默认可见性可经读端类型化还原。
 #[test]
 fn builder_optional_content_roundtrips_through_parser() {
     use pdf_engine::core::builder::{Font, OptionalContentGroup, PageSize, PdfBuilder};
@@ -6305,9 +6306,21 @@ fn builder_optional_content_roundtrips_through_parser() {
     assert_eq!(content.matches("EMC\n").count(), 2, "{content}");
 
     let extracted = reparsed.extract_page_text(0).expect("extract text");
-    for text in ["VISIBLE", "HIDDEN", "PLAIN"] {
+    for text in ["VISIBLE", "PLAIN"] {
         assert!(extracted.contains(text), "{text} missing: {extracted}");
     }
+    assert!(
+        !extracted.contains("HIDDEN"),
+        "hidden layer should be filtered: {extracted}"
+    );
+
+    // C4：页标记内容还原出两个 /OC 区段，可见性分别跟随默认配置。
+    let sections = reparsed.page_marked_content(0).expect("marked sections");
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].tag, "OC");
+    assert_eq!(sections[0].visibility, Some(true));
+    assert_eq!(sections[1].tag, "OC");
+    assert_eq!(sections[1].visibility, Some(false));
 }
 
 /// 写入 → 重新解析：ExtGState `/TR` 应写出 Type 2 直接字典、Type 0 流对象
