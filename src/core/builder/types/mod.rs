@@ -37,6 +37,7 @@ pub use form::{FormXObject, GroupXObject};
 pub use function::{
     CalculatorFunction, ExponentialFunction, Function, SampledFunction, StitchingFunction,
 };
+pub(crate) use graphics_state::GraphicsStateFunctions;
 pub use graphics_state::{
     DashPattern, GraphicsState, GraphicsStateFont, SoftMask, SoftMaskSubtype,
 };
@@ -48,11 +49,11 @@ pub(crate) use pattern::Pattern;
 pub use pattern::{PaintType, TilingPattern, TilingType};
 pub use program::FontProgram;
 pub(crate) use program::OpenTypeFlavor;
-pub(crate) use shading::mesh_color_ranges;
+pub(crate) use shading::mesh_component_ranges;
 pub use shading::{
     AxialShading, CoonsPatch, CoonsPatchShading, FreeFormMeshShading, FunctionShading,
-    LatticeMeshShading, MeshVertex, RadialShading, Shading, ShadingPattern, TensorProductPatch,
-    TensorProductPatchShading,
+    LatticeMeshShading, MeshFunction, MeshVertex, RadialShading, Shading, ShadingOptions,
+    ShadingPattern, TensorProductPatch, TensorProductPatchShading,
 };
 pub use type3::{Type3Font, Type3Glyph};
 

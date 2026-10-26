@@ -13,8 +13,8 @@ mod shading;
 mod type3;
 
 use super::{
-    CidFont, ColorSpace, Font, Function, GraphicsState, GroupXObject, ImageData, ImageMask,
-    OptionalContentGroup, Pattern, PdfBuilder, same_font,
+    CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions, GroupXObject,
+    ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
 };
 use crate::core::types::{Array, Dict, Document, Object, PdfFeature, StreamData, Trailer, Value};
 use crate::core::writer::WriteError;
@@ -293,6 +293,8 @@ impl PdfBuilder {
         ));
 
         // 每页 Page 字典 + 内容流
+        let color_spaces = &self.color_spaces;
+        let mut color_space_values: Vec<Option<Value>> = vec![None; color_spaces.len()];
         for (i, p) in self.pages.iter_mut().enumerate() {
             let (page_num, content_num) = page_slots[i];
             let (w, h) = p.size.dimensions();
@@ -340,6 +342,23 @@ impl PdfBuilder {
                 pattern_dict_res = pattern_dict_res
                     .insert(format!("P{}", k + 1), Value::Ref(pattern_nums[*handle], 0));
             }
+            // 命名颜色空间：按页内首次引用顺序登记 /CS1、/CS2……；
+            // 同一句柄复用缓存的字典值，ICCBased/函数流对象只写一次。
+            let mut color_space_dict_res = Dict::new();
+            for (k, handle) in p.color_spaces.iter().enumerate() {
+                if color_space_values[*handle].is_none() {
+                    let space = &color_spaces[*handle];
+                    space.validate().map_err(|message| {
+                        WriteError::InvalidObject(format!("color space: {message}"))
+                    })?;
+                    let value = color_space_value(space, &mut doc, &mut num)?;
+                    color_space_values[*handle] = Some(value);
+                }
+                color_space_dict_res = color_space_dict_res.insert(
+                    format!("CS{}", k + 1),
+                    color_space_values[*handle].clone().unwrap(),
+                );
+            }
 
             let mut resources = Dict::new();
             if !font_dict.0.is_empty() {
@@ -353,6 +372,9 @@ impl PdfBuilder {
             }
             if !properties_dict.0.is_empty() {
                 resources = resources.insert("Properties", Value::Dict(properties_dict));
+            }
+            if !color_space_dict_res.0.is_empty() {
+                resources = resources.insert("ColorSpace", Value::Dict(color_space_dict_res));
             }
             if !shading_dict_res.0.is_empty() {
                 resources = resources.insert("Shading", Value::Dict(shading_dict_res));
@@ -542,24 +564,30 @@ impl PdfBuilder {
             doc.set_object(Object::new(pattern_nums[handle], 0, value));
         }
 
-        // 传递函数对象：只写被 ExtGState `/TR` 引用的函数。Type 0/4 分配
-        // 独立流对象并返回引用；Type 2/3 内联为直接字典。Type 3 的子函数
-        // 由 `write_function` 递归生成。
-        let mut transfer_values: std::collections::BTreeMap<usize, Value> =
+        // 函数类条目（/TR /BG /BG2 /UCR /UCR2）：只写被 ExtGState 引用的
+        // 函数，同一句柄只写一次。Type 0/4 分配独立流对象并返回引用；
+        // Type 2/3 内联为直接字典，Type 3 的子函数由 `write_function`
+        // 递归生成。黑版生成与底色去除函数必须产生单一输出值。
+        let mut graphics_function_values: std::collections::BTreeMap<usize, Value> =
             std::collections::BTreeMap::new();
         for (state, _) in &gs_pool {
-            let Some(handle) = state.transfer_function else {
-                continue;
-            };
-            let function = self.functions.get(handle).ok_or_else(|| {
-                WriteError::InvalidObject(format!(
-                    "invalid graphics state: /TR references unknown function handle {handle}"
-                ))
-            })?;
-            if let std::collections::btree_map::Entry::Vacant(entry) = transfer_values.entry(handle)
-            {
-                let value = write_function(&mut doc, function, &mut num)?;
-                entry.insert(value);
+            for (role, handle) in state.function_handles() {
+                let function = self.functions.get(handle).ok_or_else(|| {
+                    WriteError::InvalidObject(format!(
+                        "invalid graphics state: /{role} references unknown function handle {handle}"
+                    ))
+                })?;
+                if role != "TR" && function.output_count() != Some(1) {
+                    return Err(WriteError::InvalidObject(format!(
+                        "invalid graphics state: /{role} function must produce 1 output"
+                    )));
+                }
+                if let std::collections::btree_map::Entry::Vacant(entry) =
+                    graphics_function_values.entry(handle)
+                {
+                    let value = write_function(&mut doc, function, &mut num)?;
+                    entry.insert(value);
+                }
             }
         }
 
@@ -584,10 +612,17 @@ impl PdfBuilder {
                 .soft_mask
                 .as_ref()
                 .map(|soft_mask| form_nums[soft_mask.group]);
-            let transfer = state
-                .transfer_function
-                .map(|handle| transfer_values[&handle].clone());
-            let dict = state.to_value(font_num, soft_mask_group_num, transfer)?;
+            let function_value = |handle: Option<usize>| {
+                handle.map(|handle| graphics_function_values[&handle].clone())
+            };
+            let functions = GraphicsStateFunctions {
+                transfer: function_value(state.transfer_function),
+                black_generation: function_value(state.black_generation),
+                black_generation_2: function_value(state.black_generation_2),
+                undercolor_removal: function_value(state.undercolor_removal),
+                undercolor_removal_2: function_value(state.undercolor_removal_2),
+            };
+            let dict = state.to_value(font_num, soft_mask_group_num, functions)?;
             doc.set_object(Object::new(*gs_num, 0, Value::Dict(dict)));
         }
 

@@ -3,8 +3,8 @@
 //! 对应 PDF 32000-1 §8.4.5 Table 58。写出端在页面资源字典中登记
 //! `/ExtGState` 子字典，内容流用 `/GS<n> gs` 应用；[`GraphicsState`]
 //! 覆盖不依赖外部对象的标量参数、`/D`、`/BM`、`/Font`、`/SMask`
-//! 软蒙版字典与 `/TR` 传递函数。`/TR2`、`/HT`、`/BG`、`/BG2`、`/UCR`、
-//! `/UCR2` 需要半色调等对象，留待相应特性实现。
+//! 软蒙版字典与 `/TR`、`/BG`、`/BG2`、`/UCR`、`/UCR2` 函数条目。
+//! `/TR2` 与 `/HT` 依赖半色调对象模型，留待相应特性实现。
 //!
 //! `/SMask` 的 `/G` 引用由构建器按文档级 Form XObject 句柄解析为对象号，
 //! 被引用的表单须是透明组（带 `/Group`），并在构建阶段连同表单对象写出。
@@ -162,6 +162,24 @@ pub struct GraphicsState {
     pub soft_mask: Option<SoftMask>,
     /// `/TR` 传递函数句柄（[`PdfBuilder::function`] 返回值）。
     pub transfer_function: Option<usize>,
+    /// `/BG` 黑版生成函数句柄（[`PdfBuilder::function`] 返回值）。
+    pub black_generation: Option<usize>,
+    /// `/BG2` 黑版生成函数句柄（PDF 1.3；优先于 `/BG`）。
+    pub black_generation_2: Option<usize>,
+    /// `/UCR` 底色去除函数句柄（[`PdfBuilder::function`] 返回值）。
+    pub undercolor_removal: Option<usize>,
+    /// `/UCR2` 底色去除函数句柄（PDF 1.3；优先于 `/UCR`）。
+    pub undercolor_removal_2: Option<usize>,
+}
+
+/// ExtGState 中函数类条目的已解析值（由组装阶段按句柄生成）。
+#[derive(Debug, Default)]
+pub(crate) struct GraphicsStateFunctions {
+    pub transfer: Option<Value>,
+    pub black_generation: Option<Value>,
+    pub black_generation_2: Option<Value>,
+    pub undercolor_removal: Option<Value>,
+    pub undercolor_removal_2: Option<Value>,
 }
 
 impl GraphicsState {
@@ -296,17 +314,54 @@ impl GraphicsState {
         self
     }
 
+    /// 设置 `/BG` 黑版生成函数（需先通过 [`PdfBuilder::function`] 注册）。
+    pub fn with_black_generation(mut self, function: usize) -> Self {
+        self.black_generation = Some(function);
+        self
+    }
+
+    /// 设置 `/BG2` 黑版生成函数（PDF 1.3）。
+    pub fn with_black_generation_2(mut self, function: usize) -> Self {
+        self.black_generation_2 = Some(function);
+        self
+    }
+
+    /// 设置 `/UCR` 底色去除函数。
+    pub fn with_undercolor_removal(mut self, function: usize) -> Self {
+        self.undercolor_removal = Some(function);
+        self
+    }
+
+    /// 设置 `/UCR2` 底色去除函数（PDF 1.3）。
+    pub fn with_undercolor_removal_2(mut self, function: usize) -> Self {
+        self.undercolor_removal_2 = Some(function);
+        self
+    }
+
+    /// 函数类条目（名称与函数句柄），供组装阶段解析为字典值。
+    pub(crate) fn function_handles(&self) -> impl Iterator<Item = (&'static str, usize)> + '_ {
+        [
+            ("TR", self.transfer_function),
+            ("BG", self.black_generation),
+            ("BG2", self.black_generation_2),
+            ("UCR", self.undercolor_removal),
+            ("UCR2", self.undercolor_removal_2),
+        ]
+        .into_iter()
+        .filter_map(|(name, handle)| handle.map(|handle| (name, handle)))
+    }
+
     /// 校验并转换为 `/ExtGState` 参数字典。
     ///
     /// `font_num` 是 `/Font` 条目引用的字体字典对象号；有 `/Font`
     /// 时必须给出，无 `/Font` 时必须为 `None`。`soft_mask_group_num`
-    /// 同理对应 `/SMask` 的 `/G` 表单对象号。`transfer` 是 `/TR`
-    /// 条目已解析的函数值（直接字典或流对象引用）。
+    /// 同理对应 `/SMask` 的 `/G` 表单对象号。`functions` 是各函数类
+    /// 条目已解析的值（直接字典或流对象引用）。
     pub(crate) fn to_value(
         &self,
         font_num: Option<i64>,
         soft_mask_group_num: Option<i64>,
-        transfer: Option<Value>,
+        functions: GraphicsStateFunctions,
     ) -> Result<Dict, WriteError> {
         if self.font.is_some() != font_num.is_some() {
             return Err(invalid("/Font entry and its object reference disagree"));
@@ -316,8 +371,20 @@ impl GraphicsState {
                 "/SMask entry and its group object reference disagree",
             ));
         }
-        if self.transfer_function.is_some() != transfer.is_some() {
+        if self.transfer_function.is_some() != functions.transfer.is_some() {
             return Err(invalid("/TR entry and its function value disagree"));
+        }
+        if self.black_generation.is_some() != functions.black_generation.is_some() {
+            return Err(invalid("/BG entry and its function value disagree"));
+        }
+        if self.black_generation_2.is_some() != functions.black_generation_2.is_some() {
+            return Err(invalid("/BG2 entry and its function value disagree"));
+        }
+        if self.undercolor_removal.is_some() != functions.undercolor_removal.is_some() {
+            return Err(invalid("/UCR entry and its function value disagree"));
+        }
+        if self.undercolor_removal_2.is_some() != functions.undercolor_removal_2.is_some() {
+            return Err(invalid("/UCR2 entry and its function value disagree"));
         }
         let mut dict = Dict::new().insert("Type", Value::Name("ExtGState".into()));
         if let Some(width) = self.line_width {
@@ -426,8 +493,20 @@ impl GraphicsState {
         if let Some(knockout) = self.text_knockout {
             dict = dict.insert("TK", Value::Bool(knockout));
         }
-        if let Some(transfer) = transfer {
+        if let Some(transfer) = functions.transfer {
             dict = dict.insert("TR", transfer);
+        }
+        if let Some(value) = functions.black_generation {
+            dict = dict.insert("BG", value);
+        }
+        if let Some(value) = functions.black_generation_2 {
+            dict = dict.insert("BG2", value);
+        }
+        if let Some(value) = functions.undercolor_removal {
+            dict = dict.insert("UCR", value);
+        }
+        if let Some(value) = functions.undercolor_removal_2 {
+            dict = dict.insert("UCR2", value);
         }
         if let Some(soft_mask) = &self.soft_mask {
             let group_num =

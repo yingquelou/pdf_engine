@@ -281,6 +281,21 @@ fn color_variants() {
 }
 
 #[test]
+fn color_component_stream_methods_emit_sc_operators() {
+    let mut s = ContentStream::new();
+    s.set_stroke_color_space("CS1");
+    s.set_fill_color_space("CS2");
+    s.set_stroke_color_components(&[0.1, 0.2, 0.3]);
+    s.set_fill_color_components(&[0.4, 0.5, 0.6]);
+    let bytes = s.to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/CS1 CS\n"));
+    assert!(text.contains("/CS2 cs\n"));
+    assert!(text.contains("0.1 0.2 0.3 SC\n"));
+    assert!(text.contains("0.4 0.5 0.6 sc\n"));
+}
+
+#[test]
 fn cmyk_stream_methods_emit_uppercase_and_lowercase_operators() {
     let mut s = ContentStream::new();
     s.set_stroke_cmyk(0.1, 0.2, 0.3, 0.4)

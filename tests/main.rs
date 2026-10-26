@@ -4897,6 +4897,620 @@ fn builder_shading_and_pattern_roundtrip_through_parser() {
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("GRAD"));
 }
 
+/// 写入 → 重新解析：所有渐变共有的 `/Background`、`/BBox` 与
+/// `/AntiAlias` 应同时出现在直接渐变字典与网格流渐变字典中，页面仍以
+/// `sh` 绘制且文本可提取。
+#[test]
+fn builder_shading_options_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AxialShading, ColorSpace, CoonsPatch, CoonsPatchShading, ExponentialFunction, Font,
+        Function, PageSize, PdfBuilder, Shading, ShadingOptions,
+    };
+
+    let function = Function::Exponential(
+        ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+            .with_c0(vec![0.0])
+            .with_c1(vec![1.0]),
+    );
+    let axial = Shading::Axial(
+        AxialShading::new(ColorSpace::DeviceGray, [0.0, 0.0, 200.0, 0.0], function).with_options(
+            ShadingOptions::new()
+                .with_background([0.5])
+                .with_bbox([10.0, 20.0, 200.0, 100.0])
+                .with_anti_alias(true),
+        ),
+    );
+    let coons_points = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [20.0, 0.0],
+        [30.0, 0.0],
+        [30.0, 10.0],
+        [30.0, 20.0],
+        [30.0, 30.0],
+        [20.0, 30.0],
+        [10.0, 30.0],
+        [0.0, 30.0],
+        [0.0, 20.0],
+        [0.0, 10.0],
+    ];
+    let coons = CoonsPatchShading::new(
+        ColorSpace::DeviceGray,
+        vec![CoonsPatch::new(
+            coons_points,
+            [vec![0.0], vec![1.0], vec![0.0], vec![1.0]],
+        )],
+    )
+    .with_bits(8, 8, 8)
+    .with_options(
+        ShadingOptions::new()
+            .with_background([1.0])
+            .with_bbox([0.0, 0.0, 30.0, 30.0])
+            .with_anti_alias(false),
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "OPTS");
+    let axial_handle = builder.shading(&axial);
+    builder.paint_shading(page, axial_handle);
+    let coons_handle = builder.shading(&Shading::Coons(coons));
+    builder.paint_shading(page, coons_handle);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let shadings = page_object
+        .value
+        .as_dict()
+        .and_then(|dict| dict.get("Resources"))
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("Shading"))
+        .and_then(Value::as_dict)
+        .expect("page should have Shading resources");
+    let shading_dict = |name: &str| {
+        let shading_num = shadings.get(name).and_then(Value::as_ref).unwrap().0;
+        reparsed
+            .get_object(shading_num)
+            .expect("get shading object")
+            .expect("shading object should exist")
+            .value
+            .as_dict()
+            .expect("shading dictionary")
+            .clone()
+    };
+
+    let direct = shading_dict("Sh1");
+    assert_eq!(
+        direct.get("ShadingType").and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        direct
+            .get("Background")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(vec![Value::Float(0.5)])
+    );
+    assert_eq!(
+        direct
+            .get("BBox")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some([10.0, 20.0, 200.0, 100.0].map(Value::Float).to_vec())
+    );
+    assert_eq!(direct.get("AntiAlias"), Some(&Value::Bool(true)));
+
+    let mesh = shading_dict("Sh2");
+    assert_eq!(mesh.get("ShadingType").and_then(Value::as_integer), Some(6));
+    assert_eq!(
+        mesh.get("Background")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(vec![Value::Float(1.0)])
+    );
+    assert_eq!(
+        mesh.get("BBox")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some([0.0, 0.0, 30.0, 30.0].map(Value::Float).to_vec())
+    );
+    assert_eq!(mesh.get("AntiAlias"), Some(&Value::Bool(false)));
+
+    let Value::Ref(content_num, _) = page_object
+        .value
+        .as_dict()
+        .unwrap()
+        .get("Contents")
+        .unwrap()
+    else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Sh1 sh"), "{content}");
+    assert!(content.contains("/Sh2 sh"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("OPTS"));
+}
+
+/// 写入 → 重新解析：Type 4/5 网格渐变携带 `/Function` 时，每个顶点只
+/// 编码一个参数变量，`/Decode` 只保留一对颜色范围；Type 0 函数写成
+/// 独立流对象，Type 2 函数内联；页面仍用 `sh` 绘制且文本可提取。
+#[test]
+fn builder_mesh_shading_function_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, ExponentialFunction, Font, FreeFormMeshShading, Function, LatticeMeshShading,
+        MeshVertex, PageSize, PdfBuilder, SampledFunction, Shading,
+    };
+
+    let color_function = Function::Exponential(
+        ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+            .with_c0(vec![1.0, 0.0, 0.0])
+            .with_c1(vec![0.0, 0.0, 1.0]),
+    );
+    let free_form = FreeFormMeshShading::new(
+        ColorSpace::DeviceRGB,
+        vec![
+            MeshVertex::new(10.0, 20.0, vec![0.0]),
+            MeshVertex::new(90.0, 20.0, vec![0.5]),
+            MeshVertex::new(50.0, 80.0, vec![1.0]),
+        ],
+    )
+    .with_function(color_function)
+    .with_decode([0.0, 100.0, 0.0, 100.0])
+    .with_bits(8, 8, 8);
+    let sampled = Function::Sampled(SampledFunction::new(
+        vec![0.0, 1.0],
+        vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        vec![2],
+        8,
+        vec![0.0, 0.0, 0.0, 255.0, 255.0, 255.0],
+    ));
+    let lattice = LatticeMeshShading::new(
+        ColorSpace::DeviceRGB,
+        2,
+        vec![
+            MeshVertex::new(0.0, 0.0, vec![0.0]),
+            MeshVertex::new(10.0, 0.0, vec![0.0]),
+            MeshVertex::new(0.0, 10.0, vec![1.0]),
+            MeshVertex::new(10.0, 10.0, vec![1.0]),
+        ],
+    )
+    .with_function(sampled)
+    .with_decode([0.0, 10.0, 0.0, 10.0])
+    .with_bits(8, 8);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "FUNC");
+    let free_form_handle = builder.shading(&Shading::FreeForm(free_form));
+    builder.paint_shading(page, free_form_handle);
+    let lattice_handle = builder.shading(&Shading::Lattice(lattice));
+    builder.paint_shading(page, lattice_handle);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let shadings = page_object
+        .value
+        .as_dict()
+        .and_then(|dict| dict.get("Resources"))
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("Shading"))
+        .and_then(Value::as_dict)
+        .expect("page should have Shading resources");
+    let shading_object = |name: &str| {
+        let shading_num = shadings.get(name).and_then(Value::as_ref).unwrap().0;
+        reparsed
+            .get_object(shading_num)
+            .expect("get shading object")
+            .expect("shading object should exist")
+    };
+
+    let free_form_object = shading_object("Sh1");
+    let free_form_dict = free_form_object.value.as_dict().expect("shading dict");
+    assert_eq!(
+        free_form_dict
+            .get("ShadingType")
+            .and_then(Value::as_integer),
+        Some(4)
+    );
+    assert_eq!(
+        free_form_dict
+            .get("Decode")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(
+            [0.0, 100.0, 0.0, 100.0, 0.0, 1.0]
+                .map(Value::Float)
+                .to_vec()
+        )
+    );
+    let inline_function = free_form_dict
+        .get("Function")
+        .and_then(Value::as_dict)
+        .expect("Type 2 function should be inline");
+    assert_eq!(
+        inline_function
+            .get("FunctionType")
+            .and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        inline_function
+            .get("C0")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(vec![
+            Value::Float(1.0),
+            Value::Float(0.0),
+            Value::Float(0.0)
+        ])
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&free_form_object.value)
+            .expect("decode type 4 payload"),
+        vec![0, 26, 51, 0, 0, 230, 51, 128, 0, 128, 204, 255]
+    );
+
+    let lattice_object = shading_object("Sh2");
+    let lattice_dict = lattice_object.value.as_dict().expect("shading dict");
+    assert_eq!(
+        lattice_dict.get("ShadingType").and_then(Value::as_integer),
+        Some(5)
+    );
+    assert!(!lattice_dict.0.contains_key("BitsPerFlag"));
+    let Value::Ref(function_num, _) = lattice_dict.get("Function").expect("Function") else {
+        panic!("Type 0 function must be an indirect stream");
+    };
+    let function_object = reparsed
+        .get_object(*function_num)
+        .expect("get function object")
+        .expect("function object should exist");
+    let function_dict = function_object.value.as_dict().expect("function dict");
+    assert_eq!(
+        function_dict
+            .get("FunctionType")
+            .and_then(Value::as_integer),
+        Some(0)
+    );
+    assert_eq!(
+        function_dict
+            .get("Size")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(vec![Value::Integer(2)])
+    );
+    assert_eq!(
+        function_dict
+            .get("BitsPerSample")
+            .and_then(Value::as_integer),
+        Some(8)
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&function_object.value)
+            .expect("decode sampled samples"),
+        vec![0, 0, 0, 255, 255, 255]
+    );
+
+    let Value::Ref(content_num, _) = page_object
+        .value
+        .as_dict()
+        .unwrap()
+        .get("Contents")
+        .unwrap()
+    else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Sh1 sh"), "{content}");
+    assert!(content.contains("/Sh2 sh"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("FUNC"));
+}
+
+/// 写入 → 重新解析：网格 `/Function` 可以是按颜色分量排列的函数数组；
+/// 每个顶点仍只编码一个参数变量，数组内联三个 Type 2 函数。
+#[test]
+fn builder_mesh_function_array_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, ExponentialFunction, Font, FreeFormMeshShading, Function, MeshVertex, PageSize,
+        PdfBuilder, Shading,
+    };
+
+    let component = |c0: f64, c1: f64| {
+        Function::Exponential(
+            ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                .with_c0(vec![c0])
+                .with_c1(vec![c1]),
+        )
+    };
+    let mesh = FreeFormMeshShading::new(
+        ColorSpace::DeviceRGB,
+        vec![
+            MeshVertex::new(10.0, 20.0, vec![0.0]),
+            MeshVertex::new(90.0, 20.0, vec![0.5]),
+            MeshVertex::new(50.0, 80.0, vec![1.0]),
+        ],
+    )
+    .with_component_functions(vec![
+        component(0.0, 1.0),
+        component(1.0, 0.0),
+        component(0.0, 0.0),
+    ])
+    .with_decode([0.0, 100.0, 0.0, 100.0])
+    .with_bits(8, 8, 8);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "AFUN");
+    let handle = builder.shading(&Shading::FreeForm(mesh));
+    builder.paint_shading(page, handle);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let shadings = page_object
+        .value
+        .as_dict()
+        .and_then(|dict| dict.get("Resources"))
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("Shading"))
+        .and_then(Value::as_dict)
+        .expect("page should have Shading resources");
+    let shading_num = shadings.get("Sh1").and_then(Value::as_ref).unwrap().0;
+    let shading_object = reparsed
+        .get_object(shading_num)
+        .expect("get shading object")
+        .expect("shading object should exist");
+    let shading_dict = shading_object.value.as_dict().expect("shading dict");
+    assert_eq!(
+        shading_dict.get("ShadingType").and_then(Value::as_integer),
+        Some(4)
+    );
+    assert_eq!(
+        shading_dict
+            .get("Decode")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(
+            [0.0, 100.0, 0.0, 100.0, 0.0, 1.0]
+                .map(Value::Float)
+                .to_vec()
+        )
+    );
+    let functions = shading_dict
+        .get("Function")
+        .and_then(Value::as_array)
+        .expect("Function should be an array");
+    assert_eq!(functions.0.len(), 3);
+    for (value, (c0, c1)) in functions.0.iter().zip([(0.0, 1.0), (1.0, 0.0), (0.0, 0.0)]) {
+        let function = value.as_dict().expect("component function dictionary");
+        assert_eq!(
+            function.get("FunctionType").and_then(Value::as_integer),
+            Some(2)
+        );
+        assert_eq!(
+            function
+                .get("C0")
+                .and_then(Value::as_array)
+                .map(|array| array.0.clone()),
+            Some(vec![Value::Float(c0)])
+        );
+        assert_eq!(
+            function
+                .get("C1")
+                .and_then(Value::as_array)
+                .map(|array| array.0.clone()),
+            Some(vec![Value::Float(c1)])
+        );
+    }
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&shading_object.value)
+            .expect("decode type 4 payload"),
+        vec![0, 26, 51, 0, 0, 230, 51, 128, 0, 128, 204, 255],
+        "参数变量编码应与单函数形式一致"
+    );
+
+    let Value::Ref(content_num, _) = page_object
+        .value
+        .as_dict()
+        .unwrap()
+        .get("Contents")
+        .unwrap()
+    else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/Sh1 sh"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AFUN"));
+}
+
+/// 写入 → 重新解析：页级 `/ColorSpace` 命名资源应写出 CalRGB 与
+/// Separation 数组，内容流用 `cs`/`CS` 切换空间、用分量操作符设色，
+/// 文本仍可提取。
+#[test]
+fn builder_named_color_spaces_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        CalRGB, ColorSpace, ExponentialFunction, Font, Function, PageSize, PdfBuilder, Separation,
+    };
+
+    let mut cal = CalRGB::new([0.9505, 1.0, 1.089]);
+    cal.gamma = Some([2.2, 2.2, 2.2]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let fill = builder.color_space(&ColorSpace::CalRGB(cal));
+    let stroke = builder.color_space(&ColorSpace::Separation(Separation::new(
+        "Spot",
+        ColorSpace::DeviceGray,
+        Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0)),
+    )));
+    builder.set_fill_color_space(page, fill);
+    builder.set_fill_color_components(page, &[0.2, 0.4, 0.6]);
+    builder.set_stroke_color_space(page, stroke);
+    builder.set_stroke_color_components(page, &[0.5]);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "NAMED");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let color_spaces = page_object
+        .value
+        .as_dict()
+        .and_then(|dict| dict.get("Resources"))
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("ColorSpace"))
+        .and_then(Value::as_dict)
+        .expect("page should have ColorSpace resources");
+
+    let cal_array = color_spaces
+        .get("CS1")
+        .and_then(Value::as_array)
+        .expect("CS1 should be an array");
+    assert_eq!(cal_array.0[0].as_name(), Some("CalRGB"));
+    let cal_dict = cal_array.0[1].as_dict().expect("CalRGB dictionary");
+    assert_eq!(
+        cal_dict
+            .get("WhitePoint")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(vec![
+            Value::Float(0.9505),
+            Value::Float(1.0),
+            Value::Float(1.089)
+        ])
+    );
+    assert_eq!(
+        cal_dict
+            .get("Gamma")
+            .and_then(Value::as_array)
+            .map(|array| array.0.clone()),
+        Some(vec![
+            Value::Float(2.2),
+            Value::Float(2.2),
+            Value::Float(2.2)
+        ])
+    );
+
+    let separation_array = color_spaces
+        .get("CS2")
+        .and_then(Value::as_array)
+        .expect("CS2 should be an array");
+    assert_eq!(separation_array.0[0].as_name(), Some("Separation"));
+    assert_eq!(separation_array.0[1].as_name(), Some("Spot"));
+    assert_eq!(separation_array.0[2].as_name(), Some("DeviceGray"));
+    assert!(
+        separation_array.0[3].as_dict().is_some(),
+        "tint transform should be a function dictionary"
+    );
+
+    let Value::Ref(content_num, _) = page_object
+        .value
+        .as_dict()
+        .unwrap()
+        .get("Contents")
+        .unwrap()
+    else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let content = String::from_utf8_lossy(
+        &reparsed
+            .decode_stream_bytes(&content_object.value)
+            .expect("decode content"),
+    )
+    .into_owned();
+    assert!(content.contains("/CS1 cs"), "{content}");
+    assert!(content.contains("0.2 0.4 0.6 sc"), "{content}");
+    assert!(content.contains("/CS2 CS"), "{content}");
+    assert!(content.contains("0.5 SC"), "{content}");
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("NAMED"));
+}
+
 /// 写入 → 重新解析：Type 4 自由三角网格渐变应写成流对象，字典给出
 /// 位深、`/BitsPerFlag` 与 `/Decode`；顶点按 MSB-first 位流编码，
 /// 解码后的字节与量化结果一致，页面用 `sh` 绘制且文本仍可提取。
@@ -5814,6 +6428,85 @@ fn builder_transfer_functions_roundtrip_through_parser() {
 
     let extracted = reparsed.extract_page_text(0).expect("extract text");
     assert!(extracted.contains("TR"), "{extracted}");
+}
+
+/// 写入 → 重新解析：ExtGState 的 `/BG`/`/BG2`/`/UCR`/`/UCR2` 应引用
+/// 同一个四输入单输出采样函数流，读端把四个条目保留为同一原始值。
+#[test]
+fn builder_black_generation_functions_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        Font, Function, GraphicsState, PageSize, PdfBuilder, SampledFunction,
+    };
+
+    let function = Function::Sampled(SampledFunction::new(
+        vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        vec![0.0, 1.0],
+        vec![2, 2, 2, 2],
+        8,
+        (0..16)
+            .map(|value| value as f64 * 17.0)
+            .collect::<Vec<f64>>(),
+    ));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let handle = builder.function(&function);
+    builder.set_graphics_state(
+        page,
+        &GraphicsState::new()
+            .with_black_generation(handle)
+            .with_black_generation_2(handle)
+            .with_undercolor_removal(handle)
+            .with_undercolor_removal_2(handle),
+    );
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "BG");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_dict = first_page_dict(&reparsed);
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("/Resources");
+    let states = reparsed
+        .ext_g_states(resources)
+        .expect("parse /ExtGState resources");
+    let state = states.get("GS1").expect("GS1");
+
+    let bg = state.black_generation.as_ref().expect("/BG");
+    for (name, value) in [
+        ("/BG2", state.black_generation2.as_ref()),
+        ("/UCR", state.under_color_removal.as_ref()),
+        ("/UCR2", state.under_color_removal2.as_ref()),
+    ] {
+        assert_eq!(
+            value.expect(name),
+            bg,
+            "{name} should reference the same function"
+        );
+    }
+    let dict = bg.as_dict().expect("function stream dictionary");
+    assert_eq!(
+        dict.get("FunctionType").and_then(Value::as_integer),
+        Some(0)
+    );
+    assert_eq!(
+        dict.get("Size")
+            .and_then(Value::as_array)
+            .map(|array| array.0.len()),
+        Some(4)
+    );
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(bg)
+            .expect("decode samples")
+            .len(),
+        16
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("BG"));
 }
 
 /// 写入 → 重新解析：Group XObject 的 `/Group` 字典应写出

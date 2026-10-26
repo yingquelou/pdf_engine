@@ -256,6 +256,18 @@ impl ContentStream {
         self
     }
 
+    /// 以当前颜色空间的数字分量设置描边颜色：`c1 … cn SC`。
+    pub fn set_stroke_color_components(&mut self, components: &[f64]) -> &mut Self {
+        self.push(Op::SetStrokeColor(components.to_vec()));
+        self
+    }
+
+    /// 以当前颜色空间的数字分量设置填充颜色：`c1 … cn sc`。
+    pub fn set_fill_color_components(&mut self, components: &[f64]) -> &mut Self {
+        self.push(Op::SetFillColor(components.to_vec()));
+        self
+    }
+
     /// 设置描边颜色空间（命名资源）：`/name CS`。
     pub fn set_stroke_color_space(&mut self, name: impl Into<String>) -> &mut Self {
         self.push(Op::SetStrokeColorSpace(name.into()));

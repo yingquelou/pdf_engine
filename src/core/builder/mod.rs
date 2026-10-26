@@ -27,19 +27,20 @@ mod assemble;
 mod tests;
 mod types;
 
+pub(crate) use types::GraphicsStateFunctions;
 pub(crate) use types::OpenTypeFlavor;
 pub(crate) use types::Pattern;
-pub(crate) use types::mesh_color_ranges;
+pub(crate) use types::mesh_component_ranges;
 pub use types::{
     AxialShading, CalGray, CalRGB, CalculatorFunction, CidEncoding, CidFont, CidFontSubtype,
     CidSystemInfo, CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading,
     DashPattern, DeviceN, ExponentialFunction, Font, FontDescriptor, FontEncoding, FontProgram,
     FontWidths, FormXObject, FreeFormMeshShading, Function, FunctionShading, GraphicsState,
     GraphicsStateFont, GroupXObject, ICCBased, ImageData, ImageMask, Indexed, Lab,
-    LatticeMeshShading, MeshVertex, OptionalContentGroup, PageSize, PaintType, RadialShading,
-    SampledFunction, Separation, Shading, ShadingPattern, SoftMask, SoftMaskSubtype,
-    StitchingFunction, TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType,
-    Type3Font, Type3Glyph,
+    LatticeMeshShading, MeshFunction, MeshVertex, OptionalContentGroup, PageSize, PaintType,
+    RadialShading, SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
+    SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
+    TilingPattern, TilingType, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -70,6 +71,8 @@ struct PageBuild {
     shadings: Vec<usize>,
     /// 该页填充的着色图案句柄（按首次使用顺序，资源名 `/P<n>`）。
     patterns: Vec<usize>,
+    /// 该页使用的命名颜色空间句柄（按首次引用顺序，资源名 `/CS<n>`）。
+    color_spaces: Vec<usize>,
     /// 页组属性字典（`/Group`）；提供时整页作为透明组合成。
     group: Option<GroupXObject>,
 }
@@ -131,6 +134,8 @@ pub struct PdfBuilder {
     /// 文档级图案池；`PdfBuilder::shading_pattern` / `tiling_pattern`
     /// 返回其索引。
     patterns: Vec<Pattern>,
+    /// 文档级颜色空间池；`PdfBuilder::color_space` 返回其索引。
+    color_spaces: Vec<ColorSpace>,
 }
 
 impl Default for PdfBuilder {
@@ -150,6 +155,7 @@ impl PdfBuilder {
             functions: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
         }
     }
 
@@ -163,6 +169,7 @@ impl PdfBuilder {
             functions: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
         }
     }
 
@@ -180,6 +187,7 @@ impl PdfBuilder {
             optional_content: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
             group: None,
         });
         idx
@@ -404,6 +412,75 @@ impl PdfBuilder {
         };
         p.content.paint_shading(format!("Sh{}", idx + 1));
         self
+    }
+
+    /// 注册一个命名颜色空间，返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfBuilder::set_stroke_color_space`] 与
+    /// [`PdfBuilder::set_fill_color_space`] 使用。仅页面实际引用的颜色
+    /// 空间会写入该页 `/Resources /ColorSpace`，并按首次引用顺序命名为
+    /// `/CS1`、`/CS2`……；同一句柄跨页复用时，ICCBased 配置文件与
+    /// tint 变换函数等流对象只写出一次。
+    pub fn color_space(&mut self, color_space: &ColorSpace) -> usize {
+        let idx = self.color_spaces.len();
+        self.color_spaces.push(color_space.clone());
+        idx
+    }
+
+    /// 在指定页把描边颜色空间切换为已注册的命名颜色空间（`/CS<n> CS`）。
+    ///
+    /// 未知句柄或页索引被忽略。
+    pub fn set_stroke_color_space(&mut self, page: usize, color_space: usize) -> &mut Self {
+        if let Some(name) = self.page_color_space_name(page, color_space) {
+            self.pages[page].content.set_stroke_color_space(name);
+        }
+        self
+    }
+
+    /// 在指定页把填充颜色空间切换为已注册的命名颜色空间（`/CS<n> cs`）。
+    ///
+    /// 未知句柄或页索引被忽略。
+    pub fn set_fill_color_space(&mut self, page: usize, color_space: usize) -> &mut Self {
+        if let Some(name) = self.page_color_space_name(page, color_space) {
+            self.pages[page].content.set_fill_color_space(name);
+        }
+        self
+    }
+
+    /// 在指定页以当前颜色空间的分量设置描边颜色（`c1 … cn SC`）。
+    ///
+    /// 分量个数由当前颜色空间决定；构建器不校验个数。
+    pub fn set_stroke_color_components(&mut self, page: usize, components: &[f64]) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.set_stroke_color_components(components);
+        }
+        self
+    }
+
+    /// 在指定页以当前颜色空间的分量设置填充颜色（`c1 … cn sc`）。
+    ///
+    /// 分量个数由当前颜色空间决定；构建器不校验个数。
+    pub fn set_fill_color_components(&mut self, page: usize, components: &[f64]) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.set_fill_color_components(components);
+        }
+        self
+    }
+
+    /// 返回该页的资源名（`/CS<n>`），首次引用时登记；未知页或句柄返回 `None`。
+    fn page_color_space_name(&mut self, page: usize, color_space: usize) -> Option<String> {
+        if color_space >= self.color_spaces.len() {
+            return None;
+        }
+        let p = self.pages.get_mut(page)?;
+        let idx = match p.color_spaces.iter().position(|&h| h == color_space) {
+            Some(i) => i,
+            None => {
+                p.color_spaces.push(color_space);
+                p.color_spaces.len() - 1
+            }
+        };
+        Some(format!("CS{}", idx + 1))
     }
 
     /// 在指定页用图案填充矩形：`/Pattern cs /P<n> scn x y w h re f`。

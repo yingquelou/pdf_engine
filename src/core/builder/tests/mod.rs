@@ -15,10 +15,12 @@
 //! - `function`：PDF 函数（Type 0/2/3/4）与 ExtGState `/TR`；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（PatternType 2）；
 //! - `pattern`：平铺图案（PatternType 1）；
+//! - `color_space`：页级命名颜色空间（`/ColorSpace` 资源与 `CS`/`cs`）；
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
 mod cid;
 mod cid_cmap_multibyte;
+mod color_space;
 mod encoding;
 mod font;
 mod font_cff;

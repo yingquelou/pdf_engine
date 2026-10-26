@@ -68,6 +68,7 @@ pub(super) fn find_subslice(hay: &[u8], needle: &[u8], from: usize) -> Option<us
 }
 
 mod document;
+pub mod content;
 pub mod font;
 pub mod graphics_state;
 mod lexer;

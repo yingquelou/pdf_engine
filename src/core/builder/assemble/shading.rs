@@ -3,11 +3,30 @@
 
 use super::{color_space_value, real_array, write_function};
 use crate::core::builder::{
-    ColorSpace, CoonsPatchShading, FreeFormMeshShading, LatticeMeshShading, MeshVertex, PaintType,
-    Shading, ShadingPattern, TensorProductPatchShading, TilingPattern, mesh_color_ranges,
+    ColorSpace, CoonsPatchShading, FreeFormMeshShading, LatticeMeshShading, MeshFunction,
+    MeshVertex, PaintType, Shading, ShadingOptions, ShadingPattern, TensorProductPatchShading,
+    TilingPattern, mesh_component_ranges,
 };
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
+
+/// 网格 `/Function`：单函数直接写出；函数数组按颜色分量顺序写成 PDF 数组。
+fn mesh_function_value(
+    function: &MeshFunction,
+    doc: &mut Document,
+    num: &mut i64,
+) -> Result<Value, WriteError> {
+    match function {
+        MeshFunction::Single(function) => write_function(doc, function, num),
+        MeshFunction::Components(functions) => {
+            let mut values = Vec::with_capacity(functions.len());
+            for function in functions {
+                values.push(write_function(doc, function, num)?);
+            }
+            Ok(Value::Array(Array(values)))
+        }
+    }
+}
 
 /// 构造渐变对象值：Type 1–3 为直接字典，Type 4–7 为带位打包顶点/网格片
 /// 数据的流对象（Table 78 / Table 84 / Table 85）。
@@ -31,7 +50,13 @@ fn free_form_mesh_stream(
     num: &mut i64,
 ) -> Result<Value, WriteError> {
     let role = "type 4 shading";
-    let (decode, ranges) = mesh_decode(role, &mesh.color_space, &mesh.vertices, mesh.decode)?;
+    let (decode, ranges) = mesh_decode(
+        role,
+        &mesh.color_space,
+        &mesh.vertices,
+        mesh.function.as_ref(),
+        mesh.decode,
+    )?;
     let payload = encode_mesh(
         &mesh.vertices,
         &ranges,
@@ -40,7 +65,7 @@ fn free_form_mesh_stream(
         mesh.bits_per_component,
         Some(mesh.bits_per_flag),
     );
-    let dict = Dict::new()
+    let mut dict = Dict::new()
         .insert("ShadingType", Value::Integer(4))
         .insert(
             "ColorSpace",
@@ -57,7 +82,13 @@ fn free_form_mesh_stream(
         .insert("BitsPerFlag", Value::Integer(mesh.bits_per_flag as i64))
         .insert("Decode", mesh_decode_array(decode, &ranges))
         .insert("Length", Value::Integer(payload.len() as i64));
-    Ok(Value::Stream(dict, StreamData::Owned(payload)))
+    if let Some(function) = &mesh.function {
+        dict = dict.insert("Function", mesh_function_value(function, doc, num)?);
+    }
+    Ok(Value::Stream(
+        with_shading_options(dict, &mesh.options),
+        StreamData::Owned(payload),
+    ))
 }
 
 fn lattice_mesh_stream(
@@ -66,7 +97,13 @@ fn lattice_mesh_stream(
     num: &mut i64,
 ) -> Result<Value, WriteError> {
     let role = "type 5 shading";
-    let (decode, ranges) = mesh_decode(role, &mesh.color_space, &mesh.vertices, mesh.decode)?;
+    let (decode, ranges) = mesh_decode(
+        role,
+        &mesh.color_space,
+        &mesh.vertices,
+        mesh.function.as_ref(),
+        mesh.decode,
+    )?;
     let payload = encode_mesh(
         &mesh.vertices,
         &ranges,
@@ -75,7 +112,7 @@ fn lattice_mesh_stream(
         mesh.bits_per_component,
         None,
     );
-    let dict = Dict::new()
+    let mut dict = Dict::new()
         .insert("ShadingType", Value::Integer(5))
         .insert(
             "ColorSpace",
@@ -95,7 +132,13 @@ fn lattice_mesh_stream(
         )
         .insert("Decode", mesh_decode_array(decode, &ranges))
         .insert("Length", Value::Integer(payload.len() as i64));
-    Ok(Value::Stream(dict, StreamData::Owned(payload)))
+    if let Some(function) = &mesh.function {
+        dict = dict.insert("Function", mesh_function_value(function, doc, num)?);
+    }
+    Ok(Value::Stream(
+        with_shading_options(dict, &mesh.options),
+        StreamData::Owned(payload),
+    ))
 }
 
 struct PatchStreamConfig {
@@ -110,11 +153,13 @@ struct PatchStreamConfig {
 fn patch_stream_dict(
     config: &PatchStreamConfig,
     color_space: &ColorSpace,
+    function: Option<&MeshFunction>,
+    options: &ShadingOptions,
     length: usize,
     doc: &mut Document,
     num: &mut i64,
 ) -> Result<Dict, WriteError> {
-    Ok(Dict::new()
+    let mut dict = Dict::new()
         .insert("ShadingType", Value::Integer(config.shading_type))
         .insert("ColorSpace", color_space_value(color_space, doc, num)?)
         .insert(
@@ -130,7 +175,11 @@ fn patch_stream_dict(
             "Decode",
             mesh_decode_array(config.decode, &config.color_ranges),
         )
-        .insert("Length", Value::Integer(length as i64)))
+        .insert("Length", Value::Integer(length as i64));
+    if let Some(function) = function {
+        dict = dict.insert("Function", mesh_function_value(function, doc, num)?);
+    }
+    Ok(with_shading_options(dict, options))
 }
 
 fn coons_patch_stream(
@@ -143,6 +192,7 @@ fn coons_patch_stream(
         role,
         &shading.color_space,
         shading.patches.iter().flat_map(|patch| patch.points),
+        shading.function.as_ref(),
         shading.decode,
     )?;
     let mut writer = BitWriter::new();
@@ -167,7 +217,15 @@ fn coons_patch_stream(
         decode,
         color_ranges,
     };
-    let dict = patch_stream_dict(&config, &shading.color_space, payload.len(), doc, num)?;
+    let dict = patch_stream_dict(
+        &config,
+        &shading.color_space,
+        shading.function.as_ref(),
+        &shading.options,
+        payload.len(),
+        doc,
+        num,
+    )?;
     Ok(Value::Stream(dict, StreamData::Owned(payload)))
 }
 
@@ -181,6 +239,7 @@ fn tensor_product_patch_stream(
         role,
         &shading.color_space,
         shading.patches.iter().flat_map(|patch| patch.points),
+        shading.function.as_ref(),
         shading.decode,
     )?;
     let mut writer = BitWriter::new();
@@ -205,7 +264,15 @@ fn tensor_product_patch_stream(
         decode,
         color_ranges,
     };
-    let dict = patch_stream_dict(&config, &shading.color_space, payload.len(), doc, num)?;
+    let dict = patch_stream_dict(
+        &config,
+        &shading.color_space,
+        shading.function.as_ref(),
+        &shading.options,
+        payload.len(),
+        doc,
+        num,
+    )?;
     Ok(Value::Stream(dict, StreamData::Owned(payload)))
 }
 
@@ -214,6 +281,7 @@ fn patch_decode(
     role: &str,
     color_space: &ColorSpace,
     points: impl Iterator<Item = [f64; 2]>,
+    function: Option<&MeshFunction>,
     explicit: Option<[f64; 4]>,
 ) -> Result<([f64; 4], Vec<[f64; 2]>), WriteError> {
     let decode = match explicit {
@@ -237,7 +305,10 @@ fn patch_decode(
             "{role} Decode range must be non-degenerate; provide an explicit decode range"
         )));
     }
-    Ok((decode, mesh_color_ranges(color_space)))
+    Ok((
+        decode,
+        mesh_component_ranges(color_space, function.is_some()),
+    ))
 }
 
 /// 写出一个网格片：12/16 个控制点坐标，再写 4 个角点颜色。
@@ -277,6 +348,7 @@ fn mesh_decode(
     role: &str,
     color_space: &ColorSpace,
     vertices: &[MeshVertex],
+    function: Option<&MeshFunction>,
     explicit: Option<[f64; 4]>,
 ) -> Result<([f64; 4], Vec<[f64; 2]>), WriteError> {
     let decode = match explicit {
@@ -300,7 +372,10 @@ fn mesh_decode(
             "{role} Decode range must be non-degenerate; provide an explicit decode range"
         )));
     }
-    Ok((decode, mesh_color_ranges(color_space)))
+    Ok((
+        decode,
+        mesh_component_ranges(color_space, function.is_some()),
+    ))
 }
 
 /// `/Decode` 数组：先 x/y，再按分量顺序给出各颜色分量的范围。
@@ -348,7 +423,11 @@ fn encode_mesh(
 }
 
 fn max_code(bits: u8) -> u32 {
-    (1u32 << bits) - 1
+    if bits == 32 {
+        u32::MAX
+    } else {
+        (1u32 << bits) - 1
+    }
 }
 
 fn quantize(value: f64, min: f64, max: f64, max_code: u32) -> u32 {
@@ -356,7 +435,7 @@ fn quantize(value: f64, min: f64, max: f64, max_code: u32) -> u32 {
     (ratio * max_code as f64).round() as u32
 }
 
-/// MSB-first 位打包器：写入宽度 1..=16 的整数，跨字节连续，末尾补零。
+/// MSB-first 位打包器：写入宽度 1..=32 的整数，跨字节连续，末尾补零。
 struct BitWriter {
     bytes: Vec<u8>,
     buffer: u64,
@@ -373,7 +452,7 @@ impl BitWriter {
     }
 
     fn write(&mut self, value: u32, width: u8) {
-        debug_assert!((1..=16).contains(&width));
+        debug_assert!((1..=32).contains(&width));
         let mask = (1u64 << width) - 1;
         self.buffer = (self.buffer << width) | (value as u64 & mask);
         self.pending += width;
@@ -454,7 +533,21 @@ pub(super) fn shading_dict(
             ));
         }
     }
-    Ok(dict)
+    Ok(with_shading_options(dict, shading.options()))
+}
+
+/// 写入所有渐变共有的可选条目：`/Background`、`/BBox` 与 `/AntiAlias`。
+fn with_shading_options(mut dict: Dict, options: &ShadingOptions) -> Dict {
+    if let Some(background) = &options.background {
+        dict = dict.insert("Background", real_array(background));
+    }
+    if let Some(bbox) = options.bbox {
+        dict = dict.insert("BBox", real_array(&bbox));
+    }
+    if let Some(anti_alias) = options.anti_alias {
+        dict = dict.insert("AntiAlias", Value::Bool(anti_alias));
+    }
+    dict
 }
 
 /// 构造 PatternType 2 图案字典（Table 75）：Type 1–3 渐变内联为直接

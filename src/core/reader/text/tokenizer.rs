@@ -1,7 +1,7 @@
 //! Content-stream tokenizer used by text extraction.
 
 #[derive(Debug, Clone)]
-pub(super) enum CsToken {
+pub enum CsToken {
     Number(f64),
     LiteralString(Vec<u8>),
     HexString(Vec<u8>),
@@ -11,7 +11,7 @@ pub(super) enum CsToken {
     ArrayClose,
 }
 
-pub(super) fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
+pub fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
     let mut tokens = Vec::new();
     let mut pos = 0;
     while pos < input.len() {

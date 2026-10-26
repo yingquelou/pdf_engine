@@ -25,7 +25,7 @@ use crate::core::types::{Dict, Document, StreamData, Value};
 
 use super::font::{SimpleFontEncoding, SimpleFontToUnicode, TrueTypeFont, Type0Font, Type1Font};
 
-mod tokenizer;
+pub mod tokenizer;
 
 use tokenizer::{CsToken, tokenize_content_stream};
 

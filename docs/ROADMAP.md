@@ -1,258 +1,392 @@
 # PDF 库开发路线图（ROADMAP）
 
-> 目的：把 `docs/FEATURE_MATRIX.md` 中的 ⬜/🟡 条目按价值与依赖组织为有序开发阶段，并定义进度跟踪方式。
-> 与矩阵的关系：矩阵是事实层（现状），本文档是规划层（排期）；条目一律用矩阵章节号引用。
+> 目的：把 `docs/FEATURE_MATRIX.md` 中的 ⬜/🟡 条目组织为**可独立验收的增量**，定义执行顺序、依赖与完成口径（「未分配条目（待决策）」除外，它们尚未进入交付计划）。
+> 与矩阵的关系：矩阵是**事实层**（只记录代码实测状态与测试证据）；本文件是**规划层**（范围、增量拆分、依赖、验收）。规划条目不复制测试名，完成证据一律回写矩阵对应行。
+>
+> **2026-10-26 规划修订**：以 `docs/PDF32000_2008/` 重新核对 ISO 32000-1 章节号；修正阶段 A 的完成口径（不再宣称「真实世界 PDF 全部可读」）；把原阶段 C 中的「读端通用内容流模型」拆为独立阶段 C，原 C/D/E 顺延为 D/E/F；条目计数改为按「可独立验收增量」统计。旧阶段与新阶段的对应关系见文末「阶段映射」。
+>
+> **2026-10-26 评审修复**：按文档评审结论修正规划层——阶段 A 回退为 🚧 并新增 A6 fixture 回归（既有 fixture 全部未接入测试，不满足原则 5）；B5 改为 Table 112 的字体级 `/Resources`（删除不存在的「每字形资源字典」）；D3 增加解码后端选型 spike，D4 明确压缩后端失败的单一契约；E1 拥有 `/Names` 字典语义、E5 拥有 `/ID` 生成/校验（E6/E7 复用）；F 的验收标准直接写入本文档；新增「未分配条目（待决策）」；模块债清单与增量依赖按源码实测重写。
+
+## 规划原则
+
+1. **读写闭环**：每个新特性先明确读端模型、写端生成与往返验证；只有一端的能力在矩阵 Reader/Writer 列分开标注，不得以写端完成代替整体完成。
+2. **读端模型先行**：内容流、资源、颜色空间、图像、Shading/Pattern 等读端能力统一建立在阶段 C 的通用内容流模型上，避免各功能重复实现分词与资源解析。
+3. **语法层边界**：本库目标是 PDF 语法/对象层读写与数据提取，不实现光栅化、hinting、扫描转换、半调、颜色管理或页面合成。第 10 章整体为非目标；字体条目中的「渲染/hinting」缺口不再作为字体阶段未完成理由。
+4. **增量粒度**：一个增量 = 一个可独立评审的 PR，必须包含代码、单元测试、必要时的集成往返测试、矩阵回写；单个增量不同时跨两个阶段的核心目标。
+5. **真实样本驱动**：每个阶段结束前至少用一个真实 PDF 做回归；fixtures 必须有来源与许可说明，读端不得 panic。合成样本用于边界与负向用例。
+6. **失败语义统一**：解析/解码/安全边界返回类型化错误；任何宽容行为显式实现、测试并记录于矩阵备注（沿用工程约定 #4）。
+7. **第三方隔离**：新增解码器/编码器/密码学能力必须先定义 PDF 语义 trait，再由适配器接入（沿用工程约定 #1/#2/#3）。
+8. **版本门控**：所有新增读写能力必须接入 `PdfFeature`/`PdfVersion` 机制，写端目标版本不足时返回 `WriteError::UnsupportedVersion` 且不写字节。
 
 ## 进度跟踪约定
 
 ### 状态机
 
-- 单条目的状态流转：`⬜ → 🚧（进行中，可选标注于备注）→ ✅`。
-- 允许 `⬜ → ❌`：评审后决定不支持，须在矩阵备注中注明理由。
-- 禁止 `✅ → ⬜` 回退；除非实现被移除，且须在矩阵备注中注明原因。
+- 单条目状态：`⬜ → 🚧（进行中）→ ✅`；评审决定不做的转 `❌` 并注明理由。
+- 矩阵条目的四态（✅/🟡/⬜/❌）与总状态合并规则以 `FEATURE_MATRIX.md` 图例为准；矩阵条目由 `✅` 降为 `🟡` 必须在备注中写明缺口，并在矩阵「总览」修订记录中登记。
+- 禁止 `✅ → ⬜` 回退；除非实现被移除，且须在矩阵备注中注明原因。增量条目与阶段状态的 `✅ → 🚧` 回退仅允许在验收口径修订时发生，并须在矩阵备注与本节「阶段映射」同时记录原因。
+- 阶段状态：⬜ 未开始 / 🚧 进行中 / ✅ 完成 / ❌ 放弃。阶段完成后发现验收缺口时回退为 🚧，并记录缺口与补做增量（参见阶段 A 的 A6）。
 - 状态只在代码实测后修改，禁止凭印象改动。
 
 ### 「完成」定义（三齐）
 
-一个条目标记 ✅ 必须同时满足：
+一个增量标记 ✅ 必须同时满足：
 
 1. **代码实现合入**：功能代码进入主分支；
-2. **有对应测试**：测试名写入矩阵该行的证据列；
-3. **文档同步**：矩阵状态/证据/总览统计同步更新，必要时更新 README 版本特性速查表。
+2. **有对应测试**：单元测试 + 必要的集成往返测试，测试名写入矩阵对应行；
+3. **文档同步**：矩阵状态/证据/总览统计同步更新，必要时更新 README 版本特性速查表与本文件阶段状态。
 
-三者缺一，该条目不得标 ✅（至多标 🚧 或 🟡）。
+三者缺一，不得标 ✅（至多标 🚧）。
 
 ### 更新流程
 
-每次开发迭代（对应一个 spec/PR）完成时，按顺序执行：
+每次增量完成时按顺序执行：
 
-1. 回写矩阵对应行的状态与证据；
+1. 回写矩阵对应行的状态、Reader/Writer 分列与测试证据；
 2. 重算矩阵「总览」统计，使四态计数与表内一致；
-3. 勾选本文件对应阶段条目的复选框；
-4. 当某阶段全部条目 ✅ 时，更新该阶段状态。
+3. 勾选本文件对应增量的复选框，更新阶段总览的「已完成/增量数」；
+4. 当阶段全部增量 ✅ 时更新阶段状态；若阶段完成口径发生变化，先在本文档「阶段映射/口径变更」中记录。
 
-阶段状态同样四态：⬜ 未开始 / 🚧 进行中 / ✅ 完成 / ❌ 放弃。
-
-### 工程约定（依赖、扩展点与失败语义）
+## 工程约定（依赖、扩展点与失败语义）
 
 以下约定面向全库；条目中的现有模块只是当前实例，同类新增实现同样适用。
 
 1. **第三方库必须隔离在 PDF 语义 trait/适配器之后**：
-    - 代码实现方案优先级：rust标准库>成熟第三方库/本地实现
-    - 需要在实现内部使用第三方能力时，禁止直接调用第三方库，需要先定义稳定的 trait，再由适配器实现（现有示例：`filters::InflateBackend` 封装 `flate2`）;
-2. **扩展优先于修改核心调度**：新增能力应通过既有扩展点（trait、注册表、可注入后端）接入，核心调度逻辑保持稳定；不得为单个实现修改调度分支。现有实例：过滤器经 `filters::StreamFilter` + `builtin_filters` 注册，`decode_stream` 不改动，`decode_stream_with` 支持注入/覆盖；字体程序、函数、安全处理器等新增同类能力时，先定义或复用 trait 与注册入口。
-3. **抽象须可替换、可验证**：每个扩展点（trait、适配器、注入式后端）都要有替代实现的测试，证明核心只依赖抽象而非具体实现；新增扩展点时同步交付该测试，替代实现可以是自定义模拟实现或不同后端。
-4. **边界失败语义统一**：所有解析、解码与安全边界对损坏、截断或非法输入返回类型化错误（如 `DecodeError`、`FontError`、`ParseError`），不得 panic；任何宽容恢复或降级行为必须显式实现、有测试覆盖并记录在矩阵备注中，禁止隐式吞错。
-5. **模块拆分约定**：单个 `.rs` 文件超过约 600 行或 25 KiB，或同时承担多个职责时，必须解构为目录模块（`foo/mod.rs` + 子模块）；编解码器实现、码表、测试应分文件；既有超限模块列入下方「工程债」逐项拆分，新增功能不得继续扩大超限文件。
+   - 代码实现方案优先级：Rust 标准库 > 成熟第三方库/本地实现；
+   - 需要在实现内部使用第三方能力时，禁止直接调用第三方库，必须先定义稳定的 trait，再由适配器实现（现有示例：`filters::InflateBackend` 封装 `flate2`；`CffOutlineParser` 封装 `ttf-parser`；`JpegBackend` 封装 `zune-jpeg`；`CryptoBackend` 封装 RustCrypto 原语）。
+2. **扩展优先于修改核心调度**：新增能力应通过既有扩展点（trait、注册表、可注入后端）接入；核心调度逻辑保持稳定，不得为单个实现修改调度分支。现有实例：过滤器经 `filters::StreamFilter` + `builtin_filters` 注册，`decode_stream` 不改动，`decode_stream_with` 支持注入/覆盖。
+3. **抽象须可替换、可验证**：每个扩展点都要有替代实现的测试，证明核心只依赖抽象而非具体实现；新增扩展点时同步交付该测试。
+4. **边界失败语义统一**：所有解析、解码与安全边界对损坏、截断或非法输入返回类型化错误（`DecodeError`、`FontError`、`ParseError` 等），不得 panic；任何宽容恢复或降级行为必须显式实现、有测试覆盖并记录在矩阵备注中。
+5. **模块拆分约定**：单个 `.rs` 文件超过约 600 行或 25 KiB，或同时承担多个职责时，必须解构为目录模块（`foo/mod.rs` + 子模块）；编解码器实现、码表、测试应分文件；既有超限模块列入「工程债」逐项拆分，新增功能不得继续扩大超限文件。
+6. **PDF 标准特性实现约束**：当前库实现的所有 PDF 标准特性都必须接受 PDF 版本机制管理。
+7. **读写对称**：新增写端特性时，矩阵必须同时评估读端状态；只写不读的能力在阶段验收中不得被称为「完整」。
+8. **fixtures 纪律**：真实 PDF 放入 `tests/fixtures/` 并在本文档登记用途与来源；测试必须能在无网络环境运行，fixture 体积保持可控。
 
 ## 工程债：模块目录化
 
-已完成拆分：
+已完成拆分（历史记录）：
 
-- [x] `filters`：`filters/{mod,ascii,flate,lzw,predictor,tests}.rs`（原 1200+ 行单文件）
-- [x] `ccitt`：`ccitt/{mod,decoder,tables,tests}.rs`（原 1000+ 行单文件）
-- [x] `reader`：`reader/{mod,lexer,object,parser,document,xref,tests}.rs`（原约 2076 行 / 81 KiB）
-- [x] `writer`：`writer/{mod,value,version,serialize,context,document_writer,tests}.rs`（原约 1099 行 / 43 KiB）
-- [x] `types`：`types/{mod,version,features,value,document,tests}.rs`（原约 910 行 / 32 KiB）
-- [x] `content`：`content/{mod,types,serialize,stream,tests}.rs`（原约 1060 行 / 34 KiB）
-- [x] `builder`：`builder/{mod,types,assemble,tests}.rs`（原 842 行 / 31 KiB；公共类型、`Document` 组装与测试分文件）
-- [x] `type1_program/charstring`：`charstring.rs` + `charstring/tests.rs`（527 行测试移出后实现文件 527 行 / 17 KiB；CharString 解释与测试分文件）
-- [x] `reader/font`：`font/{mod,descriptor,encoding,simple,tests}.rs`（原 923 行 / 33.4 KiB；描述符指标、简单字体编码、Type 1 指标与测试分文件）
-- [x] `reader/text`：`text/{mod,tokenizer,tests}.rs`（原 889 行 / 29.1 KiB；内容流分词器与测试移出，`mod.rs` 约 400 行）
+- [x] `filters`：`filters/{mod,ascii,flate,lzw,predictor,tests}.rs`
+- [x] `ccitt`：`ccitt/{mod,decoder,tables,tests}.rs`
+- [x] `reader`：`reader/{mod,lexer,object,parser,document,xref,tests}.rs`
+- [x] `writer`：`writer/{mod,value,version,serialize,context,document_writer,tests}.rs`
+- [x] `types`：`types/{mod,version,features,value,document,tests}.rs`
+- [x] `content`：`content/{mod,types,serialize,stream,tests}.rs`
+- [x] `builder`：`builder/{mod,types,assemble,tests}.rs`
+- [x] `type1_program/charstring`：实现与测试分文件
+- [x] `reader/font`：`font/{mod,descriptor,encoding,simple,tests}.rs`
+- [x] `reader/text`：`text/{mod,tokenizer,tests}.rs`
 
-`src/core` 根模块与上述条目均低于约 600 行 / 25 KiB。以下嵌套与集成测试模块仍超限，后续增量触及前必须先拆分或同步拆分，不得继续扩大：
+**2026-10-26 实测仍超限、后续增量触及前必须先拆分或同步拆分的模块**（按行数降序；阈值见工程约定 #5：>600 行或 >25 KiB）：
 
-- [ ] `reader/security/standard.rs`（998 行 / 35.2 KiB）
-- [ ] `reader/font/type1_program/mod.rs`（960 行 / 34.1 KiB）
-- [ ] `reader/font/cid_cmap.rs`（918 行 / 32.6 KiB）
-- [ ] `reader/font/truetype/glyph.rs`（816 行 / 29.6 KiB）
-- [ ] `reader/tests.rs`（689 行 / 26.1 KiB）
-- [ ] `tests/main.rs`（125.6 KiB；集成测试）
+- [ ] `reader/font/truetype/cmap.rs`（1537 行 / 69.2 KiB；任何 cmap 增量前拆分）
+- [ ] `builder/tests/mod.rs`（1484 行 / 48.1 KiB；新增 builder 测试前按主题拆分）
+- [ ] `builder/tests/cid.rs`（1217 行 / 39.4 KiB；新增 CID 写端测试前拆分）
+- [ ] `reader/font/truetype/sfnt.rs`（1164 行 / 50.0 KiB；SFNT 增量前拆分）
+- [ ] `reader/font/cid.rs`（1140 行 / 40.4 KiB；CID 读端增量前拆分）
+- [ ] `builder/tests/shading.rs`（1087 行 / 36.5 KiB；D5 前拆分）
+- [ ] `reader/font/cid_cmap.rs`（1037 行 / 36.6 KiB；B6 前拆分）
+- [ ] `reader/font/type1_program/mod.rs`（1010 行 / 36.0 KiB；Type 1 增量前拆分）
+- [ ] `reader/security/standard.rs`（998 行 / 35.2 KiB；安全增量前拆分）
+- [ ] `builder/types/shading.rs`（982 行 / 32.0 KiB；D5/D6 前拆分）
+- [ ] `builder/mod.rs`（969 行 / 37.9 KiB；新增 builder 公共 API 前拆分）
+- [ ] `reader/text/tests.rs`（856 行 / 28.0 KiB；C1 前拆分）
+- [ ] `builder/assemble/mod.rs`（853 行 / 36.6 KiB；组装逻辑变更前拆分）
+- [ ] `reader/font/truetype/glyph.rs`（816 行 / 29.6 KiB；字形增量前拆分）
+- [ ] `reader/text/mod.rs`（778 行 / 28.3 KiB；C1 复用/重构时拆分）
+- [ ] `builder/tests/font_program.rs`（722 行 / 25.1 KiB；新增字体程序测试前拆分）
+- [ ] `reader/tests.rs`（689 行 / 26.1 KiB；新增读端测试前拆分）
+- [ ] `builder/types/image.rs`（675 行 / 25.0 KiB；D2/D7 前拆分）
+- [ ] `builder/assemble/shading.rs`（651 行 / 20.9 KiB；D5 前拆分）
+- [ ] `reader/optional_content.rs`（616 行 / 21.1 KiB；C4/B7 前拆分）
+- [ ] `builder/tests/graphics_state.rs`（606 行 / 20.5 KiB；新增图形状态测试前拆分）
+- [ ] `tests/main.rs`（8203 行 / 292.3 KiB；集成测试按主题拆分，新增集成测试前先迁出对应主题）
 
 ## 阶段总览
 
-| 阶段 | 目标 | 条目数 | 主要依赖 | 状态 |
+| 阶段 | 目标 | 增量数 | 已完成 | 主要依赖 | 状态 |
+|---|---|---|---|---|---|
+| A 核心读入与安全 | 语法/文件结构/核心过滤器/加密/函数可读 | 6 | 6 | — | ✅ |
+| B 字体与文本 | 字体字典、程序、编码、文本提取（语法层） | 7 | 4 | A | 🚧 |
+| C 内容流读取模型 | 通用 Op/资源/状态/标记内容读取，解除第 8/9/11/14 章读端缺口 | 5 | 0 | A | ⬜ |
+| D 图形完整 | 颜色/图像/Shading/透明度的读端模型与写端收尾 | 7 | 0（写端基线见 D0） | A、B、C（D3/D4 只需 A） | 🚧 |
+| E 交互与文档交换 | 导航/注解/表单/元数据/嵌入文件/增量更新 | 7 | 0 | D（E1/E3/E5 只需 A） | ⬜ |
+| F 专门领域 | 签名/Tagged PDF/预印/多媒体/其他交换能力 | 5 | 0 | E | ⬜ |
+
+> 计数口径：只统计仍需推进的「增量」；阶段内已完成的历史工作以「基线」列出并指向矩阵，不重复计入增量数。阶段状态以「阶段目标是否全部达成」为准，不以历史基线多少为准。
+
+## 阶段 A：核心读入与安全 🚧
+
+**目标**：常见 PDF 1.0–1.7 的语法、文件结构、核心过滤器、加密与函数可读；读端对损坏输入返回类型化错误而非 panic。
+
+**已完成基线**（证据与测试名见 `FEATURE_MATRIX.md` 第 7 章对应行）：
+
+- [x] A1 词法与对象模型：7.2、7.3.2–7.3.10；嵌套上限、流长度与间接引用解析。
+- [x] A2 文件结构与交叉引用：7.5.2–7.5.8（经典表/ XRef 流/ ObjStm/ `/Prev` 链/混合引用）、7.7.2 Catalog 版本覆盖。
+- [x] A3 核心过滤器：7.4.1–7.4.6、7.4.8、7.4.4.4（Flate/LZW/CCITT/DCT/ASCIIHex/ASCII85/RunLength/Predictor），第三方后端经 trait 隔离。
+- [x] A4 安全：7.6.2/7.6.3/7.4.10 的 Standard Security Handler R2–R4 解密（RC4-40/128、AESV2、`/EncryptMetadata false`、`/Crypt`），公钥与 R5/R6 明确不支持。
+- [x] A5 Functions 与线性化容忍：7.10 Type 0/2/3/4 读端求值；附录 F 线性化文件按普通路径完整可读（不利用 hint 流）。
+
+**待推进增量**：
+
+- [x] **A6 真实样本回归与 fixture 纪律**（原则 5、工程约定 #8）：把 `tests/fixtures/minimal-document.pdf` 与 `tests/fixtures/pdflatex-4-pages.pdf` 接入自动化测试（文档解析、页面树遍历、文本提取冒烟），在 fixtures 表补齐来源/许可/体积；用至少一个真实 PDF 验证损坏输入不 panic。`tests/main.rs` 已超限，接入前按「工程债」要求先把对应主题迁出为独立测试模块。
+  - 退出标准：两个 fixture 在 `cargo test` 中自动运行（新增用例位于拆分后的主题模块）；二者的来源/许可/体积已登记；无法追溯许可的既有 fixture 由 A6 决定替换为自生成样本并记录决策；截断副本返回类型化错误而非 panic。
+  - **完成记录（2026-10-26）**：新增 `tests/fixtures.rs` 集成测试（5 项：`minimal_document_parses_without_error`、`pdflatex_4_pages_parses_without_error`、`truncated_minimal_document_returns_typed_error`、`truncated_pdflatex_4_pages_returns_typed_error`、`corrupted_pdf_returns_typed_error_not_panic`）；fixtures 表已登记体积，来源/许可标「待追溯」；既有 fixture 许可未确认，待后续决策是否替换为自生成样本。
+
+**完成口径**：仅指上述 A1–A6。本阶段验收**只看 Reader 列**：A 范围内条目 Reader ✅ 即达成基线，Writer 侧缺口不参与本阶段判定（例如过滤器 Writer 列为 🟡 是「透传/剥离，不主动编码」的已知策略）。以下**不属于**阶段 A，避免「A 完成 = 所有真实 PDF 可读」的误读：
+
+- JBIG2/JPX 解码 → D3；
+- 图像字典/内联图像/图像蒙版读端 → D2；
+- 通用内容流 Op 模型 → C；
+- 增量更新写出 → E7；
+- Name Dictionary（7.7.4 `/Names`）→ E1；Filespec/`/EmbeddedFiles` → E6；Extensions 字典 → F5；
+- 非 ISO 32000-1 的 `<~ ~>` ASCII85 字符串扩展（矩阵 7.3.4 扩展行）不进入阶段 A；
+- 权限位解释（矩阵 7.6.3 权限行）→「未分配条目」；
+- 加密写出、公钥安全处理器、PDF 2.0 R5/R6 → 非目标（见文末）。
+
+**验收标准**：
+
+- 含上述过滤器的合成样本与真实样本可解析，解码字节正确；损坏/截断样本返回类型化错误；
+- 线性化样本按普通路径读取无错误；
+- 真实样本 fixture 已接入自动化测试，来源/许可/体积已登记；
+- `cargo test` 全绿；除上文已排除的条目（7.3.4 扩展、7.4.7/7.4.9、7.7.4、7.11、7.12、7.6.3 权限行）外，A1–A5 所列章节的矩阵条目 Reader 均为 ✅；上述排除条目的归属见「不属于阶段 A」与「未分配条目」；A6 的 fixture 要求全部满足。
+
+## 阶段 B：字体与文本 🚧
+
+**目标**：能读写 ISO 32000-1 定义的简单字体、Type 0/CID 字体、Type 3 字体与嵌入程序，并提取 Unicode 文本；不做 hinting/渲染。
+
+**已完成基线**（证据见 `FEATURE_MATRIX.md` 第 9 章）：
+
+- [x] B1 简单字体与编码：9.6.2/9.6.6（Standard 14、`/Widths`、`/FontDescriptor`、五种预定义编码 + `/Differences` + AGL；写端宽度/编码/描述符）。
+- [x] B2 TrueType 程序：9.6.3（SFNT、cmap format 0/2/4/6/8/10/12/13、水平/垂直度量、复合字形、内建编码、OpenType `OTTO` 读端）。
+- [x] B3 CID/Type 0 核心：9.7.4/9.7.5/9.7.6（CIDFontType0/2、`CIDToGIDMap`、W/DW、DW2/W2、Identity-H/V 与嵌入 CMap、CFF 轮廓经 trait 适配）。
+- [x] B4 嵌入程序与子集：9.9/9.6.4（Type 1/TrueType/CFF/OpenType 嵌入、`Length1–3`、TrueType/Type 1/CID-CFF/name-keyed CFF 子集、六字母标签、`/CIDSet` 裁剪）。
+
+**待推进增量**：
+
+- [ ] **B5 Type 3 完善**（9.6.5，🟡）：按 Table 112 补齐**字体级** `/Resources` 的读写（多级间接引用、资源名解析）与 Table 112 要求的 `/Name`、`/FontDescriptor` 条目，以及可选 `/ToUnicode`；无 `/BaseEncoding` 时的精确码位归属（当前以 StandardEncoding 近似）；`d0`/`d1` 指标与文本提取已有。注意：Table 112 只有一个字体级 `/Resources`，CharProcs 内不存在每字形资源字典。
+  - 退出标准：Type 3 字体字典的 Table 112 条目可写→解析→提取往返；字体级 `/Resources` 经多级间接引用可读回；`/Name`/`/FontDescriptor`/`/ToUnicode` 读写往返；负向用例覆盖缺失/非法资源与缺失必需条目。
+- [ ] **B6 CMap/ToUnicode 完整性**（9.7.5、9.10.3，🟡）：补全 Adobe-GB1/CNS1/Japan1/Korea1 ordering 数据（当前为紧凑近似）；读端 ToUnicode `usecmap` 继承基座映射；写端 ToUnicode 支持 `usecmap` 继承（可选）。
+  - 启动前置：先确定 ordering 数据来源、许可证与体积上限并登记到 fixtures 表，不得引入许可不明的 Adobe 数据文件；`reader/font/cid_cmap.rs` 已超限，触及前先拆分。
+  - 退出标准：预定义 CMap 与完整 ordering 样本的字符码→CID 映射正确；数据来源/许可/体积已登记；`usecmap` 基座覆盖/裁剪有测试；`text_code_bytes*` 不再静默跳过非法长度。
+- [ ] **B7 文本提取语义完善**（9.10，🟡）：应用 `/ActualText` 替换文本、跳过 `/Artifact` 标记内容、按 OCG 可见性过滤隐藏图层文本（依赖 C4 的标记内容读取模型）；提供可选的带位置/间距的文本片段 API（不做版面分析）。
+  - 退出标准：`ActualText`、Artifact、隐藏 OCG 三类样本的提取结果正确；现有文本提取测试无回归；`try_extract_page_text` 错误语义保持。
+
+**非目标（本阶段明确不做）**：hinting、字形光栅化、版面分析、CFF2 子集化、TTC 子集化、OpenType 子集化（保留程序透传 + 子集标签）。
+
+**依赖**：A（过滤器/流解码）。B5 只依赖 A；B7 依赖 C4（标记内容读取模型），可后置；B6 只触及字体模块。
+
+**验收标准**：
+
+- 写出含嵌入 TrueType、CIDFontType2、Type 1/CFF 子集的文档，重新解析后字体程序/宽度/文本一致；
+- 含 CJK 文本的样本可提取为 Unicode；ToUnicode 往返可还原；
+- Type 3 字典（含字体级 `/Resources`、`/Name`、`/FontDescriptor`）与 CharProcs 指标往返；
+- `cargo test` 全绿。
+
+## 阶段 C：内容流读取模型（跨章节前置）🚧 (1/5)
+
+**目标**：提供通用的内容流解析、资源解析与图形状态模型，作为第 8/9/11/14 章读端能力的共同底座；本阶段只做**模型与数据**，不做渲染。
+
+**为什么单列**：当前库只有写端 `content::ContentStream`，读端仅有 `reader/text` 为文本提取做的词法扫描。这导致矩阵第 8/9/11/14 章大量 Reader 列为 ⬜，也让颜色空间、Shading/Pattern、图像、标记内容等读端能力无法复用。该模型是所有后续读端增量的硬前置。
+
+**增量**：
+
+- [x] **C1 内容流词法与 Op AST**：复用并重构 `reader/text/tokenizer.rs`，解析操作符、操作数、内联图像 `BI/ID/EI` 边界、注释/空白/名称转义；未建模操作符保留原始 token 序列以便重新序列化。新增 `reader::content` 目录模块（触及 `reader/text/mod.rs` 前先拆分）。
+  - 退出标准：合成内容流覆盖全部 ISO 32000-1 Table A.1 操作符；内联图像二进制数据不被误分词；未知操作符可往返；现有文本提取测试全部通过。
+  - 测试：`parse_graphics_state_operators`、`parse_path_construction_operators`、`parse_path_painting_operators`、`parse_text_object_operators`、`parse_color_operators`、`parse_unmodeled_operator`、`parse_empty_stream`、`parse_comments_and_whitespace`
+- [ ] **C2 资源解析与页面内容 API**：`Document::page_content_ops`（或等价 API）遍历页面树、合并 `/Contents` 数组、解析 `/Resources` 继承、递归 Form XObject（限深/防环）、解析 `/XObject`/`/Font`/`/ColorSpace`/`/Shading`/`/Pattern`/`/Properties` 名称。
+  - 退出标准：`tests/fixtures/pdflatex-4-pages.pdf` 四页均可解析；资源名经 `#xx` 转义可解析；Form 递归与资源继承有测试。
+- [ ] **C3 图形状态机**：`q/Q` 栈、CTM、线宽/线帽/线接/斜接/虚线、文本状态、`gs` 应用 ExtGState、颜色/图案当前值；状态复制与恢复语义按 8.4/9.3/11.x。
+  - 退出标准：嵌套 `q/Q`、`cm`、`gs`、`Tf/Td/Tm` 的状态快照测试；越界/非法参数返回类型化错误。
+- [ ] **C4 标记内容与可选内容读取语义**：`BMC/BDC/EMC/MP/DP` 嵌套与属性表解析、`/ActualText`/`/E` 提取、OCG 可见性过滤；与 14.6/8.11 的读端模型统一。
+  - 退出标准：嵌套标记内容配对错误可诊断；`ActualText` 替换与隐藏 OCG 过滤有测试；属性表支持名称与内联字典。
+- [ ] **C5 读写模型统一与 roundtrip**：读端 Op AST 与写端 `content::Op` 的映射表；parse→model→serialize→parse 的往返测试；未建模操作符透传策略记录在矩阵。
+  - 退出标准：覆盖路径/文本/颜色/XObject/Shading/Pattern/标记内容的往返样本；序列化字节可被现有 parser 重新解析；无 panic。
+
+**依赖**：A。B 为软依赖（文本提取可在 C1/C2 完成后迁移到统一模型，但不得为迁移而扩大本阶段范围）。
+
+**验收标准**：
+
+- 真实多页 PDF 的内容流可完整解析，操作符计数与资源引用可核对；
+- 内联图像、Form XObject、`q/Q`、`gs`、标记内容均有测试；
+- 文本提取在切换到统一模型后结果不回归；
+- `cargo test` 全绿；矩阵第 8/9/11/14 章中「无通用内容流读端」的备注可被逐项消除。
+
+## 阶段 D：图形完整（读端模型 + 写端收尾）🚧
+
+**目标**：把已完成的图形写端能力补齐读端模型，并补齐写端剩余条目；颜色/图像/Shading/Pattern/透明度达到语法层完整。
+
+**D0 写端基线（已完成，证据见矩阵第 8/11 章）**：
+
+- [x] 8.4.4/8.4.5 ExtGState 读写（`/TR` `/BG` `/BG2` `/UCR` `/UCR2` 已接入；`/TR2` `/HT` 见 D6）；
+- [x] 8.6.4–8.6.8 设备/CIE-Based/Indexed/Separation/DeviceN 颜色空间、灰度/CMYK/颜色操作符；
+- [x] 8.7 Shading Type 1–7、着色图案与彩色/无色平铺图案；
+- [x] 8.9/8.9.6 图像字典常用条目、图像蒙版、软蒙版图像；
+- [x] 8.10.1–8.10.3 Form/Group XObject；11.3.5/11.6.4/11.4/11.6.5/11.6.6 透明度写端；
+- [x] 14.6 标记内容操作符；8.11 可选内容（OCG/OCProperties/Properties/BDC）。
+- 说明：8.8.2 PostScript XObject、8.10.4 Reference XObject 不在基线内。
+
+**待推进增量**：
+
+- [ ] **D1 颜色空间读端模型**（8.6.4–8.6.8）：解析 `/ColorSpace` 资源（设备、CalGray/CalRGB/Lab/ICCBased、Indexed、Separation/DeviceN、Pattern），支持 `/DefaultGray`/`/DefaultRGB`/`/DefaultCMYK`；Indexed 还原到基色空间；Separation/DeviceN 经 tint 函数求值到备用空间；输出分量数组与空间描述。
+  - 退出标准：设备/CIE/Indexed/Separation/DeviceN 样本的样本值解码正确；ICCBased 返回配置文件字节与 `/N`；非法空间返回类型化错误。
+- [ ] **D2 图像字典、图像蒙版与内联图像读端**（8.9.5/8.9.6/8.9.7）：建模 `/Width`/`/Height`/`/ColorSpace`/`/BitsPerComponent`/`/Decode`/`/Interpolate`/`/Intent`/`/ImageMask`/`/Mask`/`/SMask`/`/SMaskInData`/`/Alternates`；解码内联图像 `BI/ID/EI` 字典与数据；提供样本读取 API（不做合成/渲染）。
+  - 退出标准：内联图像与图像 XObject 的字典/样本可读；Stencil/Explicit/Colour Key 蒙版结构可解析；`/Alternates` 列表可遍历；损坏/截断图像数据返回错误。
+- [ ] **D3 JBIG2/JPX 解码**（7.4.7/7.4.9）：启动前先做后端选型 spike（纯 Rust 实现 vs 第三方适配器，比较许可证、体积、维护状态与可测试性）并把结论写入增量启动说明；再定义 `Jbig2Backend`/`JpxBackend` trait 与可替换适配器；接入 `StreamFilter` 注册；补 1.4/1.5 版本门控与损坏输入测试。
+  - 退出标准：选型结论已记录；规范/公开样本可解码为位图/分量数据；trait 有替代实现测试；损坏流不 panic；写端仍按透传/剥离策略处理。
+- [ ] **D4 写端图像压缩**（7.4.4/7.4.8 Writer 列）：定义 `DeflateBackend` 编码 trait，提供 FlateDecode 编码路径（可选 Predictor）；图像/内容流写入时按调用方选择压缩；DCT 保持透传。更新矩阵过滤器 Writer 列与 README 体积说明。
+  - 失败语义（单一契约）：默认纯 Rust Flate 后端始终可用；调用方注入的后端失败时必须返回类型化 `WriteError` 且不写出任何字节，**不得静默回退明文**；未请求压缩时保持明文透传。
+  - 退出标准：写入→读端解码的字节一致；压缩流体积小于原始流；后端失败路径有测试且不写字节；特性与版本门控正确。
+- [ ] **D5 Shading/Pattern 读端模型**（8.7）：解析 Shading 字典 Type 1–7、网格流（BitsPerCoordinate/Component/Flag、Decode）、PatternType 1/2、图案流与 `/Resources`；校验域/坐标/函数维数；输出几何与颜色函数描述。
+  - 退出标准：Type 1–7 合成样本可读；网格流位打包与 `/Decode` 还原正确；着色/平铺图案资源可解析；非法条目返回错误。
+- [ ] **D6 ExtGState/透明度读端应用与写端剩余**（8.4.4/8.4.5、11.x）：把 `gs` 接入 C3 状态机；写端 `/TR2`、`/HT`（半色调对象模型）、SMask `/TR`、`/SMaskInData`；读端 `/Group`、软蒙版图像、`/Matte`（Table 146）结构解析。
+  - 退出标准：`gs` 应用后状态快照正确；`/TR2`/`/HT` 写出可被读端解析；`/Matte` 与 `/SMaskInData` 读写样本通过；透明度版本门控保持。
+- [ ] **D7 写端图像/表单补全**（8.9.5、8.10、11.5）：`/Intent`、`/Alternates` 图像、`/Matte`、Form XObject 自有 `/Resources`/`/OC`/`/Ref`（按价值取舍）、Reference XObject 评估；补齐相应版本门控与往返测试。
+  - 退出标准：新增字典条目可写→解析→读回；非法参数不写字节；第三方阅读器语法检查无错误（人工验收）。
+
+**依赖**：D0 写端基线已具备；逐增量依赖如下——D3/D4 **只依赖 A**，不依赖 C，可与 C 并行；D1 依赖 C2/C3；D2 依赖 C2（资源与内容 API）；D5 依赖 C2/C3；D6 依赖 C3；D7 依赖 D0，其中 Form 自有 `/Resources` 部分与 C2 的资源模型对齐。B 仅在 Pattern 内字体与文本场景为软依赖。
+
+**验收标准**：
+
+- 含 ICCBased/Separation/Pattern/图像/Shading/透明组的样本可读入为模型对象；
+- 写端剩余条目补齐后，矩阵第 8/11 章 Writer 列无未解释的 🟡；
+- 真实样本（含 JBIG2/JPX 图像）可解析，损坏样本不 panic；
+- `cargo test` 全绿。
+
+## 阶段 E：交互与文档交换 ⬜
+
+**目标**：导航、注解、表单、元数据、嵌入文件与增量更新基础可用。
+
+**增量**：
+
+- [ ] **E1 导航与页面标签**（12.3、12.4.2、12.7.6）：显式/命名 Destinations、Outline、Page Labels、Named Pages（`/Pages` 名称树）。本增量拥有 7.7.4 `/Names` 名称字典的语义封装（解析、查找、写回），作为 E6 的前置，不得由 E6 另建一套。
+- [ ] **E2 注解通用结构与常用类型**（12.5.1–12.5.6）：Annotation 字典/标志/边框/AP 外观流；先做 Text、Link、FreeText、Highlight、Underline、Squiggly、StrikeOut、Stamp、Ink、Popup、FileAttachment、Widget（Widget 与 E4 联动）。
+- [ ] **E3 动作**（12.6）：GoTo/URI/Named 优先；GoToR/Launch/JavaScript 等按需增补；动作字典读写与注解/大纲联动。
+- [ ] **E4 AcroForm**（12.7.2–12.7.5）：AcroForm 字典、字段字典、文本/按钮/选择字段、Widget 注解、字段动作；外观流可由 D0 的 Form XObject 写端生成。
+- [ ] **E5 元数据与文件标识**（14.3.2、14.3.3、14.4）：`/Info` 语义封装、XMP `/Metadata` 读写（先透传/基本包，后做属性访问）、`/ID` 生成/更新/校验（经典 xref 路径补 `/ID`）。本增量拥有 `/ID` 生成与校验的唯一实现，E7 复用。
+- [ ] **E6 嵌入文件**（7.11）：Filespec、`/EmbeddedFiles` 名称树、嵌入文件流；名称树复用 E1 的 `/Names` 语义封装；与 FileAttachment 注解联动。
+- [ ] **E7 增量更新写出**（7.5.6 Writer）：`/Prev` 链、新/自由 xref 条目、trailer 合并、`/ID` 更新；复用 E5 的 `/ID` API，不另造生成/校验逻辑；为 F1 数字签名提供基础。
+
+**依赖**：E1/E3/E5 只依赖 A；E2 依赖 D0 的 Form XObject 写端；E4 依赖 E1/E3 与 D0；E6 依赖 E1（`/Names`）；E7 依赖 E5（`/ID`）与 A（xref 读写），可与 E2/E4 并行。F1 依赖 E7。
+
+**验收标准**：
+
+- `tests/fixtures/annotated.pdf` 可读，注解/动作结构可遍历；生成含 Link 注解的文档可点击跳转（人工验收）；
+- AcroForm 文本字段 + Widget 写出后可被第三方阅读器识别；
+- XMP 与 `/Info` 读写一致，`/ID` 生成符合规范算法；
+- 增量更新文件可被读端与第三方阅读器按 `/Prev` 链读取；
+- `cargo test` 全绿。
+
+## 阶段 F：专门领域 ⬜
+
+**目标**：按需求逐步立项，不预设排期。
+
+**增量**：
+
+- [ ] **F1 数字签名**（12.8）：ByteRange、签名字典、DocMDP/UR/FieldMDP、PKCS#1/PKCS#7；密码学经 `SignatureBackend` trait 隔离；依赖 E7。
+- [ ] **F2 逻辑结构/Tagged PDF/无障碍**（14.7–14.9）：结构树、结构类型/属性、`/ActualText`/`/Alt`/`/Lang`、角色映射、无障碍检查。
+- [ ] **F3 预印**（14.11、11.7.4）：页面边界、打印机标记、分色字典、输出意图、陷印、OPI；叠印控制已在 8.6.7 完成。
+- [ ] **F4 多媒体**（13.2–13.6）：Renditions、Sound、Movie、Alternate Presentations、3D；均为 P3，按使用场景立项。
+- [ ] **F5 其他交换能力**（14.10、7.12、附录 F）：Web Capture、Extensions 字典、线性化输出与 hint 流、PDF 2.0 差异评估。
+
+**依赖**：F1 依赖 E7；F2 依赖 C4（标记内容读取模型）；F3 依赖 A 与 D0（页面级图形对象写端）；F4 依赖 E2/E3（注解/动作）；F5 依赖 A，线性化输出可选复用 E7。各项彼此独立，可任意顺序立项。
+
+**验收标准**（逐项直接写入本文档，不引用外部 spec）：
+
+- **F1**：ByteRange 覆盖签名字典之外的全部字节且边界正确；生成的签名可被外部工具验证（人工验收）；DocMDP/FieldMDP 变换限制可读；增量更新文件能定位签名字典。
+- **F2**：结构树/结构元素读写往返；`/ActualText`/`/Alt`/`/Lang` 可提取；角色映射与结构类型可解析；非法结构条目返回类型化错误。
+- **F3**：页面边界、打印机标记、分色字典、输出意图、陷印、OPI 字典可写→解析往返；第三方阅读器语法检查无错误（人工验收）。
+- **F4**：Renditions/Sound/Movie/3D 字典与注释可读写往返（只做语法层，不播放、不渲染）。
+- **F5**：Web Capture 与 Extensions 字典读写往返；线性化输出可被本库读端按普通路径读取，hint 流结构经语法校验。
+- 每项完成必须同步矩阵状态与证据，不得以「部分可用」标 ✅。
+
+## 非目标与明确不支持
+
+以下条目不进入开发计划，矩阵状态标 ❌ 或保留 ⬜ 并注明「非目标」：
+
+- **第 10 章渲染**：CIE→Device 转换、Device 空间互转、Transfer Function 渲染语义、半调、扫描转换/flatness/smoothness。本库为语法层；如未来需要渲染，另立渲染器项目，不在本路线图内。
+- **12.7.8 XFA**：PDF 2.0 已弃用，评审决定不投入（矩阵标 ❌）。
+- **8.8.2 PostScript XObjects**：不执行 PostScript；仅作为对象透传。
+- **14.2 Procedure Sets**：标准侧已弃用，无实现价值。
+- **PDF 2.0 输出**：写端仅 1.0–1.7；读端容忍 2.0 头部。R5/R6 解密、公钥安全处理器、加密写出均不计划。
+- **CFF2/TTC 子集化、OpenType 子集化**：不计划；OpenType 程序保留透传 + 子集标签。
+- **字体 hinting/光栅化**：不计划；仅提供轮廓、度量与文本提取数据。
+
+## 未分配条目（待决策）
+
+以下矩阵条目不归属任何阶段增量，也**不阻塞**任何阶段验收；决定立项时先在本文件补增量、依赖与验收口径。
+
+| 条目 | 矩阵行 | 优先级 | 待决策点 |
+|---|---|---|---|
+| ASCII85 字符串扩展 `<~ ~>`（非 ISO 32000-1） | 7.3.4（扩展） | P3 | 读端无解析路径、写端类型为死代码；补读端、保留或删除需决策 |
+| 混合引用文件写出（trailer `/XRefStm`） | 7.5.8.4 | P3 | 读端已支持；是否需要写出「经典表 + xref 流」的混合引用文件未定（E7 仅覆盖增量更新） |
+| 权限模型（`/P` 位解释） | 7.6.3（权限行） | P2 | 认证已读取 `/P` 派生密钥；加密写出为非目标，是否公开只读权限位 API 需产品决策 |
+| Multiple Master 字体（MMType1） | 9.6.2.3 | P3 | 现有编码路径接受 MMType1（9.6.6），但字体程序/实例语义未建模，是否值得投入 |
+| FDF（Forms Data Format） | 12.7.7 | P3 | 与 AcroForm（E4）的数据交换场景是否在范围内 |
+| Measurement Properties | 12.9 | P3 | 与预印/工程文档场景绑定，等 F3 需求明确 |
+| Document Requirements | 12.10 | P3 | 标准定义的需求处理器生态已边缘化，是否投入 |
+| Page-Piece 字典 | 14.5 | P3 | 应用私有数据，通用字典透传已够用，是否需要类型化封装 |
+
+## 下一批建议增量（按依赖与收益排序）
+
+1. **C2 资源解析与页面内容 API**：形成「读一页内容」的资源/API 底座。
+2. **D3 JBIG2 解码**：真实扫描件（MRC）常见，独立于 C；先完成后端选型 spike。
+3. **D4 写端 Flate 压缩**：对生成文件体积收益最大，独立于 C。
+4. **D2 图像字典/内联图像读端**：依赖 C2，单独评审（不与 C2 合并为一个增量）。
+5. **B6 ToUnicode/CMap 完整性**：CJK 文本正确性的关键，可与 C/D 并行；启动前拆分 `cid_cmap.rs` 并确定数据许可。
+6. **D1 颜色空间读端模型**：为 Shading/Pattern/图像读端提供基础。
+
+并行边界：C2 依赖 C1（已完成）；D2 依赖 C2；D3/D4 只依赖 A；B6 只触及字体模块，可与 C/D 并行。
+
+## 真实样本与 fixtures backlog
+
+| fixture | 用途 | 来源/许可 | 体积 | 当前状态 |
 |---|---|---|---|---|
-| A 读得全 | 核心语法补全，真实世界 PDF 读入不失败 | 8 | 无 | ✅ |
-| B 文本可用 | 字体与文本提取 | 12 | A（Functions 为软依赖） | 🚧 |
-| C 图形完整 | 色彩/Pattern/Form/透明度规范完整 | 16 | A（Functions）、B（部分字体度量） | 🚧 |
-| D 交互与交换 | 导航/注解/表单/元数据基础可用 | 9 | C | ⬜ |
-| E 专门领域 | 需求驱动，不预设排期 | 15 | D | ⬜ |
+| `tests/fixtures/minimal-document.pdf` | 基础解析回归 | 待追溯 | 17 KiB | ✅ A6 接入（`tests/fixtures.rs`） |
+| `tests/fixtures/pdflatex-4-pages.pdf` | 页面树/内容流/文本提取 | 待追溯 | 25 KiB | ✅ A6 接入解析；C2 接入内容流 |
+| `tests/fixtures/annotated.pdf` | 注解/动作 | 待追溯 | 1.8 KiB | 已存在，未接入测试；E2/E3 接入 |
+| `tests/fixtures/xmp-metadata.pdf` | XMP/Info | 待追溯 | 2.1 KiB | 已存在，未接入测试；E5 接入 |
+| 待补：JBIG2 扫描件 | D3 | 需许可安全的公开样本或自行生成 | — | 未获取 |
+| 待补：JPX 图像 | D3 | 可使用公开测试图或生成工具（须登记许可） | — | 未获取 |
+| 待补：Shading/Pattern/透明组 | D5/D6 | 优先用 builder 生成合成样本，再补真实样本 | — | 未获取 |
+| 待补：AcroForm | E4 | 自行生成最小表单样本 | — | 未获取 |
+| 待补：CJK CID/Type 0 | B6 | 使用开源字体生成最小样本；ordering 数据许可须单独登记 | — | 未获取 |
+| 待补：增量更新/签名 | E7/F1 | 自行构造 v1 + update 样本 | — | 未获取 |
 
-## 阶段 A：读得全 —— 核心语法补全
-
-**目标**：真实世界 PDF 读入不再因过滤器/加密/函数缺失而失败（对应矩阵 P0 缺口）。
-
-**包含条目**：
-
-核心验收清单共 12 项。`9.6.5` Type 3 字体虽有读写与文本提取实现，但仍缺 CharProcs 执行与渲染，按 P2 扩展支线跟踪，不计入阶段 B 的核心验收项；其状态以 [FEATURE_MATRIX.md](./FEATURE_MATRIX.md) 为准。
-
-- [x] `7.4.4` LZWDecode（已完成：9–12 位码宽、CLEAR/EOD、KwKwK、`/EarlyChange`、Predictor、截断宽容；测试见矩阵证据）
-- [x] `7.4.6` CCITTFaxDecode
-  - [x] 位流与解码器基础设施：MSB-first 位读取、白/黑游程表、2D 模式表、按行打包输出
-  - [x] Group 3 1-D（`K=0`，Modified Huffman）与 EOL/填充位容忍
-  - [x] Group 3 2-D（`K>0`，EOL 后 1-D/2-D 标志位）
-  - [x] Group 4（`K<0`，T.6 纯二维，EOFB/RTC 终止）
-  - [x] 参数：`/Columns` `/Rows` `/EndOfLine` `/EncodedByteAlign` `/EndOfBlock` `/BlackIs1` `/DamagedRowsBeforeError`
-  - [x] 测试：手工码流（1-D/2-D/G4）+ libtiff 编码样本交叉验证 + 损坏/截断负向测试
-- [x] `7.4.8` DCTDecode（JPEG，同上）
-  - 已定义 PDF 语义的 `JpegBackend` trait，由 `ZuneJpegBackend` 适配器接入 `zune-jpeg 0.5`；Adobe APP14 CMYK 取反与 YCCK 逆变换在 PDF 语义层自实现；crates.io 镜像（`.cargo/config.toml` rsproxy sparse）已就绪，依赖可拉取。测试：4 色彩路径 + progressive + 损坏负向 + writer 过滤器回归 |
-- [x] `7.4.10` Crypt 过滤器（已完成：密码认证后按对象号/generation 解密 `/Crypt`；Identity 与 R4 AESV2 具名过滤器覆盖端到端测试；writer 不支持加密输出）
-- [x] `7.6.3` 标准安全处理器解密（已完成：ISO 32000-1 R2–R4，RC4-40/128、AESV2、用户/所有者密码、字符串/流与 `/EncryptMetadata false`；第三方密码原语封装在 `CryptoBackend` 适配器后。测试见矩阵证据。PDF 2.0 R5/R6、公钥安全处理器及加密写出不在本项支持范围）
-- [x] `7.10` Functions（Type 0/2/3/4；已完成：`functions/` 目录模块，纯 Rust 语义层求值 API，Type 0 采样多线性插值 / Type 2 指数插值 / Type 3 拼接 / Type 4 PostScript 计算器子集；测试见矩阵证据。写端新增 `builder::{Function, SampledFunction, ExponentialFunction, StitchingFunction, CalculatorFunction}`：`PdfBuilder::function` 注册句柄、`GraphicsState::with_transfer_function` 经 ExtGState `/TR` 引用；Type 0/4 写流对象（采样按 MSB-first 打包）、Type 2/3 写直接字典，Type 3 子函数递归生成且流子函数分配独立对象；未引用函数不写出、同一句柄复用一个对象、未知句柄或非法参数在 `build` 报 `WriteError::InvalidObject`。测试 `exponential_transfer_function_is_written_as_direct_dictionary`、`sampled_transfer_function_packs_bits_msb_first`、`sampled_function_rejects_non_byte_aligned_packing_errors`、`calculator_transfer_function_streams_code`、`stitching_transfer_recursively_writes_nested_functions`、`repeated_transfer_function_handle_reuses_one_object`、`registered_but_unused_function_is_not_written`、`unknown_transfer_function_handle_fails_the_build`、`invalid_function_parameters_fail_the_build`、集成往返 `builder_transfer_functions_roundtrip_through_parser`。剩余缺口：`/Order 3` 三次插值读端不支持；SMask `/TR` 与 `/TR2 /HT` 等其余 ExtGState 函数条目未接入；Shading/Pattern 尚未消费该写端模型）
-- [x] `附录 F` 线性化容忍验证（已完成：reader/tests.rs 手工构造线性化样本集——经典 xref 与 XRef 流 + ObjStm 两个变体、/H 两种合法形态、损坏 hint 流负向用例；线性化参数字典 /L /H /E /T 按实际布局定点迭代取真值。读端不利用 hint 流、不解读线性化字典，全部样本按普通 PDF 路径解析无错误、无告警回退，全部对象可解析、流可解码；测试见矩阵证据。写端线性化输出列入阶段 E）
-- [x] `7.2` 词法缺口：Lexer 空白集补 0x00（已完成：`Lexer::is_whitespace` 含 NUL，与 filters 对齐；测试 `nul_byte_treated_as_whitespace`）
-
-**依赖**：无（起始阶段）。
-
-**验收标准**：
-
-- 构造/收集含 LZW、CCITT、DCT、Crypt 过滤器的 PDF 样本，可完整解析且解码字节正确；
-- 线性化 PDF 样本集按普通路径读取无错误；
-- `7.6.3` 已按 ISO 32000-1 实现 R2–R4；PDF 2.0 R5/R6 与公钥处理器作为未实现范围明确记录；
-- writer 对加密文档明确返回错误，不输出解密内容并保留原 `/Encrypt` 字典的无效文档；
-- `cargo test` 全绿，新增过滤器均有正/负向测试。
-
-## 阶段 B：文本可用 —— 字体与文本
-
-**目标**：能正确读写含 TrueType/CID 字体的文档并提取文本（对应矩阵 P1）。
-
-**包含条目**：
-
-- [ ] `9.6.2` Type 1 简单字体补全（进行中：读端已能解析直接/间接 `/Widths` 与 `/FontDescriptor` 指标，并为 Courier、Helvetica/Times 四种样式、Symbol、ZapfDingbats 提供对应内建编码宽度；`Document::type1_program` 可解析嵌入 `/FontFile` 程序的明文头、内建编码、eexec 段与解密后的 CharStrings/Subrs；`Type1FontProgram::glyph` 解释 CharString 数值编码与路径操作符（hsbw/sbw、moveto/lineto/curveto、closepath、callsubr/return、div），并把 seac 经 StandardEncoding 字符码递归展开为基字形与平移后的重音字形轮廓（嵌套上限 10），输出字宽、side bearing 与绝对坐标路径；flex 的 `callothersubr`/`pop` 序列按七点协议展开为两段三次曲线（进入/退出可跨越 subr 边界，`pop pop setcurrentpoint` 收尾，支持 rmoveto/hmoveto/vmoveto 点形式；提示替换 `callothersubr 3` 按 OtherSubrs 语义读取单个 hint code 并登记一个待 `pop` 结果，hint 本身不应用，参数个数、缺少 `pop`、flex 期间调用等错误明确报出，其他过程明确报错）；hinting/渲染仍待实现；字体嵌入与子集化已实现（见 `9.6.4`）；写端 `Font::with_widths` 按 Table 111 写出 `/FirstChar`/`/LastChar`/`/Widths`（非空、单字节范围、有限非负校验），所有非标准 14 简单字体缺宽度时报 `InvalidObject`（无论是否嵌入程序；标准 14 可省略），描述符按 Table 122 补齐必需项（`simple_font_writes_first_last_char_and_widths`、`widths_empty_list_is_invalid_object`、`widths_beyond_single_byte_range_are_invalid_object`、`widths_negative_nan_or_infinite_are_invalid_object`、`embedded_non_standard_font_without_widths_is_invalid_object`、`non_embedded_non_standard_font_without_widths_is_invalid_object`、`embedded_standard_14_font_without_widths_still_builds`、`font_descriptor_defaults_fill_table_122_required_entries`、`font_descriptor_explicit_values_are_not_overridden`、`subset_embedded_font_defaults_font_name_to_tagged_base_font`、集成往返 `builder_widths_roundtrip_through_parser`；读端 `Document::type1c_program` 解析简单字体 `/FontFile3` `/Subtype /Type1C` 的 name-keyed CFF 为 `RawCffFont`，`RawCffFont::glyph_name`/`glyph_for_name` 经 charset（GID→SID）与预定义标准字符串或 String INDEX 解析字形名，预定义 charset 0/1/2 与缺省 ISOAdobe 均展开（超出预定义表的多余字形无名），CID-keyed 程序、非 `/Type1C` 子类型与畸形 CFF 明确报错，测试 `resolves_name_keyed_glyph_names_from_charset_and_string_index`、`resolves_glyph_names_from_predefined_and_default_charsets`、`name_lookup_is_unavailable_for_cid_keyed_programs`、`type1c_program_resolves_names_widths_and_outlines`、`type1c_program_resolves_default_and_predefined_charsets`、`type1c_program_rejects_cid_keyed_wrong_subtype_and_malformed_programs`、集成往返 `builder_embeds_name_keyed_cff_and_reader_resolves_glyph_names`））
-- [ ] `9.6.3` TrueType 字体（进行中：读端解析 SFNT 目录、基础度量表、Unicode cmap format 0/2/4/6/8/10/12/13 和 loca/glyf 字形记录，可查询水平 advance、Unicode→glyph ID，并递归展开复合字形及其仿射变换/点对齐；简单字形轮廓端点、指令、标志与坐标解码已实现；`vhea`/`vmtx` 垂直度量已解析，`TrueTypeFont::vertical_advance` 与 `top_side_bearing` 支持 numberOfVMetrics 末尾复用规则与尾部 TSB 数组，缺失表时返回 `None`；字体与 CIDFontType2 的集成见 9.7.4；`Document::simple_font_encoding` 已覆盖 TrueType/MMType1/Type1 的 `/Encoding`（预定义名、`/BaseEncoding`、`/Differences`），`reader/text` 据此完成 TrueType 简单字体的 Unicode 文本提取；`TrueTypeFont::unicode_for_glyph` 支持反转 cmap 查询；`TrueTypeFont::builtin_encoding` 一次性构建 256 项单字节内建编码表（字符码→cmap glyph→反向 Unicode），`reader/text` 在 TrueType 简单字体缺 `/Encoding` 且嵌入 `/FontFile2` 可解析时优先使用该表，程序缺失/非法时回退预定义编码；cmap 选择支持 Microsoft Symbol `(3,0)` 子表（format 0/4/6/8/10/12/13，优先级低于所有 Unicode 子表），符号字体直查失败时依次按 `0xF000`/`0xF100`/`0xF200` 偏移回退；format 8 按 `is32` 位图把被标记的 16 位值当作 32 位码高半部而不单独映射、其余码走与 format 12 相同的组映射，format 10 按 `startCharCode`/`numChars` 查询 32 位修剪数组，两者的组/码范围与字形 ID 均校验且限制在 Unicode 范围内，`reader/text` 优先采用非 PUA 内建字符、PUA 字符让位于预定义编码；format 2 高字节映射与 format 13 多码对一也已解析（format 13 反向映射取最小码）；读端 `Document::truetype_font` 同时接受 `/FontFile3` `/Subtype /OpenType`（与 `/FontFile2` 共用程序解析；缺 `/Subtype` 或为 `CIDFontType0C` 时明确报错）：SFNT 目录新增 `OTTO` flavor，`loca`/`glyf` 同时缺失时按 CFF-flavored OpenType 处理——仍解析 `cmap`/`hmtx`/`vhea`/`vmtx` 供文本提取与度量查询，`glyph` 轮廓返回 `None`，二者只有其一存在则报错；测试 `parses_cff_flavored_opentype_without_glyph_tables`、`opentype_without_glyph_tables_exposes_vertical_metrics`、`rejects_opentype_without_cmap`、`rejects_opentype_with_only_one_glyph_table`、`rejects_truetype_flavor_without_glyph_tables`、`truetype_font_accepts_opentype_fontfile3_program`、`truetype_font_still_accepts_fontfile2_program`、`truetype_font_rejects_fontfile3_type1c_program`、`truetype_font_rejects_fontfile3_program_without_subtype`；写端新增 `FontProgram::OpenType` 并按 SFNT flavor 标签分流（ISO 32000-1 §9.9）：`OTTO` 写 `/FontFile3` 且流 `/Subtype /OpenType`、字体 `/Subtype` 为 `Type1`；`0x00010000` 与 `true` 写 `/FontFile2` 并附 `Length1`、字体 `/Subtype` 为 `TrueType`；未知 flavor（含 `typ1`、`OTF `）与不足 4 字节的程序在 `build` 报 `WriteError::InvalidObject`，`with_subset_glyphs`/`with_subset_type1_glyphs`/`with_subset_cff_glyphs` 均拒绝 OpenType 程序；CFF 表内容未校验、该路径不解析轮廓；测试 `opentype_cff_program_writes_fontfile3_with_opentype_subtype`、`opentype_truetype_program_writes_fontfile2_with_length1`、`opentype_program_accepts_apple_true_flavor`、`opentype_program_rejects_unsupported_sfnt_flavor`、`opentype_program_rejects_subset_requests`、集成往返 `builder_opentype_truetype_program_roundtrips_through_parser`、`builder_opentype_cff_program_roundtrips_through_parser`；测试 `builtin_encoding_maps_codes_through_cmap`、`selects_symbol_only_format4_cmap`、`prefers_unicode_format4_over_symbolic_format4`、`builtin_encoding_maps_codes_through_symbolic_cmap`、`builtin_encoding_maps_codes_through_f100_symbolic_cmap`、`builtin_encoding_maps_codes_through_f200_symbolic_cmap`、`builtin_encoding_prefers_f000_offset_over_f100`、`builtin_encoding_ignores_offsets_for_unicode_cmap`、`maps_high_byte_subheaders_with_format2`、`maps_many_codes_to_one_glyph_with_format13`、`prefers_format12_over_format13`、`prefers_format4_over_format2`、`private_use_builtin_loses_to_encoding`、`truetype_without_encoding_falls_back_when_program_is_missing`、`truetype_without_encoding_falls_back_when_program_is_invalid`、`truetype_without_encoding_extracts_through_builtin_cmap`、`maps_mixed_16_and_32_bit_codes_with_format8`、`maps_trimmed_32_bit_array_with_format10`、`prefers_format12_over_format8_and_format8_over_format4`、`rejects_invalid_format8_and_format10_tables`；hinting 与渲染仍待实现）
-- [ ] `9.6.4` 字体子集化（进行中：写端 `FontProgram::subset_tag_for_name` 按字体名称、程序字节与子集列表做 FNV-1a 哈希并按 26 进制展开为确定性六字母标签（名称参与哈希，同一程序配不同 BaseFont 名称会得到不同标签；`subset_tag_includes_font_name`、`subset_tag_with_discriminator_separates_different_subsets`；不同子集得到不同 `/BaseFont`，`subset_glyph_lists_do_not_deduplicate_fonts` 同时断言名称不同），`Font::subset` 标记后 `assemble_document` 把 `/BaseFont` 写为 `TAG+Name`；未嵌入程序时标记不产生前缀，字体去重键纳入程序与子集标志。读端 `strip_subset_tag` 剥离六字母前缀，`default_encoding`、标准 14 判定与内建字宽回退均按剥离后的名称工作。测试 `subset_font_prefixes_base_font_with_six_letters`、`subset_tag_is_deterministic_and_content_dependent`、`subset_without_font_program_keeps_base_font`、`strip_subset_tag_removes_only_six_letter_prefixes`、`subset_prefix_keeps_default_encoding_and_standard14_metrics`、`subset_font_roundtrips_through_parser`。另新增独立 TrueType 子集化工具 `reader::font::subset_truetype(data, glyph_ids)` 及返回旧→新 GID 映射的 `subset_truetype_with_mapping`（映射覆盖 glyph 0、请求字形与复合组件闭包，供 CIDFontType2 重写 `/CIDToGIDMap`；`reports_old_to_new_glyph_mapping`）：始终保留 glyph 0、递归纳入复合组件闭包、按旧 gid 升序重编号；重写 `maxp`/`loca`/`glyf`（patch 组件 glyphIndex）/`hmtx`/`hhea`/`cmap`/`head`（indexToLocFormat 与 checkSumAdjustment），重建 4 字节对齐目录与表校验和；`cmap` 始终保留 format 4（仅存活 BMP 码，Unicode BMP 或 Microsoft Symbol 编码），源 cmap 为 format 12/13 且补充平面映射仍存活时追加 format 12 子表（Windows 全字符面 `(3,10)`，符号字体 `(3,0)`；format 12 重复 BMP 条目以保证首选子表可独立查询）；源同时含 `vhea`/`vmtx` 时按新 gid 重建垂直度量（`numberOfVMetrics = min(源值, 子集字形数)`，重新生成尾部 TSB 数组，并按子集保留字形重算 `advanceHeightMax`/`minTopSideBearing`/`minBottomSideBearing`/`yMaxExtent` 四个汇总字段——逐字形读重建后 vmtx 与 glyf 头 yMin/yMax，空字形按零 bbox，越界饱和 int16），缺一即丢弃；保留 head/hhea/maxp/hmtx/cmap/loca/glyf/vhea/vmtx/name/OS/2/cvt /fpgm/prep/gasp，丢弃 post/kern/GDEF/GSUB/GPOS 等旧 gid 敏感表。测试 `subsets_simple_glyph_and_remaps_cmap`、`includes_composite_component_closure`、`rejects_out_of_range_glyphs_and_handles_empty_request`、`rebuilds_aligned_directory_and_checksums`、`writes_format4_segments_and_search_parameters`、`drops_tables_that_depend_on_original_glyphs`、`preserves_short_loca_format`、`preserves_symbolic_cmap_encoding`、`supports_maxp_version_half`、`preserves_supplementary_cmap_in_format12`、`omits_supplementary_mappings_for_dropped_glyphs`、`preserves_vertical_metrics_for_subset_glyphs`、`drops_incomplete_vertical_metrics`、`rejects_malformed_vertical_metrics`、`recomputes_vertical_summary_fields_from_retained_glyphs`、`recomputes_vertical_summaries_for_empty_request`、`ignores_removed_advances_when_recomputing_vertical_summaries`。另新增 Type 1 子集化工具 `reader::font::subset_type1(data, glyph_names)`（`reader/font/type1_program/subset.rs`）：保留 `.notdef` 与请求字形，删除其余 `/CharStrings` 条目（按名称到终结符的完整字节区间），保留明文头、Private 字典其余条目与全部 `/Subrs`，仅重新加密 `eexec` 层（确定性 4 字节零前缀、R=55665），再补 512 零守卫与 `cleartomark`；保留字形按 `seac` 操作数经 StandardEncoding 递归补齐基/重音组件闭包（含嵌套），只解释被保留字形，组件名无法映射或组件缺失时报错；未知字形、空 `/CharStrings`、条目无法安全定位时报 `FontError::Invalid`。测试 `subset_keeps_notdef_and_requested_glyph`、`subset_preserves_cleartext_header`、`subset_preserves_private_dictionary_entries`、`rejects_unknown_glyph`、`rejects_program_with_empty_charstrings`、`empty_request_keeps_only_notdef`、`subset_output_is_smaller_than_source`、`subsets_unencrypted_len_iv_minus_one`、`malformed_inputs_return_errors_without_panicking`、`subsets_seac_component_closure`、`rejects_seac_component_missing_from_charstrings`、`dropped_seac_glyph_does_not_require_components`、`subsets_nested_seac_component_closure`。写端 builder 已接入 TrueType 裁剪：`Font::with_subset_glyphs(&[gid])` 置子集标记并携带字形列表，`assemble_document` 对 `FontProgram::TrueType` 调用 `subset_truetype` 后写 `/FontFile2`（`/Length` 与流内容均为裁剪结果，`/BaseFont` 标签按名称 + 原程序 + 子集列表哈希）；非 TrueType 程序、缺少程序或越界 gid 返回 `WriteError::InvalidObject`，字体去重键纳入字形列表。测试 `subset_glyphs_rewrite_truetype_fontfile2`、`subset_glyphs_reject_non_truetype_programs`、`subset_glyphs_without_font_program_is_invalid`、`subset_glyphs_invalid_glyph_id_is_invalid_object`、`subset_glyph_lists_do_not_deduplicate_fonts`、集成往返 `builder_truetype_subset_roundtrips_through_parser`（裁剪后 glyph_count 与映射恢复、字体程序变短、文本提取还原）。Type 1 子集已接入 builder：`Font::with_subset_type1_glyphs(&[name])` 携带字形名列表（与 `subset_glyphs` 互斥），`assemble_document` 对 `FontProgram::Type1` 调用 `subset_type1` 后写 `/FontFile`；无程序/非 Type 1 程序/未知字形名/两类子集混用返回 `WriteError::InvalidObject`，去重键纳入字形名列表；测试 `type1_subset_glyphs_rewrite_fontfile`、`type1_subset_glyphs_without_font_program_is_invalid`、`type1_subset_glyphs_reject_non_type1_programs`、`type1_subset_glyphs_unknown_glyph_is_invalid_object`、`subset_glyphs_and_type1_subset_glyphs_cannot_be_combined`、`type1_subset_glyph_lists_do_not_deduplicate_fonts`、集成往返 `builder_type1_subset_roundtrips_through_parser`。CFF 子集工具 `reader::font::subset_cff(data, cids)`（`cff/subset/{mod,dict}.rs`）已实现并接入 builder：仅支持 CID-keyed CFF（含 ROS；非 CID-keyed、预定义 charset 0..=2、Top DICT 层 Private 按错误拒绝），CID 0 恒保留、GID 按保留 CID 升序重编号，charset 重写为 format 0、FDSelect 重写为 format 3、FDArray 只保留被引用 FD 并重编号，保留 FD 的 Private/Local Subrs 整组保留但重写内部偏移，Name/String/Global Subr INDEX 整组保留（subr 编号保持有效），Top DICT 偏移按新布局重算、未触及条目逐字节拷贝；`CidFont::with_subset_cids(&[u16])` 支持 CIDFontType0 + `FontProgram::CFF`（写裁剪后的 `/FontFile3`）与 CIDFontType2 + `FontProgram::TrueType`（按 CID→GID（显式 `/CIDToGIDMap` 或 Identity）取出 gid 后用 `subset_truetype_with_mapping` 裁剪 `/FontFile2`，再按旧→新映射重建 `/CIDToGIDMap`：保留 CID 指向子集 gid、未保留 CID 归零、长度覆盖最大保留 CID；Identity 源字体同样写出显式映射，因为子集重排后恒等关系不再成立），Type 0 与 CIDFont 的 `/BaseFont` 一致加六字母标签，描述符已提供的 `/CIDSet` 按子集交集裁剪（CID 0 恒保留），与 `with_predefined_encoding` 可共存；子类型与程序不匹配、CID 超出显式 `/CIDToGIDMap`、TrueType 子集化失败均报 `WriteError::InvalidObject`；测试 `subset_keeps_only_notdef_for_empty_request`、`subset_retains_requested_cids_and_renumbers_gids`、`subset_drops_unreferenced_font_dicts`、`subset_preserves_subroutines_and_outlines`、`subset_rejects_unknown_cid`、`subset_rejects_out_of_range_cid`、`subset_rejects_non_cid_keyed_programs`、`subset_rejects_cid_keyed_program_with_predefined_charset`、`subset_does_not_panic_on_malformed_input`、`subset_handles_fd_select_format_0_source`、`cid_subset_rewrites_fontfile3_with_tagged_base_font`、`cid_subset_cids_require_matching_program`、`cid_subset_cids_require_cff_program`、`cid_subset_unknown_cid_is_invalid_object`、`cid_subset_cids_do_not_deduplicate_fonts`、`cid_subset_trims_cid_set`、`cid_subset_coexists_with_predefined_encoding`、集成往返 `builder_cid_font_type0_subset_roundtrips_through_reader`；CIDFontType2 子集测试 `cid_font_type2_subset_rewrites_fontfile2_and_cid_to_gid_map`、`cid_font_type2_subset_rewrites_identity_glyph_mapping`、`cid_font_type2_subset_rejects_cid_outside_explicit_map`、`cid_font_type2_subset_reports_truetype_errors`、集成往返 `builder_cid_font_type2_subset_roundtrips_through_parser`。缺口：CFF2 子集化未实现；name-keyed（非 CID-keyed）CFF 子集工具 `reader::font::subset_cff_type1c(data, glyph_names)`（`cff/subset/{type1c,strings}.rs`）已实现并接入 builder——GID 0 恒保留、按原 GID 升序重编号，字形名经 charset（GID→SID）与 String INDEX 解析，支持预定义 charset 0/1/2、缺省 ISOAdobe 与显式 format 0/1/2，charset 统一重写为 format 0 并保留 SID，CharStrings 仅含保留字形，Top DICT 的 charset/Private/CharStrings 偏移重算，Private/Local Subrs 整组保留（Subrs 相对偏移重写），Global Subr/Name/String INDEX 整组保留，Top DICT `/Encoding` 删除（重编号后旧 code→GID 失效），带 ROS/FDArray/FDSelect 的程序拒绝并提示改用 `subset_cff`；`Font::with_subset_cff_glyphs(&[name])` 对 `FontProgram::CFF` 写裁剪后的 `/FontFile3`（`/Subtype /Type1C`），三类子集列表互斥、非 CFF 程序/无程序/未知字形名报 `WriteError::InvalidObject`；测试 `type1c_subset_keeps_notdef_for_empty_request`、`type1c_subset_retains_named_glyphs_in_source_gid_order`、`type1c_subset_rewrites_charset_to_format_zero`、`type1c_subset_output_reparses_with_raw_layer`、`type1c_subset_output_is_smaller`、`type1c_subset_drops_top_dict_encoding`、`type1c_subset_handles_explicit_charset_format_zero`、`type1c_subset_handles_explicit_charset_format_one`、`type1c_subset_handles_explicit_charset_format_two`、`type1c_subset_handles_predefined_iso_adobe_charset`、`type1c_subset_handles_predefined_expert_charset`、`type1c_subset_handles_predefined_expert_subset_charset`、`type1c_subset_defaults_missing_charset_to_iso_adobe`、`type1c_subset_preserves_local_subrs`、`type1c_subset_rejects_unknown_glyph_name`、`type1c_subset_rejects_cid_keyed_program`、`type1c_subset_does_not_panic_on_malformed_input`、`cff_subset_glyphs_rewrite_fontfile3`、`cff_subset_glyphs_require_cff_program`、`cff_subset_glyphs_unknown_glyph_is_invalid_object`、`cff_subset_glyphs_cannot_be_combined_with_other_subset_lists`、`cff_subset_glyph_lists_do_not_deduplicate_fonts`；预定义 charset 的 CID-keyed 程序与 Top DICT 层 Private 仍未支持；字形列表需调用方提供（未按文本自动收集）；Type 1 子集保持 `/CharStrings N dict` 容量值不变（PostScript 语义合法））
-- [ ] `9.6.5` Type 3 字体（进行中：读端 `Document::type3_font` 解析 `/FontBBox`、`/FontMatrix`、`/CharProcs`（字形程序名集合）、`/FirstChar`/`/LastChar`/`/Widths`（原始 glyph-space 宽度，`width_for` 按码查询）、`/Encoding` 与 `/Resources`（Table 112；解析期原样保存直接字典或间接引用，`Type3Font::resources(document)` 查询时解引用一层返回 `Option<Dict>`，缺失为 `None`，非字典或不可解析报 `FontError::Invalid`）；`Type3Font::glyph_metrics` 按需执行 CharProcs 首操作符（须为 `d0`/`d1`），返回声明宽度与可选 glyph 空间 bbox，过滤器/间接流走标准解码路径，畸形流报 `FontError::Invalid`，编码未分配字形名返回 `None`；`/Widths` 与 d0/d1 宽度为独立数据源不做一致性校验；测试 `glyph_metrics_reads_d0_declared_width`、`glyph_metrics_reads_d1_declared_width_and_bbox`、`glyph_metrics_coexists_with_widths_entry`、`glyph_metrics_decodes_filtered_and_indirect_char_procs` 及六项负向用例。`Document::simple_font_encoding` 接受 Type3（缺 `/Encoding` 报错；Encoding 字典缺 `/BaseEncoding` 时以 StandardEncoding 近似），`reader/text` 经该编码解码 Type3 文本。测试 `type3_font_parses_font_matrix_bbox_widths_and_char_procs`、`type3_font_requires_char_procs`、`extracts_type3_differences_text`、`extracts_type3_predefined_encoding_text`、`type3_encoding_without_base_encoding_uses_differences`。写端新增 `builder::Type3Glyph`（字符码、字形名、glyph-space 宽度、CharProcs 字节）与 `builder::Type3Font`（`/FontBBox` 与 `/FontMatrix` 默认值/链式设置、字形列表），`Font::type3(size, font)` 以字形列表构造 `/Differences` 编码；`assemble_document` 写出 `/Subtype /Type3` 字体字典与各 CharProcs 流（对象号按字形列表顺序分配），`/Widths` 覆盖 FirstChar..=LastChar 且缺号写 0，不含 `/BaseFont`、`/FontDescriptor` 与字体程序；`Type3Font::with_resources(Value)` 可设置 `/Resources`（直接字典或间接引用原样写出，其他类型报 `InvalidObject`，未设置时不写该条目）；嵌入字体程序、请求 `subset_glyphs`、空字形列表、重复字符码/名称或缺失 `/Encoding` 时 `build` 返回 `WriteError::InvalidObject`。测试 `type3_font_writes_char_procs_widths_and_encoding`、`type3_font_requires_glyphs`、`type3_font_rejects_duplicate_codes_or_names`、`type3_font_rejects_embedded_font_program`、`type3_font_rejects_subset_glyphs`、`type3_font_reads_direct_resources`、`type3_font_resolves_indirect_resources`、`type3_font_resources_missing_returns_none`、`type3_font_resources_rejects_non_dict_and_unresolved`、`type3_font_writes_resources`、`type3_font_writes_indirect_resources_as_is`、`type3_font_omits_resources_when_unset`、`type3_font_rejects_non_dict_resources`、`type3_font_resources_round_trip`、集成往返 `builder_type3_font_roundtrips_through_extractor` 与 `builder_type3_glyph_metrics_roundtrip_with_text_extraction`（写入→解析→d0/d1 指标与文本提取）；写端校验每个字形宽度有限且非负、`/FontBBox`/`/FontMatrix` 各分量有限，非法值报 `WriteError::InvalidObject`（`type3_font_rejects_invalid_glyph_widths`、`type3_font_rejects_non_finite_bbox_or_matrix`）。缺口：渲染未支持（本库为语法层）；`/Resources` 仅解析为字典（不执行/不校验资源名，仅解引用一层）；写端 `Value::Ref` 原样写出、目标对象由调用方保证；CharProcs 内的每字形资源字典未写出；无 BaseEncoding 的码位归属为近似）
-- [x] `9.6.6` 字符编码补全（已完成：Type 1 读端识别 Standard/WinAnsi/MacRoman/Symbol/ZapfDingbats，支持 CP1252/MacRoman Unicode 映射、Standard/Symbol/ZapfDingbats glyph name 查询及完整 Adobe Glyph List 2.0→Unicode 映射；写端 `PdfBuilder` 选择预定义编码名、自建 `/BaseEncoding`+`/Differences` 或省略 `/Encoding`，`text` 按编码反向查表转为单字节码——可打印 ASCII 保持字面量、其余输出十六进制字符串，无法表示的字符替换为 `?`，未知编码名在 build 阶段报 `WriteError::InvalidObject`（`unknown_named_encoding_fails_build`、`unknown_custom_base_encoding_fails_build`、`known_predefined_encoding_names_build`）；测试见矩阵证据）
-- [ ] `9.7.6` Type 0 复合字体 / CIDFontType0（进行中：Type 0→CIDFontType2/CIDFontType0 均可读取；Identity-H/V 与嵌入 CMap（含 Identity-H/V 基座的 usecmap 继承）的字符码→CID 映射已实现；CIDFontType0 解析 `CIDSystemInfo`（Registry/Ordering/Supplement）、W/DW（与 CIDFontType2 共用解析器，重复/重叠区间以最后定义为准）、`DW2`/`W2` 垂直度量（`DW2` 为 `[v_y w1_y]`、默认 `[880 -1000]`；`W2` 支持数组三元组与区间两种形式，缺省项按水平宽度的一半回退 `v_x`；`parses_vertical_metrics_from_dw2_and_w2`、`defaults_vertical_metrics_and_uses_half_width_for_vx`、`overlapping_w2_entries_use_the_last_value`、`rejects_invalid_vertical_metrics`）与 FontDescriptor，`CidFontType0::system_info` 暴露字符集合标识，解码 FontFile3（CIDFontType0C/OpenType）程序并经 ToUnicode 接入文本提取；CFF 轮廓解析已实现（`CidFontType0::cff_outline_parser` 经 `ttf-parser` 适配器提供 glyph 轮廓与宽度）；写端 `builder::CidFontType0` 子类型可经 `PdfBuilder::cid_font` 生成 Type 0 + CIDFontType0 字典与 `/CIDSet` 描述符，写端 `CidFont::with_font_program(FontProgram::CFF)` 可嵌入 `/FontFile3`（`/CIDFontType0C`），往返见 `builder_cid_font_type0_embeds_cff_program_roundtrip`；CFF-flavored OpenType（`OTTO`）可经 `FontProgram::OpenType` 写 `/FontFile3` `/Subtype /OpenType`（`opentype_cff_program_writes_opentype_fontfile3_for_cid_type0`、集成往返 `builder_cid_font_type0_opentype_roundtrips_through_parser`），CIDFontType0 收到 TrueType-flavored OpenType 时报 `InvalidObject`（`opentype_cid_font_rejects_mismatched_flavor`）；预定义名册 CMap 的名称引用解析已由 9.7.5 实现；CFF 子集化已实现（`CidFont::with_subset_cids` → `subset_cff` 裁剪 `/FontFile3` 并按交集裁剪 `/CIDSet`，详见 9.6.4），往返见 `builder_cid_font_type0_subset_roundtrips_through_reader`）
-- [ ] `9.7.4` CIDFontType2（进行中：读端解析 `CIDSystemInfo`（Registry/Ordering/Supplement）、CIDToGIDMap Identity/流映射、W/DW 宽度（`/W` 区间/数组重复或重叠时以最后定义为准，`overlapping_w_entries_use_the_last_value`）、`DW2`/`W2` 垂直度量（`default_vertical_metrics`/`vertical_metrics_for_cid`；`DW2` 默认 `[880 -1000]`，`W2` 数组/区间共用解析器，测试 `parses_vertical_metrics_from_dw2_and_w2`、`defaults_vertical_metrics_and_uses_half_width_for_vx`、`rejects_invalid_vertical_metrics`），并可加载 CIDFont 的 FontFile2 TrueType 程序；`CidFontType2::system_info` 暴露字符集合标识；已接入 Type 0 父字体与受支持的 CMap 编码；经 `DocumentWriter` 写入→重新解析→文本提取的往返见 `type0_text_roundtrips_through_writer_and_extractor`。写端 `builder::CidFont`（子类型、`CidSystemInfo`、描述符含 `/CIDSet` 并按 Table 122 补齐必需项、`DW`/`W`/`DW2`/`W2`）经 `PdfBuilder::cid_font` 注册，生成 Type 0 父字体 + CIDFont 后代 + 描述符 + CIDSet 流对象；`PdfBuilder::text_cid` 按 Identity-H 输出 2 字节 CID 十六进制串；`CidFont::with_font_program(FontProgram::TrueType)` 写入 `/FontFile2`，TrueType-flavored OpenType 同样写 `/FontFile2` 并附 `Length1`（`opentype_truetype_program_writes_fontfile2_for_cid_type2`），CFF-flavored 程序报 `InvalidObject`（`opentype_cid_font_rejects_mismatched_flavor`）；读端往返见 `builder_cid_font_descriptor_roundtrips_through_parser`、`builder_cid_font_type2_embeds_truetype_program_roundtrip`；写端 `CidFont::with_cid_to_gid_map` 对 CIDFontType2 写出按 CID 索引的 2 字节大端 `/CIDToGIDMap` 流（Table 117 要求同时嵌入 TrueType 程序，缺 `FontProgram::TrueType` 时报 `InvalidObject`），其他子类型报 `InvalidObject`，测试 `cid_font_type2_writes_cid_to_gid_map_stream`、`cid_to_gid_map_requires_cidfonttype2`、`cid_to_gid_map_requires_embedded_truetype_program`、`cid_font_descriptor_defaults_fill_table_122_required_entries`；写端垂直度量经 `CidFont::with_default_vertical_metrics`/`with_vertical_metrics` 写出 `/DW2`/`/W2`（与默认值相同时省略 `/DW2`，非有限值与倒序区间报 `InvalidObject`），测试 `cid_font_writes_dw2_and_w2_vertical_metrics`、`cid_font_omits_dw2_and_w2_by_default`、`cid_font_rejects_invalid_vertical_metrics`、集成往返 `builder_cid_font_vertical_metrics_roundtrip_through_parser`；写端 `CidFont::with_subset_cids` 已支持 CIDFontType2 + TrueType：按 `/CIDToGIDMap`（缺省 Identity）把请求 CID 转为 gid，经 `subset_truetype_with_mapping` 裁剪 `/FontFile2`，再以旧→新映射重建 `/CIDToGIDMap`（Identity 源亦写出显式映射），`/CIDSet` 裁剪与六字母 `/BaseFont` 标签复用既有逻辑；CID 超出显式映射、子类型与程序不匹配、TrueType 子集化失败均报 `WriteError::InvalidObject`，测试 `cid_font_type2_subset_rewrites_fontfile2_and_cid_to_gid_map`、`cid_font_type2_subset_rewrites_identity_glyph_mapping`、`cid_font_type2_subset_rejects_cid_outside_explicit_map`、`cid_font_type2_subset_reports_truetype_errors`、集成往返 `builder_cid_font_type2_subset_roundtrips_through_parser`（重解析后 CID→新 gid 与文本提取一致））
-- [ ] `9.7.5` CMap（进行中：Identity-H/V 和嵌入 CID 编码 CMap 的 codespace/cidchar/cidrange 已实现；嵌入 CMap 的 usecmap 继承支持 Identity-H/V 基座，覆盖项优先、后定义 codespace 替换并裁剪继承映射、WMode 继承；预定义 CJK CMap 已实现（紧凑近似，非完整 Adobe ordering 表：Adobe-GB1/CNS1/Japan1/Korea1 及 2 字节恒等映射的 UniGB-UCS2-H），经 `resolve_predefined_cmap` 与 `CidCMap::from_predefined` 集成到 Type 0 解析流程，`/Encoding` 名称引用按名册回退解析（`resolves_uni_gb_ucs2`、`resolves_predefined_encoding_names_by_reference`）。写端 `builder::CidEncoding`（`wmode` + 字符码→CID，支持 1..=4 字节码：`mapping` 为 2 字节、`mapping_bytes` 为任意 1..=4 字节，另可 `with_cmap_name`/`with_usecmap`）与 `CidFont::with_encoding`，`PdfBuilder::text_codes`/`text_codes_unicode` 按字符码写 2 字节十六进制并让 ToUnicode 以字符码为键，`text_code_bytes`/`text_code_bytes_unicode` 写任意 1..=4 字节源码；`assemble_document` 生成嵌入 CMap 流（`/CMapType 1`、`/WMode`、`/CMapName` 默认 `/Custom-H|V` 可覆盖、`usecmap` 基座写在 `/WMode` 之后 codespace 之前，仅 2 字节码时 codespace 保持 `<0000> <FFFF>`、存在自定义码长时按「长度 + 实际连续码区间」分组并拒绝跨长度前缀歧义，字符码与 CID 同时连续递增时写 `cidrange`、其余 `cidchar`、每节 100 条）并作为 Type 0 `/Encoding` 引用；构建期校验 wmode、空映射、`/CMapName` 合法性与 `usecmap` 基座（须为 Identity-H/V 或名册已知名称且不得同名）。写端亦支持按名称引用预定义 CMap：`CidFont::with_predefined_encoding` 把 `/Encoding` 写为名册名称引用（不生成嵌入流，与 `with_encoding` 互斥，未知名称含竖排 `-V` 变体在 `build` 报 `WriteError::InvalidObject`），`PdfBuilder::text_predefined_unicode` 把 Unicode 码位按 2 字节大端写入并登记 ToUnicode（补充平面与目标 2 字节码空间外的字符跳过）；测试 `predefined_cid_encoding_writes_name_reference_without_cmap_stream`、`predefined_cid_encoding_rejects_unknown_and_vertical_names`、`predefined_cid_encoding_conflicts_with_custom_encoding`、`predefined_cid_encoding_unicode_text_encodes_ucs2_and_registers_to_unicode`、`predefined_cid_encoding_unicode_text_skips_codes_outside_codespace`、集成往返 `builder_predefined_cmap_encoding_roundtrips_through_extractor`（写入"中文GB"→解析→提取还原）。测试 `custom_cid_encoding_writes_embedded_cmap_with_ranges_and_chars`、`custom_cid_encoding_wmode_one_is_vertical`、`text_codes_writes_two_byte_big_endian_hex`、`cid_encoding_rejects_invalid_wmode_and_empty_mapping`、`builder_custom_cid_encoding_roundtrips_through_extractor`、`custom_cmap_name_replaces_default`、`usecmap_identity_base_is_written_before_codespace_and_inherited`、`usecmap_roster_base_is_written_and_inherited`、`one_byte_codes_write_codespace_and_decode`、`three_and_four_byte_codes_write_codespace_and_decode`、`mixed_lengths_decode_by_longest_match`、`to_unicode_keys_follow_code_length`、`usecmap_with_custom_code_length_keeps_explicit_codespace`、`invalid_cmap_name_usecmap_base_code_length_and_conflict_are_rejected`、集成往返 `builder_multibyte_cid_cmap_roundtrips_through_extractor` 与 `builder_usecmap_and_custom_cmap_name_roundtrip`。缺口：完整 Adobe ordering 数据未实现；`text_code_bytes*` 对非法长度条目静默跳过；`usecmap` 基座仅限 Identity-H/V 与名册已知名称，且本 CMap 仍写完整 codespace 与映射）
-- [ ] `9.10.3` ToUnicode CMap（进行中：Type 0 字体支持嵌入 ToUnicode CMap 的 bfchar/bfrange Unicode 映射，含 UTF-16BE 补充平面字符；读端已接入内容流文本提取，并采用宽容策略：非法/不可解码的 `/ToUnicode` 仅使该字体失去映射而不拖垮字体解析（`ignores_invalid_tounicode_values_and_streams`、`malformed_type0_to_unicode_does_not_disable_the_font`），畸形 CMap 保留可解析的本地映射（`tounicode_lenient_parse_keeps_local_mappings_when_base_is_unknown`、`type0_to_unicode_with_unknown_usecmap_keeps_local_mappings`），重复源码以最后一次为准（`tounicode_duplicate_source_uses_last_mapping`），`usecmap` 仅校验语法、不继承外部基座（本地映射照常生效，`tounicode_usecmap_keeps_local_mappings_without_inheriting_base`）。写端 `CidFont.to_unicode` 记录 CID→Unicode，`PdfBuilder::text_cid_unicode` 在写文本时自动登记，`PdfBuilder::text_codes_unicode`/`text_code_bytes_unicode` 以源字符码为键登记（键长随源码 1..=4 字节），`assemble_document` 生成标准 ToUnicode CMap（codespacerange 与 bfchar/bfrange 键按源码实际字节长度写出，仅 2 字节码时保持 `<0000> <FFFF>`；CID/源码与单个 UTF-16 码元目标同时连续递增时合并为 `bfrange`，其余代理对/多码元串/目标跳变写 `bfchar`，两类节均按 100 条上限分段；目标 UTF-16BE、代理对展开），同一 CID 以最后一次登记为准。测试 `text_cid_unicode_writes_to_unicode_cmap`、`to_unicode_cmap_uses_bfrange_for_consecutive_cids`、`to_unicode_cmap_keeps_surrogate_pairs_and_discontinuous_targets_in_bfchar`、`to_unicode_cmap_splits_sections_at_100_entries`、`to_unicode_keys_follow_code_length`、`cid_font_without_unicode_mappings_omits_to_unicode`、`text_cid_unicode_last_mapping_wins`、`builder_cid_font_to_unicode_roundtrips_through_extractor`（写入→解析→提取还原 `Té测😀`）、`builder_cid_font_bfrange_roundtrips_through_extractor`（连续 CID 写入→解析→提取 `ABCDE`）、`builder_custom_cid_encoding_roundtrips_through_extractor`（非 Identity code→CID 嵌入 CMap，ToUnicode 以字符码为键）、`builder_multibyte_cid_cmap_roundtrips_through_extractor`（1..=4 字节混合码长的 ToUnicode 往返）。缺口：读端 `usecmap` 不继承基座映射（仅校验语法）；写端 ToUnicode 不生成 `usecmap` 继承（仅覆盖同文件内映射）；代理对与多码元目标一律写 `bfchar`（不合并 `bfrange`））
-- [ ] `9.8` 字体描述符（阶段项仍进行中；与功能矩阵状态一致：读端部分完成、写端与测试已完成，状态为 🟡/✅/✅。读端 `FontDescriptorMetrics` 覆盖 FontName、FontFamily、FontStretch、FontWeight、Flags、FontBBox、ItalicAngle、Ascent、Descent、Leading、CapHeight、XHeight、StemV、StemH、AvgWidth、MaxWidth、MissingWidth、CharSet、CIDSet、`/Style` 的 `/Panose`（12 字节分类数据，接受十六进制或字面字符串，长度必须为 12）、`/Lang`（名称对象）与 `/FD` 字形类覆盖（CIDFont，Table 125 类名→覆盖字典，读端保留原始字典）；Flags 提供九个标准位的类型化访问器，CIDSet 经过滤器解码后可按 CID 查询位；Type 1 与 CIDFontType2/CIDFontType0 均暴露描述符。写端 `builder::FontDescriptor` 支持链式构造并输出完整度量字典（含 FontName、CharSet），新增 `with_style_panose`/`with_lang`/`with_fd`：Panose 按 §9.8.3.2 写为 24 位十六进制字符串，Lang 写名称对象，FD 将每个字形类覆盖写成完整 FontDescriptor 且禁止嵌套 `/FD`；`Font::with_descriptor` 接入 `PdfBuilder` 字体组装流程；CIDFont 描述符经 `CidFont` 写出，`/CIDSet` 作为独立流对象（`StreamData::Owned` 明文）挂到描述符。`/FSType` 不属于 ISO 32000-1 Table 122/124，未实现。测试 `descriptor_parses_style_lang_and_fd_overrides`、`descriptor_accepts_literal_string_panose`、`descriptor_rejects_invalid_style_and_fd_entries`、`cid_font_descriptor_writes_panose_lang_and_fd_overrides`、集成往返 `builder_cid_font_descriptor_style_lang_fd_roundtrip`，其余见矩阵证据）
-- [ ] `9.9` 嵌入字体程序（FontFile/FontFile2/FontFile3）（进行中：Type 1 读端经 `Document::type1_program` 解析 `/FontFile` 的明文头、eexec 段、Private 字典与解密后的 CharStrings/Subrs，且 `Type1FontProgram::glyph` 可将单个 CharString 解释为字宽、side bearing 与绝对路径段（flex 的 `callothersubr`/`pop` 按七点协议展开为曲线段，提示替换 `callothersubr 3` 按 OtherSubrs 语义消费 hint code 并等待 `pop`；seac 按 StandardEncoding 递归展开为基/重音轮廓；FontFile3/CFF/OpenType 报错）；TrueType 与 CIDFontType2 读端解析 FontFile2 的 SFNT 目录、基础元数据和轮廓。写端新增 `builder::FontProgram`（Type1/TrueType/CFF/OpenType）与 `Font::with_font_program`，`assemble_document` 分别输出 `/FontFile`、`/FontFile2`、`/FontFile3`（CFF 带 `/Subtype /Type1C`）流对象；TrueType 程序自动把字体 `/Subtype` 切为 `TrueType`；`OpenType` 程序按 SFNT flavor 分流：`OTTO` → `/FontFile3` `/Subtype /OpenType` 且字体为 `Type1`，`0x00010000`/`true` → `/FontFile2` + `Length1` 且字体为 `TrueType`，未知 flavor 报 `WriteError::InvalidObject`，三类子集列表均拒绝 OpenType 程序；builder 构造的 `StreamData::Owned` 流按 writer 约定写明文（不声明 FlateDecode）。流字典按 Table 127 写必需长度字段：Type 1 `/FontFile` 经 `font_file_lengths` 切分明文头、`eexec` 加密段与尾部固定内容并写 `Length1`/`Length2`/`Length3`（三段之和等于流字节数），TrueType `/FontFile2`（简单字体与 CIDFontType2）写 `Length1` = 程序字节数，CFF `/FontFile3` 不写这些条目（Table 126 规定不得出现）；测试 `font_file_lengths_split_clear_encrypted_and_fixed_sections`、`font_file_lengths_without_eexec_are_all_clear_text`、`type1_fontfile_declares_table_127_lengths`、`truetype_fontfile2_declares_length1_only`、`cid_font_type2_fontfile2_declares_length1`、`cff_fontfile3_omits_font_program_length_entries`，子集路径由 `subset_glyphs_rewrite_truetype_fontfile2` 与 `type1_subset_glyphs_rewrite_fontfile` 同时断言。CIDFont 的字体程序嵌入已支持（Type2→`/FontFile2`、Type0→`/FontFile3` `/CIDFontType0C`；`OpenType` 按轮廓分流：CIDFontType0 + CFF-flavored → `/FontFile3` `/Subtype /OpenType`，CIDFontType2 + TrueType-flavored → `/FontFile2`，经 `CidFont::with_font_program`；程序类型/轮廓与子类型不匹配时 `build` 返回 `WriteError::InvalidObject`）；TrueType 字形裁剪工具 `subset_truetype` 已接入 builder（`Font::with_subset_glyphs`），并保留补充平面 format 12 cmap 与 vhea/vmtx 垂直度量；Type 1 子集工具 `subset_type1` 已接入 builder（`Font::with_subset_type1_glyphs`，与 `subset_glyphs` 互斥，`/FontFile` 写裁剪结果）；CID-keyed CFF 子集工具 `subset_cff` 已接入 builder（`CidFont::with_subset_cids`，`/FontFile3` 写裁剪结果并按交集裁剪 `/CIDSet`，见 9.6.4）；读端 `Document::truetype_font` 已接受 `/FontFile3` `/Subtype /OpenType`（`OTTO` flavor，CFF-flavored 程序可无 `loca`/`glyf`，仅 cmap 与度量可用）；name-keyed CFF 子集工具 `subset_cff_type1c` 已接入 builder（`Font::with_subset_cff_glyphs`，三类子集列表互斥，`/FontFile3` `/Subtype /Type1C` 写裁剪结果，CFF2 未支持），`9.6.4` 的六字母名称标签前缀已支持；读端 `Document::type1c_program` 已把简单字体 `/FontFile3` `/Subtype /Type1C` 解析为 name-keyed `RawCffFont` 并提供 `glyph_name`/`glyph_for_name` 字形名解析（预定义/缺省 charset 展开，CID-keyed 与错误子类型明确报错，见 9.6.2）；OpenType 写端测试 `opentype_cff_program_writes_fontfile3_with_opentype_subtype`、`opentype_truetype_program_writes_fontfile2_with_length1`、`opentype_program_accepts_apple_true_flavor`、`opentype_program_rejects_unsupported_sfnt_flavor`、`opentype_program_rejects_subset_requests`、`opentype_cff_program_writes_opentype_fontfile3_for_cid_type0`、`opentype_truetype_program_writes_fontfile2_for_cid_type2`、`opentype_cid_font_rejects_mismatched_flavor`、集成往返 `builder_opentype_truetype_program_roundtrips_through_parser`、`builder_opentype_cff_program_roundtrips_through_parser`、`builder_cid_font_type0_opentype_roundtrips_through_parser`。缺口：写端仅校验 OpenType 的 SFNT flavor 标签，不校验 SFNT 目录与表结构；OpenType 子集化、TTC 与 `CFF2` 未支持）
-- [ ] `9.10` 文本内容提取（进行中：`reader/text/{mod,tokenizer}` 实现内容流文本提取——操作数栈式分词与文本操作符解释（BT/ET/Tf/Tj/TJ/Td/TD/T*/Tm/'/"），Type 0 经 CMap+ToUnicode 解码，简单字体（Type 1/MMType1/TrueType/Type3）经 `/Encoding`+AGL 解码，缺 `/Encoding` 的 TrueType 若 `/FontFile2` 可解析则先按 `TrueTypeFont::builtin_encoding`（cmap，含 Symbol `(3,0)` 的 0xF000/0xF100/0xF200 偏移回退）解码、PUA 字符让位于预定义编码、仍未命中再回退预定义编码，无字体时回退 Latin-1；页面级 `extract_page_text` 支持页面树遍历、资源继承与多内容流合并，新增 `try_extract_page_text` 返回 `TextExtractionError`（PageNotFound/MalformedContent/ContentTooLarge）；页面树与 `/Parent` 链均有 visited 防环与深度上限 64，`/Contents` 与表单共享 64 MiB / 4096 流预算；`Do` 递归提取 Form XObject（仅 `/Subtype /Form`，缺 `/Resources` 时继承调用方、嵌套上限 32、visited 防循环、图片跳过）。测试 `page_tree_cycle_does_not_hang_and_finds_reachable_page`、`page_tree_deeper_than_limit_returns_not_found`、`parent_chain_cycle_terminates_and_own_resources_still_apply`、`page_contents_stream_count_over_limit_returns_content_too_large`、`page_contents_byte_size_over_limit_returns_content_too_large`、`form_xobject_with_own_resources_is_extracted`、`form_without_resources_inherits_caller_resources`、`nested_form_xobject_text_is_extracted_in_order`、`cyclic_form_xobject_references_terminate`、`image_xobject_is_skipped_without_losing_text`；表单可重复提取且字体选择不泄漏（`repeated_form_xobject_is_extracted_each_time`、`form_font_selection_does_not_leak_into_caller`），`q`/`Q` 恢复选中字体（`q_and_q_restore_selected_font`），内联图片数据不吞后续文本（`inline_image_data_is_skipped_without_losing_text`），资源名支持 `#xx` 转义（`content_stream_name_escapes_select_font_resources`），简单字体 `/ToUnicode` 优先于编码解码（`simple_font_to_unicode_takes_precedence_over_encoding`），其解析失败时回退编码（`malformed_simple_font_to_unicode_falls_back_to_encoding`）。写端补充 `ContentStream::show_text_hex`（`<...> Tj`），集成测试 `type0_text_roundtrips_through_writer_and_extractor` 验证 Type 0 + CIDFontType2 + FontFile2 + ToUnicode 的写入→解析→提取往返，`truetype_without_encoding_extracts_through_builtin_cmap` 验证缺 `/Encoding` 的 TrueType 经内建 cmap 提取，`builder_custom_cid_encoding_roundtrips_through_extractor` 验证非 Identity 嵌入 CMap 的写入→解析→提取往返，`builder_multibyte_cid_cmap_roundtrips_through_extractor` 验证 1..=4 字节混合码长的写入→解析→提取往返。写端 `PdfBuilder::text_code_bytes`/`text_code_bytes_unicode` 支持任意 1..=4 字节源码。完整 Adobe ordering 数据仍待补齐；`text_code_bytes*` 对非法长度条目静默跳过）
-- [x] `7.9` 公共数据结构（已完成：`PdfDate`、`PdfRect` 已实现；`PdfTextString` 支持 PDFDocEncoding 与带 BOM 的 UTF-16BE 编解码；`NameTree` 和 `NumberTree` 支持从字典解析（含 `/Kids` 递归）、按键查找、迭代和序列化往返）
-
-**依赖**：A（过滤器解码能力是字体程序/嵌入流读取的硬依赖；`7.10` Functions 对文本非硬依赖，为软依赖，可并行）。
-
-**执行顺序与并行边界**：
-
-1. **简单字体与度量（进行中）**：Type 1 字体字典、宽度读取、Encoding 字典、WinAnsi/MacRoman 映射、Standard/Symbol/ZapfDingbats glyph name 查询及 AGL 2.0 的 4,281 个 Unicode 序列映射已覆盖；写端编码配置与文本码转换（五种预定义编码 + 自定义 Differences，非 ASCII 输出十六进制字符串）已实现。Standard 14 内建字宽已按 AFM 数据整理为结构化 CSV，Courier 四种样式为固定 600 单位；Type 1 字体程序格式解析（明文头、内建编码、eexec、Private 字典、CharStrings/Subrs 解密）已完成，`Type1FontProgram::glyph` 已解释 CharString 操作符并产出字宽与绝对路径，seac 合成字形已按 StandardEncoding 展开（含递归嵌套），flex 的 `callothersubr`/`pop` 已按七点协议展开为曲线段（含 subr 内进出与 `pop pop setcurrentpoint` 收尾）；提示替换 `callothersubr 3` 已按 OtherSubrs 语义消费单个 hint code，并要求后续 `pop` 消费其结果（不应用 hint）；写端 `FontProgram::Type1`/`TrueType`/`CFF` 与 `Font::with_font_program` 已可嵌入字体程序；`subset_type1` 已可按字形名裁剪 Type 1 `/CharStrings`、补齐 seac 组件闭包并重加密 `eexec` 段，并经 `Font::with_subset_type1_glyphs` 接入 builder（与 `subset_glyphs` 互斥）。剩余 hinting/渲染；CFF 子集程序重写已实现（见 `9.6.4`）。
-2. **TrueType 程序读取（进行中）**：TrueType 的 `/FontFile2` 解码后校验 SFNT 目录，并解析 `head`/`maxp` 的 unitsPerEm/glyph count、`hhea`/`hmtx` 水平度量、`vhea`/`vmtx` 垂直度量（含 numberOfVMetrics 末尾复用与尾部 TSB）、Unicode `cmap` format 0/2/4/6/8/10/12/13 以及 `loca`/`glyf` 字形记录。可按 glyph ID 查询 advance width 与 vertical advance/top side bearing（含复用规则）、Unicode 查询 glyph ID，并读取 glyph header/bounds 和原始记录；简单字形的轮廓端点、instructions、压缩 flags 及 x/y 坐标增量已解码，复合字形可递归展开，支持 2.14 缩放/旋转/斜切矩阵、XY 偏移与点对齐，并限制递归深度及展开点数；`TrueTypeFont::builtin_encoding` 提供由 cmap 派生的 256 项单字节内建编码，供 `reader/text` 在简单 TrueType 字体缺 `/Encoding` 时解码（`/Encoding` 优先，程序缺失/非法时回退预定义编码）；cmap 选择支持 Microsoft Symbol `(3,0)` 子表，符号字体直查失败时依次按 0xF000/0xF100/0xF200 偏移探测，提取时非 PUA 内建字符优先、PUA 字符让位于预定义编码；不执行 hinting，也不渲染。此二进制解析仅用 Rust 标准库，以便控制格式支持范围及错误语义，当前无需引入第三方解析依赖。独立的 `subset_truetype` 已完成 glyf/loca/hmtx/hhea/maxp/cmap/head 重写、复合组件闭包与表校验和重建，保留补充平面 format 12 cmap 与 vhea/vmtx，并经 `Font::with_subset_glyphs` 接入 builder 写入 `/FontFile2`。读端同时接受 `/FontFile3` `/Subtype /OpenType`：`OTTO` flavor 在 `loca`/`glyf` 缺失时仍解析 cmap 与度量（轮廓不可用），为 CFF-flavored OpenType 提供文本提取能力。
-3. **CID/复合字体与文本提取（进行中）**：CIDFontType2 可解析 descendant 字典、`CIDSystemInfo`、`CIDToGIDMap`（Identity/流）、`W`/`DW`，并可从 FontDescriptor 加载 `/FontFile2`。Type 0 可连接一个 CIDFontType2 descendant；编码支持 `/Identity-H`、`/Identity-V` 及嵌入 CMap 的 codespace、`cidchar`、`cidrange` 段，并提供字符码→CID→GID/宽度查询。`/ToUnicode` 支持嵌入 CMap 的 `bfchar` 和 `bfrange` 数组/递增目标，按 UTF-16BE 转换为 Unicode 序列，并在 Type 0 decoded code 中附带可选映射结果。`reader/text/{mod,tokenizer}` 已实现内容流文本提取：操作数栈式分词解释 `BT`/`ET`/`Tf`/`Tj`/`TJ`/`Td`/`TD`/`T*`/`Tm`/`'`/`"` 操作符，Type 0 经 CMap+ToUnicode 解码，简单字体（Type 1/MMType1/TrueType/Type3）经 `/Encoding`+AGL 解码，无字体回退 Latin-1；`Document::extract_page_text` 支持页面树遍历、资源继承与多内容流合并（14 项单元测试覆盖）。写端补充 `ContentStream::show_text_hex`，集成测试 `type0_text_roundtrips_through_writer_and_extractor` 验证 Type 0/CIDFontType2 文档经 `DocumentWriter` 写入、重新解析后由 `extract_page_text` 还原原始 Unicode 文本；`builder::CidFont` + `PdfBuilder::cid_font`/`text_cid` 可生成 Type 0 父字体、CIDFont 后代、描述符（含 `/CIDSet` 流）与 Identity-H 4 位十六进制文本，往返见 `builder_cid_font_descriptor_roundtrips_through_parser`；`builder::CidEncoding` + `CidFont::with_encoding` + `text_codes`/`text_codes_unicode` 可生成非 Identity 嵌入 CMap（cidrange/cidchar、WMode）并按字符码登记 ToUnicode，往返见 `builder_custom_cid_encoding_roundtrips_through_extractor`；`PdfBuilder::text_cid_unicode` 可同时登记 CID→Unicode 并写出 `/ToUnicode` CMap（连续 CID 与单码元目标合并为 `bfrange`，其余 `bfchar`，每节 100 条上限），写入→解析→提取往返见 `builder_cid_font_to_unicode_roundtrips_through_extractor`、`builder_cid_font_bfrange_roundtrips_through_extractor`。Type 3 字体读端已解析字体矩阵/包围盒/宽度/CharProcs 与 `/Encoding` 并接入文本提取（`extracts_type3_differences_text`、`extracts_type3_predefined_encoding_text`）；写端 `Type3Glyph`/`Type3Font`/`Font::type3` 已可生成 Type 3 字典与 CharProcs 流，并在 `builder_type3_font_roundtrips_through_extractor` 中完成写入→解析→提取往返。CMap 的 `usecmap` 继承已支持 Identity-H/V 基座；Type 0 现已同时接受 CIDFontType2 与 CIDFontType0 descendant（后者解析 W/DW 与 FontFile3 程序，文本提取经 ToUnicode 工作）。CIDFont 的字体程序嵌入已支持（`CidFont::with_font_program`，Type2 `/FontFile2`、Type0 `/FontFile3` `/CIDFontType0C`）；完整 Adobe ordering 数据仍待实现；CFF 子集程序重写已实现（见 `9.6.4`）；TrueType 字形裁剪已接入 builder（`with_subset_glyphs`），Type 1 子集工具 `subset_type1` 已实现含 seac 组件闭包并经 `with_subset_type1_glyphs` 接入 builder，`9.6.4` 名称标签前缀已实现。
-4. **独立公共类型（已完成）**：`7.9` 的 `PdfDate`、`PdfRect`、`PdfTextString`、`NameTree` 与 `NumberTree` 均已实现；名称树和数值树支持 `/Kids` 递归解析、按键查找、迭代和序列化。
-
-**范围边界**：
-
-- 每次只将有数据表、负向用例及公开 API 验证的子项标为已实现；识别 Encoding 名称不等于完成码值映射，码值映射也不等于完成 Unicode 文本提取。
-- 标准 14 字体表不得以 `/MissingWidth` 代替逐字符度量；显式 `/Widths` 优先，其次适用的字体描述符默认宽度，再使用准确的内建字宽。
-- 依赖关系按上面顺序推进；独立的 `7.9` 名称树/数值树可并行，但不提前勾选阶段 B 整体完成。
-
-**验收标准**：
-
-- 写出含嵌入 TrueType 与 CIDFontType2 的文档，第三方阅读器打开显示正确；
-- 含 CJK 文本的样本可正确提取为 Unicode 文本；
-- ToUnicode 往返：写入文档的文本可被提取还原；
-- 各字体类型均有解析/生成测试，`cargo test` 全绿。
-
-## 阶段 C：图形完整 —— 色彩/Pattern/Form/透明度
-
-**目标**：色彩/图案/Form XObject/透明度达到规范语法层完整（对应矩阵 P1–P2）。
-
-**包含条目**：
-
-- [ ] `8.4.4 / 8.4.5` `gs`（ExtGState 应用）、`i`（flatness）与图形状态参数字典（进行中：`gs`/`i` 操作符与 `ContentStream::set_ext_g_state`/`set_flatness` 之外，已新增读端 `reader/graphics_state/` 的 Table 58 全条目解析（`Document::ext_g_state`/`Document::ext_g_states`，`/SMask` `/TR` `/TR2` `/HT` `/BG` `/BG2` `/UCR` `/UCR2` 保留为原始值，`Document::soft_mask` 提供 `/SMask` 类型化解析）与写端 `PdfBuilder::set_graphics_state` + `builder/types/graphics_state.rs` 的 `/ExtGState` 资源构造（标量参数、`/D`、`/BM`、`/Font`、`/SMask`，页内/跨页去重、透明度版本门控、非法值报错）。写端 `/TR` 已接入 `builder::Function`（`GraphicsState::with_transfer_function` + `PdfBuilder::function`，Type 0/2/3/4 均可引用，测试 `exponential_transfer_function_is_written_as_direct_dictionary`、`sampled_transfer_function_packs_bits_msb_first`、`calculator_transfer_function_streams_code`、`stitching_transfer_recursively_writes_nested_functions`、`repeated_transfer_function_handle_reuses_one_object`、`unknown_transfer_function_handle_fails_the_build`、集成往返 `builder_transfer_functions_roundtrip_through_parser`）；剩余缺口：写端尚不支持 `/TR2` `/HT` `/BG` `/BG2` `/UCR` `/UCR2` 6 个复杂条目（依赖半色调对象模型与 TransferFunction2 语义）；`gs` 仍由调用方显式发起；内联 ca/CA/BM 写法已由 `11.3.5`/`11.6.4` 移除）
-- [x] `8.6.4` Device 颜色空间补全（已完成：设备色彩空间按名字写出，无需资源字典。`builder/types/image.rs` 的 `ColorSpace` 增加 `DeviceCMYK`（4 通道）与按行对齐的 `expected_data_len`（`ceil(width × 通道数 × bits / 8) × height`，checked 运算），`assemble_document` 在构建期校验图片维度/位深（仅 1/2/4/8/16）与样本长度，非法时返回 `WriteError::InvalidObject` 且不写出任何字节；`content/stream.rs` 新增 `set_stroke_cmyk`/`set_fill_cmyk`，与既有 RGB/颜色空间名/分量操作符互补。测试 `cmyk_image_xobject_emitted`、`cmyk_image_data_length_mismatch_is_invalid_object`、`image_with_unsupported_bits_is_invalid_object`、`cmyk_stream_methods_emit_uppercase_and_lowercase_operators`、集成往返 `builder_cmyk_image_roundtrips_through_parser`。剩余缺口：读端无通用内容流颜色空间模型（仅 DCT 过滤器按 JPEG 样本解码 DeviceCMYK）；ICCBased/Indexed/Separation/DeviceN 见 `8.6.5`/`8.6.6`，灰度快捷 `G g` 见 `8.6.8`）
-- [ ] `8.6.5` CIE-Based 颜色空间（进行中：写端图片 `/ColorSpace` 已支持四种 CIE-Based 空间——`builder/types/image.rs` 新增 `CalGray`/`CalRGB`/`Lab`/`ICCBased` 类型并按 Table 63–66 写出 `[名称 字典]` 数组：WhitePoint 必填，BlackPoint/Gamma/Matrix/Range 按提供值写出（省略时使用规范默认值）；ICCBased 配置文件作为独立流对象写出（`/N`、可选 `/Alternate`、`/Range`），颜色空间数组引用该流；构建期校验 WhitePoint/BlackPoint 有限、Gamma 有限正数、Matrix 有限、Lab Range 有序、ICCBased `N` ∈ {1,3,4}、配置文件非空、Range 长度 2N 且有序、Alternate 分量数一致且不得嵌套 ICCBased，非法值返回 `WriteError::InvalidObject`，像素样本长度沿用行对齐校验。测试 `cal_gray_image_writes_white_black_and_gamma`、`cal_rgb_image_writes_gamma_and_matrix`、`lab_image_writes_range`、`icc_based_image_writes_profile_stream_and_alternative`、`invalid_cie_color_space_parameters_fail_the_build`、`invalid_icc_based_parameters_fail_the_build`、集成往返 `builder_cie_color_spaces_roundtrip_through_parser`。剩余缺口：无页级 `/ColorSpace` 资源字典与 `CS`/`cs` 命名引用（内容流仍按调用方资源名透传）、无 `DefaultGray`/`DefaultRGB`/`DefaultCMYK` 与渲染意图语义；读端无颜色空间模型；不校验 ICC 配置文件内容，ICC 流不去重）
-- [ ] `8.6.6` Special 颜色空间（Pattern/Indexed/Separation/DeviceN）（进行中：写端图片 `/ColorSpace` 已支持 Indexed——`builder/types/image.rs` 新增 `Indexed { base, hival, lookup }`（每像素 1 个下标样本），校验 base 不得嵌套 Indexed、递归校验 base 参数（设备/CIE-Based/ICCBased 均可作 base）、调色板长度必须为 `(hival + 1) × base.channels()`，非法值返回 `WriteError::InvalidObject`；`assemble/mod.rs` 的 `color_space_value` 写出 `[/Indexed base hival <大写十六进制调色板>]`，ICCBased base 的配置文件仍分配独立流对象。测试 `indexed_image_writes_base_hival_and_lookup_hex`、`indexed_image_embeds_cie_base_definition`、`invalid_indexed_parameters_fail_the_build`、集成往返 `builder_indexed_image_roundtrips_through_parser`。本次补齐 Separation/DeviceN——`image.rs` 新增 `Separation { colorant, alternate, tint_transform }` 与 `DeviceN { colorants, alternate, tint_transform }`，通道数分别为 1 与色料数；构建期校验色料名非空、DeviceN 至少 1 个且除 `None` 外不得重复、禁用保留名 `All`，备用空间只接受设备/CIE-Based（拒绝 Indexed/Separation/DeviceN），并用新增的 `Function::input_count`/`output_count` 校验 tint 变换输入数（1 / 色料数）与输出数（备用空间通道数；Type 2 缺省 C0/C1 按规范计 1 个输出，Type 3 省略 Range 时取首个子函数）；`assemble/mod.rs` 的 `color_space_value` 改为返回 `Result`，写出 `[/Separation name alternate tintTransform]` 与 `[/DeviceN names alternate tintTransform]`，Type 0/4 tint 变换分配独立流对象、Type 2/3 内联；组 `/CS` 按 §11.6.6 拒绝 Separation/DeviceN（`GroupXObject::validate`）。测试 `separation_image_writes_colorant_alternate_and_tint_transform`、`device_n_image_writes_names_and_sampled_tint_transform`、`device_n_allows_repeated_none_colorant`、`invalid_separation_and_device_n_color_spaces_fail_the_build`、`invalid_page_group_color_space_fails_the_build`（新增 Separation 断言）、集成往返 `builder_separation_and_devicen_images_roundtrip_through_parser`。剩余缺口：Pattern 依赖页级资源字典与内容流图案绘制；DeviceN 可选 `/Colorants`/`/Process`/`/MixingHints` 属性字典（NChannel）未建模；无页级 `/ColorSpace` 资源字典与 `CS`/`cs`/`SCN`/`scn` 命名引用；读端无颜色空间模型，无法把 Indexed/Separation/DeviceN 样本解码到备用空间；不校验调色板分量范围）
-- [x] `8.6.8` 颜色操作符补全（灰度快捷 `G g`）（已完成：`content/types.rs` 新增 `Op::SetStrokeGray { gray }`/`Op::SetFillGray { gray }`，`content/serialize.rs` 序列化为 `gray G`/`gray g`，`content/stream.rs` 新增 `set_stroke_gray`/`set_fill_gray`；至此 `G g RG rg K k CS cs SC sc SCN scn` 14 个颜色操作符均有对应变体与构建器方法。测试 `gray_stream_methods_emit_uppercase_and_lowercase_operators` 与扩展的 `color_variants`。剩余缺口：库内无内容流 Op 级读端（文本提取仅做词法级扫描）；`SCN`/`scn` 的图案名分支已由 `8.7` 的 `SetStrokeColorPattern`/`SetFillColorPattern` 补齐；颜色分量不做 0..1 范围校验，由调用方保证）
-- [ ] `8.7` Patterns（Tiling/Shading，Shading Type 1–7）（进行中：写端已支持 Shading Type 1–7、PatternType 2 着色图案与 PatternType 1 彩色/无色平铺图案——`builder/types/shading.rs` 新增 `FunctionShading`（二维 Domain、可选 Matrix、2 输入颜色函数）、`AxialShading`（Coords `[x0 y0 x1 y1]`、可选 Domain/Extend）、`RadialShading`（六项 Coords、半径非负、可选 Domain/Extend）、网格渐变 `FreeFormMeshShading`（Type 4，`MeshVertex { x, y, color }` 顶点按 3 的倍数分组，`bits_per_flag` 仅 2/4/8，默认 16/8/8 位）与 `LatticeMeshShading`（Type 5，`vertices_per_row >= 2`、至少两行且行须填满，默认 16/8 位）以及 Coons/张量积网格——`CoonsPatch`（12 个控制点与 4 个角点颜色）、`TensorProductPatch`（16 个控制点与 4 个角点颜色）、`CoonsPatchShading`（Type 6）与 `TensorProductPatchShading`（Type 7，默认 16/8/8 位、可配 Decode，每个网格片独立写标志 0、不复用相邻片共享边）、`Shading` 枚举与 `ShadingPattern`（`/Type /Pattern`、`/PatternType 2`、可选 Matrix、内联 `/Shading`）；`builder/types/pattern.rs` 新增 `TilingPattern`（`/Type /Pattern`、`/PatternType 1`、`PaintType` 枚举（彩色 `/PaintType 1`、无色 `/PaintType 2`）、`TilingType` 1/2/3、`BBox`、非零 `XStep`/`YStep`、可选 Matrix、可选资源字典、图块内容流）与统一 `Pattern` 枚举；无色图案由 `TilingPattern::uncolored` 构造，构建期要求 `/ColorSpace` 并按图片颜色空间写出逻辑递归校验，流字典写 `/PaintType 2` 与 `/ColorSpace`（彩色图案忽略该字段、不写 `/ColorSpace`）；`PdfBuilder::tiling_pattern` 注册句柄并复用 `fill_rect_with_pattern`，新增 `PdfBuilder::fill_rect_with_uncolored_pattern` 按基色分量数校验（缺失/非有限即忽略）并写 `/Pattern cs` + `c1 … cn /P<n> scn`；构建期校验 BBox 有限且最小不超过最大、步距有限且非零、Matrix 有限；`PdfFeature::TilingPattern`（PDF 1.2）与 `PdfFeature::Shading`（PDF 1.3）分别门控，特性扫描识别 `/PatternType 1`/`/PatternType 2`/`/ShadingType`；构建期校验 Domain/Coords/Matrix 有限、Domain 最小值小于最大值、径向半径非负、颜色空间合法与颜色函数输入/输出维数（Type 1 双输入；Type 2/3 单输入；输出数须等于颜色空间分量数）；网格渐变以流对象写出（`/ShadingType 4`/`5`、`/BitsPerCoordinate`/`/BitsPerComponent`、Type 4 的 `/BitsPerFlag`、Type 5 的 `/VerticesPerRow`、`/Decode` 与按 MSB-first 连续位流打包的顶点数据，末字节补零；Type 6/7 另写 `/BitsPerFlag`，按网格片依次写 12/16 个控制点坐标与 4 个角点颜色），顶点坐标/颜色按 `/Decode` 线性量化取整，未提供 Decode 时取坐标紧包围盒并与颜色空间默认范围拼接（Lab 取 L `[0,100]` 与 `/Range`、Indexed 取 `[0, hival]`、ICCBased 取 `/Range` 否则 `[0,1]`），空洞包围盒要求显式 Decode；构建期校验顶点数分组/行约束、位深 1–16、颜色分量数与颜色空间匹配、颜色值落在 Decode 范围内，Type 6/7 另校验至少一个网格片、控制点有限、4 个角点颜色及分量数/范围、`BitsPerFlag` ∈ {2,4,8}；着色图案内嵌网格渐变时分配独立流对象并以间接引用写入 `/Shading`；`PdfBuilder::shading`/`shading_pattern` 注册句柄，`paint_shading`（`/Sh<n> sh`）与 `fill_rect_with_pattern`（`/Pattern cs` + `/P<n> scn`）按页去重登记 `/Shading`、`/Pattern` 资源；仅为页面引用的渐变/图案分配对象号，图案内联其渐变字典；内容流新增 `SetStrokeColorPattern`/`SetFillColorPattern`/`SetStrokeColorPatternWithComponents`/`SetFillColorPatternWithComponents`/`PaintShading` 与 `set_stroke_color_space`/`set_fill_color_space`/`set_stroke_pattern`/`set_fill_pattern`/`set_stroke_pattern_with_components`/`set_fill_pattern_with_components`/`paint_shading`；着色图案登记 `PdfFeature::Shading`（PDF 1.3），平铺图案登记 `PdfFeature::TilingPattern`（PDF 1.2），目标版本不足时返回 `UnsupportedVersion` 且不写字节。测试 `function_shading_writes_type1_domain_matrix_and_sampled_function`、`axial_shading_writes_coords_domain_function_and_extend`、`radial_shading_writes_six_coords_and_omits_default_entries`、`free_form_mesh_shading_writes_type4_stream_dictionary`、`free_form_mesh_shading_defaults_to_tight_decode_bounds`、`lattice_mesh_shading_writes_type5_vertices_per_row_and_omits_flag`、`mesh_shading_uses_lab_component_decode_ranges`、`mesh_shading_pattern_writes_mesh_as_indirect_stream`、`invalid_mesh_shading_parameters_fail_the_build`、`mesh_payload_packs_bits_msb_first_across_byte_boundaries`、`mesh_payload_quantizes_values_into_the_decode_range`、`coons_patch_shading_writes_type6_stream_dictionary`、`tensor_product_patch_shading_writes_type7_stream_dictionary`、`invalid_patch_shading_parameters_fail_the_build`、`shading_pattern_writes_pattern_type_two_and_reuses_page_resource`、`unused_shadings_and_patterns_are_not_written`、`shading_requires_pdf_1_3`、`invalid_shading_and_pattern_parameters_fail_the_build`、内容流 `shading_and_pattern_operators_serialize`、特性阈值 `feature_thresholds_match_iso_32000`、特性扫描 `feature_scan_detects_tiling_and_shading_patterns`；平铺图案测试 `tiling_pattern_writes_stream_dictionary_and_content`、`tiling_pattern_omits_matrix_and_writes_empty_resources_by_default`、`tiling_pattern_resources_are_written_verbatim`、`shading_and_tiling_patterns_share_page_pattern_resource_names`、`unused_tiling_patterns_are_not_written`、`tiling_pattern_requires_pdf_1_2`、`invalid_tiling_pattern_parameters_fail_the_build`、无色图案 `uncolored_pattern_components_serialize_before_name`、`uncolored_tiling_pattern_writes_paint_type_and_color_space`、`uncolored_tiling_pattern_ignores_mismatched_components`、`invalid_uncolored_tiling_pattern_fails_the_build`，集成往返 `builder_shading_and_pattern_roundtrip_through_parser`、`builder_free_form_mesh_shading_roundtrips_through_parser`、`builder_patch_mesh_shading_roundtrips_through_parser`、`builder_tiling_pattern_roundtrips_through_parser`、`builder_uncolored_tiling_pattern_roundtrips_through_parser`。剩余缺口：图案资源仅接受调用方直接字典（构建器不代管图案内字体/图片对象）、网格 `/Function`（颜色映射函数）未实现、`/Background`/`/BBox`/`/AntiAlias` 未建模；无页级 `/ColorSpace` 命名资源；`fill_rect_with_pattern` 仅为矩形填充快捷方式，任意路径/描边图案需调用方直接使用内容流方法；读端无 Shading/Pattern 资源与绘制操作符模型）
-- [ ] `8.10.1 / 8.10.2` Form XObject（进行中：写端已支持 Form 字典生成与 `Do` 联动——`builder/types/form.rs` 新增 `FormXObject { bbox, matrix, content }`，`PdfBuilder::form_xobject` 注册表单句柄、`PdfBuilder::draw_form` 以 `q cm /Fm<n> Do Q` 绘制；每页按句柄去重分配 `/Fm<n>` 资源名，跨页共享同一表单对象；仅为实际绘制的表单分配对象号，已注册但未绘制的表单不写出；表单流写出 `/Type /XObject`、`/Subtype /Form`、`/FormType 1`、`/BBox`、`/Length`，可选 `/Matrix`，按规范省略 `/Resources` 以继承使用页资源；构建期校验 BBox 四项有限且最小值不大于最大值、Matrix 六项有限，非法值返回 `WriteError::InvalidObject`（`form XObject: ...`）且不写出任何字节。测试 `form_xobject_writes_dictionary_and_stream`、`form_without_matrix_omits_matrix_entry`、`repeated_draws_reuse_one_form_resource_and_object`、`form_drawn_on_two_pages_shares_one_object`、`unused_form_object_is_not_written`、`invalid_form_bbox_and_matrix_fail_the_build`、集成往返 `builder_form_xobject_roundtrips_through_parser`。剩余缺口：无表单自有 `/Resources`、`/Ref`、`/Metadata`、`/PieceInfo`、`/OPI`、`/OC`（`/Group` 见 `8.10.3`）；不校验内容流操作符合法性；重复绘制只复用资源名与对象号，不按内容去重；Form XObject 引入版本待核，未加版本门控；通用内容流读端不建模 Form（`reader/text` 已可遍历表单提取文本并继承调用方资源））
-- [ ] `8.10.3` Group XObjects（进行中：写端已支持 Form XObject 的组属性字典——`builder/types/form.rs` 新增 `GroupXObject`（`/S /Transparency`，可选组颜色空间 `/CS`、隔离 `/I`、挖空 `/K`），`FormXObject::with_group` 接入，`assemble` 在表单流字典写出 `/Group << /Type /Group /S /Transparency ... >>`；`/CS` 复用图片颜色空间写出逻辑（设备空间写名称，CIE-Based 写数组，ICCBased 仍分配独立配置文件流），`/I`、`/K` 仅在 true 时写出，省略即规范默认 false；组颜色空间按 §11.6.6 拒绝 Indexed/Separation/DeviceN 并递归校验参数，非法值返回 `WriteError::InvalidObject`；带组表单自动登记 `PdfFeature::Transparency`，PDF 1.3 目标下 `build` 返回 `UnsupportedVersion` 且不写出任何字节。测试 `group_xobject_writes_transparency_dictionary`、`group_without_options_omits_optional_entries`、`group_color_space_accepts_cie_based_array`、`invalid_group_color_space_fails_the_build`、`group_xobject_requires_pdf_1_4`、集成往返 `builder_group_xobject_roundtrips_through_parser`。剩余缺口：Page Group（页字典 `/Group`）已由 `11.4 / 11.6.6` 写出；组内透明度合成/渲染语义、读端不解析 `/Group`；`/CS` 按 §11.6.6 仅接受设备/CIE-Based 空间（Pattern 尚无模型）；组表单仍不支持自有 `/Resources`）
-- [ ] `8.9` 图像 XObject 补全（进行中：写端 `builder/types/image.rs` 的 `ImageData` 新增 `decode: Option<Vec<f64>>`、`interpolate: bool`、`smask: Option<Box<ImageData>>` 与 `with_decode`/`with_interpolate`/`with_smask`，`validate()` 统一校验颜色空间、数据长度、`/Decode` 项数（2×通道数）与有限性、软蒙版同尺寸/DeviceGray/不嵌套；`assemble/mod.rs` 写出 `/Decode`、`/Interpolate true`、`/SMask` 引用，软蒙版作为独立 DeviceGray 图片流对象（紧随基图分配对象号，仅经 `/SMask` 引用、不登记页面资源），带蒙版图片自动登记 `PdfFeature::Transparency`，PDF 1.3 目标下 `build` 返回 `UnsupportedVersion` 且不写出任何字节；图片去重池按含蒙版的完整 `ImageData` 判等。测试 `image_writes_decode_and_interpolate_entries`、`invalid_image_decode_fails_the_build`、`image_with_smask_writes_soft_mask_object_and_reference`、`invalid_smask_parameters_fail_the_build`、`smask_requires_pdf_1_4`，集成往返 `builder_soft_mask_image_roundtrips_through_parser`。剩余缺口：压缩写入（需 deflate/JPEG 编码器或新依赖）、`/Matte` 预乘颜色、`/Alternate` 备用图像、读端无通用图片字典模型；ImageMask//Mask 见 `8.9.6`（写端已完成）；Image XObject 引入版本待核）
-- [x] `8.9.6` 图像蒙版（Stencil/Explicit/Colour Key）——写端完成：`builder/types/image.rs` 的 `ImageData` 新增 `image_mask: bool` 与 `mask: Option<ImageMask>`，`ImageMask::{Explicit, ColorKey}` 提供 `explicit`/`color_key` 构造器与 `with_image_mask`/`with_mask`；`validate()` 要求 stencil 蒙版为 DeviceGray + 1 位、禁带 SMask/嵌套 Mask、`/Decode` 仅允许 `[0 1]`/`[1 0]`，显式蒙版必须是 image mask 且递归校验，colour key 必须为 2×通道数整数且 `0 <= min <= max <= 2^bits-1`。`assemble/mod.rs` 为 stencil 基图写出 `/ImageMask true` 且省略 `/ColorSpace`，显式蒙版分配独立对象并以 `/Mask` 引用，colour key 写整数区间数组；`/Mask` 自动登记 `PdfFeature::ImageMaskEntry`（PDF 1.3），1.2 目标下 `build` 返回 `UnsupportedVersion` 且不写字节（stencil 本身 1.2 仍可写）。测试 `stencil_image_mask_writes_image_mask_and_omits_color_space`、`explicit_mask_writes_mask_reference_and_stencil_object`、`colour_key_mask_writes_integer_ranges`、`invalid_image_mask_parameters_fail_the_build`、`invalid_explicit_and_colour_key_masks_fail_the_build`、`image_mask_entry_requires_pdf_1_3`，集成往返 `builder_image_masks_roundtrip_through_parser`。剩余缺口：读端无图片字典模型，尚不能解析 `/ImageMask`/`/Mask` 或做蒙版合成；stencil 与 `/Mask` 未与内容流非描边色联动校验；无压缩写入与 `/SMaskInData`。
-- [x] `11.3.5` 混合模式（BM）规范符合性修正（已完成：删除 `Op::SetBlendMode` 与 `ContentStream::set_blend_mode` 的内联 `BM` 写法——ISO 32000-1 Table A.1 中 `BM` 不是内容流操作符；混合模式只能写入 ExtGState 字典 `/BM` 并经 `PdfBuilder::set_graphics_state` 应用 `/GS<n> gs`。`GraphicsState::with_blend_mode`/`with_blend_modes` 校验名称合法性、多值回退数组，读端 `ExtGState::blend_mode` 解析名称/数组。测试 `transparency_parameters_are_applied_through_gs_only`、`ext_g_state_serializes_gs_without_inline_transparency_operators`，集成 `builder_graphics_state_roundtrips_through_parser` 扩展断言内容流仅含 `/GS1 gs` 且无内联 `BM`。剩余缺口：读端无通用内容流操作符模型，`gs` 只由调用方显式发起）
-- [x] `11.6.4` 恒定透明度（ca/CA）规范符合性修正（已完成：删除 `Op::SetFillAlpha`/`Op::SetStrokeAlpha` 与 `ContentStream::set_fill_alpha`/`set_stroke_alpha` 的内联 `ca`/`CA` 写法；填充/描边不透明度只写入 ExtGState `/ca`/`/CA` 并经 `gs` 应用，`GraphicsState` 校验 0–1 范围。随内联操作符移除，`ContentStream` 不再维护特性画像（透明度改由 ExtGState 构建路径登记 `PdfFeature::Transparency` 并做 PDF 1.4 门控）。测试 `transparency_parameters_are_applied_through_gs_only`、`ext_g_state_serializes_gs_without_inline_transparency_operators`、`transparency_parameters_require_pdf_1_4`，集成 `builder_graphics_state_roundtrips_through_parser` 断言重解析 `/ca`/`/CA` 与内容流无内联 `ca`/`CA`。剩余缺口：读端无内容流操作符模型）
-- [x] `11.4 / 11.6.6` 透明组（Transparency Group XObject，含 isolated/knockout/Page Group）——写端完成：Form 侧组属性字典由 `8.10.3` 写出；本次新增 Page Group——`builder/mod.rs` 的 `PageBuild` 增加 `group: Option<GroupXObject>` 与 `PdfBuilder::set_page_group`，`assemble/mod.rs` 提取 Form/Page 共用的 `group_dict` 助手并按 `/Type /Group`、`/S /Transparency`、可选 `/CS`（复用图片颜色空间写出逻辑：设备空间写名称，CIE-Based 写数组，ICCBased 分配独立配置文件流）、`/I`、`/K` 写入页字典 `/Group`；组颜色空间按 §11.6.6 拒绝 Indexed/Separation/DeviceN 并递归校验，非法值返回 `WriteError::InvalidObject`（`page group: ...`）且不写出任何字节；带页组的页面自动登记 `PdfFeature::Transparency`，PDF 1.3 目标下 `build` 返回 `UnsupportedVersion` 且不写出任何字节。测试 `page_group_writes_transparency_dictionary`、`page_without_group_omits_group_entry`、`page_group_writes_cie_based_color_space`、`page_group_only_applies_to_target_page`、`invalid_page_group_color_space_fails_the_build`、`page_group_requires_pdf_1_4`，集成往返 `builder_page_group_roundtrips_through_parser`。剩余缺口：读端不解析 `/Group`，组内透明度合成/渲染语义未实现；`/CS` 按 §11.6.6 仅接受设备/CIE-Based 空间（Pattern 尚无模型）；组表单仍不支持自有 `/Resources`
-- [ ] `11.5 / 11.6.5` 软蒙版（SMask 字典与 Soft-Mask 图像生成）（进行中：图片 XObject 侧软蒙版已由 `8.9` 落地——`ImageData::with_smask` 写出 `/SMask` 引用与独立 DeviceGray 蒙版流，同尺寸/不嵌套校验、透明度版本门控；ExtGState `/SMask` 字典本次完成——`builder/types/graphics_state.rs` 新增 `SoftMask { subtype: SoftMaskSubtype::Alpha|Luminosity, group, backdrop }` 与 `GraphicsState::with_soft_mask`，`to_value` 写出 `/SMask << /S /Alpha|/Luminosity /G <表单引用> [/BC [...]] >>`，`/G` 按文档级 Form XObject 句柄在 `assemble/mod.rs` 解析为对象号；被引用表单必须是透明组（带 `/Group`），仅为 `/SMask` 引用的表单同样分配流对象但不登记页面 XObject 资源；`/BC` 非空且分量 0–1，未知句柄/非透明组/非法分量返回 `WriteError::InvalidObject` 且不写出任何字节；`/SMask` 写入后由特性扫描自动登记 `PdfFeature::Transparency`，PDF 1.3 目标下 `build` 返回 `UnsupportedVersion`。读端新增类型化 `Document::soft_mask`（解析 `/S`、校验 `/G` 解析为 Form/Image 流、`/BC` 非空 0–1、`/TR` 名称仅 `/Identity`，`/G`//`TR` 保留原值），`ExtGState::soft_mask` 仍保留原始值向后兼容。测试 `soft_mask_writes_dictionary_and_form_reference`、`alpha_soft_mask_without_backdrop_omits_bc`、`invalid_soft_mask_parameters_fail_the_build`、`soft_mask_requires_pdf_1_4`、`parses_soft_mask_dictionary_from_ext_g_state`、`rejects_malformed_soft_masks`，集成往返 `builder_soft_mask_graphics_state_roundtrips_through_parser`。剩余缺口：`/TR` 传递函数需要 Function 写端模型（省略即恒等）；`/G` 仅支持透明组 Form（不支持 Image XObject）；`/SMaskInData` 需压缩图像写入；读端无 SMask 图像解析与合成语义）
-- [x] `14.6` 标记内容操作符（已完成：`content/types.rs` 新增 `MarkedContentProperties`（资源名 / 内联 `Dict`）与 5 个 `Op` 变体——`BeginMarkedContent`（`/tag BMC`）、`BeginMarkedContentProperties`（`/tag props BDC`）、`MarkedContentPoint`（`/tag MP`）、`MarkedContentPointProperties`（`/tag props DP`）、`EndMarkedContent`（`EMC`）；`content/serialize.rs` 写出名称与内联字典（经 `writer::write_value`，键与字符串正确转义），`content/stream.rs` 新增 `begin_marked_content`/`begin_marked_content_properties`/`marked_content_point`/`marked_content_point_properties`/`end_marked_content` 链式方法，并提供 `optional_content(OptionalContent)` 把既有枚举映射为 `/OC /name BDC`、`tag /property DP`、`EMC`（`OptionalContent` 死代码标记消除）。测试 `marked_content_operators_without_properties`、`marked_content_properties_name_and_inline_dict`、`optional_content_enum_serializes_through_marked_content_operators`，集成往返 `builder_marked_content_operators_roundtrip_through_parser`（BDC 范围内文本经 `Do` 提取）。剩余缺口：无内容流 Op 级读端（`reader/text` 仅词法扫描并忽略这些操作符，不应用 `/ActualText` 替换文本）；属性表仅支持直接名称与内联字典，不支持间接引用；不做标记内容嵌套配对校验）
-- [x] `8.11` 可选内容完整（已完成核心范围：内容流侧 BDC/EMC 由 `14.6` 完成；本次写端新增 `builder/types/optional_content.rs` 的 `OptionalContentGroup`（`/Name` 按 PDF 文本串编码为大写十六进制、可选 `/Intent` 名称或数组、默认可见性）与 `PdfBuilder::optional_content_group`/`begin_optional_content`/`end_optional_content`，按页去重登记 `/OC<n>` 资源名并写出 `/OC /OC<n> BDC ... EMC`；`assemble/mod.rs` 为使用中的 OCG 分配对象号并写 `/Type /OCG` 字典，页资源写 `/Properties << /OC<n> n 0 R >>`，目录写 `/OCProperties << /OCGs [...] /D << /BaseState /ON /ON [...] /OFF [...] /Order [...] >> >>`，未使用/未知组不写出；构建期校验空名称与非法 Intent 名称（`WriteError::InvalidObject` 且不写字节），`/OCProperties` 经特性扫描自动登记 `PdfFeature::OptionalContent`，PDF 1.5 以下目标 `build` 返回 `UnsupportedVersion`。读端新增 `reader/optional_content.rs` 类型化 API（`Document::optional_content_properties`，解析 `/OCGs`、OCG `/Name`（字面/十六进制 UTF-16BE）、`/Intent` 名称或数组、默认配置 `/D` 的 `/BaseState`（缺省 ON）、`/ON`/`/OFF`/`/Order`（嵌套数组合并）以及 `is_visible` 语义：`/ON` 优先于 `/OFF`，否则按 `/BaseState`，`Unchanged` 返回 `None`；畸形条目与非法 `/BaseState` 报错）。测试 `optional_content_group_writes_ocg_and_catalog_properties`、`group_used_on_two_pages_shares_object_with_page_local_names`、`unused_and_unknown_groups_are_not_written`、`invalid_optional_content_group_fails_the_build`、`optional_content_requires_pdf_1_5`、`parses_groups_and_default_configuration`、`base_state_controls_groups_outside_on_and_off`、`missing_ocproperties_returns_none`、`rejects_malformed_optional_content`、`rejects_invalid_group_entries`、集成往返 `builder_optional_content_roundtrips_through_parser`（/Properties 与 BDC 联动、可见性、文本提取）。剩余缺口：无 `/Configs` 备用配置与 `/AS` 当前配置、`/VE` 可见性表达式、`/OCMD` 标记内容引用与 OCG 使用字典（`/Usage`）、`/Intent` 的 View/Design 过滤语义；读端不把 OCG 可见性应用到文本提取/渲染（隐藏图层文本仍会被提取）；`begin_optional_content` 假定调用方管理 BDC/EMC 配对与嵌套）
-
-**依赖**：A（`7.10` Functions 是 Shading 的硬依赖）、B（Pattern/Form 内文本需字体度量支持，为部分软依赖）。
-
-**验收标准**：
-
-- ca/CA/BM 全部经 ExtGState + `gs` 序列化，矩阵 11.x 行的「规范符合性缺口」备注消除；
-- 含 ICCBased/Separation/Pattern 颜色的文档可生成并被第三方阅读器正确渲染；
-- 含透明组与软蒙版的文档生成正确；
-- OCG 生成 + BDC/EMC 操作符接入并有测试，`OptionalContent` 死代码标记消除（已完成：`14.6` BDC/EMC 与枚举接线、`8.11` OCG 结构、目录 `/OCProperties`、页 `/Properties` 与可见性读端）；
-- `cargo test` 全绿。
-
-## 阶段 D：交互与交换 —— 导航/注解/表单/元数据
-
-**目标**：导航/注解/表单/元数据基础可用（对应矩阵 P2）。
-
-**包含条目**：
-
-- [ ] `12.3` 文档级导航（显式/命名 Destinations、大纲 Outline）
-- [ ] `12.5.1–12.5.5` 注解通用结构（Annotation 字典/标志/边框样式/外观流 AP）
-- [ ] `12.5.6` 常用注解类型（引用子表对应行：Text、Link、FreeText、Highlight、Underline、Squiggly、StrikeOut、Stamp、Ink、Popup、FileAttachment、Widget）
-- [ ] `12.6` 常用动作（GoTo/URI/Named，其余动作类型按需增补）
-- [ ] `12.7.2–12.7.4` AcroForm 基础（AcroForm 字典/字段字典/Widget 注解联动）
-- [ ] `14.3.2` 元数据流（XMP /Metadata 读写）
-- [ ] `14.3.3` 文档信息字典（/Info 语义封装）
-- [ ] `14.4` 文件标识符（/ID 生成、更新与校验；经典表写出路径补 /ID）
-- [ ] `7.11` 文件规格与嵌入文件流（Filespec、/EmbeddedFiles；FileAttachment 注解前置）
-
-**依赖**：C（注解外观流/表单外观依赖图形能力完整）。
-
-**验收标准**：
-
-- 生成含大纲与 Link 注解的文档，第三方阅读器可点击跳转；
-- Text/Highlight 等常用注解生成+解析往返测试通过，`tests/fixtures/annotated.pdf` 接入测试；
-- AcroForm 文本字段+Widget 写出后可被识别填写；
-- XMP 与 /Info 读写一致，/ID 生成符合规范算法；
-- `12.4`、`12.7.5`、`12.10`、`12.2` 等按需增补，不阻塞本阶段验收；
-- `cargo test` 全绿。
-
-## 阶段 E：专门领域（长期）
-
-**目标**：按需求驱动，不预设排期；仅在明确使用场景出现时逐项立项（对应矩阵 P3）。
-
-**包含条目**：
-
-- [ ] `13.2` 多媒体（Renditions、Media Clip）
-- [ ] `13.3` 声音（Sounds）
-- [ ] `13.4` 视频（Movies）
-- [ ] `13.5` Alternate Presentations
-- [ ] `13.6` 3D Artwork
-- [ ] `12.8` 数字签名（DocMDP/UR/FieldMDP、PKCS#7）
-- [ ] `14.7` 逻辑结构
-- [ ] `14.8` Tagged PDF
-- [ ] `14.9` 无障碍支持
-- [ ] `14.10` Web Capture
-- [ ] `14.11` 预印支持（含 `8.6.7` Overprint、`11.7.4` Overprinting 与透明度联动）
-- [ ] `7.12` Extensions 字典
-- [ ] PDF 2.0 差异评估（引用矩阵「PDF 2.0 差异摘要」节，评估结果决定写端 2.0 策略是否调整）
-- [ ] `7.5.6` 写端增量更新（写出 /Prev 链）
-- [ ] `附录 F` 线性化输出（生成 hint 流）
-
-**依赖**：D（多数专门领域建立在导航/注解/元数据基础之上）；各项彼此独立，可任意顺序立项。
-
-**验收标准**：
-
-- 逐项立项时单独定义验收标准并挂到对应 spec；
-- `12.7.8` XFA 不建议投入（PDF 2.0 已弃用，矩阵该行有注），维持 ⬜ 或评审转 ❌。
+> 纪律：真实 PDF 必须有可追溯来源与许可；无法确认许可的样本不得入库。合成样本由 builder 或脚本生成，生成脚本随 fixture 一并入库。既有 4 个 fixture 来源待追溯，A6 已接入测试，后续决策是否替换为自生成样本。
 
 ## 阶段依赖图
 
 ```mermaid
 flowchart LR
-    A["阶段 A：读得全"] --> B["阶段 B：文本可用"]
-    A -->|"7.10 Functions（硬）"| C["阶段 C：图形完整"]
-    B -->|"字体度量（软）"| C
-    C --> D["阶段 D：交互与交换"]
-    D --> E["阶段 E：专门领域"]
+    A["A 核心读入与安全 🚧"] --> B["B 字体与文本 🚧"]
+    A --> C["C 内容流读取模型 ⬜"]
+    B --> D["D 图形完整 🚧"]
+    C --> D
+    A --> D
+    A -.-> E["E 交互与文档交换 ⬜"]
+    D -.-> E
+    E --> F["F 专门领域 ⬜"]
+    A --> E7["E7 增量更新"]
+    E5["E5 元数据与 /ID"] --> E7
+    E7 --> F1["F1 数字签名"]
 ```
 
-依赖构成无环 DAG：A → B → C → D → E；A 对 C、B 对 C 的细化依赖如图所示，均不构成回边。
+实线表示阶段完成顺序，虚线表示 E 阶段的 E1/E3/E5 等增量只依赖 A、可在 D 完成前启动（逐增量依赖以各阶段正文为准）。依赖构成无环 DAG：A → B/C → D → E → F；B 与 C 可并行；E7 是 F1 的额外前置。
+
+## 阶段映射（旧 → 新）
+
+| 旧规划 | 新规划 | 说明 |
+|---|---|---|
+| 阶段 A 读得全 ✅ | 阶段 A 核心读入与安全 🚧 | 收窄完成口径；JBIG2/JPX/图像字典/内容流读端移出；评审后回退为 🚧 并补 A6 fixture 回归 |
+| 阶段 B 文本可用 🚧 | 阶段 B 字体与文本 🚧 | 条目合并为 7 个增量；完成基线 B1–B4 |
+| 阶段 C 图形完整 🚧 | 阶段 C 内容流读取模型 ⬜ + 阶段 D 图形完整 🚧 | 拆出跨章节前置的读端内容流模型 |
+| 阶段 D 交互与交换 ⬜ | 阶段 E 交互与文档交换 ⬜ | 顺延；新增 E7 增量更新 |
+| 阶段 E 专门领域 ⬜ | 阶段 F 专门领域 ⬜ | 顺延；签名/线性化等重新分组 |
+
+## 维护说明
+
+- 本文件只写「计划、依赖、验收」，不复制测试名；测试证据以矩阵为准。
+- 每次增量完成后更新阶段总览的「已完成」计数；若增量拆分/合并，先更新本文件再动代码。
+- 新增条目必须给出 ISO 32000-1 章节号与矩阵行；章节号以 `docs/PDF32000_2008/` 为准。
+- 规划调整需在「阶段映射」或本文件顶部记录日期与原因，避免历史记忆与文档冲突。
