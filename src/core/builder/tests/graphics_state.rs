@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::core::content::ContentStream;
-use crate::core::types::PdfVersion;
+use crate::core::types::{Array, PdfVersion};
 
 fn page_dict(doc: &Document, index: i64) -> Dict {
     let page_num = 3 + index * 2;
@@ -603,4 +603,338 @@ fn unknown_black_generation_handle_fails_the_build() {
         "{error}"
     );
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+fn one_output_function() -> Function {
+    Function::Exponential(ExponentialFunction::new(vec![0.0, 1.0], 1.0))
+}
+
+fn assert_build_error(b: &mut PdfBuilder, expected: &str) {
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("构建应失败");
+    let message = error.to_string();
+    assert!(
+        message.contains(expected),
+        "error {message:?} should mention {expected:?}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+#[test]
+fn transfer_function_2_dictionary_is_written_verbatim() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let tr2 = Value::Dict(
+        Dict::new()
+            .insert("TransferType", Value::Name("DitherType".into()))
+            .insert("ScreenList", Value::Array(Array(vec![Value::Integer(0)]))),
+    );
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_transfer_function_2(tr2.clone()),
+    );
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, gs) = ext_g_state(&doc, 0, "GS1");
+    assert_eq!(gs.get("TR2"), Some(&tr2));
+}
+
+#[test]
+fn invalid_transfer_function_2_fails_the_build() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_transfer_function_2(Value::Integer(4)),
+    );
+    assert_build_error(&mut b, "/TR2 must be a dictionary");
+}
+
+#[test]
+fn halftone_dictionary_is_written_with_resolved_functions() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let spot = b.function(&one_output_function());
+    let halftone = HalftoneDictionary::new(1)
+        .with_colorant(
+            "C",
+            Halftone::Type1(Type1Halftone {
+                x_frequency: 65.0,
+                angle: 15.0,
+                spot_function: spot,
+                transfer_function: None,
+            }),
+        )
+        .with_colorant(
+            "M",
+            Halftone::Type2(Type2Halftone {
+                frequency: 133.3,
+                angle: 75.0,
+                width: 0.5,
+                uncompensated: true,
+                spot_function: spot,
+                transfer_function: None,
+            }),
+        );
+    b.set_graphics_state(p, &GraphicsState::new().with_halftone(halftone));
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, gs) = ext_g_state(&doc, 0, "GS1");
+    let ht = gs
+        .get("HT")
+        .expect("/HT")
+        .as_dict()
+        .expect("/HT dictionary");
+    assert_eq!(
+        ht.get("DefaultHalftoneType").and_then(Value::as_integer),
+        Some(1)
+    );
+
+    let cyan = ht
+        .get("C")
+        .expect("/C")
+        .as_dict()
+        .expect("type 1 dictionary");
+    assert_eq!(
+        cyan.get("HalftoneType").and_then(Value::as_integer),
+        Some(1)
+    );
+    assert_eq!(
+        as_number(cyan.get("XFrequency").expect("/XFrequency")),
+        65.0
+    );
+    assert_eq!(as_number(cyan.get("Angle").expect("/Angle")), 15.0);
+    assert!(!cyan.0.contains_key("Uncompensated"));
+
+    let magenta = ht
+        .get("M")
+        .expect("/M")
+        .as_dict()
+        .expect("type 2 dictionary");
+    assert_eq!(
+        magenta.get("HalftoneType").and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        as_number(magenta.get("Frequency").expect("/Frequency")),
+        133.3
+    );
+    assert_eq!(as_number(magenta.get("Width").expect("/Width")), 0.5);
+    assert_eq!(
+        as_bool(magenta.get("Uncompensated").expect("/Uncompensated")),
+        Some(true)
+    );
+
+    // 两个色料共享同一函数句柄：Type 2 函数内联写出，两处值一致。
+    let cyan_function = cyan.get("SpotFunction").expect("/SpotFunction");
+    let magenta_function = magenta.get("SpotFunction").expect("/SpotFunction");
+    assert_eq!(magenta_function, cyan_function);
+    let inline = cyan_function.as_dict().expect("inline function dictionary");
+    assert_eq!(
+        inline.get("FunctionType").and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        numbers(inline.get("Domain").expect("/Domain")),
+        vec![0.0, 1.0]
+    );
+}
+
+#[test]
+fn halftone_functions_require_single_output() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let handle = b.function(&Function::Exponential(
+        ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+            .with_c0(vec![0.0, 0.0, 0.0])
+            .with_c1(vec![1.0, 1.0, 1.0]),
+    ));
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_halftone(HalftoneDictionary::new(1).with_colorant(
+            "C",
+            Halftone::Type1(Type1Halftone {
+                x_frequency: 65.0,
+                angle: 15.0,
+                spot_function: handle,
+                transfer_function: None,
+            }),
+        )),
+    );
+    assert_build_error(&mut b, "/HT function must produce 1 output");
+}
+
+#[test]
+fn invalid_halftone_parameters_fail_the_build() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let spot = b.function(&one_output_function());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_halftone(HalftoneDictionary::new(1).with_colorant(
+            "C",
+            Halftone::Type1(Type1Halftone {
+                x_frequency: 0.0,
+                angle: 15.0,
+                spot_function: spot,
+                transfer_function: None,
+            }),
+        )),
+    );
+    assert_build_error(
+        &mut b,
+        "colorant C: type 1 /XFrequency must be a positive finite number",
+    );
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_halftone(HalftoneDictionary::new(3)),
+    );
+    assert_build_error(
+        &mut b,
+        "/DefaultHalftoneType 3 is not modeled (only 1 and 2)",
+    );
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let spot = b.function(&one_output_function());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_halftone(HalftoneDictionary::new(1).with_colorant(
+            "Bad Name",
+            Halftone::Type1(Type1Halftone {
+                x_frequency: 65.0,
+                angle: 15.0,
+                spot_function: spot,
+                transfer_function: None,
+            }),
+        )),
+    );
+    assert_build_error(
+        &mut b,
+        "halftone colorant name \"Bad Name\" is not a valid PDF name",
+    );
+}
+
+#[test]
+fn unknown_halftone_handle_fails_the_build() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_halftone(HalftoneDictionary::new(1).with_colorant(
+            "C",
+            Halftone::Type1(Type1Halftone {
+                x_frequency: 65.0,
+                angle: 15.0,
+                spot_function: 99,
+                transfer_function: None,
+            }),
+        )),
+    );
+    assert_build_error(&mut b, "/HT references unknown function handle 99");
+}
+
+#[test]
+fn soft_mask_writes_transfer_function_smask_in_data_and_matte() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let mask = b.form_xobject(&mask_form());
+    let transfer = b.function(&one_output_function());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_soft_mask(
+            SoftMask::luminosity(mask)
+                .with_transfer_function(transfer)
+                .with_smask_in_data(1)
+                .with_matte([0.2, 0.4, 0.6]),
+        ),
+    );
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, gs) = ext_g_state(&doc, 0, "GS1");
+    let mask_dict = gs
+        .get("SMask")
+        .expect("/SMask")
+        .as_dict()
+        .expect("/SMask dictionary");
+    let transfer_dict = mask_dict
+        .get("TR")
+        .expect("/TR")
+        .as_dict()
+        .expect("inline transfer function dictionary");
+    assert_eq!(
+        transfer_dict
+            .get("FunctionType")
+            .and_then(Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        mask_dict.get("SMaskInData").and_then(Value::as_integer),
+        Some(1)
+    );
+    assert_eq!(
+        numbers(mask_dict.get("Matte").expect("/Matte")),
+        vec![0.2, 0.4, 0.6]
+    );
+}
+
+#[test]
+fn soft_mask_extension_parameters_are_validated() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let mask = b.form_xobject(&mask_form());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_soft_mask(SoftMask::alpha(mask).with_smask_in_data(3)),
+    );
+    assert_build_error(&mut b, "/SMask /SMaskInData must be 0, 1 or 2");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let mask = b.form_xobject(&mask_form());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_soft_mask(SoftMask::alpha(mask).with_matte(Vec::new())),
+    );
+    assert_build_error(&mut b, "/SMask /Matte must not be empty");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let mask = b.form_xobject(&mask_form());
+    let matte = {
+        let mut components = vec![0.5];
+        components.push(f64::NAN);
+        components
+    };
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_soft_mask(SoftMask::alpha(mask).with_matte(matte)),
+    );
+    assert_build_error(&mut b, "/SMask /Matte components must be finite");
+}
+
+#[test]
+fn matte_requires_pdf_1_6() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_5);
+    let p = b.page(PageSize::A4);
+    let mask = b.form_xobject(&mask_form());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_soft_mask(SoftMask::alpha(mask).with_matte([0.5])),
+    );
+    assert_build_error(&mut b, "soft mask matte color");
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_6);
+    let p = b.page(PageSize::A4);
+    let mask = b.form_xobject(&mask_form());
+    b.set_graphics_state(
+        p,
+        &GraphicsState::new().with_soft_mask(SoftMask::alpha(mask).with_matte([0.5])),
+    );
+    let mut out = Vec::new();
+    b.build(&mut out).expect("PDF 1.6 supports /Matte");
+    assert!(String::from_utf8_lossy(&out).contains("/Matte"));
 }

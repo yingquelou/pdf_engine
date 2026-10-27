@@ -124,6 +124,84 @@ impl OptionalContentProperties {
             .as_ref()
             .and_then(|configuration| configuration.is_visible(object))
     }
+
+    /// Visibility of an optional content membership dictionary (OCMD,
+    /// 8.11.2.2) under the default configuration.
+    pub fn membership_visible(&self, dict: &Dict) -> Option<bool> {
+        membership_visibility(dict, &|object| self.is_visible(object))
+    }
+}
+
+/// Evaluate an optional content membership dictionary (Table 100).
+///
+/// `/VE` takes precedence over `/P`; without either, `/P` defaults to
+/// `/AllOn`. Returns `None` when the dictionary carries no `/OCGs` array, the
+/// policy is unknown, or the state of a referenced group cannot be
+/// determined (for example an `/Unchanged` base state).
+pub fn membership_visibility(
+    dict: &Dict,
+    is_visible: &dyn Fn(i64) -> Option<bool>,
+) -> Option<bool> {
+    if let Some(expression) = dict.get("VE") {
+        return visibility_expression(expression, is_visible);
+    }
+    let groups = dict.get("OCGs")?.as_array()?;
+    let policy = dict.get("P").and_then(Value::as_name).unwrap_or("AllOn");
+    let mut any_visible = false;
+    let mut any_hidden = false;
+    for group in groups.iter() {
+        match group.as_ref().and_then(|(object, _)| is_visible(object)) {
+            Some(true) => any_visible = true,
+            Some(false) => any_hidden = true,
+            None => return None,
+        }
+    }
+    match policy {
+        "AllOn" => Some(!any_hidden),
+        "AnyOn" => Some(any_visible),
+        "AnyOff" => Some(any_hidden),
+        "AllOff" => Some(!any_visible),
+        _ => None,
+    }
+}
+
+/// Evaluate a `/VE` visibility expression: `[/And …]`, `[/Or …]`,
+/// `[/Not expr]`, or an OCG reference.
+fn visibility_expression(value: &Value, is_visible: &dyn Fn(i64) -> Option<bool>) -> Option<bool> {
+    match value {
+        Value::Ref(object, _) => is_visible(*object),
+        Value::Array(items) => {
+            let mut operands = items.iter();
+            let operator = operands.next()?.as_name()?;
+            match operator {
+                "And" | "Or" => {
+                    let dominates = operator == "Or";
+                    let mut state = Some(!dominates);
+                    for item in operands {
+                        state = combine(state, visibility_expression(item, is_visible), dominates);
+                    }
+                    state
+                }
+                "Not" => Some(!visibility_expression(operands.next()?, is_visible)?),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Fold one visibility operand into a short-circuiting `And`/`Or` result.
+///
+/// `dominates` is the operator's absorbing value: `false` for `And`, `true`
+/// for `Or`. An unknown operand only survives when no absorbing value was
+/// seen.
+fn combine(state: Option<bool>, operand: Option<bool>, dominates: bool) -> Option<bool> {
+    match (state, operand) {
+        (Some(value), _) if value == dominates => Some(dominates),
+        (_, Some(value)) if value == dominates => Some(dominates),
+        (Some(true), Some(true)) | (Some(false), Some(false)) => state,
+        _ => None,
+    }
 }
 
 impl Document {
@@ -563,6 +641,123 @@ mod tests {
                 ),
             ),
             "/BaseState",
+        );
+    }
+
+    #[test]
+    fn membership_policy_matrix() {
+        let is_visible = |object: i64| -> Option<bool> {
+            match object {
+                10 => Some(true),
+                11 => Some(false),
+                _ => None,
+            }
+        };
+        let ocmd = |policy: &str| {
+            Dict::new()
+                .insert(
+                    "OCGs",
+                    Value::Array(Array::new().push(Value::Ref(10, 0)).push(Value::Ref(11, 0))),
+                )
+                .insert("P", Value::Name(policy.into()))
+        };
+        assert_eq!(
+            membership_visibility(&ocmd("AllOn"), &is_visible),
+            Some(false)
+        );
+        assert_eq!(
+            membership_visibility(&ocmd("AnyOn"), &is_visible),
+            Some(true)
+        );
+        assert_eq!(
+            membership_visibility(&ocmd("AnyOff"), &is_visible),
+            Some(true)
+        );
+        assert_eq!(
+            membership_visibility(&ocmd("AllOff"), &is_visible),
+            Some(false)
+        );
+
+        let defaulted = Dict::new().insert(
+            "OCGs",
+            Value::Array(Array::new().push(Value::Ref(10, 0)).push(Value::Ref(11, 0))),
+        );
+        assert_eq!(
+            membership_visibility(&defaulted, &is_visible),
+            Some(false),
+            "/P defaults to /AllOn"
+        );
+        assert_eq!(membership_visibility(&ocmd("Maybe"), &is_visible), None);
+        assert_eq!(membership_visibility(&Dict::new(), &is_visible), None);
+
+        let unknown_group =
+            Dict::new().insert("OCGs", Value::Array(Array::new().push(Value::Ref(99, 0))));
+        assert_eq!(membership_visibility(&unknown_group, &is_visible), None);
+
+        let empty = OptionalContentProperties {
+            groups: Vec::new(),
+            default: None,
+        };
+        assert_eq!(empty.membership_visible(&ocmd("AllOn")), None);
+    }
+
+    #[test]
+    fn membership_visibility_expression_overrides_policy() {
+        let is_visible = |object: i64| -> Option<bool> {
+            match object {
+                10 => Some(true),
+                11 => Some(false),
+                _ => None,
+            }
+        };
+        // /AnyOn alone is false (group 11 is off), but /Or 10 11 is true.
+        let ve_wins = Dict::new()
+            .insert("OCGs", Value::Array(Array::new().push(Value::Ref(11, 0))))
+            .insert("P", Value::Name("AnyOn".into()))
+            .insert(
+                "VE",
+                Value::Array(
+                    Array::new()
+                        .push(Value::Name("Or".into()))
+                        .push(Value::Ref(10, 0))
+                        .push(Value::Ref(11, 0)),
+                ),
+            );
+        assert_eq!(membership_visibility(&ve_wins, &is_visible), Some(true));
+
+        let nested = Dict::new().insert(
+            "VE",
+            Value::Array(
+                Array::new()
+                    .push(Value::Name("And".into()))
+                    .push(Value::Array(
+                        Array::new()
+                            .push(Value::Name("Or".into()))
+                            .push(Value::Ref(10, 0))
+                            .push(Value::Ref(11, 0)),
+                    ))
+                    .push(Value::Array(
+                        Array::new()
+                            .push(Value::Name("Not".into()))
+                            .push(Value::Ref(11, 0)),
+                    )),
+            ),
+        );
+        assert_eq!(membership_visibility(&nested, &is_visible), Some(true));
+
+        let short_circuit = Dict::new().insert(
+            "VE",
+            Value::Array(
+                Array::new()
+                    .push(Value::Name("And".into()))
+                    .push(Value::Ref(11, 0))
+                    .push(Value::Ref(99, 0)),
+            ),
+        );
+        assert_eq!(
+            membership_visibility(&short_circuit, &is_visible),
+            Some(false),
+            "a known false /And operand absorbs an unknown one"
         );
     }
 

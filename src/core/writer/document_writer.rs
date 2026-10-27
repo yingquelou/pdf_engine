@@ -4,6 +4,7 @@ use crate::core::types::{Document, PdfFeature, PdfVersion};
 use std::io::Write;
 
 use super::WriteError;
+use super::compression::StreamCompression;
 use super::context::WriteContext;
 use super::serialize::{
     ClassicXrefSerializer, ObjectLayout, ObjectStreamLayout, PlainObjectLayout, XrefSerializer,
@@ -21,6 +22,8 @@ use super::version::{validate_content_version, validate_output_version};
 #[derive(Debug, Clone, Default)]
 pub struct DocumentWriter {
     version: Option<PdfVersion>,
+    /// D4 流压缩策略；未设置时输出保持明文透传（既有行为）。
+    compression: Option<StreamCompression>,
 }
 
 impl DocumentWriter {
@@ -31,6 +34,16 @@ impl DocumentWriter {
     /// 指定目标版本；未指定则用 writer 自身默认值（`PdfVersion::default()`，即 1.7）。
     pub fn with_version(mut self, v: PdfVersion) -> Self {
         self.version = Some(v);
+        self
+    }
+
+    /// 启用写端流压缩（D4）：所有未声明 `/Filter` 的明文流在序列化时按
+    /// `FlateDecode` 压缩写出。`FlateDecode` 要求目标版本 ≥1.2；启用图像
+    /// PNG 预测器要求 ≥1.3；不满足时报 [`WriteError::UnsupportedVersion`]
+    /// 且不写出任何字节。压缩后端失败报 [`WriteError::Compression`]，
+    /// 同样零字节，不静默回退明文。
+    pub fn with_compression(mut self, compression: StreamCompression) -> Self {
+        self.compression = Some(compression);
         self
     }
 
@@ -47,18 +60,31 @@ impl DocumentWriter {
         // 若 Document 有源文件（读端），自动预加载全部对象。
         // 失败只记 warning，不中断。load_all_objects 同时填充完整
         // FeatureProfile（读端特性画像的唯一数据源）。
-        if doc.source.is_some() {
-            if let Err(e) = doc.load_all_objects() {
-                doc.push_warning(format!(
-                    "DocumentWriter: load_all_objects failed: {e}; continuing with partial cache"
-                ));
-            }
+        if doc.source.is_some()
+            && let Err(e) = doc.load_all_objects()
+        {
+            doc.push_warning(format!(
+                "DocumentWriter: load_all_objects failed: {e}; continuing with partial cache"
+            ));
         }
         // 默认版本用 writer 自身的 1.7（PdfVersion::default），**不再**
         // 继承 doc.source_version——写端与读端版本彻底解耦。
-        let version = self.version.unwrap_or(PdfVersion::default());
+        let version = self.version.unwrap_or_default();
         validate_output_version(version)?;
         validate_content_version(version, doc)?;
+        // D4 版本门控：FlateDecode 为 PDF 1.2 引入，PNG 预测器为 1.3 引入。
+        if let Some(comp) = &self.compression {
+            if version < PdfVersion::V1_2 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "flate stream compression requires PDF 1.2, got {version}"
+                )));
+            }
+            if comp.uses_image_predictor() && version < PdfVersion::V1_3 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "PNG image predictor requires PDF 1.3, got {version}"
+                )));
+            }
+        }
 
         // 策略选择：唯一事实源为版本能力模型（PdfVersion::supports）。
         let layout: Box<dyn ObjectLayout> = if version.supports(PdfFeature::ObjectStream) {
@@ -89,7 +115,7 @@ impl DocumentWriter {
                 Some("ObjStm") | Some("XRef")
             )
         });
-        let mut ctx = WriteContext::new(version);
+        let mut ctx = WriteContext::new(version, self.compression.clone());
         ctx.write_header();
         // 先预留文档内全部对象号，再分配对象流/XRef 流的新对象号。
         ctx.reserve_object_numbers(&objs);

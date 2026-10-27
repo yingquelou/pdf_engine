@@ -63,14 +63,23 @@ pub fn parse_content_stream(input: &[u8]) -> Result<Vec<Op>> {
     let mut pos = 0;
 
     while pos < tokens.len() {
-        // Check for inline image (BI ... ID <data> EI)
-        if let Some(CsToken::Keyword(kw)) = tokens.get(pos) {
-            if kw == "BI" {
-                let (image, next_pos) = parse_inline_image(&tokens, pos, input)?;
-                ops.push(Op::InlineImage(image));
-                pos = next_pos;
-                continue;
+        // Inline image (BI ... ID <data> EI); the tokenizer already split the
+        // dictionary from the binary data and consumed the closing EI.
+        if let Some(CsToken::InlineImage {
+            dict,
+            data,
+            terminated,
+        }) = tokens.get(pos)
+        {
+            if !terminated {
+                return Err(ContentStreamError::MalformedInlineImage);
             }
+            ops.push(Op::InlineImage(InlineImage {
+                dict: inline_image_dict_entries(dict),
+                data: data.clone(),
+            }));
+            pos += 1;
+            continue;
         }
 
         // Collect operands until we hit an operator
@@ -92,85 +101,13 @@ pub fn parse_content_stream(input: &[u8]) -> Result<Vec<Op>> {
     Ok(ops)
 }
 
-fn parse_inline_image(
-    tokens: &[CsToken],
-    start: usize,
-    input: &[u8],
-) -> Result<(InlineImage, usize)> {
-    // Skip BI
-    let mut pos = start + 1;
-
-    // Parse dictionary entries until ID
-    let mut dict = Vec::new();
-    while pos < tokens.len() {
-        match &tokens[pos] {
-            CsToken::Keyword(kw) if kw == "ID" => {
-                pos += 1;
-                break;
-            }
-            CsToken::Name(key) => {
-                let key = key.clone();
-                pos += 1;
-                if pos >= tokens.len() {
-                    return Err(ContentStreamError::MalformedInlineImage);
-                }
-                let value = token_to_value(&tokens[pos])?;
-                dict.push((key, value));
-                pos += 1;
-            }
-            _ => {
-                return Err(ContentStreamError::MalformedInlineImage);
-            }
-        }
-    }
-
-    // Find the raw data between ID and EI in the original input.
-    // The tokenizer already consumed the image data and the closing EI,
-    // so `pos` (one past the ID token) points at the next content token.
-    let id_pos = find_keyword_in_input(input, b"ID", start);
-    let ei_pos = id_pos.and_then(|id| find_keyword_in_input(input, b"EI", id + 2));
-
-    let data = if let (Some(id), Some(ei)) = (id_pos, ei_pos) {
-        // Data starts after "ID " (3 bytes) and ends before " EI"
-        let data_start = id + 3;
-        let data_end = ei;
-        if data_start <= data_end && data_end <= input.len() {
-            input[data_start..data_end].to_vec()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-
-    Ok((InlineImage { dict, data }, pos))
-}
-
-fn find_keyword_in_input(input: &[u8], keyword: &[u8], _after_token: usize) -> Option<usize> {
-    // Simple search for the keyword in the input
-    // This is a best-effort approach; inline images are tricky because the data
-    // can contain arbitrary bytes
-    let mut pos = 0;
-    while pos + keyword.len() < input.len() {
-        if &input[pos..pos + keyword.len()] == keyword {
-            // Check that it's surrounded by whitespace or delimiters
-            let before_ok = pos == 0 || is_ws_or_delimiter(input[pos - 1]);
-            let after_ok = pos + keyword.len() >= input.len()
-                || is_ws_or_delimiter(input[pos + keyword.len()]);
-            if before_ok && after_ok {
-                return Some(pos);
-            }
-        }
-        pos += 1;
-    }
-    None
-}
-
-fn is_ws_or_delimiter(b: u8) -> bool {
-    matches!(
-        b,
-        b' ' | b'\n' | b'\r' | b'\t' | b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'/' | b'%'
-    )
+/// Parse the raw inline image dictionary bytes into ordered key/value pairs.
+///
+/// Inline image dictionaries use abbreviated keys (`/W`, `/H`, `/BPC`, `/CS`,
+/// ...) and may contain arrays (`/D`, `/F`, `/DP`) and nested dictionaries
+/// (`/DP`); [`parse_dictionary_inner`] already handles both.
+fn inline_image_dict_entries(dict: &[u8]) -> Vec<(String, Value)> {
+    parse_dictionary_inner(dict).0.into_iter().collect()
 }
 
 fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
@@ -260,9 +197,9 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         // Text state
         "Tc" => Ok(Op::SetCharSpacing(expect_number(&operands[0], "Tc", 0)?)),
         "Tw" => Ok(Op::SetWordSpacing(expect_number(&operands[0], "Tw", 0)?)),
-        "Th" => Ok(Op::SetHorizontalScaling(expect_number(
+        "Tz" => Ok(Op::SetHorizontalScaling(expect_number(
             &operands[0],
-            "Th",
+            "Tz",
             0,
         )?)),
         "TL" => Ok(Op::SetTextLeading(expect_number(&operands[0], "TL", 0)?)),
@@ -408,25 +345,95 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         // Unmodeled operator
         _ => Ok(Op::Unmodeled {
             operator: keyword.into(),
-            operands: operands
-                .iter()
-                .map(token_to_value)
-                .collect::<Result<Vec<_>>>()?,
+            operands: tokens_to_values(operands)?,
         }),
     }
 }
 
-fn token_to_value(token: &CsToken) -> Result<Value> {
-    match token {
-        CsToken::Number(n) => Ok(Value::Float(*n)),
-        CsToken::LiteralString(s) => Ok(Value::String(String::from_utf8_lossy(s).into_owned())),
-        CsToken::HexString(s) => Ok(Value::HexString(String::from_utf8_lossy(s).into_owned())),
-        CsToken::Name(n) => Ok(Value::Name(n.clone())),
-        CsToken::Keyword(k) => Ok(Value::Name(k.clone())),
-        CsToken::ArrayOpen => Ok(Value::Array(Default::default())),
-        CsToken::ArrayClose => Ok(Value::Array(Default::default())),
-        CsToken::Dictionary(inner) => Ok(Value::Dict(parse_dictionary_inner(inner))),
+/// Convert a run of operand tokens into PDF values, coalescing structure.
+///
+/// Used for unmodeled operators so their operands survive a
+/// parse → serialize → parse roundtrip: `[ ... ]` spans (with nesting)
+/// become [`Value::Array`], `num gen R` triplets become [`Value::Ref`],
+/// and `true`/`false`/`null` keywords become their typed values.
+fn tokens_to_values(tokens: &[CsToken]) -> Result<Vec<Value>> {
+    let mut values = Vec::new();
+    let mut pos = 0;
+    while pos < tokens.len() {
+        if let (
+            Some(CsToken::Number(num)),
+            Some(CsToken::Number(generation)),
+            Some(CsToken::Keyword(kw)),
+        ) = (tokens.get(pos), tokens.get(pos + 1), tokens.get(pos + 2))
+            && kw == "R"
+        {
+            values.push(Value::Ref(*num as i64, *generation as i64));
+            pos += 3;
+            continue;
+        }
+        if matches!(tokens[pos], CsToken::ArrayOpen) {
+            let end = array_close_index(tokens, pos).unwrap_or(tokens.len());
+            values.push(Value::Array(Array(tokens_to_values(
+                &tokens[pos + 1..end.min(tokens.len())],
+            )?)));
+            pos = end + 1;
+            continue;
+        }
+        values.push(token_to_value(&tokens[pos])?);
+        pos += 1;
     }
+    Ok(values)
+}
+
+/// Index of the `ArrayClose` matching the `ArrayOpen` at `open`.
+fn array_close_index(tokens: &[CsToken], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut pos = open;
+    while pos < tokens.len() {
+        match &tokens[pos] {
+            CsToken::ArrayOpen => depth += 1,
+            CsToken::ArrayClose => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(pos);
+                }
+            }
+            _ => {}
+        }
+        pos += 1;
+    }
+    None
+}
+
+fn token_to_value(token: &CsToken) -> Result<Value> {
+    Ok(match token {
+        CsToken::Number(n) => Value::Float(*n),
+        CsToken::LiteralString(s) => Value::String(s.iter().map(|&b| b as char).collect()),
+        CsToken::HexString(s) => Value::HexString(hex_upper(s)),
+        CsToken::Name(n) => Value::Name(n.clone()),
+        CsToken::Keyword(k) => match k.as_str() {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            "null" => Value::Null,
+            _ => Value::Name(k.clone()),
+        },
+        CsToken::ArrayOpen => Value::Array(Default::default()),
+        CsToken::ArrayClose => Value::Array(Default::default()),
+        CsToken::Dictionary(inner) => Value::Dict(parse_dictionary_inner(inner)),
+        // Inline images are consumed as a whole by `parse_content_stream` and
+        // cannot appear as an operand of another operator.
+        CsToken::InlineImage { .. } => return Err(ContentStreamError::MalformedInlineImage),
+    })
+}
+
+/// Render bytes as uppercase hex pairs, matching the document parser.
+pub(crate) fn hex_upper(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(hex, "{byte:02X}");
+    }
+    hex
 }
 
 /// Build a [`Dict`] from the raw inner bytes of a `<< ... >>` literal.
@@ -516,7 +523,7 @@ fn take_dictionary_value(tokens: &[CsToken], pos: &mut usize) -> Option<Value> {
             *pos += 1;
             return Some(Value::Dict(parse_dictionary_inner(inner)));
         }
-        CsToken::ArrayClose => return None,
+        CsToken::ArrayClose | CsToken::InlineImage { .. } => return None,
     };
     *pos += 1;
     Some(value)

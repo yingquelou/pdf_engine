@@ -146,3 +146,21 @@ fn pdflatex_4_pages_marked_content_pairs_with_spans() {
         assert_eq!(sections, doc.page_marked_content(page_index).unwrap());
     }
 }
+
+/// C5：真实 pdflatex 内容流经 `serialize_ops` → 重新解析应保持模型无损
+/// （含未建模操作符透传与二进制文本的字面量/十六进制选择）。
+#[test]
+fn pdflatex_4_pages_content_model_serialization_roundtrips() {
+    use pdf_engine::core::reader::content::{parse_content_stream, serialize_ops};
+    let doc = parse_buf(&read_fixture("pdflatex-4-pages.pdf")).unwrap();
+    for page_index in 0..4 {
+        let ops = doc.page_content_ops(page_index).expect("content ops parse");
+        let bytes = serialize_ops(&ops);
+        let back = parse_content_stream(&bytes)
+            .unwrap_or_else(|e| panic!("page {page_index} re-parse failed: {e}"));
+        assert_eq!(
+            ops, back,
+            "page {page_index} model changed through roundtrip"
+        );
+    }
+}

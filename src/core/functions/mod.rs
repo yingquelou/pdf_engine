@@ -157,6 +157,20 @@ impl Function {
         }
     }
 
+    /// 输出分量数：Type 0/4 取 `/Range` 对数；Type 2 取 `/C0` 元素数；
+    /// Type 3 有 `/Range` 时取对数，否则取首个子函数的输出数。
+    pub fn output_count(&self) -> Option<usize> {
+        match self {
+            Function::Sampled(f) => Some(f.range.len()),
+            Function::Exponential(f) => Some(f.c0.len()),
+            Function::Stitching(f) => match &f.range {
+                Some(range) => Some(range.len()),
+                None => f.functions.first().and_then(|first| first.output_count()),
+            },
+            Function::Calculator(f) => Some(f.range.len()),
+        }
+    }
+
     /// 函数类型号（0/2/3/4）。
     pub fn function_type(&self) -> i64 {
         match self {

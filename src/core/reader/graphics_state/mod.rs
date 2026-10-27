@@ -4,15 +4,21 @@
 //! Entries that carry function, halftone or soft-mask objects (`/SMask`,
 //! `/TR`, `/TR2`, `/HT`, `/BG`, `/BG2`, `/UCR`, `/UCR2`) are preserved as
 //! resolved raw values; [`Document::soft_mask`] additionally parses an
-//! `/SMask` value into a typed [`SoftMask`] dictionary. Interpreting
-//! transfer functions and halftones belongs to those features (7.10, 10.5).
+//! `/SMask` value into a typed [`SoftMask`] dictionary and
+//! `Document::halftone` (see the `halftone` submodule) parses an `/HT`
+//! value into a [`HalftoneModel`]. Interpreting transfer functions remains
+//! out of scope.
 //! Unknown entries are kept verbatim in [`ExtGState::other`] without
 //! resolving them.
+
+mod halftone;
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::core::types::{Dict, Document, Value};
+
+pub use halftone::{CompositeHalftone, HalftoneModel, Type1Halftone, Type2Halftone};
 
 use super::ParseError;
 
@@ -107,6 +113,12 @@ pub struct SoftMask {
     pub backdrop: Option<Vec<f64>>,
     /// `/TR` transfer function as written (name `Identity` or a function).
     pub transfer: Option<Value>,
+    /// `/SMaskInData` (0–2).
+    pub smask_in_data: Option<u8>,
+    /// `/Matte` matte colour components (non-empty, finite); PDF 1.6.
+    pub matte: Option<Vec<f64>>,
+    /// Entries outside Table 146, preserved verbatim and unresolved.
+    pub other: BTreeMap<String, Value>,
 }
 
 /// Parsed graphics state parameter dictionary.
@@ -225,8 +237,9 @@ impl Document {
     /// `value` may be a dictionary or an indirect reference to one.
     /// `/S` must be `/Alpha` or `/Luminosity`, `/G` must resolve to a
     /// Form or Image XObject stream, `/BC` components must lie within
-    /// `0..=1`, and a `/TR` name must be `/Identity`. `/G` and `/TR` are
-    /// kept as written so callers can resolve them themselves.
+    /// `0..=1`, `/SMaskInData` must be 0–2, `/Matte` must be a non-empty
+    /// array of numbers, and a `/TR` name must be `/Identity`. `/G` and
+    /// `/TR` are kept as written so callers can resolve them themselves.
     pub fn soft_mask(&self, value: &Value) -> Result<SoftMask> {
         let value = self.resolve_graphics_state_value(value)?;
         let dict = value.as_dict().ok_or_else(|| {
@@ -356,11 +369,56 @@ fn parse_soft_mask(document: &Document, dict: &Dict) -> Result<SoftMask> {
         return Err(invalid("soft mask /TR name must be /Identity"));
     }
 
+    let smask_in_data = match entry(document, dict, "SMaskInData")? {
+        None => None,
+        Some(value) => {
+            let Some(code) = integer(&value) else {
+                return Err(invalid("soft mask /SMaskInData must be an integer"));
+            };
+            if !(0..=2).contains(&code) {
+                return Err(invalid("soft mask /SMaskInData must be 0, 1 or 2"));
+            }
+            Some(code as u8)
+        }
+    };
+
+    let matte = match entry(document, dict, "Matte")? {
+        None => None,
+        Some(value) => {
+            let array = value
+                .as_array()
+                .ok_or_else(|| invalid("soft mask /Matte must be an array"))?;
+            if array.is_empty() {
+                return Err(invalid("soft mask /Matte must not be empty"));
+            }
+            let mut components = Vec::with_capacity(array.len());
+            for item in array.iter() {
+                let item = document.resolve_graphics_state_value(item)?;
+                let Some(component) = number(&item) else {
+                    return Err(invalid("soft mask /Matte entries must be numbers"));
+                };
+                components.push(component);
+            }
+            Some(components)
+        }
+    };
+
+    const SOFT_MASK_ENTRIES: [&str; 7] = ["Type", "S", "G", "BC", "TR", "SMaskInData", "Matte"];
+    let mut other = BTreeMap::new();
+    for (key, value) in &dict.0 {
+        if !SOFT_MASK_ENTRIES.contains(&key.as_str()) {
+            other.insert(key.clone(), value.clone());
+        }
+    }
+
     Ok(SoftMask {
         subtype,
         group,
         backdrop,
         transfer,
+        smask_in_data,
+        matte,
+        other,
     })
 }
 

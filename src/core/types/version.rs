@@ -115,12 +115,18 @@ pub enum PdfFeature {
     Transparency,
     /// 图像 `/Mask` 条目（显式蒙版或颜色键蒙版），PDF 1.3 引入。
     ImageMaskEntry,
+    /// 图像 `/Alternates` 替代图像数组（Table 90），PDF 1.3 引入。
+    AlternateImages,
+    /// 图像 `/Intent` 渲染意图，PDF 1.4 引入。
+    ImageIntent,
     /// 平铺图案（`/PatternType 1` 图案流），PDF 1.2 引入。
     TilingPattern,
     /// 平滑渐变（`/ShadingType 1–7`、`sh` 操作符与着色图案），PDF 1.3 引入。
     Shading,
     /// 可选内容（`/OCProperties`），PDF 1.5 引入。
     OptionalContent,
+    /// 软蒙版 `/Matte` 衬底颜色（PDF 1.6 引入）。
+    SoftMaskMatte,
 }
 
 impl PdfFeature {
@@ -129,12 +135,17 @@ impl PdfFeature {
         match self {
             PdfFeature::EncryptionRC4 => PdfVersion::V1_1,
             PdfFeature::TilingPattern => PdfVersion::V1_2,
-            PdfFeature::ImageMaskEntry | PdfFeature::Shading => PdfVersion::V1_3,
-            PdfFeature::JBIG2Decode | PdfFeature::Transparency => PdfVersion::V1_4,
+            PdfFeature::ImageMaskEntry | PdfFeature::AlternateImages | PdfFeature::Shading => {
+                PdfVersion::V1_3
+            }
+            PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
+                PdfVersion::V1_4
+            }
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
             | PdfFeature::OptionalContent => PdfVersion::V1_5,
+            PdfFeature::SoftMaskMatte => PdfVersion::V1_6,
         }
     }
 }
@@ -149,9 +160,12 @@ impl fmt::Display for PdfFeature {
             PdfFeature::JPXDecode => "JPXDecode filter",
             PdfFeature::Transparency => "transparency",
             PdfFeature::ImageMaskEntry => "image Mask entry",
+            PdfFeature::AlternateImages => "alternate images",
+            PdfFeature::ImageIntent => "image rendering intent",
             PdfFeature::TilingPattern => "tiling pattern",
             PdfFeature::Shading => "shading",
             PdfFeature::OptionalContent => "optional content",
+            PdfFeature::SoftMaskMatte => "soft mask matte color",
         };
         write!(f, "{name}")
     }

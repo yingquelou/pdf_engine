@@ -304,3 +304,74 @@ fn dictionary_with_string_containing_angle_brackets_roundtrips_entries() {
     assert_eq!(dict.get("ActualText"), Some(&Value::String("a>b".into())));
     assert_eq!(dict.get("E"), Some(&Value::String("c".into())));
 }
+
+#[test]
+fn parse_inline_image_extracts_dictionary_and_binary_data() {
+    let ops = parse_content_stream(b"BI /W 2 /H 1 /BPC 8 /CS /G ID \x00\xff EI Q").unwrap();
+    assert_eq!(ops.len(), 2);
+    let Op::InlineImage(image) = &ops[0] else {
+        panic!("expected an inline image, got {:?}", ops[0]);
+    };
+    assert_eq!(
+        image.dict,
+        vec![
+            ("BPC".to_string(), Value::Float(8.0)),
+            ("CS".to_string(), Value::Name("G".into())),
+            ("H".to_string(), Value::Float(1.0)),
+            ("W".to_string(), Value::Float(2.0)),
+        ]
+    );
+    assert_eq!(image.data, vec![0x00, 0xFF]);
+    assert!(matches!(ops[1], Op::RestoreState));
+}
+
+#[test]
+fn inline_image_data_may_contain_operator_like_bytes() {
+    let content = b"BI /W 1 /H 1 /BPC 8 /CS /G ID BI \x01\x02 q Q ( EI";
+    let ops = parse_content_stream(content).unwrap();
+    let Op::InlineImage(image) = &ops[0] else {
+        panic!("expected an inline image, got {:?}", ops[0]);
+    };
+    assert_eq!(image.data, b"BI \x01\x02 q Q (");
+    assert_eq!(ops.len(), 1, "the image span hides operator-like bytes");
+}
+
+#[test]
+fn parse_inline_image_keeps_filter_array_and_decode_parms() {
+    let content = b"BI /W 1 /H 1 /BPC 8 /CS /G /F [/AHx] /DP [<< /K -1 >>] ID 00> EI";
+    let ops = parse_content_stream(content).unwrap();
+    let Op::InlineImage(image) = &ops[0] else {
+        panic!("expected an inline image, got {:?}", ops[0]);
+    };
+    let mut dict = crate::core::types::Dict::new();
+    for (key, value) in &image.dict {
+        dict = dict.insert(key.clone(), value.clone());
+    }
+    assert_eq!(
+        dict.get("F"),
+        Some(&Value::Array(crate::core::types::Array(vec![Value::Name(
+            "AHx".into()
+        )])))
+    );
+    let Some(Value::Array(parms)) = dict.get("DP") else {
+        panic!("expected /DP array, got {:?}", dict.get("DP"));
+    };
+    assert_eq!(
+        parms
+            .0
+            .first()
+            .and_then(Value::as_dict)
+            .and_then(|d| d.get("K")),
+        Some(&Value::Float(-1.0))
+    );
+    assert_eq!(image.data, b"00>");
+}
+
+#[test]
+fn truncated_inline_image_returns_error() {
+    let error = parse_content_stream(b"BI /W 1 /H 1 /BPC 8 /CS /G ID \x01").unwrap_err();
+    assert_eq!(error, ContentStreamError::MalformedInlineImage);
+
+    let error = parse_content_stream(b"BI /W 1 /H 1").unwrap_err();
+    assert_eq!(error, ContentStreamError::MalformedInlineImage);
+}

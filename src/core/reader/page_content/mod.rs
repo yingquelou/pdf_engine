@@ -71,20 +71,7 @@ impl Document {
     /// Returns an error when the page index is out of range, the page structure
     /// is malformed, or the content exceeds the parsing limits.
     pub fn page_content_ops(&self, page_index: usize) -> Result<Vec<Op>> {
-        let root = self
-            .trailer
-            .dict
-            .get("Root")
-            .ok_or(PageContentError::PageNotFound)?;
-        let root = resolve_value(self, root).ok_or(PageContentError::PageNotFound)?;
-        let root = root.as_dict().ok_or(PageContentError::PageNotFound)?;
-        let pages_value = root.get("Pages").ok_or(PageContentError::PageNotFound)?;
-        let pages_key = pages_value.as_ref();
-        let pages = resolve_value(self, pages_value).ok_or(PageContentError::PageNotFound)?;
-        let pages = pages.as_dict().ok_or(PageContentError::PageNotFound)?;
-
-        let page_value = find_page_node(self, pages, pages_key, page_index)
-            .ok_or(PageContentError::PageNotFound)?;
+        let page_value = self.locate_page_node(page_index)?;
         let page = page_value.as_dict().ok_or(PageContentError::PageNotFound)?;
 
         let content_bytes = collect_page_content_bytes(self, page)?;
@@ -108,20 +95,7 @@ impl Document {
         category: &str,
         name: &str,
     ) -> Result<Option<Value>> {
-        let root = self
-            .trailer
-            .dict
-            .get("Root")
-            .ok_or(PageContentError::PageNotFound)?;
-        let root = resolve_value(self, root).ok_or(PageContentError::PageNotFound)?;
-        let root = root.as_dict().ok_or(PageContentError::PageNotFound)?;
-        let pages_value = root.get("Pages").ok_or(PageContentError::PageNotFound)?;
-        let pages_key = pages_value.as_ref();
-        let pages = resolve_value(self, pages_value).ok_or(PageContentError::PageNotFound)?;
-        let pages = pages.as_dict().ok_or(PageContentError::PageNotFound)?;
-
-        let page_value = find_page_node(self, pages, pages_key, page_index)
-            .ok_or(PageContentError::PageNotFound)?;
+        let page_value = self.locate_page_node(page_index)?;
         let page = page_value.as_dict().ok_or(PageContentError::PageNotFound)?;
 
         let resources =
@@ -152,6 +126,33 @@ impl Document {
         }
 
         Ok(None)
+    }
+
+    /// Locate the `page_index`th (0-based) page node through the catalog's
+    /// `/Pages` tree. Shared by page-scoped reader APIs.
+    pub(crate) fn locate_page_node(&self, page_index: usize) -> Result<Value> {
+        let root = self
+            .trailer
+            .dict
+            .get("Root")
+            .ok_or(PageContentError::PageNotFound)?;
+        let root = resolve_value(self, root).ok_or(PageContentError::PageNotFound)?;
+        let root = root.as_dict().ok_or(PageContentError::PageNotFound)?;
+        let pages_value = root.get("Pages").ok_or(PageContentError::PageNotFound)?;
+        let pages_key = pages_value.as_ref();
+        let pages = resolve_value(self, pages_value).ok_or(PageContentError::PageNotFound)?;
+        let pages = pages.as_dict().ok_or(PageContentError::PageNotFound)?;
+        find_page_node(self, pages, pages_key, page_index).ok_or(PageContentError::PageNotFound)
+    }
+
+    /// Resolve a page's `/Resources` dictionary by page index.
+    pub(crate) fn locate_page_resources(&self, page_index: usize) -> Result<Option<Dict>> {
+        let page_value = self.locate_page_node(page_index)?;
+        let page = page_value.as_dict().ok_or(PageContentError::PageNotFound)?;
+        let Some(resources) = resolve_page_resources(self, page) else {
+            return Ok(None);
+        };
+        Ok(resources.as_dict().cloned())
     }
 }
 

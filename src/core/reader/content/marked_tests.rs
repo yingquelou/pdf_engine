@@ -193,7 +193,7 @@ fn visibility_resolves_oc_name_and_reference() {
         resolve_marked_visibility(Some(&by_ref), &resolve_ocg_name, &is_visible),
         Some(false)
     );
-    // Inline OCG dictionaries and OCMDs stay unresolved (treated visible).
+    // An empty dictionary is neither an OCG nor an OCMD: unresolved.
     assert_eq!(
         resolve_marked_visibility(Some(&by_dict), &resolve_ocg_name, &is_visible),
         None
@@ -201,6 +201,35 @@ fn visibility_resolves_oc_name_and_reference() {
     assert_eq!(
         resolve_marked_visibility(None, &resolve_ocg_name, &is_visible),
         None
+    );
+}
+
+#[test]
+fn visibility_evaluates_inline_membership_dictionary() {
+    let ocmd = Dict::new().insert(
+        "OC",
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("OCMD".into()))
+                .insert(
+                    "OCGs",
+                    Value::Array(Array::new().push(Value::Ref(7, 0)).push(Value::Ref(8, 0))),
+                )
+                .insert("P", Value::Name("AnyOff".into())),
+        ),
+    );
+    let resolve_ocg_name = Box::new(|_: &str| -> Option<i64> { None });
+    let is_visible = Box::new(|object: i64| -> Option<bool> {
+        match object {
+            7 => Some(true),
+            8 => Some(false),
+            _ => None,
+        }
+    });
+    assert_eq!(
+        resolve_marked_visibility(Some(&ocmd), &resolve_ocg_name, &is_visible),
+        Some(true),
+        "/AnyOff is true when at least one group is off"
     );
 }
 

@@ -5,6 +5,7 @@
 
 use crate::core::types::Value;
 
+mod mapping;
 mod marked;
 mod parser;
 mod state;
@@ -13,11 +14,15 @@ mod state;
 mod marked_tests;
 
 #[cfg(test)]
+mod mapping_tests;
+
+#[cfg(test)]
 mod state_tests;
 
 #[cfg(test)]
 mod tests;
 
+pub use mapping::{OpMappingError, from_content_op, serialize_ops, to_content_op};
 pub use marked::{
     MAX_MARKED_DEPTH, MarkedContentError, MarkedSection, collect_marked_sections,
     resolve_marked_visibility,
@@ -113,7 +118,7 @@ pub enum Op {
     SetCharSpacing(f64),
     /// `Tw` — set word spacing
     SetWordSpacing(f64),
-    /// `Th` — set horizontal scaling
+    /// `Tz` — set horizontal scaling
     SetHorizontalScaling(f64),
     /// `TL` — set text leading
     SetTextLeading(f64),

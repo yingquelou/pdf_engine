@@ -14,7 +14,7 @@ pub struct ExponentialFunction {
     /// 值域（可选；存在则输出截断）。
     pub(crate) range: Option<Vec<(f64, f64)>>,
     /// /C0（默认 0）。
-    c0: Vec<f64>,
+    pub(crate) c0: Vec<f64>,
     /// /C1（默认 1）。
     c1: Vec<f64>,
     /// 指数 /N。

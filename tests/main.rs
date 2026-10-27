@@ -3788,6 +3788,9 @@ fn builder_cmyk_image_roundtrips_through_parser() {
 
     let pixels = vec![255, 0, 0, 0, 0, 255, 0, 0];
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceCMYK,
@@ -3880,6 +3883,9 @@ fn builder_soft_mask_image_roundtrips_through_parser() {
 
     let mask_pixels = vec![0, 64, 128, 255];
     let mask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceGray,
@@ -3893,6 +3899,9 @@ fn builder_soft_mask_image_roundtrips_through_parser() {
     };
     let pixels = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceRGB,
@@ -4030,6 +4039,9 @@ fn builder_image_masks_roundtrip_through_parser() {
 
     let stencil_pixels = vec![0b1010_1010];
     let stencil = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 8,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -4043,6 +4055,9 @@ fn builder_image_masks_roundtrip_through_parser() {
     };
     let explicit_mask_pixels = vec![0b1010_1010, 0b0101_0101];
     let explicit_mask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 4,
         height: 2,
         color_space: ColorSpace::DeviceGray,
@@ -4056,6 +4071,9 @@ fn builder_image_masks_roundtrip_through_parser() {
     };
     let base_pixels = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     let explicit = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceRGB,
@@ -4068,6 +4086,9 @@ fn builder_image_masks_roundtrip_through_parser() {
         mask: Some(ImageMask::explicit(explicit_mask)),
     };
     let keyed = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceRGB,
@@ -4250,6 +4271,9 @@ fn builder_cie_color_spaces_roundtrip_through_parser() {
 
     let lab_pixels = vec![50, 128, 128];
     let lab_img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::Lab(Lab {
@@ -4269,6 +4293,9 @@ fn builder_cie_color_spaces_roundtrip_through_parser() {
     let profile: Vec<u8> = (0..128).map(|v| v as u8).collect();
     let icc_pixels = vec![10, 20, 30, 40, 50, 60];
     let icc_img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::ICCBased(ICCBased {
@@ -4411,6 +4438,9 @@ fn builder_indexed_image_roundtrips_through_parser() {
     let lookup = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11];
     let pixels = vec![0, 1];
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::Indexed(Indexed::new(ColorSpace::DeviceRGB, 1, lookup.clone())),
@@ -4505,6 +4535,9 @@ fn builder_separation_and_devicen_images_roundtrip_through_parser() {
     };
 
     let separation = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::Separation(Separation::new(
@@ -4525,6 +4558,9 @@ fn builder_separation_and_devicen_images_roundtrip_through_parser() {
         mask: None,
     };
     let devicen = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceN(DeviceN::new(
@@ -6025,8 +6061,192 @@ fn builder_uncolored_tiling_pattern_roundtrips_through_parser() {
     assert!(content.contains("/Pattern cs"), "{content}");
     assert!(content.contains("0.2 0.4 0.6 /P1 scn"), "{content}");
     assert!(content.contains("72.0 500.0 120.0 80.0 re"), "{content}");
-
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("SPOT"));
+}
+
+/// 写入 → 类型化读端模型：构建器写出的轴向渐变、自由形态网格、
+/// 着色/无色平铺与着色图案应能经 `page_shading`/`page_pattern` 还原为
+/// 坐标、域、Decode、位深、顶点、图案类型与图块内容字节。
+#[test]
+fn reader_shading_pattern_model_roundtrips_builder_output() {
+    use pdf_engine::core::builder::{
+        AxialShading, ColorSpace, ExponentialFunction, Font, FreeFormMeshShading, Function,
+        MeshVertex, PageSize, PdfBuilder, RadialShading, Shading, ShadingPattern, TilingPattern,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::color_space::ColorSpaceModel;
+    use pdf_engine::core::reader::shading::{PaintType, PatternModel, ShadingModel, TilingType};
+
+    let exponential = |c0: Vec<f64>, c1: Vec<f64>| {
+        Function::Exponential(
+            ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                .with_c0(c0)
+                .with_c1(c1),
+        )
+    };
+    let axial = Shading::Axial(
+        AxialShading::new(
+            ColorSpace::DeviceGray,
+            [0.0, 0.0, 200.0, 0.0],
+            exponential(vec![0.0], vec![1.0]),
+        )
+        .with_domain([0.2, 0.8])
+        .with_extend([true, false]),
+    );
+    let mesh = Shading::FreeForm(
+        FreeFormMeshShading::new(
+            ColorSpace::DeviceRGB,
+            vec![
+                MeshVertex::new(0.0, 0.0, vec![0.0, 0.0, 0.0]),
+                MeshVertex::new(100.0, 0.0, vec![1.0, 0.0, 0.0]),
+                MeshVertex::new(0.0, 100.0, vec![0.0, 1.0, 0.0]),
+            ],
+        )
+        .with_decode([0.0, 100.0, 0.0, 100.0]),
+    );
+    let pattern = ShadingPattern::new(Shading::Radial(
+        RadialShading::new(
+            ColorSpace::DeviceRGB,
+            [50.0, 50.0, 0.0, 50.0, 50.0, 80.0],
+            exponential(vec![1.0, 0.0, 0.0], vec![0.0, 0.0, 1.0]),
+        )
+        .with_extend([true, true]),
+    ))
+    .with_matrix([1.0, 0.0, 0.0, 1.0, 10.0, 20.0]);
+
+    let mut colored_tile = ContentStream::new();
+    colored_tile
+        .set_fill_rgb(0.2, 0.4, 0.6)
+        .rect(0.0, 0.0, 6.0, 6.0)
+        .fill();
+    let colored = TilingPattern::new([0.0, 0.0, 12.0, 12.0], 12.0, 12.0, colored_tile);
+    let mut spot_tile = ContentStream::new();
+    spot_tile.rect(0.0, 0.0, 6.0, 6.0).fill();
+    let uncolored = TilingPattern::uncolored(
+        [0.0, 0.0, 12.0, 12.0],
+        12.0,
+        12.0,
+        ColorSpace::DeviceRGB,
+        spot_tile,
+    );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "D5");
+    let axial_handle = builder.shading(&axial);
+    builder.paint_shading(page, axial_handle);
+    let mesh_handle = builder.shading(&mesh);
+    builder.paint_shading(page, mesh_handle);
+    let shading_pattern_handle = builder.shading_pattern(&pattern);
+    builder.fill_rect_with_pattern(page, shading_pattern_handle, [72.0, 500.0, 120.0, 80.0]);
+    let colored_handle = builder.tiling_pattern(&colored);
+    builder.fill_rect_with_pattern(page, colored_handle, [72.0, 400.0, 120.0, 80.0]);
+    let uncolored_handle = builder.tiling_pattern(&uncolored);
+    builder.fill_rect_with_uncolored_pattern(
+        page,
+        uncolored_handle,
+        &[0.2, 0.4, 0.6],
+        [72.0, 300.0, 120.0, 80.0],
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let axial_model = reparsed
+        .page_shading(0, "Sh1")
+        .expect("page_shading Sh1")
+        .expect("Sh1 exists");
+    let ShadingModel::Axial(a) = axial_model else {
+        panic!("expected axial shading, got {axial_model:?}");
+    };
+    assert_eq!(a.coords, [0.0, 0.0, 200.0, 0.0]);
+    assert_eq!(a.domain, vec![(0.2, 0.8)]);
+    assert_eq!(a.extend, [true, false]);
+    assert_eq!(a.color_space, ColorSpaceModel::DeviceGray);
+
+    let mesh_model = reparsed
+        .page_shading(0, "Sh2")
+        .expect("page_shading Sh2")
+        .expect("Sh2 exists");
+    let ShadingModel::FreeFormMesh(m) = mesh_model else {
+        panic!("expected free form mesh, got {mesh_model:?}");
+    };
+    assert_eq!(m.bits_per_coordinate, 16);
+    assert_eq!(m.bits_per_components, 8);
+    assert_eq!(m.bits_per_flag, 8);
+    assert_eq!(
+        m.decode,
+        vec![
+            (0.0, 100.0),
+            (0.0, 100.0),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            (0.0, 1.0)
+        ]
+    );
+    assert_eq!(m.vertices.len(), 3);
+    assert_eq!(m.vertices[0].flag, 0);
+    assert_eq!(m.vertices[1].x, 100.0);
+    assert_eq!(m.vertices[1].components, vec![1.0, 0.0, 0.0]);
+    assert_eq!(m.vertices[2].y, 100.0);
+    assert_eq!(m.vertices[2].components, vec![0.0, 1.0, 0.0]);
+
+    let shading_pattern = reparsed
+        .page_pattern(0, "P1")
+        .expect("page_pattern P1")
+        .expect("P1 exists");
+    let PatternModel::Shading(sp) = shading_pattern else {
+        panic!("expected shading pattern, got {shading_pattern:?}");
+    };
+    assert_eq!(sp.matrix, Some([1.0, 0.0, 0.0, 1.0, 10.0, 20.0]));
+    let ShadingModel::Radial(r) = sp.shading else {
+        panic!("expected radial shading inside pattern");
+    };
+    assert_eq!(r.coords, [50.0, 50.0, 0.0, 50.0, 50.0, 80.0]);
+    assert_eq!(r.domain, vec![(0.0, 1.0)]);
+    assert_eq!(r.extend, [true, true]);
+    assert_eq!(r.color_space, ColorSpaceModel::DeviceRGB);
+
+    let colored_pattern = reparsed
+        .page_pattern(0, "P2")
+        .expect("page_pattern P2")
+        .expect("P2 exists");
+    let PatternModel::Tiling(t) = colored_pattern else {
+        panic!("expected tiling pattern, got {colored_pattern:?}");
+    };
+    assert_eq!(t.paint_type, PaintType::Colored);
+    assert_eq!(t.tiling_type, TilingType::ConstantSpacing);
+    assert_eq!(t.bbox, [0.0, 0.0, 12.0, 12.0]);
+    assert_eq!((t.x_step, t.y_step), (12.0, 12.0));
+    assert!(t.matrix.is_none());
+    assert!(t.color_space.is_none());
+    let tile_text = String::from_utf8(t.content).expect("tile content is utf-8");
+    assert!(
+        tile_text.contains("0.2 0.4 0.6"),
+        "着色图块应保留颜色操作符: {tile_text}"
+    );
+
+    let uncolored_pattern = reparsed
+        .page_pattern(0, "P3")
+        .expect("page_pattern P3")
+        .expect("P3 exists");
+    let PatternModel::Tiling(t) = uncolored_pattern else {
+        panic!("expected tiling pattern, got {uncolored_pattern:?}");
+    };
+    assert_eq!(t.paint_type, PaintType::Uncolored);
+    assert_eq!(
+        t.color_space,
+        Some(ColorSpaceModel::DeviceRGB),
+        "无色平铺应带回基色空间"
+    );
+    let spot_text = String::from_utf8(t.content).expect("spot tile is utf-8");
+    assert!(
+        !spot_text.contains("0.2 0.4 0.6"),
+        "无色图块不应含颜色操作符: {spot_text}"
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("D5"));
 }
 
 /// 写入 → 重新解析：Form XObject 应写出 `/Subtype /Form` 字典与内容流，
@@ -8213,4 +8433,1105 @@ fn builder_graphics_state_roundtrips_through_parser() {
     }
 
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Hello"));
+}
+
+/// C5 读写模型统一往返：页面内容 → 读端 Op 模型 → `serialize_ops` →
+/// 重新解析模型相等；再经 `to_content_op` 重建为写端 `ContentStream`
+/// 表单写出，同样的文本仍可提取。
+#[test]
+fn content_model_roundtrip_preserves_text_extraction() {
+    use pdf_engine::core::builder::{Font, FormXObject, PageSize, PdfBuilder};
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::content::{parse_content_stream, serialize_ops, to_content_op};
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "Roundtrip");
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+
+    let ops = doc.page_content_ops(0).expect("page content ops");
+    let rewritten = serialize_ops(&ops);
+    let reparsed = parse_content_stream(&rewritten).expect("re-parse serialized content stream");
+    assert_eq!(ops, reparsed, "模型往返应无损");
+    assert_eq!(doc.extract_page_text(0).as_deref(), Some("Roundtrip"));
+
+    // 模型 → 写端 Op → FormXObject 重建表单（继承页面资源）后文本仍可提取。
+    let mut inner = ContentStream::new();
+    for op in &ops {
+        inner.push(to_content_op(op).expect("builder 生成的操作符应全部可映射"));
+    }
+    let form = FormXObject::new([0.0, 0.0, 842.0, 595.0], inner);
+    let mut builder2 = PdfBuilder::new();
+    let page2 = builder2.page(PageSize::A4);
+    // 先在 page2 注册 /F1 资源，供模型引用的 Tf 名称解析。
+    builder2.text(page2, &Font::helvetica(12.0), 72.0, 50.0, "Base");
+    let handle = builder2.form_xobject(&form);
+    builder2.draw_form(page2, handle, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let mut buf2 = Vec::new();
+    builder2.build(&mut buf2).expect("模型重建内容应可写出");
+    let doc2 = parse_buf(&buf2);
+    let text2 = doc2.extract_page_text(0).expect("重建后应有文本");
+    assert!(text2.contains("Roundtrip"), "重建后提取文本: {text2:?}");
+}
+
+/// 写入 → 重新解析：启用 D4 压缩策略后，图片流应带 PNG Up 预测器地写成
+/// FlateDecode，内容流写成无 DecodeParms 的 FlateDecode；读端解码字节与
+/// 原始样本一致，文本仍可提取，且整体输出严格小于同内容明文版本。
+#[test]
+fn builder_flate_stream_compression_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{ColorSpace, Font, ImageData, PageSize, PdfBuilder};
+    use pdf_engine::core::writer::{ImagePredictor, StreamCompression};
+
+    let mut pixels = Vec::with_capacity(16 * 4 * 3);
+    for y in 0..4u8 {
+        for x in 0..16u8 {
+            pixels.extend_from_slice(&[x * 15, y * 60, (x + y) * 14]);
+        }
+    }
+    let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 16,
+        height: 4,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: pixels.clone(),
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let build = |compress: bool| -> Vec<u8> {
+        let mut builder = PdfBuilder::new();
+        if compress {
+            builder.compress_streams(
+                StreamCompression::flate().with_image_predictor(ImagePredictor::PngUp),
+            );
+        }
+        let page = builder.page(PageSize::A4);
+        builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "Flate");
+        // 重复填充文本把内容流推到 ~450 B，确保 zlib 收益超过头部开销。
+        builder.text(
+            page,
+            &Font::helvetica(9.0),
+            72.0,
+            700.0,
+            &"padding ".repeat(40),
+        );
+        builder.image(page, 72.0, 600.0, 96.0, 24.0, &img);
+        let mut buf = Vec::new();
+        builder.build(&mut buf).expect("build");
+        buf
+    };
+
+    let plain = build(false);
+    let compressed = build(true);
+    assert!(
+        compressed.len() < plain.len(),
+        "压缩输出应小于明文输出: plain {} B, compressed {} B",
+        plain.len(),
+        compressed.len()
+    );
+    let text = String::from_utf8_lossy(&compressed).into_owned();
+    assert!(text.contains("/Filter /FlateDecode"), "{text}");
+    assert!(text.contains("/Predictor 15"), "{text}");
+
+    let reparsed = parse_buf(&compressed);
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let Value::Ref(image_num, _) = xobjects.get("Im1").expect("Im1 resource") else {
+        panic!("Im1 should be an indirect reference");
+    };
+    let image_object = reparsed
+        .get_object(*image_num)
+        .expect("get object")
+        .expect("image object should exist");
+    let Value::Stream(image_dict, _) = &image_object.value else {
+        panic!("image should be a stream");
+    };
+    assert_eq!(
+        image_dict.get("Filter").and_then(Value::as_name),
+        Some("FlateDecode")
+    );
+    let parms = image_dict
+        .get("DecodeParms")
+        .and_then(Value::as_dict)
+        .expect("image should carry DecodeParms");
+    assert_eq!(parms.get("Predictor").and_then(Value::as_integer), Some(15));
+    assert_eq!(parms.get("Colors").and_then(Value::as_integer), Some(3));
+    assert_eq!(parms.get("Columns").and_then(Value::as_integer), Some(16));
+    assert_eq!(
+        reparsed
+            .decode_stream_bytes(&image_object.value)
+            .expect("decode image"),
+        pixels
+    );
+
+    let Value::Ref(content_num, _) = page_dict.get("Contents").expect("Contents") else {
+        panic!("Contents should be an indirect reference");
+    };
+    let content_object = reparsed
+        .get_object(*content_num)
+        .expect("get content object")
+        .expect("content stream should exist");
+    let Value::Stream(content_dict, _) = &content_object.value else {
+        panic!("content should be a stream");
+    };
+    assert_eq!(
+        content_dict.get("Filter").and_then(Value::as_name),
+        Some("FlateDecode")
+    );
+    assert!(
+        content_dict.get("DecodeParms").is_none(),
+        "非图像流不应带预测器参数"
+    );
+    let content = reparsed
+        .decode_stream_bytes(&content_object.value)
+        .expect("decode content");
+    let content_text = String::from_utf8_lossy(&content);
+    assert!(content_text.contains("/Im1 Do"), "{content_text}");
+    let extracted = reparsed.extract_page_text(0).expect("compressed text");
+    assert!(extracted.contains("Flate"), "提取文本: {extracted:?}");
+}
+
+/// D1 读端颜色空间模型：写端产出的 Indexed / Separation / DeviceN / ICCBased
+/// 图片与页级命名颜色空间，经 `Document::color_space` 解析为类型化模型，
+/// `decode_samples` 解码样本值正确（调色板展开、tint 函数求值、ICC 配置
+/// 字节与 /N），非法空间返回类型化错误。
+#[test]
+fn reader_color_space_model_decodes_builder_images() {
+    use pdf_engine::core::builder::{
+        CalRGB, ColorSpace, DeviceN, ExponentialFunction, Font, Function, ICCBased, ImageData,
+        Indexed, PageSize, PdfBuilder, SampledFunction, Separation,
+    };
+    use pdf_engine::core::reader::color_space::{ColorSpaceError, ColorSpaceModel};
+
+    let assert_close = |samples: &[f64], expected: &[f64]| {
+        assert_eq!(samples.len(), expected.len(), "样本个数不符: {samples:?}");
+        for (actual, want) in samples.iter().zip(expected) {
+            assert!((actual - want).abs() < 1e-6, "got {actual}, want {want}");
+        }
+    };
+
+    let indexed_lookup = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11];
+    let indexed = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::Indexed(Indexed::new(
+            ColorSpace::DeviceRGB,
+            1,
+            indexed_lookup.clone(),
+        )),
+        bits: 8,
+        data: vec![0, 1],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let separation = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::Separation(Separation::new(
+            "Orange",
+            ColorSpace::DeviceCMYK,
+            Function::Exponential(
+                ExponentialFunction::new(vec![0.0, 1.0], 1.0)
+                    .with_c0(vec![0.0, 0.0, 0.0, 0.0])
+                    .with_c1(vec![0.0, 0.4, 0.8, 0.0]),
+            ),
+        )),
+        bits: 8,
+        data: vec![0x00, 0xFF],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let devicen = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceN(DeviceN::new(
+            vec!["Orange".to_string(), "Green".to_string()],
+            ColorSpace::DeviceRGB,
+            Function::Sampled(SampledFunction::new(
+                vec![0.0, 1.0, 0.0, 1.0],
+                vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                vec![2, 2],
+                8,
+                vec![0.0; 12],
+            )),
+        )),
+        bits: 8,
+        data: vec![0x10, 0x20, 0x30, 0x40],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let profile: Vec<u8> = (0..64u32).map(|v| v as u8).collect();
+    let icc = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::ICCBased(ICCBased {
+            n: 3,
+            data: profile.clone(),
+            alternate: None,
+            range: None,
+        }),
+        bits: 8,
+        data: vec![10, 20, 30, 40, 50, 60],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "CS");
+    builder.image(page, 72.0, 600.0, 60.0, 30.0, &indexed);
+    builder.image(page, 72.0, 540.0, 60.0, 30.0, &separation);
+    builder.image(page, 72.0, 480.0, 60.0, 30.0, &devicen);
+    builder.image(page, 72.0, 420.0, 60.0, 30.0, &icc);
+    let cal = ColorSpace::CalRGB(CalRGB {
+        white_point: [0.9505, 1.0, 1.089],
+        black_point: None,
+        gamma: Some([2.2, 2.2, 2.2]),
+        matrix: None,
+    });
+    let handle = builder.color_space(&cal);
+    builder.set_fill_color_space(page, handle);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_object = (3..=64)
+        .filter_map(|num| reparsed.get_object(num).ok().flatten())
+        .find(|object| {
+            object
+                .value
+                .as_dict()
+                .and_then(|dict| dict.get("Type"))
+                .and_then(Value::as_name)
+                == Some("Page")
+        })
+        .expect("should find page object");
+    let page_dict = page_object.value.as_dict().expect("page is a dict");
+    let xobjects = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page should have XObject resources");
+    let image_object = |name: &str| {
+        let number = xobjects.get(name).and_then(Value::as_ref).unwrap().0;
+        reparsed
+            .get_object(number)
+            .expect("get object")
+            .expect("image object should exist")
+    };
+
+    let decode_image = |name: &str| -> (ColorSpaceModel, Vec<f64>) {
+        let object = image_object(name);
+        let Value::Stream(dict, _) = &object.value else {
+            panic!("{name} should be a stream");
+        };
+        let model = reparsed
+            .color_space(dict.get("ColorSpace").expect("ColorSpace"))
+            .expect("color space should parse");
+        let bits = dict
+            .get("BitsPerComponent")
+            .and_then(Value::as_integer)
+            .expect("BitsPerComponent") as usize;
+        let width = dict
+            .get("Width")
+            .and_then(Value::as_integer)
+            .expect("Width") as usize;
+        let raw = reparsed
+            .decode_stream_bytes(&object.value)
+            .expect("decode image bytes");
+        let samples = model
+            .decode_samples(bits, width, &raw)
+            .expect("decode samples");
+        (model, samples)
+    };
+
+    let (model, samples) = decode_image("Im1");
+    let ColorSpaceModel::Indexed(indexed_space) = &model else {
+        panic!("Im1 should be Indexed");
+    };
+    assert_eq!(indexed_space.hival, 1);
+    assert_eq!(indexed_space.lookup, indexed_lookup);
+    assert_eq!(
+        *indexed_space.base,
+        ColorSpaceModel::DeviceRGB,
+        "基空间应解析为 DeviceRGB"
+    );
+    let expected: Vec<f64> = indexed_lookup.iter().map(|v| *v as f64 / 255.0).collect();
+    assert_close(&samples, &expected);
+
+    let (model, samples) = decode_image("Im2");
+    let ColorSpaceModel::Separation(separation_space) = &model else {
+        panic!("Im2 should be Separation");
+    };
+    assert_eq!(separation_space.colorant, "Orange");
+    assert_eq!(*separation_space.alternate, ColorSpaceModel::DeviceCMYK);
+    assert!(separation_space.tint.is_some(), "tint 函数应已构造");
+    assert_close(&samples, &[0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.8, 0.0]);
+
+    let (model, samples) = decode_image("Im3");
+    let ColorSpaceModel::DeviceN(device_n) = &model else {
+        panic!("Im3 should be DeviceN");
+    };
+    assert_eq!(device_n.colorants, vec!["Orange", "Green"]);
+    assert_eq!(model.component_count(), Some(2));
+    assert_close(&samples, &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+    let (model, samples) = decode_image("Im4");
+    let ColorSpaceModel::IccBased(icc_space) = &model else {
+        panic!("Im4 should be ICCBased");
+    };
+    assert_eq!(icc_space.n, 3);
+    assert_eq!(icc_space.profile, profile, "应返回 ICC 配置文件字节");
+    assert_eq!(
+        *icc_space.alternate,
+        ColorSpaceModel::DeviceRGB,
+        "缺 /Alternate 时按 /N=3 取 DeviceRGB"
+    );
+    assert_eq!(icc_space.range, vec![(0.0, 1.0); 3]);
+    let expected: Vec<f64> = [10, 20, 30, 40, 50, 60]
+        .iter()
+        .map(|v| *v as f64 / 255.0)
+        .collect();
+    assert_close(&samples, &expected);
+
+    let named = reparsed
+        .page_color_space(0, "CS1")
+        .expect("named color space lookup")
+        .expect("CS1 should exist");
+    let ColorSpaceModel::CalRGB(cal_rgb) = named else {
+        panic!("CS1 should be CalRGB");
+    };
+    assert_eq!(cal_rgb.white_point, vec![0.9505, 1.0, 1.089]);
+    assert_eq!(cal_rgb.gamma, vec![2.2, 2.2, 2.2]);
+    assert_eq!(
+        cal_rgb.matrix,
+        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    );
+    assert!(
+        reparsed
+            .page_color_space(0, "Absent")
+            .expect("lookup")
+            .is_none()
+    );
+    assert!(matches!(
+        reparsed.color_space(&Value::Name("NChannel".into())),
+        Err(ColorSpaceError::Unsupported(_))
+    ));
+}
+
+/// 写入 → 重新解析：PDF 1.6 透明度扩展（/TR2 字典、/HT 半色调包装字典、
+/// `/SMask` 的 /TR、/SMaskInData、/Matte、页/表单透明组）应写出并被读端
+/// 解析为类型化模型；页面文本仍可提取。
+#[test]
+fn builder_transparency_extensions_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, ExponentialFunction, Font, FormXObject, Function, GraphicsState, GroupXObject,
+        Halftone, HalftoneDictionary, PageSize, PdfBuilder, SoftMask, Type1Halftone, Type2Halftone,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::graphics_state::{
+        HalftoneModel, SoftMaskSubtype, Type1Halftone as RType1, Type2Halftone as RType2,
+    };
+    use pdf_engine::core::reader::group::GroupSubtype;
+
+    let mut mask_content = ContentStream::new();
+    mask_content
+        .set_fill_gray(0.5)
+        .rect(0.0, 0.0, 50.0, 50.0)
+        .fill();
+    let mask_form = FormXObject::new([0.0, 0.0, 50.0, 50.0], mask_content)
+        .with_group(GroupXObject::transparency().with_color_space(ColorSpace::DeviceGray));
+
+    let tr2 = Value::Dict(
+        Dict::new()
+            .insert("TransferType", Value::Name("HalftoneType".into()))
+            .insert("TransferFunction0", Value::Name("identity".into())),
+    );
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_6);
+    let page = builder.page(PageSize::A4);
+    let mask_handle = builder.form_xobject(&mask_form);
+    let spot = builder.function(&Function::Exponential(ExponentialFunction::new(
+        vec![0.0, 1.0],
+        2.2,
+    )));
+    let halftone = HalftoneDictionary::new(1)
+        .with_colorant(
+            "C",
+            Halftone::Type1(Type1Halftone {
+                x_frequency: 65.0,
+                angle: 15.0,
+                spot_function: spot,
+                transfer_function: None,
+            }),
+        )
+        .with_colorant(
+            "M",
+            Halftone::Type2(Type2Halftone {
+                frequency: 133.3,
+                angle: 75.0,
+                width: 0.5,
+                uncompensated: true,
+                spot_function: spot,
+                transfer_function: None,
+            }),
+        );
+    builder.set_graphics_state(
+        page,
+        &GraphicsState::new()
+            .with_fill_alpha(0.5)
+            .with_transfer_function_2(tr2.clone())
+            .with_halftone(halftone)
+            .with_soft_mask(
+                SoftMask::luminosity(mask_handle)
+                    .with_transfer_function(spot)
+                    .with_smask_in_data(1)
+                    .with_matte([0.2, 0.4, 0.6]),
+            ),
+    );
+    builder.set_page_group(
+        page,
+        &GroupXObject::transparency()
+            .with_color_space(ColorSpace::DeviceRGB)
+            .with_isolated(true)
+            .with_knockout(true),
+    );
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "XTND");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("PDF 1.6 build");
+    let reparsed = parse_buf(&buf);
+
+    let page_dict = first_page_dict(&reparsed);
+    let resources = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("/Resources");
+    let states = reparsed
+        .ext_g_states(resources)
+        .expect("parse /ExtGState resources");
+    let gs = states.get("GS1").expect("GS1 graphics state");
+
+    assert_eq!(gs.transfer2, Some(tr2));
+
+    let raw_halftone = gs.halftone.as_ref().expect("GS1 should carry /HT");
+    let model = reparsed.halftone(raw_halftone).expect("typed halftone");
+    match model {
+        HalftoneModel::Composite(composite) => {
+            assert_eq!(composite.default_type, Some(1));
+            match composite.colorants.get("C") {
+                Some(HalftoneModel::Type1(RType1 {
+                    x_frequency,
+                    angle,
+                    transfer_function,
+                    ..
+                })) => {
+                    assert_eq!(*x_frequency, 65.0);
+                    assert_eq!(*angle, 15.0);
+                    assert!(transfer_function.is_none());
+                }
+                other => panic!("colorant C should be typed, got {other:?}"),
+            }
+            match composite.colorants.get("M") {
+                Some(HalftoneModel::Type2(RType2 {
+                    frequency,
+                    width,
+                    uncompensated,
+                    ..
+                })) => {
+                    assert!((frequency - 133.3).abs() < 1e-9);
+                    assert_eq!(*width, 0.5);
+                    assert!(*uncompensated);
+                }
+                other => panic!("colorant M should be typed, got {other:?}"),
+            }
+        }
+        other => panic!("expected composite halftone, got {other:?}"),
+    }
+
+    let raw_mask = gs.soft_mask.as_ref().expect("GS1 should carry /SMask");
+    let mask = reparsed.soft_mask(raw_mask).expect("typed soft mask");
+    assert_eq!(mask.subtype, SoftMaskSubtype::Luminosity);
+    assert_eq!(mask.smask_in_data, Some(1));
+    assert_eq!(mask.matte, Some(vec![0.2, 0.4, 0.6]));
+    let transfer = mask.transfer.as_ref().expect("/SMask /TR function");
+    assert_eq!(
+        transfer
+            .as_dict()
+            .and_then(|dict| dict.get("FunctionType"))
+            .and_then(Value::as_integer),
+        Some(2)
+    );
+
+    let group = reparsed
+        .page_group(0)
+        .expect("page group")
+        .expect("page has /Group");
+    assert_eq!(group.subtype, GroupSubtype::Transparency);
+    assert!(group.isolated);
+    assert_eq!(group.knockout, Some(true));
+    assert!(matches!(
+        group.color_space,
+        Some(pdf_engine::core::reader::color_space::ColorSpaceModel::DeviceRGB)
+    ));
+
+    let Value::Stream(mask_dict, _) = reparsed
+        .get_object(match &mask.group {
+            Value::Ref(num, _) => *num,
+            other => panic!("soft mask /G should stay a reference, got {other:?}"),
+        })
+        .expect("lookup")
+        .expect("mask form object")
+        .value
+    else {
+        panic!("/G references a stream");
+    };
+    let form_group = reparsed
+        .group(mask_dict.get("Group").expect("form /Group"))
+        .expect("typed form group");
+    assert_eq!(form_group.subtype, GroupSubtype::Transparency);
+    assert_eq!(
+        form_group.color_space_raw,
+        Some(Value::Name("DeviceGray".into()))
+    );
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("XTND"));
+}
+
+/// 严出校验：`/Matte` 需要 PDF 1.6，降级到 1.5 目标应报错且零字节。
+#[test]
+fn builder_soft_mask_matte_requires_pdf_1_6_target() {
+    use pdf_engine::core::builder::{
+        ColorSpace, FormXObject, GraphicsState, GroupXObject, PageSize, PdfBuilder, SoftMask,
+    };
+    use pdf_engine::core::content::ContentStream;
+
+    let mut mask_content = ContentStream::new();
+    mask_content
+        .set_fill_gray(0.5)
+        .rect(0.0, 0.0, 50.0, 50.0)
+        .fill();
+    let mask_form = FormXObject::new([0.0, 0.0, 50.0, 50.0], mask_content)
+        .with_group(GroupXObject::transparency().with_color_space(ColorSpace::DeviceGray));
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_5);
+    let page = builder.page(PageSize::A4);
+    let mask_handle = builder.form_xobject(&mask_form);
+    builder.set_graphics_state(
+        page,
+        &GraphicsState::new().with_soft_mask(SoftMask::alpha(mask_handle).with_matte([0.5])),
+    );
+
+    let mut buf = Vec::new();
+    let error = builder
+        .build(&mut buf)
+        .expect_err("/Matte must not build at PDF 1.5");
+    let message = error.to_string();
+    assert!(
+        message.contains("soft mask matte color") && message.contains("1.6"),
+        "{message}"
+    );
+    assert!(buf.is_empty(), "构建失败时不应写出任何字节");
+}
+
+/// D2 读端图像模型：写端产出的 RGB、软蒙版、显式蒙版与颜色键蒙版图片
+/// 经 `Document::page_image` 解析为 `ImageModel`；`samples()` 返回解码后的
+/// 样本值，`/Mask` 区分为显式蒙版或颜色键范围；页面文本仍可提取。
+#[test]
+fn builder_images_roundtrip_through_image_model() {
+    use pdf_engine::core::builder::{ColorSpace, Font, ImageData, ImageMask, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::color_space::ColorSpaceModel;
+    use pdf_engine::core::reader::image::ImageMaskModel;
+
+    let rgb = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255],
+        decode: None,
+        interpolate: true,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let alpha = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![0, 64, 128, 255],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let soft = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![9, 9, 9, 8, 8, 8, 7, 7, 7, 6, 6, 6],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    }
+    .with_smask(alpha);
+    let stencil = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 4,
+        height: 1,
+        color_space: ColorSpace::DeviceGray,
+        bits: 1,
+        data: vec![0b1010_0000],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: true,
+        mask: None,
+    };
+    let explicit = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    }
+    .with_mask(ImageMask::explicit(stencil));
+    let keyed = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        width: 2,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![0, 10, 20, 30, 40, 50],
+        decode: None,
+        interpolate: false,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    }
+    .with_mask(ImageMask::color_key(vec![0, 10, 20, 30, 40, 50]));
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "IMG");
+    builder.image(page, 72.0, 600.0, 100.0, 100.0, &rgb);
+    builder.image(page, 72.0, 480.0, 100.0, 100.0, &soft);
+    builder.image(page, 72.0, 360.0, 100.0, 100.0, &explicit);
+    builder.image(page, 72.0, 240.0, 100.0, 100.0, &keyed);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let rgb_model = reparsed
+        .page_image(0, "Im1")
+        .expect("page image lookup")
+        .expect("Im1 should exist");
+    assert_eq!((rgb_model.width, rgb_model.height), (2, 2));
+    assert_eq!(rgb_model.color_space, Some(ColorSpaceModel::DeviceRGB));
+    assert_eq!(rgb_model.bits_per_component, 8);
+    assert!(rgb_model.interpolate);
+    assert_eq!(rgb_model.decode, None);
+    assert!(rgb_model.smask.is_none() && rgb_model.mask.is_none());
+    let samples = rgb_model.samples().expect("rgb samples");
+    assert_eq!(samples.pixel(0, 0), Some(&[1.0, 0.0, 0.0][..]));
+    assert_eq!(samples.pixel(1, 0), Some(&[0.0, 1.0, 0.0][..]));
+    assert_eq!(samples.pixel(0, 1), Some(&[0.0, 0.0, 1.0][..]));
+    assert_eq!(samples.pixel(1, 1), Some(&[1.0, 1.0, 1.0][..]));
+
+    let soft_model = reparsed
+        .page_image(0, "Im2")
+        .expect("page image lookup")
+        .expect("Im2 should exist");
+    let smask = soft_model.smask.as_ref().expect("Im2 should have /SMask");
+    assert_eq!(smask.color_space, Some(ColorSpaceModel::DeviceGray));
+    assert_eq!(
+        smask.samples().expect("smask samples").values,
+        vec![0.0, 64.0 / 255.0, 128.0 / 255.0, 1.0]
+    );
+
+    let explicit_model = reparsed
+        .page_image(0, "Im3")
+        .expect("page image lookup")
+        .expect("Im3 should exist");
+    let Some(ImageMaskModel::Explicit(mask)) = explicit_model.mask else {
+        panic!("expected an explicit mask, got {:?}", explicit_model.mask);
+    };
+    assert!(mask.image_mask);
+    assert_eq!((mask.width, mask.height), (4, 1));
+    assert_eq!(
+        mask.samples().expect("mask samples").values,
+        vec![1.0, 0.0, 1.0, 0.0]
+    );
+
+    let keyed_model = reparsed
+        .page_image(0, "Im4")
+        .expect("page image lookup")
+        .expect("Im4 should exist");
+    assert_eq!(
+        keyed_model.mask,
+        Some(ImageMaskModel::ColorKey(vec![0, 10, 20, 30, 40, 50]))
+    );
+
+    assert!(
+        reparsed
+            .page_image(0, "Im9")
+            .expect("page image lookup")
+            .is_none()
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("IMG"));
+}
+
+/// D7 写端图像补全：`/Intent`、`/Alternates`、`/Matte` 经写端组装后由
+/// `page_image` 读回；替代图像解析为独立 `ImageModel` 且不占页面资源，
+/// `/Matte` 落在 SMask 图像上并按基图分量数校验。
+#[test]
+fn builder_image_intent_alternates_and_matte_roundtrip() {
+    use pdf_engine::core::builder::{
+        ColorSpace, Font, ImageData, ImageIntent, PageSize, PdfBuilder,
+    };
+
+    let alternate = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![10, 20, 30],
+        decode: None,
+        interpolate: false,
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let alpha = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceGray,
+        bits: 8,
+        data: vec![64, 128, 192, 255],
+        decode: None,
+        interpolate: false,
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let img = ImageData {
+        width: 2,
+        height: 2,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![128; 12],
+        decode: None,
+        interpolate: false,
+        intent: Some(ImageIntent::Perceptual),
+        alternates: vec![alternate],
+        matte: Some(vec![0.25, 0.5, 0.75]),
+        smask: Some(Box::new(alpha)),
+        image_mask: false,
+        mask: None,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "EXTRA");
+    builder.image(page, 72.0, 600.0, 100.0, 100.0, &img);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let model = reparsed
+        .page_image(0, "Im1")
+        .expect("page image lookup")
+        .expect("Im1 should exist");
+    assert_eq!(model.intent.as_deref(), Some("Perceptual"));
+    assert_eq!(model.alternates.len(), 1, "one alternate image");
+    assert_eq!(
+        (model.alternates[0].width, model.alternates[0].height),
+        (1, 1)
+    );
+    let alternate_samples = model.alternates[0].samples().expect("alternate samples");
+    assert_eq!(
+        alternate_samples.pixel(0, 0),
+        Some(&[10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0][..])
+    );
+
+    let smask = model.smask.as_ref().expect("Im1 should have an SMask");
+    assert_eq!(smask.matte, Some(vec![0.25, 0.5, 0.75]));
+    assert_eq!(
+        smask.samples().expect("smask samples").values,
+        vec![64.0 / 255.0, 128.0 / 255.0, 192.0 / 255.0, 1.0]
+    );
+
+    assert!(
+        reparsed
+            .page_image(0, "Im2")
+            .expect("page image lookup")
+            .is_none(),
+        "alternate and SMask must not be page resources"
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("EXTRA"));
+}
+
+#[test]
+fn builder_form_own_resources_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        ColorSpace, Font, FormResources, FormXObject, ImageData, OptionalContentGroup, PageSize,
+        PdfBuilder,
+    };
+    use pdf_engine::core::content::ContentStream;
+
+    let image = ImageData {
+        width: 1,
+        height: 1,
+        color_space: ColorSpace::DeviceRGB,
+        bits: 8,
+        data: vec![40, 80, 120],
+        decode: None,
+        interpolate: false,
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
+        smask: None,
+        image_mask: false,
+        mask: None,
+    };
+    let mut inner = ContentStream::new();
+    inner
+        .begin_text()
+        .set_font("F1", 12.0)
+        .move_next_line(10.0, 40.0)
+        .show_text("OwnRes")
+        .end_text();
+    inner
+        .save_state()
+        .concat_matrix([20.0, 0.0, 0.0, 20.0, 10.0, 10.0])
+        .draw_xobject("Im1")
+        .restore_state();
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 720.0, "PAGE");
+    let group = builder.optional_content_group(&OptionalContentGroup::new("Form Layer"));
+    let form = FormXObject::new([0.0, 0.0, 100.0, 50.0], inner)
+        .with_resources(
+            FormResources::new()
+                .with_font(Font::helvetica(12.0))
+                .with_image(image)
+                .with_optional_content(group),
+        )
+        .with_optional_content(group);
+    let handle = builder.form_xobject(&form);
+    builder.draw_form(page, handle, [1.0, 0.0, 0.0, 1.0, 72.0, 600.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let page_dict = first_page_dict(&reparsed);
+    let form_ref = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|resources| resources.get("XObject"))
+        .and_then(Value::as_dict)
+        .and_then(|xobjects| xobjects.get("Fm1"))
+        .and_then(Value::as_ref)
+        .expect("page should reference /Fm1");
+    let form_object = reparsed
+        .get_object(form_ref.0)
+        .expect("form lookup")
+        .expect("form object");
+    let Value::Stream(form_dict, _) = &form_object.value else {
+        panic!("form should be a stream");
+    };
+    assert_eq!(
+        form_dict.get("Subtype").and_then(Value::as_name),
+        Some("Form")
+    );
+
+    // 表单自有资源：字体与图片子字典。
+    let resources = form_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .expect("form should write /Resources");
+    assert!(
+        resources
+            .get("Font")
+            .and_then(Value::as_dict)
+            .and_then(|fonts| fonts.get("F1"))
+            .and_then(Value::as_ref)
+            .is_some(),
+        "form /Font/F1: {resources:?}"
+    );
+    assert!(
+        resources
+            .get("Properties")
+            .and_then(Value::as_dict)
+            .and_then(|properties| properties.get("OC1"))
+            .and_then(Value::as_ref)
+            .is_some(),
+        "form /Properties/OC1: {resources:?}"
+    );
+    let image_ref = resources
+        .get("XObject")
+        .and_then(Value::as_dict)
+        .and_then(|xobjects| xobjects.get("Im1"))
+        .cloned()
+        .expect("form image /Im1");
+    let image_model = reparsed.image(&image_ref).expect("parse form image");
+    assert_eq!((image_model.width, image_model.height), (1, 1));
+    assert_eq!(
+        image_model.samples().expect("image samples").pixel(0, 0),
+        Some(&[40.0 / 255.0, 80.0 / 255.0, 120.0 / 255.0][..])
+    );
+
+    // 表单 /OC 引用同一 OCG，且目录 /OCProperties 包含该组。
+    let Value::Ref(form_group, _) = form_dict.get("OC").expect("form /OC") else {
+        panic!("form /OC should be an indirect reference");
+    };
+    assert_eq!(
+        resources
+            .get("Properties")
+            .and_then(Value::as_dict)
+            .and_then(|properties| properties.get("OC1"))
+            .and_then(Value::as_ref)
+            .map(|(num, _)| num),
+        Some(*form_group),
+        "form /OC and /Properties/OC1 should reference the same OCG"
+    );
+    let oc_properties = reparsed
+        .optional_content_properties()
+        .expect("parse /OCProperties")
+        .expect("expected /OCProperties");
+    assert_eq!(
+        oc_properties
+            .group(*form_group)
+            .map(|group| group.name.as_str()),
+        Some("Form Layer")
+    );
+
+    // 文本提取经表单自有资源解析字体（页面与表单文字都可提取）。
+    let extracted = reparsed.extract_page_text(0).expect("extract text");
+    assert!(extracted.contains("PAGE"), "{extracted}");
+    assert!(extracted.contains("OwnRes"), "{extracted}");
+}
+
+/// B7：位置片段 API 与 builder 写出的文本坐标一致，且平铺文本输出不变。
+#[test]
+fn builder_text_fragments_report_positions() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::text::TextFragment;
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let font = Font::helvetica(12.0);
+    builder.text(page, &font, 72.0, 700.0, "First");
+    builder.text(page, &font, 72.0, 680.0, "Second");
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    assert_eq!(
+        reparsed
+            .extract_page_text_fragments(0)
+            .expect("page fragments"),
+        vec![
+            TextFragment {
+                text: "First".into(),
+                x: 72.0,
+                y: 700.0,
+            },
+            TextFragment {
+                text: "Second".into(),
+                x: 72.0,
+                y: 680.0,
+            },
+        ]
+    );
+    assert_eq!(
+        reparsed.extract_page_text(0).as_deref(),
+        Some("First\nSecond")
+    );
 }

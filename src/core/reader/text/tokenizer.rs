@@ -13,6 +13,15 @@ pub enum CsToken {
     /// angle-bracket pairs so consumers (e.g. BDC property lists) can parse
     /// the entries instead of dropping them.
     Dictionary(Vec<u8>),
+    /// `BI ... ID ... EI` inline image; carries the raw dictionary bytes
+    /// (between `BI` and `ID`) and the image data (after the single
+    /// white-space byte following `ID`, up to the white space before `EI`).
+    /// `terminated` is `false` when `ID` or the closing `EI` is missing.
+    InlineImage {
+        dict: Vec<u8>,
+        data: Vec<u8>,
+        terminated: bool,
+    },
 }
 
 pub fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
@@ -82,10 +91,16 @@ pub fn tokenize_content_stream(input: &[u8]) -> Vec<CsToken> {
                 let kw = String::from_utf8_lossy(&input[start..pos]).into_owned();
                 if kw == "BI" {
                     // Inline images embed arbitrary binary bytes between `ID`
-                    // and `EI`; skipping the whole span prevents image data
-                    // from being tokenized as text operators or from opening a
+                    // and `EI`; the whole span is consumed here so image data
+                    // cannot be tokenized as text operators or open a
                     // string/comment that swallows the following content.
-                    pos = skip_inline_image(input, pos);
+                    let (dict, data, terminated, next) = read_inline_image(input, pos);
+                    tokens.push(CsToken::InlineImage {
+                        dict,
+                        data,
+                        terminated,
+                    });
+                    pos = next;
                 } else if !kw.is_empty() {
                     tokens.push(CsToken::Keyword(kw));
                 }
@@ -170,15 +185,19 @@ fn take_dictionary(input: &[u8], start: usize) -> (Vec<u8>, usize) {
     (input[inner_start..].to_vec(), pos)
 }
 
-/// Skip an inline image starting just after the `BI` keyword.///
-/// Scans the image dictionary for the `ID` keyword, then discards the binary
-/// image data up to the closing `EI`. Returns the index just past `EI`, or the
-/// end of the input when the image is truncated.
-fn skip_inline_image(input: &[u8], mut pos: usize) -> usize {
+/// Extract an inline image starting just after the `BI` keyword.
+///
+/// Scans the image dictionary for the `ID` keyword, then locates the closing
+/// `EI`. Returns the raw dictionary bytes, the image data (the single
+/// white-space byte after `ID` and the white space before `EI` are separators,
+/// not data), whether `EI` was found, and the index just past `EI` (end of
+/// input when the image is truncated).
+fn read_inline_image(input: &[u8], mut pos: usize) -> (Vec<u8>, Vec<u8>, bool, usize) {
+    let dict_start = pos;
     while pos < input.len() {
         skip_ws_and_comments(input, &mut pos);
         if pos >= input.len() {
-            return pos;
+            break;
         }
         match input[pos] {
             b'(' => {
@@ -206,24 +225,30 @@ fn skip_inline_image(input: &[u8], mut pos: usize) -> usize {
                     pos += 1;
                 }
                 if &input[start..pos] == b"ID" {
-                    if pos >= input.len() {
-                        return pos;
+                    let dict = input[dict_start..start].to_vec();
+                    if pos < input.len() && is_whitespace(input[pos]) {
+                        let data_start = pos + 1;
+                        if let Some((data_end, next)) = find_inline_image_end(input, data_start) {
+                            let data = input[data_start..data_end.max(data_start)].to_vec();
+                            return (dict, data, true, next);
+                        }
+                        return (dict, input[data_start..].to_vec(), false, input.len());
                     }
-                    if is_whitespace(input[pos]) {
-                        return skip_inline_image_data(input, pos + 1);
-                    }
+                    return (dict, Vec::new(), false, input.len());
                 }
             }
         }
     }
-    pos
+    (input[dict_start..].to_vec(), Vec::new(), false, input.len())
 }
 
 /// Find the `EI` terminator of inline image data.
 ///
 /// PDF requires `EI` to be preceded by white space and followed by white
-/// space, a delimiter, or end of input (ISO 32000-1 8.9.7).
-fn skip_inline_image_data(input: &[u8], start: usize) -> usize {
+/// space, a delimiter, or end of input (ISO 32000-1 8.9.7). Returns the end of
+/// the data (the separator white space is excluded) and the index just past
+/// `EI`.
+fn find_inline_image_end(input: &[u8], start: usize) -> Option<(usize, usize)> {
     let mut pos = start;
     while pos + 1 < input.len() {
         if input[pos] == b'E' && input[pos + 1] == b'I' {
@@ -232,12 +257,12 @@ fn skip_inline_image_data(input: &[u8], start: usize) -> usize {
                 || is_whitespace(input[pos + 2])
                 || is_delimiter(input[pos + 2]);
             if preceded_by_space && followed_by_separator {
-                return pos + 2;
+                return Some((pos - 1, pos + 2));
             }
         }
         pos += 1;
     }
-    input.len()
+    None
 }
 
 fn skip_ws_and_comments(input: &[u8], pos: &mut usize) {

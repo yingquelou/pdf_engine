@@ -23,7 +23,8 @@ pub enum LineCap {
 }
 
 impl LineCap {
-    pub(super) fn value(self) -> u8 {
+    /// 规范数值（0/1/2）。
+    pub fn value(self) -> u8 {
         match self {
             LineCap::Butt => 0,
             LineCap::Round => 1,
@@ -44,7 +45,8 @@ pub enum LineJoin {
 }
 
 impl LineJoin {
-    pub(super) fn value(self) -> u8 {
+    /// 规范数值（0/1/2）。
+    pub fn value(self) -> u8 {
         match self {
             LineJoin::Miter => 0,
             LineJoin::Round => 1,

@@ -9,6 +9,7 @@
 use std::fmt;
 
 use super::Op;
+use crate::core::reader::optional_content::membership_visibility;
 use crate::core::reader::page_content::PageContentError;
 use crate::core::types::{Dict, Document, PdfTextString, Value};
 
@@ -162,9 +163,12 @@ fn hex_value(byte: u8) -> Option<u8> {
 ///
 /// `resolve_ocg_name` maps a property-list `/OC` *name* to the OCG object
 /// number through the `/Properties` resource; direct `num gen R` values are
-/// already object numbers. Returns `None` when there is no `/OC`, the group
-/// cannot be identified (e.g. an inline OCG dictionary or an OCMD), or the
-/// default configuration leaves the state unchanged.
+/// already object numbers. Inline membership dictionaries (`/OC << /OCGs …
+/// /P … >>`) are evaluated with their `/P` policy or `/VE` expression; an
+/// indirect OCMD reference cannot be identified here because it is
+/// indistinguishable from an OCG object number with this callback shape.
+/// Returns `None` when there is no `/OC`, the group cannot be identified, or
+/// the default configuration leaves the state unchanged.
 pub fn resolve_marked_visibility(
     properties: Option<&Dict>,
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
@@ -174,6 +178,7 @@ pub fn resolve_marked_visibility(
     match oc {
         Value::Name(name) => resolve_ocg_name(name).and_then(is_visible),
         Value::Ref(object, _) => is_visible(*object),
+        Value::Dict(dict) => membership_visibility(dict, is_visible),
         _ => None,
     }
 }

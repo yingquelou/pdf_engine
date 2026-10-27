@@ -35,18 +35,19 @@ pub use types::{
     AxialShading, CalGray, CalRGB, CalculatorFunction, CidEncoding, CidFont, CidFontSubtype,
     CidSystemInfo, CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading,
     DashPattern, DeviceN, ExponentialFunction, Font, FontDescriptor, FontEncoding, FontProgram,
-    FontWidths, FormXObject, FreeFormMeshShading, Function, FunctionShading, GraphicsState,
-    GraphicsStateFont, GroupXObject, ICCBased, ImageData, ImageMask, Indexed, Lab,
-    LatticeMeshShading, MeshFunction, MeshVertex, OptionalContentGroup, PageSize, PaintType,
-    RadialShading, SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
-    SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
-    TilingPattern, TilingType, Type3Font, Type3Glyph,
+    FontWidths, FormResources, FormXObject, FreeFormMeshShading, Function, FunctionShading,
+    GraphicsState, GraphicsStateFont, GroupXObject, Halftone, HalftoneDictionary, ICCBased,
+    ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, MeshFunction, MeshVertex,
+    OptionalContentGroup, PageSize, PaintType, RadialShading, SampledFunction, Separation, Shading,
+    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
+    TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
+    Type2Halftone, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
 use crate::core::reader::font::predefined_cmaps::resolve_predefined_cmap;
 use crate::core::types::PdfVersion;
-use crate::core::writer::{DocumentWriter, WriteError};
+use crate::core::writer::{DocumentWriter, StreamCompression, WriteError};
 use std::io::Write;
 
 /// 单页的构建态：尚未分配对象号的内容。
@@ -136,6 +137,8 @@ pub struct PdfBuilder {
     patterns: Vec<Pattern>,
     /// 文档级颜色空间池；`PdfBuilder::color_space` 返回其索引。
     color_spaces: Vec<ColorSpace>,
+    /// D4 写端流压缩策略；`None`（默认）时所有流保持明文写出。
+    compression: Option<StreamCompression>,
 }
 
 impl Default for PdfBuilder {
@@ -156,6 +159,7 @@ impl PdfBuilder {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            compression: None,
         }
     }
 
@@ -170,7 +174,21 @@ impl PdfBuilder {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            compression: None,
         }
+    }
+
+    /// 启用写端流压缩（D4）：`build` 时所有未声明 `/Filter` 的明文流
+    /// （页面内容流、图像、字体程序与 writer 生成的结构流）按
+    /// [`StreamCompression`] 策略以 `FlateDecode` 压缩写出；已声明过滤器的
+    /// 流（如 `DCTDecode`/`JPXDecode` 透传）保持原样。不调用本方法则输出
+    /// 与既往一致为明文。`FlateDecode` 要求目标版本 ≥1.2，图像 PNG 预测器
+    /// 要求 ≥1.3，不满足时 [`build`](Self::build) 报
+    /// [`WriteError::UnsupportedVersion`] 且不写出任何字节；后端失败报
+    /// [`WriteError::Compression`]，同样零字节、不静默回退明文。
+    pub fn compress_streams(&mut self, compression: StreamCompression) -> &mut Self {
+        self.compression = Some(compression);
+        self
     }
 
     /// 新增一页，返回该页的 0-based 索引，供后续 `text`/`image` 使用。
@@ -962,8 +980,10 @@ impl PdfBuilder {
     /// [`DocumentWriter`] 输出。xref/trailer 由 writer 自动生成。
     pub fn build<W: Write>(&mut self, w: &mut W) -> Result<(), WriteError> {
         let doc = self.assemble_document()?;
-        DocumentWriter::new()
-            .with_version(self.version)
-            .build(&doc, w)
+        let mut writer = DocumentWriter::new().with_version(self.version);
+        if let Some(compression) = self.compression.clone() {
+            writer = writer.with_compression(compression);
+        }
+        writer.build(&doc, w)
     }
 }

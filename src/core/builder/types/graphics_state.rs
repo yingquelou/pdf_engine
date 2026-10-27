@@ -3,8 +3,8 @@
 //! 对应 PDF 32000-1 §8.4.5 Table 58。写出端在页面资源字典中登记
 //! `/ExtGState` 子字典，内容流用 `/GS<n> gs` 应用；[`GraphicsState`]
 //! 覆盖不依赖外部对象的标量参数、`/D`、`/BM`、`/Font`、`/SMask`
-//! 软蒙版字典与 `/TR`、`/BG`、`/BG2`、`/UCR`、`/UCR2` 函数条目。
-//! `/TR2` 与 `/HT` 依赖半色调对象模型，留待相应特性实现。
+//! 软蒙版字典与 `/TR`、`/BG`、`/BG2`、`/UCR`、`/UCR2` 函数条目、
+//! `/TR2` 原始字典与 `/HT` 半色调包装字典（见 `types::halftone`）。
 //!
 //! `/SMask` 的 `/G` 引用由构建器按文档级 Form XObject 句柄解析为对象号，
 //! 被引用的表单须是透明组（带 `/Group`），并在构建阶段连同表单对象写出。
@@ -13,6 +13,7 @@ use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
 use super::Font;
+use super::halftone::HalftoneDictionary;
 
 /// 虚线样式（`/D`）：交替的虚线段与间隔长度、相位。
 #[derive(Debug, Clone, PartialEq)]
@@ -55,8 +56,8 @@ impl SoftMaskSubtype {
 ///
 /// `/G` 是透明组 Form XObject 的构建器句柄（[`PdfBuilder::form_xobject`]
 /// 的返回值），构建阶段解析为对象引用；引用的表单必须带
-/// [`GroupXObject`](super::GroupXObject)。`/TR` 传递函数需要函数对象
-/// 模型，暂不支持（省略即恒等）。
+/// [`GroupXObject`](super::GroupXObject)。`/TR` 传递函数以
+/// [`PdfBuilder::function`] 句柄引用（组装阶段解析，须单输出）。
 ///
 /// [`PdfBuilder::form_xobject`]: super::super::PdfBuilder::form_xobject
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +68,12 @@ pub struct SoftMask {
     pub group: usize,
     /// `/BC` 背景色分量（每项 0–1）。
     pub backdrop: Option<Vec<f64>>,
+    /// `/TR` 传递函数句柄（PDF 1.4 起弃用，省略即恒等）。
+    pub transfer_function: Option<usize>,
+    /// `/SMaskInData` 蒙版与图像数据的关系（0–2，PDF 1.4）。
+    pub smask_in_data: Option<u8>,
+    /// `/Matte` 衬底颜色分量（PDF 1.6，按组颜色空间原生值）。
+    pub matte: Option<Vec<f64>>,
 }
 
 impl SoftMask {
@@ -76,6 +83,9 @@ impl SoftMask {
             subtype: SoftMaskSubtype::Alpha,
             group,
             backdrop: None,
+            transfer_function: None,
+            smask_in_data: None,
+            matte: None,
         }
     }
 
@@ -85,12 +95,35 @@ impl SoftMask {
             subtype: SoftMaskSubtype::Luminosity,
             group,
             backdrop: None,
+            transfer_function: None,
+            smask_in_data: None,
+            matte: None,
         }
     }
 
     /// 设置 `/BC` 背景色分量。
     pub fn with_backdrop(mut self, components: impl Into<Vec<f64>>) -> Self {
         self.backdrop = Some(components.into());
+        self
+    }
+
+    /// 设置 `/TR` 传递函数（需先通过 [`PdfBuilder::function`] 注册）。
+    ///
+    /// [`PdfBuilder::function`]: super::super::PdfBuilder::function
+    pub fn with_transfer_function(mut self, function: usize) -> Self {
+        self.transfer_function = Some(function);
+        self
+    }
+
+    /// 设置 `/SMaskInData`（0–2）。
+    pub fn with_smask_in_data(mut self, value: u8) -> Self {
+        self.smask_in_data = Some(value);
+        self
+    }
+
+    /// 设置 `/Matte` 衬底颜色分量（PDF 1.6）。
+    pub fn with_matte(mut self, components: impl Into<Vec<f64>>) -> Self {
+        self.matte = Some(components.into());
         self
     }
 }
@@ -170,6 +203,11 @@ pub struct GraphicsState {
     pub undercolor_removal: Option<usize>,
     /// `/UCR2` 底色去除函数句柄（PDF 1.3；优先于 `/UCR`）。
     pub undercolor_removal_2: Option<usize>,
+    /// `/TR2` PostScript 传递函数 2 字典（PDF 1.3，弃用）：原样写出，
+    /// 仅校验为字典，不解释其内部语义。
+    pub transfer_function_2: Option<Value>,
+    /// `/HT` 半色调包装字典（PDF 1.3）。
+    pub halftone: Option<HalftoneDictionary>,
 }
 
 /// ExtGState 中函数类条目的已解析值（由组装阶段按句柄生成）。
@@ -180,6 +218,9 @@ pub(crate) struct GraphicsStateFunctions {
     pub black_generation_2: Option<Value>,
     pub undercolor_removal: Option<Value>,
     pub undercolor_removal_2: Option<Value>,
+    pub smask_transfer: Option<Value>,
+    /// `/HT` 包装字典已解析出的值（函数句柄已替换为对象值）。
+    pub halftone: Option<Value>,
 }
 
 impl GraphicsState {
@@ -338,6 +379,20 @@ impl GraphicsState {
         self
     }
 
+    /// 设置 `/TR2` PostScript 传递函数 2 字典（PDF 1.3，弃用）。
+    ///
+    /// 值原样写出；构建阶段仅校验其为字典，不解释内部条目。
+    pub fn with_transfer_function_2(mut self, dict: Value) -> Self {
+        self.transfer_function_2 = Some(dict);
+        self
+    }
+
+    /// 设置 `/HT` 半色调包装字典（PDF 1.3）。
+    pub fn with_halftone(mut self, halftone: HalftoneDictionary) -> Self {
+        self.halftone = Some(halftone);
+        self
+    }
+
     /// 函数类条目（名称与函数句柄），供组装阶段解析为字典值。
     pub(crate) fn function_handles(&self) -> impl Iterator<Item = (&'static str, usize)> + '_ {
         [
@@ -349,6 +404,20 @@ impl GraphicsState {
         ]
         .into_iter()
         .filter_map(|(name, handle)| handle.map(|handle| (name, handle)))
+    }
+
+    /// 须为单输出的附加函数句柄：`/SMask /TR` 与 `/HT` 内函数。
+    pub(crate) fn auxiliary_function_handles(&self) -> Vec<(&'static str, usize)> {
+        let mut handles = Vec::new();
+        if let Some(soft_mask) = &self.soft_mask
+            && let Some(handle) = soft_mask.transfer_function
+        {
+            handles.push(("SMask /TR", handle));
+        }
+        if let Some(halftone) = &self.halftone {
+            handles.extend(halftone.function_handles().map(|handle| ("HT", handle)));
+        }
+        handles
     }
 
     /// 校验并转换为 `/ExtGState` 参数字典。
@@ -385,6 +454,22 @@ impl GraphicsState {
         }
         if self.undercolor_removal_2.is_some() != functions.undercolor_removal_2.is_some() {
             return Err(invalid("/UCR2 entry and its function value disagree"));
+        }
+        if self.soft_mask.is_none() && functions.smask_transfer.is_some() {
+            return Err(invalid(
+                "/SMask transfer function value without a soft mask",
+            ));
+        }
+        if self
+            .soft_mask
+            .as_ref()
+            .is_some_and(|soft_mask| soft_mask.transfer_function.is_some())
+            != functions.smask_transfer.is_some()
+        {
+            return Err(invalid("/SMask /TR entry and its function value disagree"));
+        }
+        if self.halftone.is_some() != functions.halftone.is_some() {
+            return Err(invalid("/HT entry and its resolved value disagree"));
         }
         let mut dict = Dict::new().insert("Type", Value::Name("ExtGState".into()));
         if let Some(width) = self.line_width {
@@ -508,6 +593,15 @@ impl GraphicsState {
         if let Some(value) = functions.undercolor_removal_2 {
             dict = dict.insert("UCR2", value);
         }
+        if let Some(value) = &self.transfer_function_2 {
+            if value.as_dict().is_none() {
+                return Err(invalid("/TR2 must be a dictionary"));
+            }
+            dict = dict.insert("TR2", value.clone());
+        }
+        if let Some(value) = functions.halftone {
+            dict = dict.insert("HT", value);
+        }
         if let Some(soft_mask) = &self.soft_mask {
             let group_num =
                 soft_mask_group_num.ok_or_else(|| invalid("/SMask /G reference is missing"))?;
@@ -525,6 +619,29 @@ impl GraphicsState {
                     array.push(Value::Float(*component))
                 });
                 mask_dict = mask_dict.insert("BC", Value::Array(array));
+            }
+            if let Some(value) = functions.smask_transfer {
+                mask_dict = mask_dict.insert("TR", value);
+            }
+            if let Some(in_data) = soft_mask.smask_in_data {
+                if in_data > 2 {
+                    return Err(invalid("/SMask /SMaskInData must be 0, 1 or 2"));
+                }
+                mask_dict = mask_dict.insert("SMaskInData", Value::Integer(i64::from(in_data)));
+            }
+            if let Some(components) = &soft_mask.matte {
+                if components.is_empty() {
+                    return Err(invalid("/SMask /Matte must not be empty"));
+                }
+                for component in components {
+                    if !component.is_finite() {
+                        return Err(invalid("/SMask /Matte components must be finite"));
+                    }
+                }
+                let array = components.iter().fold(Array::new(), |array, component| {
+                    array.push(Value::Float(*component))
+                });
+                mask_dict = mask_dict.insert("Matte", Value::Array(array));
             }
             dict = dict.insert("SMask", Value::Dict(mask_dict));
         }

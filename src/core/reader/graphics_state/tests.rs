@@ -547,3 +547,78 @@ fn rejects_malformed_soft_masks() {
         other => panic!("expected an invalid soft mask, got {other:?}"),
     }
 }
+
+#[test]
+fn parses_soft_mask_transfer_function_smask_in_data_and_matte() {
+    let transfer = Value::Dict(state(vec![
+        ("FunctionType", Value::Integer(2)),
+        (
+            "Domain",
+            Value::Array(Array(vec![Value::Integer(0), Value::Integer(1)])),
+        ),
+        (
+            "Range",
+            Value::Array(Array(vec![Value::Integer(0), Value::Integer(1)])),
+        ),
+    ]));
+    let document = document_with_objects(vec![
+        (7, xobject_stream(Some("Form"))),
+        (9, transfer.clone()),
+    ]);
+
+    let mask = document
+        .soft_mask(&Value::Dict(state(vec![
+            ("S", Value::Name("Luminosity".into())),
+            ("G", Value::Ref(7, 0)),
+            ("TR", Value::Ref(9, 0)),
+            ("SMaskInData", Value::Integer(2)),
+            (
+                "Matte",
+                Value::Array(Array(vec![Value::Float(0.1), Value::Integer(0)])),
+            ),
+            ("Foo", Value::Integer(7)),
+        ])))
+        .expect("extended soft mask should parse");
+
+    assert_eq!(mask.transfer, Some(transfer));
+    assert_eq!(mask.smask_in_data, Some(2));
+    assert_eq!(mask.matte, Some(vec![0.1, 0.0]));
+    assert_eq!(mask.other.get("Foo"), Some(&Value::Integer(7)));
+}
+
+#[test]
+fn rejects_invalid_smask_in_data_and_matte() {
+    let objects = vec![(7, xobject_stream(Some("Form")))];
+    let assert_invalid_mask = |extra: Vec<(&str, Value)>, needle: &str| {
+        let document = document_with_objects(objects.clone());
+        let mut entries = vec![("S", Value::Name("Alpha".into())), ("G", Value::Ref(7, 0))];
+        entries.extend(extra);
+        match document.soft_mask(&Value::Dict(state(entries))) {
+            Err(GraphicsStateError::Invalid(message)) => assert!(
+                message.contains(needle),
+                "error {message:?} should mention {needle}"
+            ),
+            other => panic!("expected an invalid soft mask, got {other:?}"),
+        }
+    };
+
+    assert_invalid_mask(
+        vec![("SMaskInData", Value::Integer(3))],
+        "soft mask /SMaskInData must be 0, 1 or 2",
+    );
+    assert_invalid_mask(
+        vec![("SMaskInData", Value::Name("Alpha".into()))],
+        "soft mask /SMaskInData must be an integer",
+    );
+    assert_invalid_mask(
+        vec![("Matte", Value::Array(Array(Vec::new())))],
+        "soft mask /Matte must not be empty",
+    );
+    assert_invalid_mask(
+        vec![(
+            "Matte",
+            Value::Array(Array(vec![Value::Name("Red".into())])),
+        )],
+        "soft mask /Matte entries must be numbers",
+    );
+}

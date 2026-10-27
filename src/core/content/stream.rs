@@ -26,6 +26,11 @@ impl ContentStream {
         self.ops.len()
     }
 
+    /// 只读引用当前操作符序列（用于与读端 Op 模型做映射/比对）。
+    pub fn ops(&self) -> &[Op] {
+        &self.ops
+    }
+
     /// 操作符序列是否为空。
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()

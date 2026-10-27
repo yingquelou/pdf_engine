@@ -14,7 +14,7 @@ pub struct StitchingFunction {
     /// 值域（可选；存在则输出截断）。
     pub(crate) range: Option<Vec<(f64, f64)>>,
     /// 子函数（n ≥ 1，均应为一维输入）。
-    functions: Vec<super::Function>,
+    pub(crate) functions: Vec<super::Function>,
     /// 内部分点（n−1 个，严格递增）。
     bounds: Vec<f64>,
     /// 每段的 (in_lo, in_hi) 编码对（n 个）。

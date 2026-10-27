@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use super::WriteError;
-use super::value::{write_object, write_value};
+use super::compression::StreamCompression;
+use super::value::{write_object_maybe_compressed, write_value};
 
 /// 单个对象在输出文件中的交叉引用条目（writer 内部表达）。
 #[derive(Clone)]
@@ -35,6 +36,8 @@ impl XrefEntryOut {
 /// 写入阶段的内部状态：缓冲 + 当前偏移 + 对象条目表 + 已写出的最大对象号。
 pub(super) struct WriteContext {
     version: PdfVersion,
+    /// D4 流压缩策略；`None` 时全部流保持明文。
+    compression: Option<StreamCompression>,
     pub(super) buf: Vec<u8>,
     pub(super) pos: u64,
     /// 已写出对象的交叉引用条目（不保证按对象号有序：打包条目在对象流
@@ -45,9 +48,10 @@ pub(super) struct WriteContext {
 }
 
 impl WriteContext {
-    pub(super) fn new(version: PdfVersion) -> Self {
+    pub(super) fn new(version: PdfVersion, compression: Option<StreamCompression>) -> Self {
         Self {
             version,
+            compression,
             buf: Vec::new(),
             pos: 0,
             entries: Vec::new(),
@@ -68,7 +72,7 @@ impl WriteContext {
         doc: &Document,
         obj: &Object,
     ) -> Result<u64, WriteError> {
-        let bytes = write_object(obj, doc)?;
+        let bytes = write_object_maybe_compressed(obj, doc, self.compression.as_ref())?;
         let off = self.pos;
         self.buf.extend_from_slice(&bytes);
         self.pos = self.buf.len() as u64;
@@ -124,8 +128,8 @@ impl WriteContext {
     /// 并为每个被打包的对象记录 `InObjStream` 条目。
     ///
     /// 流内容：头部 N 对「对象号 相对偏移」（ASCII、空白分隔），随后
-    /// 各对象本体；`/First` 为首个对象本体在流内的偏移。**不压缩**
-    /// （写端无需 Flate，读端按未压缩路径解析）。
+    /// 各对象本体；`/First` 为首个对象本体在流内的偏移。默认**不压缩**；
+    /// 启用 D4 压缩策略时，容器流与文档流一样在序列化咽喉点压缩。
     pub(super) fn write_object_stream(
         &mut self,
         doc: &Document,

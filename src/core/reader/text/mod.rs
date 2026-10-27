@@ -16,8 +16,13 @@
 //! Marked content (14.6) affects the output: `BMC`/`BDC` sections resolve
 //! their property lists (inline dictionary or `/Properties` name), a section
 //! whose optional-content group (8.11.2) is off by the default configuration
-//! is not extracted, and `/ActualText` replaces the section's shown text.
-//! Unbalanced `EMC` is ignored.
+//! is not extracted, `/ActualText` replaces the section's shown text, and
+//! `/Artifact` sections (14.8.2.6.2) are skipped entirely. Unbalanced `EMC` is
+//! ignored.
+//!
+//! [`Document::try_extract_page_text_fragments`] returns the same text split
+//! into positioned runs ([`TextFragment`]), tracking the text matrix and the
+//! current transformation matrix instead of only inserting separators.
 //!
 //! The extractor uses an operand stack: non-operator tokens (numbers,
 //! strings, names, arrays) are pushed onto the stack; when an operator
@@ -56,6 +61,87 @@ const MAX_PARENT_CHAIN_DEPTH: usize = 64;
 const MAX_FORM_DEPTH: usize = 32;
 /// Maximum saved text/graphics states from `q` operators.
 const MAX_STATE_DEPTH: usize = 256;
+/// Maximum `/OC` name/reference redirection depth.
+const MAX_OC_DEPTH: usize = 16;
+
+// ── Positioned fragments ──────────────────────────────────
+
+/// One run of extracted text at its approximate position.
+///
+/// The position is the text-space origin of the run transformed by the text
+/// matrix (`Tm`/`Td`/`TD`/`T*`, including `TL` leading and `Ts` rise) and the
+/// current transformation matrix (`cm`, `q`/`Q`, and a form XObject's
+/// `/Matrix`). Glyph advances inside a shown string are not modeled, so
+/// consecutive runs on one line may share a position.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFragment {
+    /// Decoded Unicode text of the run.
+    pub text: String,
+    /// X coordinate in default user space.
+    pub x: f64,
+    /// Y coordinate in default user space.
+    pub y: f64,
+}
+
+/// Affine transform in PDF's row-vector convention (`[x y 1] × M`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Matrix {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    e: f64,
+    f: f64,
+}
+
+impl Matrix {
+    const IDENTITY: Self = Self {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        e: 0.0,
+        f: 0.0,
+    };
+
+    fn from_values(values: [f64; 6]) -> Self {
+        Self {
+            a: values[0],
+            b: values[1],
+            c: values[2],
+            d: values[3],
+            e: values[4],
+            f: values[5],
+        }
+    }
+
+    fn translate(tx: f64, ty: f64) -> Self {
+        Self {
+            e: tx,
+            f: ty,
+            ..Self::IDENTITY
+        }
+    }
+
+    /// Concatenation: applies `self` first, then `other`.
+    fn concat(self, other: Self) -> Self {
+        Self {
+            a: self.a * other.a + self.b * other.c,
+            b: self.a * other.b + self.b * other.d,
+            c: self.c * other.a + self.d * other.c,
+            d: self.c * other.b + self.d * other.d,
+            e: self.e * other.a + self.f * other.c + other.e,
+            f: self.e * other.b + self.f * other.d + other.f,
+        }
+    }
+
+    fn transform(self, x: f64, y: f64) -> (f64, f64) {
+        (
+            self.a * x + self.c * y + self.e,
+            self.b * x + self.d * y + self.f,
+        )
+    }
+}
 
 // ── Operand stack & text state ────────────────────────────
 
@@ -94,8 +180,9 @@ enum FontHandle {
 /// One open `BMC`/`BDC` marked-content section while extracting text.
 #[derive(Debug, Clone)]
 struct MarkedFrame {
-    /// `true` when this section (or an enclosing one) belongs to an
-    /// optional-content group that the default configuration turns off.
+    /// `true` when this section (or an enclosing one) is an `/Artifact` or
+    /// belongs to an optional-content group that the default configuration
+    /// turns off.
     hidden: bool,
     /// `/ActualText` replacing the section's rendered text, when present.
     actual_text: Option<String>,
@@ -104,15 +191,36 @@ struct MarkedFrame {
     actual_emitted: bool,
 }
 
+/// Text/graphics state saved by `q` and restored by `Q`.
+#[derive(Clone)]
+struct SavedState {
+    font_name: Option<String>,
+    ctm: Matrix,
+    leading: f64,
+    rise: f64,
+}
+
 struct TextState {
     font_name: Option<String>,
     fonts: HashMap<String, FontHandle>,
     output: String,
-    /// Text parameters saved by `q` and restored by `Q`. Only the selected
-    /// font is modeled, but it is part of the PDF graphics state.
-    font_stack: Vec<Option<String>>,
+    fragments: Vec<TextFragment>,
+    /// Current run being accumulated; flushed when the position changes or a
+    /// separator is emitted.
+    pending_fragment: Option<TextFragment>,
+    /// States saved by `q` and restored by `Q`. Only the selected font and the
+    /// text parameters that affect positioning are modeled.
+    saved_states: Vec<SavedState>,
     /// Open marked-content sections (`BMC`/`BDC` … `EMC` nesting).
     marked: Vec<MarkedFrame>,
+    /// Current transformation matrix (`cm`, `q`/`Q`, form `/Matrix`).
+    ctm: Matrix,
+    /// Text matrix `Tm` and text line matrix `Tlm` (9.4.2).
+    text_matrix: Matrix,
+    line_matrix: Matrix,
+    /// Leading `TL` and text rise `Ts`.
+    leading: f64,
+    rise: f64,
 }
 
 impl TextState {
@@ -121,8 +229,15 @@ impl TextState {
             font_name: None,
             fonts: HashMap::new(),
             output: String::new(),
-            font_stack: Vec::new(),
+            fragments: Vec::new(),
+            pending_fragment: None,
+            saved_states: Vec::new(),
             marked: Vec::new(),
+            ctm: Matrix::IDENTITY,
+            text_matrix: Matrix::IDENTITY,
+            line_matrix: Matrix::IDENTITY,
+            leading: 0.0,
+            rise: 0.0,
         }
     }
 
@@ -151,51 +266,111 @@ impl TextState {
     }
 
     fn save_state(&mut self) {
-        if self.font_stack.len() < MAX_STATE_DEPTH {
-            self.font_stack.push(self.font_name.clone());
+        if self.saved_states.len() < MAX_STATE_DEPTH {
+            self.saved_states.push(SavedState {
+                font_name: self.font_name.clone(),
+                ctm: self.ctm,
+                leading: self.leading,
+                rise: self.rise,
+            });
         }
     }
 
     fn restore_state(&mut self) {
-        if let Some(font_name) = self.font_stack.pop() {
-            self.font_name = font_name;
+        if let Some(saved) = self.saved_states.pop() {
+            self.font_name = saved.font_name;
+            self.ctm = saved.ctm;
+            self.leading = saved.leading;
+            self.rise = saved.rise;
         }
     }
 
+    /// `BT` resets both text matrices; text state parameters are preserved.
+    fn begin_text(&mut self) {
+        self.text_matrix = Matrix::IDENTITY;
+        self.line_matrix = Matrix::IDENTITY;
+    }
+
+    fn set_text_matrix(&mut self, matrix: Matrix) {
+        self.text_matrix = matrix;
+        self.line_matrix = matrix;
+    }
+
+    /// `Td`/`TD`/`T*`: move the line matrix and make it the text matrix.
+    fn move_line(&mut self, tx: f64, ty: f64) {
+        self.line_matrix = Matrix::translate(tx, ty).concat(self.line_matrix);
+        self.text_matrix = self.line_matrix;
+    }
+
+    fn next_line(&mut self) {
+        self.move_line(0.0, -self.leading);
+    }
+
+    /// `cm`: concatenate a matrix with the current transformation matrix.
+    fn concatenate_ctm(&mut self, matrix: Matrix) {
+        self.ctm = matrix.concat(self.ctm);
+    }
+
+    /// Text-space origin of the next shown run in default user space.
+    fn position(&self) -> (f64, f64) {
+        self.text_matrix.concat(self.ctm).transform(0.0, self.rise)
+    }
+
     fn show_bytes(&mut self, bytes: &[u8]) {
-        if let Some(frame) = self.marked.last_mut() {
-            if frame.hidden {
-                return;
-            }
-            if frame.actual_text.is_some() {
-                if !frame.actual_emitted {
-                    frame.actual_emitted = true;
-                    self.output
-                        .push_str(frame.actual_text.as_deref().unwrap_or_default());
-                }
-                return;
-            }
-        }
-        let Some(font_name) = &self.font_name else {
-            self.output.push_str(&lossy_latin1(bytes));
+        if self.marked_hidden() {
             return;
+        }
+        if let Some(frame) = self.marked.last_mut()
+            && frame.actual_text.is_some()
+        {
+            if frame.actual_emitted {
+                return;
+            }
+            frame.actual_emitted = true;
+            let replacement = frame.actual_text.clone().unwrap_or_default();
+            if !replacement.is_empty() {
+                self.flush_fragment();
+                let (x, y) = self.position();
+                self.output.push_str(&replacement);
+                self.fragments.push(TextFragment {
+                    text: replacement,
+                    x,
+                    y,
+                });
+            }
+            return;
+        }
+        let text = self.decode_text(bytes);
+        if text.is_empty() {
+            return;
+        }
+        self.output.push_str(&text);
+        let (x, y) = self.position();
+        self.push_fragment_run(text, x, y);
+    }
+
+    /// Decode one shown string through the selected font, falling back to
+    /// Latin-1 when no font metadata is available.
+    fn decode_text(&self, bytes: &[u8]) -> String {
+        let Some(font_name) = &self.font_name else {
+            return lossy_latin1(bytes);
         };
         let Some(handle) = self.fonts.get(font_name) else {
-            self.output.push_str(&lossy_latin1(bytes));
-            return;
+            return lossy_latin1(bytes);
         };
+        let mut text = String::new();
         match handle {
             FontHandle::Type0(font) => match font.decode_codes(bytes) {
                 Ok(codes) => {
                     for code in codes {
                         if let Some(unicode) = &code.unicode {
-                            self.output.push_str(unicode);
+                            text.push_str(unicode);
                         } else {
-                            self.output.push_str(&lossy_latin1(&code.code));
+                            text.push_str(&lossy_latin1(&code.code));
                         }
                     }
                 }
-                Err(_) => self.output.push_str(&lossy_latin1(bytes)),
+                Err(_) => text.push_str(&lossy_latin1(bytes)),
             },
             FontHandle::Simple {
                 encoding,
@@ -206,17 +381,37 @@ impl TextState {
                 for &byte in bytes {
                     // `/ToUnicode` 是字符码到 Unicode 的权威映射，优先于
                     // 内置编码与 /Encoding（PDF 32000-1 §9.10.3）。
-                    if let Some(text) = to_unicode.as_ref().and_then(|map| map.unicode_for(byte)) {
-                        self.output.push_str(text);
+                    if let Some(mapped) = to_unicode.as_ref().and_then(|map| map.unicode_for(byte))
+                    {
+                        text.push_str(mapped);
                         continue;
                     }
                     let builtin_char = builtin.as_ref().and_then(|table| table[usize::from(byte)]);
                     match simple_byte_text(byte, builtin_char, encoding.as_ref()) {
-                        Some(text) => self.output.push_str(&text),
-                        None => self.output.push(byte as char),
+                        Some(decoded) => text.push_str(&decoded),
+                        None => text.push(byte as char),
                     }
                 }
             }
+        }
+        text
+    }
+
+    fn push_fragment_run(&mut self, text: String, x: f64, y: f64) {
+        if let Some(pending) = self.pending_fragment.as_mut()
+            && pending.x == x
+            && pending.y == y
+        {
+            pending.text.push_str(&text);
+            return;
+        }
+        self.flush_fragment();
+        self.pending_fragment = Some(TextFragment { text, x, y });
+    }
+
+    fn flush_fragment(&mut self) {
+        if let Some(fragment) = self.pending_fragment.take() {
+            self.fragments.push(fragment);
         }
     }
 
@@ -224,6 +419,7 @@ impl TextState {
         if self.marked_hidden() || self.output.is_empty() {
             return;
         }
+        self.flush_fragment();
         let last = self.output.as_bytes().last().copied();
         match kind {
             BreakKind::Space => {
@@ -359,61 +555,132 @@ impl<'a> ExtractionContext<'a> {
 
     /// Open a marked-content section for `BMC` (no operand) or `BDC`
     /// (inline dictionary or `/Properties` resource name).
-    fn open_marked(&mut self, property_operand: Option<&Operand>, resources: &Dict) {
+    ///
+    /// `/Artifact` sections are pagination or layout decorations and are
+    /// excluded from extracted text (ISO 32000-1 14.8.2.6.2), as are sections
+    /// whose optional-content group is off in the default configuration.
+    fn open_marked(
+        &mut self,
+        tag: Option<&str>,
+        property_operand: Option<&Operand>,
+        resources: &Dict,
+    ) {
         let properties = match property_operand {
             Some(Operand::Dict(dict)) => Some(dict.clone()),
             Some(Operand::Name(name)) => resolve_property_list(self.document, resources, name),
             _ => None,
         };
-        let group_object = match property_operand {
-            // A name whose `/Properties` entry is the OCG dictionary itself
-            // marks the group directly (the pattern written by this crate's
-            // optional-content builder).
-            Some(Operand::Name(name))
-                if properties.as_ref().is_some_and(|dict| {
-                    dict.get("Type").and_then(Value::as_name) == Some("OCG")
-                        && dict.get("OC").is_none()
-                }) =>
-            {
-                property_entry_reference(self.document, resources, name)
-            }
-            _ => properties
-                .as_ref()
-                .and_then(|dict| self.ocg_object_number(dict, resources)),
-        };
-        let hidden = group_object.is_some_and(|object| {
-            self.oc_properties
-                .as_ref()
-                .and_then(|properties| properties.is_visible(object))
-                == Some(false)
-        });
+        let hidden = self.operand_visibility(property_operand, resources) == Some(false);
         let actual_text = properties
             .as_ref()
             .and_then(|dict| dict.get("ActualText"))
             .and_then(text_value);
-        self.state.begin_marked(hidden, actual_text);
+        self.state
+            .begin_marked(hidden || tag == Some("Artifact"), actual_text);
     }
 
-    /// Resolve a property list `/OC` entry to the OCG object number.
+    /// Resolve the optional-content visibility of a `BDC`/`DP` property
+    /// operand (ISO 32000-1 14.6.2, 8.11.2).
     ///
-    /// Direct references are already object numbers; names are looked up in
-    /// the `/Properties` resource (per 14.6.2 the entry there is the OCG
-    /// reference itself). Inline OCG dictionaries and OCMDs cannot be
-    /// identified, leaving visibility unfiltered.
-    fn ocg_object_number(&self, properties: &Dict, resources: &Dict) -> Option<i64> {
-        match properties.get("OC")? {
-            Value::Ref(object, _) => Some(*object),
-            Value::Name(name) => match resources
-                .get("Properties")
-                .and_then(|value| resolve_value(self.document, value))?
-                .as_dict()?
-                .get(name)?
-            {
-                Value::Ref(object, _) => Some(*object),
-                _ => None,
-            },
+    /// The operand is an inline property list or a `/Properties` resource
+    /// name. A named entry may be the OCG dictionary itself (the pattern
+    /// written by this crate's builder) or a property list carrying `/OC`.
+    /// `/OC` values may be OCG references, inline OCMDs, or indirect
+    /// references to either; OCMDs are evaluated through their `/P` policy or
+    /// `/VE` expression against the default configuration.
+    fn operand_visibility(&self, operand: Option<&Operand>, resources: &Dict) -> Option<bool> {
+        match operand? {
+            Operand::Dict(dict) => self.property_list_visibility(dict, resources),
+            Operand::Name(name) => {
+                let entry = properties_entry(self.document, resources, name)?;
+                let resolved = resolve_value(self.document, &entry);
+                let is_inline_group = resolved.as_ref().is_some_and(|value| {
+                    value
+                        .as_dict()
+                        .is_some_and(|dict| is_ocg_dictionary(dict) && dict.get("OC").is_none())
+                });
+                if is_inline_group {
+                    return match &entry {
+                        Value::Ref(object, _) => self.group_visible(*object),
+                        _ => None,
+                    };
+                }
+                self.oc_visibility(&entry, resources, 0)
+            }
             _ => None,
         }
+    }
+
+    /// Visibility of a property list dictionary carrying `/OC`.
+    fn property_list_visibility(&self, dict: &Dict, resources: &Dict) -> Option<bool> {
+        self.oc_visibility(dict.get("OC")?, resources, 0)
+    }
+
+    /// Follow `/OC` values: names through `/Properties`, references through
+    /// the document, and inline dictionaries directly.
+    fn oc_visibility(&self, value: &Value, resources: &Dict, depth: usize) -> Option<bool> {
+        if depth > MAX_OC_DEPTH {
+            return None;
+        }
+        match value {
+            Value::Name(name) => {
+                let entry = properties_entry(self.document, resources, name)?;
+                self.oc_visibility(&entry, resources, depth + 1)
+            }
+            Value::Ref(object, generation) => {
+                self.object_visibility(*object, *generation, resources, depth + 1)
+            }
+            Value::Dict(dict) => self.dictionary_visibility(dict, resources, depth + 1),
+            _ => None,
+        }
+    }
+
+    /// Visibility of an indirect `/OC` target, which may be an OCG, an OCMD,
+    /// or (tolerantly) a property list that itself carries `/OC`.
+    fn object_visibility(
+        &self,
+        object: i64,
+        generation: i64,
+        resources: &Dict,
+        depth: usize,
+    ) -> Option<bool> {
+        let resolved = self
+            .document
+            .get_object(object)
+            .ok()
+            .flatten()
+            .filter(|entry| entry.generation == generation)
+            .map(|entry| entry.value);
+        match resolved {
+            Some(Value::Dict(dict)) if dict.get("OC").is_some() => {
+                self.dictionary_visibility(&dict, resources, depth)
+            }
+            Some(Value::Dict(dict)) if is_membership_dictionary(&dict) => {
+                self.membership_visible(&dict)
+            }
+            _ => self.group_visible(object),
+        }
+    }
+
+    fn dictionary_visibility(&self, dict: &Dict, resources: &Dict, depth: usize) -> Option<bool> {
+        if is_membership_dictionary(dict) {
+            self.membership_visible(dict)
+        } else if let Some(oc) = dict.get("OC") {
+            self.oc_visibility(oc, resources, depth)
+        } else {
+            // Inline OCG dictionary: its object number is unknown.
+            None
+        }
+    }
+
+    fn membership_visible(&self, dict: &Dict) -> Option<bool> {
+        self.oc_properties.as_ref()?.membership_visible(dict)
+    }
+
+    fn group_visible(&self, object: i64) -> Option<bool> {
+        self.oc_properties
+            .as_ref()
+            .and_then(|properties| properties.is_visible(object))
     }
 
     /// Parse one content stream (page content or a form XObject body) and
@@ -446,8 +713,12 @@ impl<'a> ExtractionContext<'a> {
                                 self.draw_form(name, resources)?;
                             }
                         }
-                        "BMC" => self.open_marked(None, resources),
-                        "BDC" => self.open_marked(operands.last(), resources),
+                        "BMC" => self.open_marked(name_operand(operands.first()), None, resources),
+                        "BDC" => self.open_marked(
+                            name_operand(operands.first()),
+                            operands.get(1),
+                            resources,
+                        ),
                         "EMC" => self.state.end_marked(),
                         _ => execute_operator(kw, &operands, &mut self.state),
                     }
@@ -464,6 +735,7 @@ impl<'a> ExtractionContext<'a> {
                 }
             }
         }
+        self.state.flush_fragment();
         Ok(())
     }
 
@@ -532,12 +804,22 @@ impl<'a> ExtractionContext<'a> {
         // `Do` saves the graphics state (which includes the selected font),
         // runs the form, and restores it afterwards (ISO 32000-1 8.10.1).
         // Font resources are restored as well so a form's same-named font
-        // cannot leak into the caller's `Tf` lookups.
+        // cannot leak into the caller's `Tf` lookups. The form's `/Matrix` is
+        // concatenated with the current transformation matrix, and its text
+        // matrices start over because text objects cannot span streams.
+        let form_matrix = form_matrix(self.document, dict.get("Matrix"));
         let saved_font_name = self.state.font_name.clone();
         let saved_fonts = self.state.fonts.clone();
         // Marked-content sections are lexically scoped to one stream; an
         // unclosed `BMC` in a form must not leak into the caller.
         let saved_marked = std::mem::take(&mut self.state.marked);
+        let saved_ctm = self.state.ctm;
+        let saved_text_matrix = self.state.text_matrix;
+        let saved_line_matrix = self.state.line_matrix;
+        self.state.flush_fragment();
+        self.state.ctm = form_matrix.concat(saved_ctm);
+        self.state.text_matrix = Matrix::IDENTITY;
+        self.state.line_matrix = Matrix::IDENTITY;
         if let Some(key) = active_key {
             self.active_forms.insert(key);
         }
@@ -547,6 +829,10 @@ impl<'a> ExtractionContext<'a> {
         if let Some(key) = active_key {
             self.active_forms.remove(&key);
         }
+        self.state.flush_fragment();
+        self.state.ctm = saved_ctm;
+        self.state.text_matrix = saved_text_matrix;
+        self.state.line_matrix = saved_line_matrix;
         self.state.font_name = saved_font_name;
         self.state.fonts = saved_fonts;
         self.state.marked = saved_marked;
@@ -660,24 +946,86 @@ fn execute_operator(kw: &str, operands: &[Operand], state: &mut TextState) {
             }
         }
         "'" => {
+            state.next_line();
             state.add_break(BreakKind::Newline);
             if let Some(bytes) = last_string(operands) {
                 state.show_bytes(bytes);
             }
         }
         "\"" => {
+            // The first two operands are word and character spacing, which
+            // do not affect the run's origin.
+            state.next_line();
             state.add_break(BreakKind::Newline);
             if let Some(bytes) = last_string(operands) {
                 state.show_bytes(bytes);
             }
         }
-        "Td" | "TD" | "T*" | "Tm" => {
+        "Td" | "TD" => {
+            if let Some([tx, ty]) = trailing_numbers::<2>(operands) {
+                if kw == "TD" {
+                    state.leading = -ty;
+                }
+                state.move_line(tx, ty);
+            }
             state.add_break(BreakKind::Newline);
+        }
+        "T*" => {
+            state.next_line();
+            state.add_break(BreakKind::Newline);
+        }
+        "Tm" => {
+            if let Some(values) = trailing_numbers::<6>(operands) {
+                state.set_text_matrix(Matrix::from_values(values));
+            }
+            state.add_break(BreakKind::Newline);
+        }
+        "TL" => {
+            if let Some([leading]) = trailing_numbers::<1>(operands) {
+                state.leading = leading;
+            }
+        }
+        "Ts" => {
+            if let Some([rise]) = trailing_numbers::<1>(operands) {
+                state.rise = rise;
+            }
+        }
+        "BT" => {
+            state.flush_fragment();
+            state.begin_text();
+        }
+        "ET" => state.flush_fragment(),
+        "cm" => {
+            if let Some(values) = trailing_numbers::<6>(operands) {
+                state.concatenate_ctm(Matrix::from_values(values));
+            }
         }
         "q" => state.save_state(),
         "Q" => state.restore_state(),
         _ => {}
     }
+}
+
+fn name_operand(operand: Option<&Operand>) -> Option<&str> {
+    match operand {
+        Some(Operand::Name(name)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Parse the trailing `N` operands as numbers (`Td`, `Tm`, `cm`, `TL`, `Ts`).
+fn trailing_numbers<const N: usize>(operands: &[Operand]) -> Option<[f64; N]> {
+    if operands.len() < N {
+        return None;
+    }
+    let mut values = [0.0; N];
+    for (slot, operand) in values.iter_mut().zip(&operands[operands.len() - N..]) {
+        let Operand::Number(number) = operand else {
+            return None;
+        };
+        *slot = *number;
+    }
+    Some(values)
 }
 
 fn last_string(operands: &[Operand]) -> Option<&[u8]> {
@@ -753,23 +1101,57 @@ fn resolve_value(document: &Document, value: &Value) -> Option<Value> {
     }
 }
 
+/// Read a form XObject's `/Matrix`, falling back to the identity matrix.
+fn form_matrix(document: &Document, value: Option<&Value>) -> Matrix {
+    let Some(value) = value.and_then(|value| resolve_value(document, value)) else {
+        return Matrix::IDENTITY;
+    };
+    let Some(array) = value.as_array() else {
+        return Matrix::IDENTITY;
+    };
+    if array.len() != 6 {
+        return Matrix::IDENTITY;
+    }
+    let mut values = [0.0; 6];
+    for (slot, item) in values.iter_mut().zip(array.iter()) {
+        let Some(item) = resolve_value(document, item) else {
+            return Matrix::IDENTITY;
+        };
+        *slot = match item {
+            Value::Integer(number) => number as f64,
+            Value::Float(number) => number,
+            _ => return Matrix::IDENTITY,
+        };
+    }
+    Matrix::from_values(values)
+}
+
+/// The raw `/Properties` resource entry a `BDC` property *name* operand
+/// refers to (ISO 32000-1 14.6.2), before dereferencing.
+fn properties_entry(document: &Document, resources: &Dict, name: &str) -> Option<Value> {
+    let properties = resources
+        .get("Properties")
+        .and_then(|value| resolve_value(document, value))?;
+    properties.as_dict()?.get(name).cloned()
+}
+
 /// Resolve a `BDC` property *name* operand to its property list dictionary
 /// through the `/Properties` resource (ISO 32000-1 14.6.2).
 fn resolve_property_list(document: &Document, resources: &Dict, name: &str) -> Option<Dict> {
-    let properties = resources
-        .get("Properties")
-        .and_then(|value| resolve_value(document, value))?;
-    let entry = properties.as_dict()?.get(name)?;
-    resolve_value(document, entry).and_then(|value| value.as_dict().cloned())
+    let entry = properties_entry(document, resources, name)?;
+    resolve_value(document, &entry).and_then(|value| value.as_dict().cloned())
 }
 
-/// The indirect object number a `/Properties` resource entry points at.
-fn property_entry_reference(document: &Document, resources: &Dict, name: &str) -> Option<i64> {
-    let properties = resources
-        .get("Properties")
-        .and_then(|value| resolve_value(document, value))?;
-    let entry = properties.as_dict()?.get(name)?;
-    entry.as_ref().map(|(object, _)| object)
+/// Whether a dictionary is an optional content membership dictionary
+/// (8.11.2.2, Table 100) rather than an OCG or a property list.
+fn is_membership_dictionary(dict: &Dict) -> bool {
+    dict.get("Type").and_then(Value::as_name) == Some("OCMD")
+        || dict.get("OCGs").is_some()
+        || dict.get("VE").is_some()
+}
+
+fn is_ocg_dictionary(dict: &Dict) -> bool {
+    dict.get("Type").and_then(Value::as_name) == Some("OCG")
 }
 
 // ── Document-level API ────────────────────────────────────
@@ -782,6 +1164,23 @@ impl Document {
     /// the content stream are resolved through `self`.
     pub fn extract_text(&self, content_bytes: &[u8], resources: &Dict) -> String {
         extract_text(content_bytes, resources, self)
+    }
+
+    /// Extract positioned text runs from a single content stream.
+    ///
+    /// The same decoding rules as [`Document::extract_text`] apply, but the
+    /// output is split into runs carrying the text-space origin in default
+    /// user space (see [`TextFragment`]).
+    pub fn extract_text_fragments(
+        &self,
+        content_bytes: &[u8],
+        resources: &Dict,
+    ) -> Vec<TextFragment> {
+        let mut context = ExtractionContext::new(self);
+        let _ = context.extract_from_content(content_bytes, resources);
+        let mut state = context.state;
+        state.flush_fragment();
+        state.fragments
     }
 
     /// Extract Unicode text from a page by its 0-based index.
@@ -804,6 +1203,30 @@ impl Document {
     /// 64 MiB / 4096-stream budget; exceeding it returns
     /// [`TextExtractionError::ContentTooLarge`] instead of truncating.
     pub fn try_extract_page_text(&self, page_index: usize) -> Result<String, TextExtractionError> {
+        self.extract_page_state(page_index)
+            .map(|state| state.output)
+    }
+
+    /// Positioned variant of [`Document::try_extract_page_text`].
+    ///
+    /// Returns one [`TextFragment`] per contiguous text run; see
+    /// [`Document::extract_text_fragments`] for the position model.
+    pub fn try_extract_page_text_fragments(
+        &self,
+        page_index: usize,
+    ) -> Result<Vec<TextFragment>, TextExtractionError> {
+        self.extract_page_state(page_index)
+            .map(|state| state.fragments)
+    }
+
+    /// Infallible variant of [`Document::try_extract_page_text_fragments`].
+    pub fn extract_page_text_fragments(&self, page_index: usize) -> Option<Vec<TextFragment>> {
+        self.try_extract_page_text_fragments(page_index).ok()
+    }
+
+    /// Page-tree walk plus content extraction shared by the text and fragment
+    /// entry points.
+    fn extract_page_state(&self, page_index: usize) -> Result<TextState, TextExtractionError> {
         let root = self
             .trailer
             .dict
@@ -831,7 +1254,9 @@ impl Document {
         let mut context = ExtractionContext::new(self);
         let content_bytes = context.collect_content_bytes(page)?;
         context.extract_from_content(&content_bytes, resources)?;
-        Ok(context.state.output)
+        let mut state = context.state;
+        state.flush_fragment();
+        Ok(state)
     }
 }
 

@@ -84,32 +84,32 @@
 - [ ] `builder/tests/cid.rs`（1217 行 / 39.4 KiB；新增 CID 写端测试前拆分）
 - [ ] `reader/font/truetype/sfnt.rs`（1164 行 / 50.0 KiB；SFNT 增量前拆分）
 - [ ] `reader/font/cid.rs`（1140 行 / 40.4 KiB；CID 读端增量前拆分）
-- [ ] `builder/tests/shading.rs`（1087 行 / 36.5 KiB；D5 前拆分）
+- [ ] `builder/tests/shading.rs`（1087 行 / 36.5 KiB；新增着色写端测试前拆分；D5 为读端增量未触及）
 - [ ] `reader/font/cid_cmap.rs`（1037 行 / 36.6 KiB；B6 前拆分）
 - [ ] `reader/font/type1_program/mod.rs`（1010 行 / 36.0 KiB；Type 1 增量前拆分）
 - [ ] `reader/security/standard.rs`（998 行 / 35.2 KiB；安全增量前拆分）
-- [ ] `builder/types/shading.rs`（982 行 / 32.0 KiB；D5/D6 前拆分）
+- [ ] `builder/types/shading.rs`（982 行 / 32.0 KiB；D6/D7 前拆分；D5 为读端增量未触及）
 - [ ] `builder/mod.rs`（969 行 / 37.9 KiB；新增 builder 公共 API 前拆分）
-- [ ] `reader/text/tests.rs`（856 行 / 28.0 KiB；C1 前拆分）
+- [ ] `reader/text/tests.rs`（1358 行 / 44.2 KiB；C1 前拆分；B7 继续追加未拆分）
 - [ ] `builder/assemble/mod.rs`（853 行 / 36.6 KiB；组装逻辑变更前拆分）
 - [ ] `reader/font/truetype/glyph.rs`（816 行 / 29.6 KiB；字形增量前拆分）
-- [ ] `reader/text/mod.rs`（778 行 / 28.3 KiB；C1 复用/重构时拆分）
+- [ ] `reader/text/mod.rs`（1350 行 / 48.8 KiB；C1 复用/重构时拆分；B7 新增位置模型与 OCMD 求值后仍超限，后续文本增量前须拆出片段/可选内容子模块）
 - [ ] `builder/tests/font_program.rs`（722 行 / 25.1 KiB；新增字体程序测试前拆分）
 - [ ] `reader/tests.rs`（689 行 / 26.1 KiB；新增读端测试前拆分）
 - [ ] `builder/types/image.rs`（675 行 / 25.0 KiB；D2/D7 前拆分）
-- [ ] `builder/assemble/shading.rs`（651 行 / 20.9 KiB；D5 前拆分）
-- [ ] `reader/optional_content.rs`（616 行 / 21.1 KiB；B7 前拆分；C4 仅更新模块文档未拆分）
+- [ ] `builder/assemble/shading.rs`（651 行 / 20.9 KiB；组装变更前拆分；D5 为读端增量未触及）
+- [ ] `reader/optional_content.rs`（813 行 / 28.1 KiB；B7 已触及仍未拆分，后续可选内容增量前拆分配置解析与 OCMD 求值）
 - [ ] `builder/tests/graphics_state.rs`（606 行 / 20.5 KiB；新增图形状态测试前拆分）
-- [ ] `tests/main.rs`（8203 行 / 292.3 KiB；集成测试按主题拆分，新增集成测试前先迁出对应主题）
+- [ ] `tests/main.rs`（8819 行 / 314.8 KiB；集成测试按主题拆分，新增集成测试前先迁出对应主题）
 
 ## 阶段总览
 
 | 阶段 | 目标 | 增量数 | 已完成 | 主要依赖 | 状态 |
 |---|---|---|---|---|---|
 | A 核心读入与安全 | 语法/文件结构/核心过滤器/加密/函数可读 | 6 | 6 | — | ✅ |
-| B 字体与文本 | 字体字典、程序、编码、文本提取（语法层） | 7 | 4 | A | 🚧 |
-| C 内容流读取模型 | 通用 Op/资源/状态/标记内容读取，解除第 8/9/11/14 章读端缺口 | 5 | 4 | A | 🚧 |
-| D 图形完整 | 颜色/图像/Shading/透明度的读端模型与写端收尾 | 7 | 0（写端基线见 D0） | A、B、C（D3/D4 只需 A） | 🚧 |
+| B 字体与文本 | 字体字典、程序、编码、文本提取（语法层） | 7 | 5 | A | 🚧 |
+| C 内容流读取模型 | 通用 Op/资源/状态/标记内容读取，解除第 8/9/11/14 章读端缺口 | 5 | 5 | A | ✅ |
+| D 图形完整 | 颜色/图像/Shading/透明度的读端模型与写端收尾 | 7 | 3（D1、D4、D5 完成；写端基线见 D0） | A、B、C（D3 只需 A） | 🚧 |
 | E 交互与文档交换 | 导航/注解/表单/元数据/嵌入文件/增量更新 | 7 | 0 | D（E1/E3/E5 只需 A） | ⬜ |
 | F 专门领域 | 签名/Tagged PDF/预印/多媒体/其他交换能力 | 5 | 0 | E | ⬜ |
 
@@ -169,8 +169,10 @@
 - [ ] **B6 CMap/ToUnicode 完整性**（9.7.5、9.10.3，🟡）：补全 Adobe-GB1/CNS1/Japan1/Korea1 ordering 数据（当前为紧凑近似）；读端 ToUnicode `usecmap` 继承基座映射；写端 ToUnicode 支持 `usecmap` 继承（可选）。
   - 启动前置：先确定 ordering 数据来源、许可证与体积上限并登记到 fixtures 表，不得引入许可不明的 Adobe 数据文件；`reader/font/cid_cmap.rs` 已超限，触及前先拆分。
   - 退出标准：预定义 CMap 与完整 ordering 样本的字符码→CID 映射正确；数据来源/许可/体积已登记；`usecmap` 基座覆盖/裁剪有测试；`text_code_bytes*` 不再静默跳过非法长度。
-- [ ] **B7 文本提取语义完善**（9.10，🟡）：跳过 `/Artifact` 标记内容、提供可选的带位置/间距的文本片段 API（不做版面分析）；`/ActualText` 替换与隐藏 OCG 过滤已随 C4 落地，B7 只需补回归样本与 OCMD 可见性。
+- [x] **B7 文本提取语义完善**（9.10，🟡）：跳过 `/Artifact` 标记内容、提供可选的带位置/间距的文本片段 API（不做版面分析）；`/ActualText` 替换与隐藏 OCG 过滤已随 C4 落地，B7 只需补回归样本与 OCMD 可见性。
   - 退出标准：`ActualText`、Artifact、隐藏 OCG 三类样本的提取结果正确；现有文本提取测试无回归；`try_extract_page_text` 错误语义保持。
+  - 完成说明（2026-10-27，证据见矩阵 9.2/9.10/14.6）：提取端标记栈把 `/Artifact`（含嵌套继承、内联属性、分隔符抑制）整体排除；新增 `TextFragment` 位置模型（`Tm/Td/TD/T*/TL/Ts`、`cm`、`q/Q`、Form `/Matrix`、`BT` 重置；不含字形推进）与 `Document::extract_text_fragments`/`try_extract_page_text_fragments`/`extract_page_text_fragments`，页面文本与片段共用 `extract_page_state`，错误语义不变；新增 OCMD 求值：`OptionalContentProperties::membership_visible` + `membership_visibility`（`/P` 四种策略、`/VE` 的 `And/Or/Not` 递归与短路、未知组状态返回 `None`），文本提取与 `resolve_marked_visibility` 均支持内联/间接 OCMD。测试：`artifact_marked_content_is_skipped`、`nested_sections_inherit_artifact_state`、`artifact_with_inline_properties_is_skipped`、`artifact_breaks_do_not_insert_separators`、`artifact_text_is_absent_from_fragments`、`fragments_report_show_positions_and_merge_same_position_runs`、`fragments_apply_cm_and_q_q_at_the_ctm_level`、`fragments_track_leading_and_text_rise`、`actual_text_replacement_becomes_a_fragment`、`fragments_apply_form_matrix_and_restore_ctm`、`extract_page_text_fragments_reports_page_errors`、`hidden_ocg_text_is_absent_from_fragments`、`membership_policy_matrix`、`membership_visibility_expression_overrides_policy`、`visibility_evaluates_inline_membership_dictionary`、`indirect_ocmd_hides_section_by_policy`、`ocmd_resolved_through_properties_name`、`inline_ocmd_visibility_expression_overrides_policy`、`builder_text_fragments_report_positions`。
+  - 剩余缺口：片段位置不含字形宽度推进（同一行多次 `Tj` 共用起点）；不感知 `/Rotate` 与 MediaBox（坐标为默认用户空间）；内联 OCG 字典（无对象号）可见性仍未求值；`page_marked_content` 的间接 OCMD 引用仍不可判定（回调签名限制）；写端无 `/Artifact` 写出 API；`reader/text/mod.rs` 与 `reader/optional_content.rs` 已超限未拆分。
 
 **非目标（本阶段明确不做）**：hinting、字形光栅化、版面分析、CFF2 子集化、TTC 子集化、OpenType 子集化（保留程序透传 + 子集标签）。
 
@@ -183,7 +185,7 @@
 - Type 3 字典（含字体级 `/Resources`、`/Name`、`/FontDescriptor`）与 CharProcs 指标往返；
 - `cargo test` 全绿。
 
-## 阶段 C：内容流读取模型（跨章节前置）🚧 (4/5)
+## 阶段 C：内容流读取模型（跨章节前置）✅ (5/5)
 
 **目标**：提供通用的内容流解析、资源解析与图形状态模型，作为第 8/9/11/14 章读端能力的共同底座；本阶段只做**模型与数据**，不做渲染。
 
@@ -201,14 +203,17 @@
   - 退出标准：嵌套 `q/Q`、`cm`、`gs`、`Tf/Td/Tm` 的状态快照测试；越界/非法参数返回类型化错误。
   - 实现范围：`reader/content/state.rs` 新增 `ContentStateRunner`/`ContentState`（Table 57 初始值、Table 56 `Q` 空栈为 no-op、`MAX_SAVE_DEPTH`=512 限深）、`run_content_state` 逐操作符快照、`Document::page_content_state_trace`/`page_content_state`（经 `/Resources/ExtGState` 应用 `gs` 的 LW/LC/LJ/ML/SA/D/RI/Font/CA/ca/BM/OP）；文本状态按 9.3/9.4（BT 仅重置 Tm/Tlm、Td 平移 Tlm、TD 设置 leading=-ty、T*/'/" 依 leading 换行）；颜色/图案当前值跟踪 rg/RG/g/G/CMYK/scn/SCN/CS/cs 与分量范围校验。
   - 测试：`q_q_stack_restores_ctm_and_line_width`、`q_stack_underflow_has_no_effect`、`cm_concatenates_matrices_in_prepend_order`、`save_stack_depth_limit_returns_error`、`gs_applies_ext_g_state_parameters`、`unknown_gs_name_returns_typed_error`、`gs_font_name_entry_sets_text_font`、`invalid_state_parameters_return_typed_errors`、`non_finite_matrix_returns_typed_error`、`bt_resets_text_matrices_keeps_text_state`、`td_td_and_t_star_update_matrices`、`tick_and_quote_show_text_move_to_next_line`、`color_operators_track_current_values`、`named_pattern_color_operators_are_modeled`、`out_of_range_device_color_components_return_typed_errors`、`pdflatex_4_pages_state_machine_runs`
-  - 剩余缺口：路径/裁剪/图像/Form XObject 的绘制语义不进入状态模型（仅几何与参数状态）；`gs` 的 `/Font` 名称形式只记录名称不解析字号引用；内联图像 `BI…EI` 由分词器整段跳过，`Op::InlineImage` 路径不可达（见矩阵 8.9.7，D2 处理）；颜色分量个数与 `/ColorSpace` 基色空间的匹配依赖 D1 读端模型。
+  - 剩余缺口：路径/裁剪/图像/Form XObject 的绘制语义不进入状态模型（仅几何与参数状态）；`gs` 的 `/Font` 名称形式只记录名称不解析字号引用；颜色分量个数与 `/ColorSpace` 基色空间的匹配依赖 D1 读端模型。
 - [x] **C4 标记内容与可选内容读取语义**：`BMC/BDC/EMC/MP/DP` 嵌套与属性表解析、`/ActualText`/`/E` 提取、OCG 可见性过滤；与 14.6/8.11 的读端模型统一。
   - 退出标准：嵌套标记内容配对错误可诊断；`ActualText` 替换与隐藏 OCG 过滤有测试；属性表支持名称与内联字典。
   - 实现范围：分词器补 `CsToken::Dictionary`（`take_dictionary`，嵌套/字符串感知，`(a>b)` 不提前闭合）并修复名称分词吞分隔符（`]`）的缺口；`parser.rs` 新增 `parse_dictionary_inner` 宽松字典构建（嵌套字典/数组/`num num R` 引用（顶层与数组内）/布尔/字符串/十六进制串）。新增 `reader/content/marked.rs`：`collect_marked_sections`（`BMC/BDC/EMC/MP/DP` 栈配对，`MAX_MARKED_DEPTH`=64 限深，类型化 `MarkedContentError`：`UnmatchedEnd`/`UnclosedSection`/`DepthExceeded`）、`MarkedSection`（span、`point`、`/ActualText`/`/E`/`/Alt`/`/Lang`，字面与 UTF-16BE 十六进制串解码）、属性表支持内联字典与 `/Properties` 名称解析（含兼容写端「名称直指 OCG 字典」形态）、`resolve_marked_visibility` 经目录 `/OCProperties` 判定 OCG 可见性（`/D` BaseState/ON/OFF）、`Document::page_marked_content`。文本提取端（`reader/text`）统一语义：`MarkedFrame` 栈实现隐藏范围不提取、`/ActualText` 整段替换（emit-once）、嵌套继承隐藏态、`EMC` 宽容失衡、Form XObject 内未闭合范围不外泄；`OptionalContentProperties::is_visible` 复用。
   - 测试：`pairs_begin_and_end_with_spans`、`nests_sections_and_closes_inner_first`、`point_operators_are_zero_length_sections`、`bdc_resolves_inline_dictionary_properties`、`bdc_resolves_property_name_through_resources`、`bdc_name_pointing_at_ocg_dictionary_marks_group`、`unmatched_emc_reports_operator_index`、`unclosed_section_reports_outermost_tag`、`depth_limit_is_enforced`、`text_entries_decode_literal_and_hex_strings`、`visibility_resolves_oc_name_and_reference`、`page_marked_content_resolves_properties_and_visibility`、`bdc_keeps_inline_dictionary_property_list`、`bdc_property_dictionary_supports_nested_dict_array_and_reference`、`dp_accepts_property_name_or_dictionary`、`hex_string_operand_in_dictionary_keeps_hex_characters`、`dictionary_with_string_containing_angle_brackets_roundtrips_entries`、`actual_text_replaces_all_shows_in_section`、`actual_text_decodes_hex_string_property`、`bdc_property_name_resolves_through_properties_resource`、`hidden_ocg_section_is_not_extracted`、`visible_ocg_section_is_extracted`、`hidden_ocg_property_resolved_by_direct_reference`、`bdc_name_pointing_at_ocg_dictionary_filters_hidden_group`、`nested_section_inherits_hidden_state_from_parent`、`unbalanced_emc_does_not_break_extraction`、`unclosed_marked_section_in_form_does_not_leak_to_caller`、`pdflatex_4_pages_marked_content_pairs_with_spans`（写→读往返 `builder_optional_content_roundtrips_through_parser` 同步升级为隐藏层不提取断言）
-  - 剩余缺口：OCMD 与内联 OCG 字典形态的可见性未求值（按可见处理）；间接属性表操作数（`5 0 R /Tag BDC`）不支持；`page_marked_content` 不递归 Form XObject；`/E` 已暴露但未参与提取替换；`/Artifact` 范围识别与位置感知 API 留给 B7；`reader/optional_content.rs` 模块拆分未做。
-- [ ] **C5 读写模型统一与 roundtrip**：读端 Op AST 与写端 `content::Op` 的映射表；parse→model→serialize→parse 的往返测试；未建模操作符透传策略记录在矩阵。
+  - 剩余缺口：内联 OCG 字典形态的可见性未求值（OCMD 已随 B7 求值）；间接属性表操作数（`5 0 R /Tag BDC`）不支持；`page_marked_content` 不递归 Form XObject，且其回调签名无法区分间接 OCMD 引用；`/E` 已暴露但未参与提取替换；`/Artifact` 范围识别与位置感知 API 已随 B7 落地；`reader/optional_content.rs` 模块拆分未做。
+- [x] **C5 读写模型统一与 roundtrip**：读端 Op AST 与写端 `content::Op` 的映射表；parse→model→serialize→parse 的往返测试；未建模操作符透传策略记录在矩阵。
   - 退出标准：覆盖路径/文本/颜色/XObject/Shading/Pattern/标记内容的往返样本；序列化字节可被现有 parser 重新解析；无 panic。
+  - 实现范围：新增 `reader/content/mapping.rs` 三件套——`to_content_op`（读端 `Op` → 写端 `content::Op`，写端不可表达时返回类型化 `OpMappingError`：`NotRepresentableByWriter`（TD 双操作数/d0/d1/BX/EX/内嵌图像/Unmodeled/非 Name/Dict 属性表/非 UTF-8 的 `'`/`"`/`TJ` 串）与 `OperandOutOfRange`（`J`/`j` 非 0–2、`Tr` 非 0–255）；`Tj` 串按字节合法性自动选字面量或十六进制形式）；`from_content_op`（写端 → 读端全函数，唯一有损点为单操作数 `MoveNextLineSetLeading` 映射为 `TD` 且 `tx=0`）；`serialize_ops`（可映射操作符复用写端 `ContentStream` 序列化器，其余走原始回退输出合法语法，保证 `parse → serialize → parse` 模型级无损）。parser 修复：水平缩放关键字从错误的 `Th` 改为规范的 `Tz`；未建模操作数经 `tokens_to_values` 无损捕获（`[ ... ]` 数组含嵌套、`num gen R` 引用、`true/false/null` 类型化、字面量串按字节逐 char、十六进制串大写）。`ContentStream::ops()` 只读访问器与 `LineCap/LineJoin::value()` 公开（纯增量，不改公共签名）。
+  - 测试：`horizontal_scaling_parses_tz_keyword`、`graphics_state_and_path_operators_roundtrip`、`text_operators_roundtrip_including_hex_binary_and_escapes`、`td_d0_d1_bx_ex_roundtrip_through_raw_fallback`、`out_of_range_linecap_linejoin_and_render_mode_roundtrip`、`to_content_op_errors_for_variants_without_writer_model`、`show_text_selects_literal_for_utf8_and_hex_for_binary`、`marked_content_operators_roundtrip_name_and_inline_dict`、`color_pattern_xobject_shading_and_extgstate_roundtrip`、`unmodeled_operators_preserve_array_name_and_string_operands`、`from_content_op_maps_writer_stream_ops_and_remaps_losslessly`、`writer_model_ops_map_to_reader_model_shapes`、`inline_image_variant_serializes_and_reparses`、`pdflatex_4_pages_content_model_serialization_roundtrips`（真实四页样本逐页模型无损）、`content_model_roundtrip_preserves_text_extraction`（builder 写出 → 读端模型 → `serialize_ops` → 重解析相等 → 经 `to_content_op` 重建 Form 写出后文本仍可提取）
+  - 剩余缺口：内联图像 `Op::InlineImage` 自 D2 起可读写往返（`BI … ID <data> EI`，D2 已修复分词器入口）；写端模型仍缺 TD 双操作数、d0/d1、BX/EX、内嵌图像与 Unmodeled 透传变体（桥接层以原始回退补齐，未扩展 `content::Op` 公共 API）；Latin-1 边界：未建模操作数/属性字典内 `Value::String` 含 ≥0x80 字节时经 `write_value` 按 UTF-8 编码写出、重解析按字节逐 char，模型级不严格相等（ASCII 串往返无损）；`BDC/DP` 的数组/布尔/间接引用形态操作数仍是 `expect_properties` 的既有限制（映射为 Unmodeled 后按写值原样输出，重解析形态不变）；写端 `MoveNextLineSetLeading` 单操作数 `TD` 不合规范的问题仅记录未修（改动公共枚举超出本增量边界）。
 
 **依赖**：A。B 为软依赖（文本提取可在 C1/C2 完成后迁移到统一模型，但不得为迁移而扩大本阶段范围）。
 
@@ -225,7 +230,7 @@
 
 **D0 写端基线（已完成，证据见矩阵第 8/11 章）**：
 
-- [x] 8.4.4/8.4.5 ExtGState 读写（`/TR` `/BG` `/BG2` `/UCR` `/UCR2` 已接入；`/TR2` `/HT` 见 D6）；
+- [x] 8.4.4/8.4.5 ExtGState 读写（`/TR` `/BG` `/BG2` `/UCR` `/UCR2` 已接入；`/TR2` 透传、`/HT` 半色调对象模型见 D6，2026-10-26）；
 - [x] 8.6.4–8.6.8 设备/CIE-Based/Indexed/Separation/DeviceN 颜色空间、灰度/CMYK/颜色操作符；
 - [x] 8.7 Shading Type 1–7、着色图案与彩色/无色平铺图案；
 - [x] 8.9/8.9.6 图像字典常用条目、图像蒙版、软蒙版图像；
@@ -235,21 +240,28 @@
 
 **待推进增量**：
 
-- [ ] **D1 颜色空间读端模型**（8.6.4–8.6.8）：解析 `/ColorSpace` 资源（设备、CalGray/CalRGB/Lab/ICCBased、Indexed、Separation/DeviceN、Pattern），支持 `/DefaultGray`/`/DefaultRGB`/`/DefaultCMYK`；Indexed 还原到基色空间；Separation/DeviceN 经 tint 函数求值到备用空间；输出分量数组与空间描述。
+- [x] **D1 颜色空间读端模型**（8.6.4–8.6.8）：解析 `/ColorSpace` 资源（设备、CalGray/CalRGB/Lab/ICCBased、Indexed、Separation/DeviceN、Pattern），支持 `/DefaultGray`/`/DefaultRGB`/`/DefaultCMYK`；Indexed 还原到基色空间；Separation/DeviceN 经 tint 函数求值到备用空间；输出分量数组与空间描述。
   - 退出标准：设备/CIE/Indexed/Separation/DeviceN 样本的样本值解码正确；ICCBased 返回配置文件字节与 `/N`；非法空间返回类型化错误。
-- [ ] **D2 图像字典、图像蒙版与内联图像读端**（8.9.5/8.9.6/8.9.7）：建模 `/Width`/`/Height`/`/ColorSpace`/`/BitsPerComponent`/`/Decode`/`/Interpolate`/`/Intent`/`/ImageMask`/`/Mask`/`/SMask`/`/SMaskInData`/`/Alternates`；解码内联图像 `BI/ID/EI` 字典与数据；提供样本读取 API（不做合成/渲染）。
+  - 完成说明（2026-10-26，证据见矩阵 8.6.4–8.6.8）：新增 `core/reader/color_space/`——`Document::color_space` 解析名字/数组空间（间接引用、流、`/Default*` 经页资源），`ColorSpaceModel` 覆盖设备/CIE/ICCBased/Indexed/Separation/DeviceN/Pattern，`decode_samples` 按 1/2/4/8/16 位 MSB-first 行补位解码并把 Indexed 展到基空间、Separation/DeviceN 送 `Function` tint 求值；非法结构返回类型化 `ColorSpaceError`（Malformed/Unsupported/Function）。剩余缺口：NChannel 与 `/Attributes`/`/Optimize`、Lab 的 `/Attn` 不建模；解码不应用图像 `/Decode` 矩阵（归 D2 样本 API）；颜色操作符分量匹配校验尚未接入 C3 状态机。
+- [x] **D2 图像字典、图像蒙版与内联图像读端**（8.9.5/8.9.6/8.9.7）：建模 `/Width`/`/Height`/`/ColorSpace`/`/BitsPerComponent`/`/Decode`/`/Interpolate`/`/Intent`/`/ImageMask`/`/Mask`/`/SMask`/`/SMaskInData`/`/Alternates`；解码内联图像 `BI/ID/EI` 字典与数据；提供样本读取 API（不做合成/渲染）。
   - 退出标准：内联图像与图像 XObject 的字典/样本可读；Stencil/Explicit/Colour Key 蒙版结构可解析；`/Alternates` 列表可遍历；损坏/截断图像数据返回错误。
+  - 完成说明（2026-10-27，证据见矩阵 8.9.5/8.9.5.4/8.9.6/8.9.7）：新增 `reader/image`——`Document::image`/`page_image`/`inline_image`/`page_inline_image` 返回 `ImageModel`（字典全字段 + 过滤器链 + 未建模条目 `other`），`samples()` 复用 D1 `ColorSpaceModel` 解码（Indexed 展开调色板、Separation/DeviceN tint 求值、Lab 默认 `/Range`）、再应用 `/Decode` 线性映射（Indexed/Separation/DeviceN 的显式 `/Decode` 返回 `Unsupported`）；`ImageMaskModel::{Explicit, ColorKey}` 覆盖 Stencil/显式蒙版/颜色键蒙版，SMask 要求 DeviceGray 同尺寸且禁止嵌套；`/Alternates` 递归解析并沿用深度上限 8；数据长度、蒙版范围、循环引用均返回类型化 `ImageError`。内联图像修复分词器不可达路径（`CsToken::InlineImage` 按空白/分隔符识别 `EI`），`ContentParser` 产出 `Op::InlineImage`，读端补齐 Table 94 键缩写与 Table 95 颜色空间名缩写。测试：`reader/image/tests.rs` 16 项 + 集成 `builder_images_roundtrip_through_image_model` + 内容层 `inline_image_*` 4 项。剩余缺口：JBIG2/JPX 样本解码归 D3、不做图像合成/渲染、内联 `/L` 不用于修正数据长度、内联 `/OC` 与其他冷门条目仅保留在 `other`。
 - [ ] **D3 JBIG2/JPX 解码**（7.4.7/7.4.9）：启动前先做后端选型 spike（纯 Rust 实现 vs 第三方适配器，比较许可证、体积、维护状态与可测试性）并把结论写入增量启动说明；再定义 `Jbig2Backend`/`JpxBackend` trait 与可替换适配器；接入 `StreamFilter` 注册；补 1.4/1.5 版本门控与损坏输入测试。
   - 退出标准：选型结论已记录；规范/公开样本可解码为位图/分量数据；trait 有替代实现测试；损坏流不 panic；写端仍按透传/剥离策略处理。
-- [ ] **D4 写端图像压缩**（7.4.4/7.4.8 Writer 列）：定义 `DeflateBackend` 编码 trait，提供 FlateDecode 编码路径（可选 Predictor）；图像/内容流写入时按调用方选择压缩；DCT 保持透传。更新矩阵过滤器 Writer 列与 README 体积说明。
+- [x] **D4 写端图像压缩**（7.4.4/7.4.8 Writer 列）：定义 `DeflateBackend` 编码 trait，提供 FlateDecode 编码路径（可选 Predictor）；图像/内容流写入时按调用方选择压缩；DCT 保持透传。更新矩阵过滤器 Writer 列与 README 体积说明。
   - 失败语义（单一契约）：默认纯 Rust Flate 后端始终可用；调用方注入的后端失败时必须返回类型化 `WriteError` 且不写出任何字节，**不得静默回退明文**；未请求压缩时保持明文透传。
   - 退出标准：写入→读端解码的字节一致；压缩流体积小于原始流；后端失败路径有测试且不写字节；特性与版本门控正确。
-- [ ] **D5 Shading/Pattern 读端模型**（8.7）：解析 Shading 字典 Type 1–7、网格流（BitsPerCoordinate/Component/Flag、Decode）、PatternType 1/2、图案流与 `/Resources`；校验域/坐标/函数维数；输出几何与颜色函数描述。
+  - 完成说明（2026-10-26，证据见矩阵 7.4.4/7.4.4.4）：压缩位于 `write_object_maybe_compressed` 序列化咽喉点，内存明文不变；Predictor 采用 15（逐行标记 2 = PNG Up），限 8-bit DeviceGray/RGB/CMYK 命名色空间；Flate ≥1.2、预测器 ≥1.3 门控。剩余缺口：仅文档级 opt-in（无逐流粒度）、不编码 TIFF/其他 PNG 过滤函数。
+- [x] **D5 Shading/Pattern 读端模型**（8.7）：解析 Shading 字典 Type 1–7、网格流（BitsPerCoordinate/Component/Flag、Decode）、PatternType 1/2、图案流与 `/Resources`；校验域/坐标/函数维数；输出几何与颜色函数描述。
   - 退出标准：Type 1–7 合成样本可读；网格流位打包与 `/Decode` 还原正确；着色/平铺图案资源可解析；非法条目返回错误。
-- [ ] **D6 ExtGState/透明度读端应用与写端剩余**（8.4.4/8.4.5、11.x）：`gs` 接入 C3 状态机已完成（LW/LC/LJ/ML/SA/D/RI/Font/CA/ca/BM/OP）；剩余写端 `/TR2`、`/HT`（半色调对象模型）、SMask `/TR`、`/SMaskInData`；读端 `/Group`、软蒙版图像、`/Matte`（Table 146）结构解析。
+  - 完成说明（2026-10-26，证据见矩阵 8.7）：新增 `reader/shading`，`ShadingModel` 覆盖 Type 1–7（网格按 MSB-first 位流还原顶点记录，`/Function` 存在时每顶点存单参数）、`PatternModel` 覆盖平铺（PaintType/TilingType/BBox/XStep/YStep/Matrix/Resources/图块字节）与着色图案（内联/引用/按 `/Shading` 资源名解析），`page_shading`/`page_pattern` 提供页资源入口；函数维数、位深、Decode 长度与分组完整性返回类型化错误。剩余缺口：Type 4 顶点不做三角形复用展开、平铺图块内容流不做解释、C3 状态机尚未按 `PatternModel` 接线、真实样本 fixture 待补。
+- [x] **D6 ExtGState/透明度读端应用与写端剩余**（8.4.4/8.4.5、11.x）：`gs` 接入 C3 状态机已完成（LW/LC/LJ/ML/SA/D/RI/Font/CA/ca/BM/OP）；剩余写端 `/TR2`、`/HT`（半色调对象模型）、SMask `/TR`、`/SMaskInData`；读端 `/Group`、软蒙版图像、`/Matte`（Table 146）结构解析。
   - 退出标准：`gs` 应用后状态快照正确；`/TR2`/`/HT` 写出可被读端解析；`/Matte` 与 `/SMaskInData` 读写样本通过；透明度版本门控保持。
-- [ ] **D7 写端图像/表单补全**（8.9.5、8.10、11.5）：`/Intent`、`/Alternates` 图像、`/Matte`、Form XObject 自有 `/Resources`/`/OC`/`/Ref`（按价值取舍）、Reference XObject 评估；补齐相应版本门控与往返测试。
+  - 完成说明（2026-10-26，证据见矩阵 8.4.4/8.4.5、11.4/11.6.6、11.5/11.6.5）：写端 `/TR2` 以字典原样透传、`/HT` 建模半色调包装字典（`/DefaultHalftoneType` + 按色料覆盖）与类型 1/2 半色调字典（`/SpotFunction` `/TransferFunction` 复用函数句柄池，同一句柄只写一次）、软蒙版 `/TR`（`/SMaskInData` 限 0–2、`/Matte` 非空有限数组），`/Matte` 由 `PdfFeature::SoftMaskMatte` 门控 ≥1.6；读端新增 `reader/graphics_state/halftone`（`HalftoneModel`：类型 1/2 类型化、类型 3–5/色料数组/命名半色调不建模但保留写出值、包装字典色料与其余条目）与 `reader/group`（`Document::group`/`page_group`：`/S`、`/CS` 经颜色空间模型解析、`/I` 默认 false、`/K` 宽松建模、未知条目入 `other`），`SoftMask` 补 `/TR`、`/SMaskInData`、`/Matte` 与未建模条目透传。剩余缺口：`/HT` 类型 3–5、屏幕字典、命名半色调与 `/HTPO` 不写不建模；`/TR2` 只透传不解释语义；软蒙版 `/G` 仅接受透明组 Form；组内合成/渲染语义不做；图像级 `/Matte` 与图像流尺寸校验放宽归 D7/8.9。
+- [x] **D7 写端图像/表单补全**（8.9.5、8.10、11.5）：`/Intent`、`/Alternates` 图像、`/Matte`、Form XObject 自有 `/Resources`/`/OC`/`/Ref`（按价值取舍）、Reference XObject 评估；补齐相应版本门控与往返测试。
   - 退出标准：新增字典条目可写→解析→读回；非法参数不写字节；第三方阅读器语法检查无错误（人工验收）。
+  - 进度（2026-10-27，图像字典部分完成）：`ImageData` 新增 `intent`/`alternates`/`matte` 与 `with_*`，写端 `/Intent`（`PdfFeature::ImageIntent` ≥1.4）、`/Alternates`（Table 90 `<< /Image n 0 R >>` 字典数组，`PdfFeature::AlternateImages` ≥1.3）、`/Matte`（写到 SMask 图像字典，`PdfFeature::SoftMaskMatte` ≥1.6）及校验（图像蒙版禁用、替代图像禁嵌套/蒙版/超高分辨率、Matte 分量数按基图）；读端补 `ImageModel::matte` 与 Table 90 替代图像字典。证据见矩阵 8.9.5/8.9.5.4/11.5，测试 `image_writes_intent_alternates_and_matte`、`image_intent_requires_pdf_1_4`、`image_alternates_require_pdf_1_3`、`image_matte_requires_pdf_1_6`、`invalid_matte_parameters_fail_the_build`、`invalid_alternate_images_fail_the_build`、`image_mask_rejects_intent_and_alternates`、`image_matte_is_parsed_on_soft_mask`、`smask_matte_length_must_match_base_components`、`image_matte_rejects_non_finite_and_image_masks`、`image_alternates_accept_table_90_dictionaries`、集成往返 `builder_image_intent_alternates_and_matte_roundtrip`。
+  - 完成说明（2026-10-27，Form 部分收尾）：`builder/types/form.rs` 新增 `FormResources`（`fonts`/`images`/`optional_content`，`with_font`/`with_image`/`with_optional_content` 链式构造）与 `FormXObject::with_resources`，`assemble` 为每个在用表单写 `/Resources`（`/Font` `/F<n>`、`/XObject` `/Im<n>`、`/Properties` `/OC<n>`，提供空资源时写空字典以按规范替换而非继承）；表单字体/图片并入文档级 `font_pool`/`image_pool`，与页面相同资源共享对象号，未绘制的表单不分配对象；`FormXObject::with_optional_content` 写表单级 `/OC`（PDF 1.5，`PdfFeature::OptionalContent` 门控），表单 `/OC` 与 `/Properties` 引用的 OCG 并入同一 OCG 池并出现在目录 `/OCProperties`，越界句柄报 `WriteError::InvalidObject` 且零字节。测试 `form_own_resources_write_font_and_image_dictionaries`、`form_resources_share_objects_with_page_resources`、`unused_form_resources_are_not_written`、`empty_form_resources_replace_inherited_resources`、`form_optional_content_writes_oc_and_properties_references`、`form_optional_content_requires_pdf_1_5`、`unknown_form_optional_content_handles_fail_the_build`、集成往返 `builder_form_own_resources_roundtrip_through_parser`。`/Ref`（Reference XObject）按价值取舍不实现：PDF 2.0 已弃用、依赖外部文件规格语义，读写端均不生成/不解析（见矩阵 8.10.4）。剩余缺口：表单资源仅覆盖 Font/XObject/Properties（无 ExtGState/Pattern/Shading/ColorSpace），不写 `/Metadata`/`/PieceInfo`/`/OPI`，不按内容去重；读端文本提取不按表单 `/OC` 求值可见性，替代图像 `/DefaultForPrinting`/`/OC` 仍未建模。
 
 **依赖**：D0 写端基线已具备；逐增量依赖如下——D3/D4 **只依赖 A**，不依赖 C，可与 C 并行；D1 依赖 C2/C3；D2 依赖 C2（资源与内容 API）；D5 依赖 C2/C3；D6 依赖 C3；D7 依赖 D0，其中 Form 自有 `/Resources` 部分与 C2 的资源模型对齐。B 仅在 Pattern 内字体与文本场景为软依赖。
 
@@ -336,26 +348,25 @@
 
 ## 下一批建议增量（按依赖与收益排序）
 
-1. **C5 读写模型统一与 roundtrip**：阶段 C 收尾项，依赖 C1–C4（均已完成）。
-2. **D3 JBIG2 解码**：真实扫描件（MRC）常见，独立于 C；先完成后端选型 spike。
-3. **D4 写端 Flate 压缩**：对生成文件体积收益最大，独立于 C。
-4. **D2 图像字典/内联图像读端**：依赖 C3（已完成），含解析 `BI…EI` 不可达路径的整改；单独评审。
-5. **B6 ToUnicode/CMap 完整性**：CJK 文本正确性的关键，可与 C/D 并行；启动前拆分 `cid_cmap.rs` 并确定数据许可。
-6. **D1 颜色空间读端模型**：为 Shading/Pattern/图像读端提供基础。
+1. **D3 JBIG2 解码**：真实扫描件（MRC）常见，独立于 C；先完成后端选型 spike。
+2. **D2 图像字典/内联图像读端**：依赖 C3（已完成）与 D1（已完成，提供样本解码基础），含解析 `BI…EI` 不可达路径的整改（C5 已把该缺口记入映射层剩余项）；单独评审。已完成（2026-10-27，`reader/image`）。
+3. **B6 ToUnicode/CMap 完整性**：CJK 文本正确性的关键，可与 C/D 并行；启动前拆分 `cid_cmap.rs` 并确定数据许可。
+4. **D7 写端图像/表单补全**（8.9.5、8.10、11.5）：已完成（2026-10-27）——图像 `/Intent`/`/Alternates`/`/Matte`，Form 自有 `/Resources`/`/OC`，`/Ref` 与 Reference XObject 经评估不实现（PDF 2.0 弃用、依赖外部文件规格）。
+5. **B7 文本提取语义完善**（9.10）：已完成（2026-10-27）——`/Artifact` 跳过、位置片段 API、OCMD 可见性（含 `/VE`）。
 
-并行边界：C5 依赖 C1–C4（均已完成）；D2 依赖 C3（已完成）；D3/D4 只依赖 A；B6 只触及字体模块，可与 C/D 并行；B7 的 C4 依赖已满足，剩余 `/Artifact` 与位置 API 可独立推进。
+并行边界：阶段 C 已全部完成；D2 已完成（图像字典/图像蒙版/内联图像读端 `reader/image`，2026-10-27）；D7 已完成（图像字典条目与 Form 自有 `/Resources`/`/OC`，2026-10-27）；B7 已完成（文本提取语义与 OCMD，2026-10-27）；D3 只依赖 A；D4 已完成（写端 Flate 压缩，2026-10-26）；D1 已完成（颜色空间读端模型 `reader/color_space`，2026-10-26）；D5 已完成（Shading/Pattern 读端模型 `reader/shading`，2026-10-26）；D6 已完成（ExtGState/透明度写端剩余与读端模型 `reader/graphics_state/halftone`、`reader/group`，2026-10-26）；B6 只触及字体模块，可与 D 并行。
 
 ## 真实样本与 fixtures backlog
 
 | fixture | 用途 | 来源/许可 | 体积 | 当前状态 |
 |---|---|---|---|---|
 | `tests/fixtures/minimal-document.pdf` | 基础解析回归 | 待追溯 | 17 KiB | ✅ A6 接入（`tests/fixtures.rs`） |
-| `tests/fixtures/pdflatex-4-pages.pdf` | 页面树/内容流/文本提取 | 待追溯 | 25 KiB | ✅ A6 接入解析；C2 接入内容流；C3 接入状态机 |
+| `tests/fixtures/pdflatex-4-pages.pdf` | 页面树/内容流/文本提取 | 待追溯 | 25 KiB | ✅ A6 接入解析；C2 接入内容流；C3 接入状态机；C4 接入标记内容；C5 接入模型往返无损校验 |
 | `tests/fixtures/annotated.pdf` | 注解/动作 | 待追溯 | 1.8 KiB | 已存在，未接入测试；E2/E3 接入 |
 | `tests/fixtures/xmp-metadata.pdf` | XMP/Info | 待追溯 | 2.1 KiB | 已存在，未接入测试；E5 接入 |
 | 待补：JBIG2 扫描件 | D3 | 需许可安全的公开样本或自行生成 | — | 未获取 |
 | 待补：JPX 图像 | D3 | 可使用公开测试图或生成工具（须登记许可） | — | 未获取 |
-| 待补：Shading/Pattern/透明组 | D5/D6 | 优先用 builder 生成合成样本，再补真实样本 | — | 未获取 |
+| 待补：Shading/Pattern/透明组 | D5/D6 | 优先用 builder 生成合成样本，再补真实样本 | — | D5/D6 合成样本已由 builder 往返集成测试覆盖；真实样本未获取 |
 | 待补：AcroForm | E4 | 自行生成最小表单样本 | — | 未获取 |
 | 待补：CJK CID/Type 0 | B6 | 使用开源字体生成最小样本；ordering 数据许可须单独登记 | — | 未获取 |
 | 待补：增量更新/签名 | E7/F1 | 自行构造 v1 + update 样本 | — | 未获取 |
@@ -367,7 +378,7 @@
 ```mermaid
 flowchart LR
     A["A 核心读入与安全 🚧"] --> B["B 字体与文本 🚧"]
-    A --> C["C 内容流读取模型 🚧"]
+    A --> C["C 内容流读取模型 ✅"]
     B --> D["D 图形完整 🚧"]
     C --> D
     A --> D

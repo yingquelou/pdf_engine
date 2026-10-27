@@ -2,7 +2,9 @@ use crate::core::types::{
     Array, Dict, Document, Object, StartXref, StreamData, Trailer, Value, Xref,
 };
 
-use super::{MAX_CONTENT_BYTES, MAX_CONTENT_STREAMS, MAX_PAGE_TREE_DEPTH, TextExtractionError};
+use super::{
+    MAX_CONTENT_BYTES, MAX_CONTENT_STREAMS, MAX_PAGE_TREE_DEPTH, TextExtractionError, TextFragment,
+};
 
 fn winansi_type1_font() -> Value {
     Value::Dict(
@@ -858,6 +860,10 @@ fn inline_image_data_is_skipped_without_losing_following_text() {
 // ── Marked content & optional content (C4) ────────────────
 
 fn oc_properties_document(on: &[i64], off: &[i64]) -> Document {
+    oc_properties_document_with(on, off, Vec::new())
+}
+
+fn oc_properties_document_with(on: &[i64], off: &[i64], extra: Vec<Object>) -> Document {
     let mut on_array = Array::new();
     for object in on {
         on_array = on_array.push(Value::Ref(*object, 0));
@@ -899,8 +905,26 @@ fn oc_properties_document(on: &[i64], off: &[i64]) -> Document {
                 ),
             ),
     );
+    objects.extend(extra);
     objects.insert(0, Object::new(1, 0, catalog));
     document_from_objects(objects)
+}
+
+fn ocmd_object(object: i64, groups: &[i64], policy: &str) -> Object {
+    let mut refs = Array::new();
+    for group in groups {
+        refs = refs.push(Value::Ref(*group, 0));
+    }
+    Object::new(
+        object,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("OCMD".into()))
+                .insert("OCGs", Value::Array(refs))
+                .insert("P", Value::Name(policy.into())),
+        ),
+    )
 }
 
 fn marked_resources(properties: &[(&str, Value)]) -> Dict {
@@ -998,6 +1022,38 @@ fn nested_section_inherits_hidden_state_from_parent() {
 }
 
 #[test]
+fn indirect_ocmd_hides_section_by_policy() {
+    let document = oc_properties_document_with(&[5], &[], vec![ocmd_object(7, &[5], "AllOff")]);
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"/P <</OC 7 0 R>> BDC BT /F1 12 Tf (gone) Tj ET EMC \
+                    BT /F1 12 Tf (kept) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "kept");
+}
+
+#[test]
+fn ocmd_resolved_through_properties_name() {
+    let document = oc_properties_document_with(&[], &[5], vec![ocmd_object(7, &[5], "AllOn")]);
+    let resources = marked_resources(&[("MC0", Value::Ref(7, 0))]);
+    let content = b"/P /MC0 BDC BT /F1 12 Tf (gone) Tj ET EMC \
+                    BT /F1 12 Tf (kept) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "kept");
+}
+
+#[test]
+fn inline_ocmd_visibility_expression_overrides_policy() {
+    let document = oc_properties_document(&[], &[5]);
+    let resources = resources_with_font("F1", winansi_type1_font());
+    // /P /AnyOn alone would hide the section (group 5 is off), but
+    // /VE [/Not 5 0 R] says the membership is on.
+    let content = b"/P <</OC <</Type /OCMD /OCGs [5 0 R] /P /AnyOn /VE [/Not 5 0 R]>>>> BDC \
+                    BT /F1 12 Tf (shown) Tj ET EMC";
+
+    assert_eq!(document.extract_text(content, &resources), "shown");
+}
+
+#[test]
 fn unbalanced_emc_does_not_break_extraction() {
     let document = Document::new();
     let resources = resources_with_font("F1", winansi_type1_font());
@@ -1052,4 +1108,251 @@ fn unclosed_marked_section_in_form_does_not_leak_to_caller() {
                     BT /F1 12 Tf (after) Tj ET";
 
     assert_eq!(document.extract_text(content, &resources), "beforeafter");
+}
+
+// ── B7: /Artifact skipping and positioned fragments ───────
+
+#[test]
+fn artifact_marked_content_is_skipped() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf (before) Tj ET \
+                    /Artifact BMC BT /F1 12 Tf (foot) Tj ET EMC \
+                    BT /F1 12 Tf (after) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "beforeafter");
+}
+
+#[test]
+fn nested_sections_inherit_artifact_state() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"/Artifact BMC /Span BMC BT /F1 12 Tf (hidden) Tj ET EMC EMC \
+                    BT /F1 12 Tf (shown) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "shown");
+}
+
+#[test]
+fn artifact_with_inline_properties_is_skipped() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"/Artifact <</Type /Pagination>> BDC \
+                    BT /F1 12 Tf (foot) Tj ET EMC \
+                    BT /F1 12 Tf (body) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "body");
+}
+
+#[test]
+fn artifact_breaks_do_not_insert_separators() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf (A) Tj ET /Artifact BMC Td EMC \
+                    BT /F1 12 Tf (B) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "AB");
+}
+
+#[test]
+fn artifact_text_is_absent_from_fragments() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"/Artifact BMC BT /F1 12 Tf 10 10 Td (stamp) Tj ET EMC \
+                    BT /F1 12 Tf 20 20 Td (body) Tj ET";
+
+    assert!(!document.extract_text(content, &resources).contains("stamp"));
+    assert_eq!(
+        document.extract_text_fragments(content, &resources),
+        vec![TextFragment {
+            text: "body".into(),
+            x: 20.0,
+            y: 20.0,
+        }]
+    );
+}
+
+#[test]
+fn fragments_report_show_positions_and_merge_same_position_runs() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf 100 700 Td [(H) (i)] TJ ET \
+                    BT /F1 12 Tf 80 680 Td (There) Tj ET";
+
+    assert_eq!(
+        document.extract_text_fragments(content, &resources),
+        vec![
+            TextFragment {
+                text: "Hi".into(),
+                x: 100.0,
+                y: 700.0,
+            },
+            TextFragment {
+                text: "There".into(),
+                x: 80.0,
+                y: 680.0,
+            },
+        ]
+    );
+}
+
+#[test]
+fn fragments_apply_cm_and_q_q_at_the_ctm_level() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"1 0 0 1 10 20 cm \
+                    BT /F1 12 Tf 100 50 Td (A) Tj ET \
+                    q 2 0 0 2 5 5 cm BT /F1 12 Tf 100 50 Td (B) Tj ET Q \
+                    BT /F1 12 Tf 100 50 Td (C) Tj ET";
+
+    assert_eq!(
+        document.extract_text_fragments(content, &resources),
+        vec![
+            TextFragment {
+                text: "A".into(),
+                x: 110.0,
+                y: 70.0,
+            },
+            TextFragment {
+                text: "B".into(),
+                x: 215.0,
+                y: 125.0,
+            },
+            TextFragment {
+                text: "C".into(),
+                x: 110.0,
+                y: 70.0,
+            },
+        ]
+    );
+}
+
+#[test]
+fn fragments_track_leading_and_text_rise() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf 14 TL 50 700 Td (One) Tj T* 5 Ts (Two) Tj ET";
+
+    assert_eq!(
+        document.extract_text_fragments(content, &resources),
+        vec![
+            TextFragment {
+                text: "One".into(),
+                x: 50.0,
+                y: 700.0,
+            },
+            TextFragment {
+                text: "Two".into(),
+                x: 50.0,
+                y: 691.0,
+            },
+        ]
+    );
+}
+
+#[test]
+fn actual_text_replacement_becomes_a_fragment() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"/Span <</ActualText (replaced)>> BDC \
+                    BT /F1 12 Tf 7 9 Td (abc) Tj ET EMC";
+
+    assert_eq!(document.extract_text(content, &resources), "replaced");
+    assert_eq!(
+        document.extract_text_fragments(content, &resources),
+        vec![TextFragment {
+            text: "replaced".into(),
+            x: 7.0,
+            y: 9.0,
+        }]
+    );
+}
+
+fn form_with_matrix(form: Value, matrix: [f64; 6]) -> Value {
+    let Value::Stream(dict, data) = form else {
+        panic!("form should be a stream");
+    };
+    let mut array = Array::new();
+    for value in matrix {
+        array = array.push(Value::Float(value));
+    }
+    Value::Stream(dict.insert("Matrix", Value::Array(array)), data)
+}
+
+#[test]
+fn fragments_apply_form_matrix_and_restore_ctm() {
+    let resources = Value::Dict(resources_with_font_and_xobjects(
+        winansi_type1_font(),
+        &[("Frm", 10)],
+    ));
+    let form = form_with_matrix(
+        form_xobject(b"BT /F1 12 Tf 0 0 Td (F) Tj ET", None),
+        [1.0, 0.0, 0.0, 1.0, 5.0, 20.0],
+    );
+    let document = single_page_document(
+        contents_stream(b"1 0 0 1 10 0 cm /Frm Do BT /F1 12 Tf 0 0 Td (P) Tj ET"),
+        resources,
+        vec![Object::new(10, 0, form)],
+    );
+
+    assert_eq!(
+        document.extract_page_text_fragments(0).unwrap(),
+        vec![
+            TextFragment {
+                text: "F".into(),
+                x: 15.0,
+                y: 20.0,
+            },
+            TextFragment {
+                text: "P".into(),
+                x: 10.0,
+                y: 0.0,
+            },
+        ]
+    );
+}
+
+#[test]
+fn extract_page_text_fragments_reports_page_errors() {
+    let document = single_page_document(
+        contents_stream(b"BT /F1 12 Tf 30 40 Td (Hi) Tj ET"),
+        Value::Dict(resources_with_font("F1", winansi_type1_font())),
+        Vec::new(),
+    );
+
+    assert_eq!(
+        document.extract_page_text_fragments(0),
+        Some(vec![TextFragment {
+            text: "Hi".into(),
+            x: 30.0,
+            y: 40.0,
+        }])
+    );
+    assert_eq!(document.extract_page_text_fragments(1), None);
+    assert_eq!(
+        document.try_extract_page_text_fragments(1),
+        Err(TextExtractionError::PageNotFound)
+    );
+    assert_eq!(
+        document.try_extract_page_text(1),
+        Err(TextExtractionError::PageNotFound)
+    );
+}
+
+#[test]
+fn hidden_ocg_text_is_absent_from_fragments() {
+    let document = oc_properties_document(&[], &[5]);
+    let resources = marked_resources(&[("MC0", Value::Ref(5, 0))]);
+    let content = b"/P <</OC /MC0>> BDC BT /F1 12 Tf 10 10 Td (gone) Tj ET EMC \
+                    BT /F1 12 Tf 20 20 Td (kept) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "kept");
+    assert_eq!(
+        document.extract_text_fragments(content, &resources),
+        vec![TextFragment {
+            text: "kept".into(),
+            x: 20.0,
+            y: 20.0,
+        }]
+    );
 }

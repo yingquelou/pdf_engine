@@ -21,13 +21,16 @@
 mod cid;
 mod cid_cmap_multibyte;
 mod color_space;
+mod compression;
 mod encoding;
 mod font;
 mod font_cff;
 mod font_program;
 mod form;
+mod form_resources;
 mod function;
 mod graphics_state;
+mod image_entries;
 mod optional_content;
 mod page_group;
 mod pattern;
@@ -326,6 +329,9 @@ fn text_escapes_parens_and_backslash() {
 fn image_xobject_emitted() {
     // 2x2 RGB 全红。
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceRGB,
@@ -360,6 +366,9 @@ fn image_xobject_emitted() {
 fn cmyk_image_xobject_emitted() {
     // 1x1 CMYK（C 满、M/Y/K 为零）：每像素 4 字节。
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceCMYK,
@@ -384,6 +393,9 @@ fn cmyk_image_xobject_emitted() {
 #[test]
 fn cmyk_image_data_length_mismatch_is_invalid_object() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceCMYK,
@@ -415,6 +427,9 @@ fn cmyk_image_data_length_mismatch_is_invalid_object() {
 #[test]
 fn image_with_unsupported_bits_is_invalid_object() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -445,6 +460,9 @@ fn image_with_unsupported_bits_is_invalid_object() {
 #[test]
 fn image_writes_decode_and_interpolate_entries() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceRGB,
@@ -480,6 +498,9 @@ fn assert_image_rejected(img: ImageData, expected: &str) {
 #[test]
 fn invalid_image_decode_fails_the_build() {
     let base = || ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceRGB,
@@ -504,6 +525,9 @@ fn invalid_image_decode_fails_the_build() {
 #[test]
 fn image_with_smask_writes_soft_mask_object_and_reference() {
     let mask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceGray,
@@ -516,6 +540,9 @@ fn image_with_smask_writes_soft_mask_object_and_reference() {
         mask: None,
     };
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceRGB,
@@ -561,6 +588,9 @@ fn image_with_smask_writes_soft_mask_object_and_reference() {
 fn invalid_smask_parameters_fail_the_build() {
     fn gray_mask(width: u32, height: u32, data: Vec<u8>) -> ImageData {
         ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             width,
             height,
             color_space: ColorSpace::DeviceGray,
@@ -575,6 +605,9 @@ fn invalid_smask_parameters_fail_the_build() {
     }
     fn base_with(mask: ImageData) -> ImageData {
         ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             width: 2,
             height: 2,
             color_space: ColorSpace::DeviceRGB,
@@ -594,6 +627,9 @@ fn invalid_smask_parameters_fail_the_build() {
     );
     assert_image_rejected(
         base_with(ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             width: 2,
             height: 2,
             color_space: ColorSpace::DeviceRGB,
@@ -620,6 +656,9 @@ fn invalid_smask_parameters_fail_the_build() {
 #[test]
 fn smask_requires_pdf_1_4() {
     let mask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -632,6 +671,9 @@ fn smask_requires_pdf_1_4() {
         mask: None,
     };
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -670,6 +712,9 @@ fn smask_requires_pdf_1_4() {
 #[test]
 fn stencil_image_mask_writes_image_mask_and_omits_color_space() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 8,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -697,6 +742,9 @@ fn stencil_image_mask_writes_image_mask_and_omits_color_space() {
 #[test]
 fn explicit_mask_writes_mask_reference_and_stencil_object() {
     let mask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 4,
         height: 2,
         color_space: ColorSpace::DeviceGray,
@@ -709,6 +757,9 @@ fn explicit_mask_writes_mask_reference_and_stencil_object() {
         mask: None,
     };
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 2,
         color_space: ColorSpace::DeviceRGB,
@@ -745,6 +796,9 @@ fn explicit_mask_writes_mask_reference_and_stencil_object() {
 #[test]
 fn colour_key_mask_writes_integer_ranges() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceRGB,
@@ -767,6 +821,9 @@ fn colour_key_mask_writes_integer_ranges() {
 #[test]
 fn invalid_image_mask_parameters_fail_the_build() {
     let base = || ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 8,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -780,6 +837,9 @@ fn invalid_image_mask_parameters_fail_the_build() {
     };
     assert_image_rejected(
         ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             bits: 8,
             data: vec![0; 8],
             ..base()
@@ -788,6 +848,9 @@ fn invalid_image_mask_parameters_fail_the_build() {
     );
     assert_image_rejected(
         ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             color_space: ColorSpace::DeviceRGB,
             ..base()
         },
@@ -798,6 +861,9 @@ fn invalid_image_mask_parameters_fail_the_build() {
         "image mask Decode must be [0 1] or [1 0]",
     );
     let smask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 8,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -811,6 +877,9 @@ fn invalid_image_mask_parameters_fail_the_build() {
     };
     assert_image_rejected(
         ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             smask: Some(Box::new(smask)),
             ..base()
         },
@@ -818,6 +887,9 @@ fn invalid_image_mask_parameters_fail_the_build() {
     );
     assert_image_rejected(
         ImageData {
+            intent: None,
+            alternates: Vec::new(),
+            matte: None,
             mask: Some(ImageMask::color_key(vec![0, 1])),
             ..base()
         },
@@ -828,6 +900,9 @@ fn invalid_image_mask_parameters_fail_the_build() {
 #[test]
 fn invalid_explicit_and_colour_key_masks_fail_the_build() {
     let base = || ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceRGB,
@@ -840,6 +915,9 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
         mask: None,
     };
     let plain_gray = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -856,6 +934,9 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
         "Mask image must be an image mask (ImageMask true)",
     );
     let broken_mask = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -888,6 +969,9 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
 #[test]
 fn image_mask_entry_requires_pdf_1_3() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceRGB,
@@ -923,6 +1007,9 @@ fn image_mask_entry_requires_pdf_1_3() {
 
     // `/ImageMask true` 本身自 PDF 1.0 起可用，不触发 1.3 门控。
     let stencil = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 8,
         height: 1,
         color_space: ColorSpace::DeviceGray,
@@ -945,6 +1032,9 @@ fn image_mask_entry_requires_pdf_1_3() {
 #[test]
 fn cal_gray_image_writes_white_black_and_gamma() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::CalGray(CalGray {
@@ -974,6 +1064,9 @@ fn cal_gray_image_writes_white_black_and_gamma() {
 #[test]
 fn cal_rgb_image_writes_gamma_and_matrix() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::CalRGB(CalRGB {
@@ -1007,6 +1100,9 @@ fn cal_rgb_image_writes_gamma_and_matrix() {
 #[test]
 fn lab_image_writes_range() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::Lab(Lab {
@@ -1036,6 +1132,9 @@ fn lab_image_writes_range() {
 fn icc_based_image_writes_profile_stream_and_alternative() {
     let profile = vec![0, 1, 2, 3];
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::ICCBased(ICCBased {
@@ -1068,6 +1167,9 @@ fn icc_based_image_writes_profile_stream_and_alternative() {
 #[test]
 fn indexed_image_writes_base_hival_and_lookup_hex() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::Indexed(Indexed::new(
@@ -1098,6 +1200,9 @@ fn indexed_image_writes_base_hival_and_lookup_hex() {
 #[test]
 fn indexed_image_embeds_cie_base_definition() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 3,
         height: 1,
         color_space: ColorSpace::Indexed(Indexed::new(
@@ -1130,6 +1235,9 @@ fn indexed_image_embeds_cie_base_definition() {
 #[test]
 fn separation_image_writes_colorant_alternate_and_tint_transform() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::Separation(Separation::new(
@@ -1167,6 +1275,9 @@ fn separation_image_writes_colorant_alternate_and_tint_transform() {
 #[test]
 fn device_n_image_writes_names_and_sampled_tint_transform() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 2,
         height: 1,
         color_space: ColorSpace::DeviceN(DeviceN::new(
@@ -1208,6 +1319,9 @@ fn device_n_image_writes_names_and_sampled_tint_transform() {
 #[test]
 fn device_n_allows_repeated_none_colorant() {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space: ColorSpace::DeviceN(DeviceN::new(
@@ -1272,6 +1386,9 @@ fn invalid_indexed_parameters_fail_the_build() {
 
 fn assert_color_space_rejected(color_space: ColorSpace, expected: &str) {
     let img = ImageData {
+        intent: None,
+        alternates: Vec::new(),
+        matte: None,
         width: 1,
         height: 1,
         color_space,

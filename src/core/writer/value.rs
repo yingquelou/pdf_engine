@@ -4,6 +4,7 @@ use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use std::fmt::Write as _;
 
 use super::WriteError;
+use super::compression::StreamCompression;
 
 /// 序列化工作项：显式栈的元素。
 ///
@@ -313,6 +314,17 @@ fn prepare_stream_dict_for_write(dict: &Dict, owned_bytes: &[u8]) -> Dict {
 ///
 /// 流字节从 `doc.stream_bytes` 取（读端按需从文件读，写端用 Owned）。
 pub fn write_object(obj: &Object, doc: &Document) -> Result<Vec<u8>, WriteError> {
+    write_object_maybe_compressed(obj, doc, None)
+}
+
+/// 同 [`write_object`]；给定 `compression` 时，Owned 明文流在**序列化时**
+/// 按策略压缩（D4）——内存不变量「Owned 恒为明文」不受影响，压缩只
+/// 作用于输出字节。已有 `/Filter` 的流与 Ref 透传流不二次编码。
+pub(crate) fn write_object_maybe_compressed(
+    obj: &Object,
+    doc: &Document,
+    compression: Option<&StreamCompression>,
+) -> Result<Vec<u8>, WriteError> {
     if obj.num <= 0 {
         return Err(WriteError::InvalidObject(format!(
             "object number must be positive, got {}",
@@ -326,7 +338,7 @@ pub fn write_object(obj: &Object, doc: &Document) -> Result<Vec<u8>, WriteError>
 
     match &obj.value {
         Value::Stream(dict, data) => {
-            let bytes = doc.stream_bytes(&obj.value).ok_or_else(|| {
+            let mut bytes = doc.stream_bytes(&obj.value).ok_or_else(|| {
                 WriteError::InvalidObject(format!(
                     "stream bytes unavailable for object {}",
                     obj.num
@@ -336,7 +348,7 @@ pub fn write_object(obj: &Object, doc: &Document) -> Result<Vec<u8>, WriteError>
             // 流字典准备：
             // - Owned 字节 + 原 dict 有 /Filter → 移除压缩过滤器 + 更新 Length（宽进严出协调）
             // - Ref 字节 + 原 dict → 原样（写端构造的 Ref 流不存在"解压"问题）
-            let prepared_dict = match data {
+            let mut prepared_dict = match data {
                 StreamData::Owned(_) => prepare_stream_dict_for_write(dict, &bytes),
                 StreamData::Ref { .. } | StreamData::EncryptedRef { .. } => {
                     let mut d = dict.clone();
@@ -344,6 +356,15 @@ pub fn write_object(obj: &Object, doc: &Document) -> Result<Vec<u8>, WriteError>
                     d
                 }
             };
+
+            // D4 压缩：仅 Owned 流；apply 内部再排除已有 Filter/空流。
+            if matches!(data, StreamData::Owned(_))
+                && let Some(comp) = compression
+                && let Some((d2, b2)) = comp.apply(&prepared_dict, &bytes)?
+            {
+                prepared_dict = d2;
+                bytes = b2;
+            }
 
             let mut s = String::new();
             write_stream_dict(&prepared_dict, bytes.len(), &mut s);

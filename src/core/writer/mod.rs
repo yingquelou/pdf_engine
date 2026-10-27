@@ -21,6 +21,9 @@ pub enum WriteError {
     InvalidObject(String),
     /// 目标版本不在 1.0–1.7 范围内，或所需特性高于目标版本支持。
     UnsupportedVersion(String),
+    /// 流压缩后端失败（注入的压缩后端返回错误）。
+    /// writer 先缓冲后一次性写出，失败时输出端不会收到任何字节。
+    Compression(String),
 }
 
 impl fmt::Display for WriteError {
@@ -34,6 +37,7 @@ impl fmt::Display for WriteError {
             WriteError::UnsupportedVersion(s) => {
                 write!(f, "unsupported pdf version: {s}")
             }
+            WriteError::Compression(s) => write!(f, "stream compression failed: {s}"),
         }
     }
 }
@@ -46,6 +50,7 @@ impl From<io::Error> for WriteError {
     }
 }
 
+mod compression;
 mod context;
 mod document_writer;
 mod serialize;
@@ -54,6 +59,7 @@ mod tests;
 mod value;
 mod version;
 
+pub use compression::{DeflateBackend, Flate2DeflateBackend, ImagePredictor, StreamCompression};
 pub use document_writer::{DocumentWriter, write_document};
 pub use value::{write_object, write_value};
 

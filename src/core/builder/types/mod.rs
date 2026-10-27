@@ -11,6 +11,7 @@
 //! - `form`：Form XObject 与组属性字典；
 //! - `function`：PDF 函数（Type 0/2/3/4）；
 //! - `graphics_state`：图形状态参数（ExtGState）；
+//! - `halftone`：半色调字典（Type 1/2 与包装字典）；
 //! - `optional_content`：可选内容组（OCG）；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池。
@@ -22,6 +23,7 @@ mod font;
 mod form;
 mod function;
 mod graphics_state;
+mod halftone;
 mod image;
 mod optional_content;
 mod pattern;
@@ -33,7 +35,7 @@ pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMe
 pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;
 pub use font::{Font, FontWidths};
-pub use form::{FormXObject, GroupXObject};
+pub use form::{FormResources, FormXObject, GroupXObject};
 pub use function::{
     CalculatorFunction, ExponentialFunction, Function, SampledFunction, StitchingFunction,
 };
@@ -41,8 +43,10 @@ pub(crate) use graphics_state::GraphicsStateFunctions;
 pub use graphics_state::{
     DashPattern, GraphicsState, GraphicsStateFont, SoftMask, SoftMaskSubtype,
 };
+pub use halftone::{Halftone, HalftoneDictionary, Type1Halftone, Type2Halftone};
 pub use image::{
-    CalGray, CalRGB, ColorSpace, DeviceN, ICCBased, ImageData, ImageMask, Indexed, Lab, Separation,
+    CalGray, CalRGB, ColorSpace, DeviceN, ICCBased, ImageData, ImageIntent, ImageMask, Indexed,
+    Lab, Separation,
 };
 pub use optional_content::OptionalContentGroup;
 pub(crate) use pattern::Pattern;

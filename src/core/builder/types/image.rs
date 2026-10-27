@@ -461,6 +461,33 @@ fn validate_triplet(name: &str, values: &[f64; 3]) -> Result<(), String> {
     }
 }
 
+/// 图像 `/Intent`（Table 89）：渲染意图，PDF 1.4 引入。
+///
+/// 规范只定义四个名称；省略时按 `RelativeColorimetric` 处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageIntent {
+    /// 感知意图，适合照片类图像。
+    Perceptual,
+    /// 相对色度意图（缺省）。
+    RelativeColorimetric,
+    /// 饱和度意图。
+    Saturation,
+    /// 绝对色度意图。
+    AbsoluteColorimetric,
+}
+
+impl ImageIntent {
+    /// 字典中写出的名称。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Perceptual => "Perceptual",
+            Self::RelativeColorimetric => "RelativeColorimetric",
+            Self::Saturation => "Saturation",
+            Self::AbsoluteColorimetric => "AbsoluteColorimetric",
+        }
+    }
+}
+
 /// 原始像素图片数据。
 ///
 /// 流字节即未压缩的逐行像素样本，由 [`crate::core::builder::PdfBuilder::image`]
@@ -486,6 +513,14 @@ pub struct ImageData {
     pub decode: Option<Vec<f64>>,
     /// `/Interpolate`：是否对图像做插值采样，省略即 false。
     pub interpolate: bool,
+    /// `/Intent`（PDF 1.4）：渲染意图；图像蒙版不得设置。
+    pub intent: Option<ImageIntent>,
+    /// `/Alternates`（PDF 1.3）：同一图像的低分辨率替代版本，按
+    /// `<< /Image n 0 R >>` 字典数组写出；不得嵌套、不得是图像蒙版。
+    pub alternates: Vec<ImageData>,
+    /// `/Matte`（PDF 1.6）：本图软蒙版的衬底颜色，按本图颜色空间给出；
+    /// 必须与 [`ImageData::smask`] 同时设置，写出到 SMask 图像字典。
+    pub matte: Option<Vec<f64>>,
     /// 显式软蒙版（`/SMask`，PDF 1.4）：独立的 DeviceGray 图像，
     /// 尺寸必须与本图一致，且自身不得再带软蒙版。
     pub smask: Option<Box<ImageData>>,
@@ -530,6 +565,24 @@ impl ImageData {
     /// 设置 `/Interpolate`。
     pub fn with_interpolate(mut self, interpolate: bool) -> Self {
         self.interpolate = interpolate;
+        self
+    }
+
+    /// 设置 `/Intent`。
+    pub fn with_intent(mut self, intent: ImageIntent) -> Self {
+        self.intent = Some(intent);
+        self
+    }
+
+    /// 追加替代图像（`/Alternates`）。
+    pub fn with_alternates(mut self, alternates: impl Into<Vec<ImageData>>) -> Self {
+        self.alternates = alternates.into();
+        self
+    }
+
+    /// 设置 `/Matte` 衬底颜色。
+    pub fn with_matte(mut self, matte: impl Into<Vec<f64>>) -> Self {
+        self.matte = Some(matte.into());
         self
     }
 
@@ -586,6 +639,15 @@ impl ImageData {
             }
             if self.mask.is_some() {
                 return Err("image mask must not have a Mask entry".into());
+            }
+            if self.intent.is_some() {
+                return Err("image mask must not have an Intent entry".into());
+            }
+            if self.matte.is_some() {
+                return Err("image mask must not have a Matte entry".into());
+            }
+            if !self.alternates.is_empty() {
+                return Err("image mask must not have Alternates".into());
             }
         }
         let expected = self.expected_data_len().ok_or_else(|| {
@@ -669,6 +731,41 @@ impl ImageData {
                     }
                 }
             }
+        }
+        if let Some(matte) = &self.matte {
+            if self.smask.is_none() {
+                return Err("Matte requires an SMask".into());
+            }
+            let components = self.color_space.channels();
+            if matte.len() != components {
+                return Err(format!(
+                    "Matte must contain {components} numbers for a \
+                     {components}-component image, got {}",
+                    matte.len()
+                ));
+            }
+            if matte.iter().any(|value| !value.is_finite()) {
+                return Err("Matte must contain finite numbers".into());
+            }
+        }
+        for (index, alternate) in self.alternates.iter().enumerate() {
+            if alternate.image_mask {
+                return Err(format!("alternate image {index} must not be an image mask"));
+            }
+            if !alternate.alternates.is_empty() {
+                return Err(format!(
+                    "alternate image {index} must not contain nested Alternates"
+                ));
+            }
+            if alternate.width > self.width || alternate.height > self.height {
+                return Err(format!(
+                    "alternate image {index} dimensions {}x{} exceed the base image {}x{}",
+                    alternate.width, alternate.height, self.width, self.height
+                ));
+            }
+            alternate
+                .validate()
+                .map_err(|message| format!("alternate image {index}: {message}"))?;
         }
         Ok(())
     }

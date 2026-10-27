@@ -75,12 +75,7 @@ impl PdfBuilder {
         }
 
         // 图片去重池：按内容完全相等合并（同像素即同一 XObject）。
-        // 软蒙版与显式蒙版各分配紧随基图的独立流对象号。
-        struct ImageObjectNums {
-            base: i64,
-            smask: Option<i64>,
-            mask: Option<i64>,
-        }
+        // 软蒙版、显式蒙版与替代图像各分配独立流对象号。
         let mut image_pool: Vec<(ImageData, ImageObjectNums)> = Vec::new();
         let mut page_image_nums: Vec<Vec<i64>> = Vec::with_capacity(self.pages.len());
         for p in &self.pages {
@@ -90,23 +85,9 @@ impl PdfBuilder {
                 let obj_num = match pos {
                     Some(i) => image_pool[i].1.base,
                     None => {
-                        let base = num;
-                        num += 1;
-                        let smask = if img.smask.is_some() {
-                            let m = num;
-                            num += 1;
-                            Some(m)
-                        } else {
-                            None
-                        };
-                        let mask = if matches!(img.mask, Some(ImageMask::Explicit(_))) {
-                            let m = num;
-                            num += 1;
-                            Some(m)
-                        } else {
-                            None
-                        };
-                        image_pool.push((img.clone(), ImageObjectNums { base, smask, mask }));
+                        let nums = allocate_image_objects(img, &mut num);
+                        let base = nums.base;
+                        image_pool.push((img.clone(), nums));
                         base
                     }
                 };
@@ -195,14 +176,76 @@ impl PdfBuilder {
             num += 1;
         }
 
+        // Form 自有资源：字体/图片并入全局去重池（与页面资源共享对象），
+        // 仅为实际绘制的表单分配；未提供资源的表单继续继承绘制页资源。
+        let mut form_font_nums: Vec<Vec<i64>> = vec![Vec::new(); self.forms.len()];
+        let mut form_image_nums: Vec<Vec<i64>> = vec![Vec::new(); self.forms.len()];
+        for &handle in &used_forms {
+            let Some(resources) = self.forms[handle].resources.clone() else {
+                continue;
+            };
+            let mut fonts = Vec::with_capacity(resources.fonts.len());
+            for font in resources.fonts {
+                let obj_num = match font_pool.iter().position(|(g, _)| same_font(g, &font)) {
+                    Some(i) => font_pool[i].1,
+                    None => {
+                        let n = num;
+                        num += 1;
+                        font_pool.push((font, n));
+                        n
+                    }
+                };
+                fonts.push(obj_num);
+            }
+            form_font_nums[handle] = fonts;
+            let mut images = Vec::with_capacity(resources.images.len());
+            for image in resources.images {
+                let obj_num = match image_pool.iter().position(|(g, _)| g == &image) {
+                    Some(i) => image_pool[i].1.base,
+                    None => {
+                        let nums = allocate_image_objects(&image, &mut num);
+                        let base = nums.base;
+                        image_pool.push((image, nums));
+                        base
+                    }
+                };
+                images.push(obj_num);
+            }
+            form_image_nums[handle] = images;
+        }
+
         // 可选内容组：只为页面实际标记过的组分配对象号（注册但未使用
         // 的组不写出，与 Form XObject 一致）。句柄在 `begin_optional_content`
         // 中已校验上界，此处再校验组参数。
-        let used_ocgs: std::collections::BTreeSet<usize> = self
+        let mut used_ocgs: std::collections::BTreeSet<usize> = self
             .pages
             .iter()
             .flat_map(|p| p.optional_content.iter().copied())
             .collect();
+        // 表单级 `/OC` 与表单自有 `/Properties` 引用的组同样需要写出。
+        for &handle in &used_forms {
+            let form = &self.forms[handle];
+            if let Some(group) = form.optional_content
+                && group >= self.optional_content_groups.len()
+            {
+                return Err(WriteError::InvalidObject(format!(
+                    "form XObject: /OC references unknown optional content group handle {group}"
+                )));
+            }
+            if let Some(resources) = &form.resources {
+                for &group in &resources.optional_content {
+                    if group >= self.optional_content_groups.len() {
+                        return Err(WriteError::InvalidObject(format!(
+                            "form XObject: /Properties references unknown optional content group handle {group}"
+                        )));
+                    }
+                    used_ocgs.insert(group);
+                }
+            }
+            if let Some(group) = form.optional_content {
+                used_ocgs.insert(group);
+            }
+        }
         let mut ocg_nums = vec![0i64; self.optional_content_groups.len()];
         for &handle in &used_ocgs {
             self.optional_content_groups[handle]
@@ -427,84 +470,10 @@ impl PdfBuilder {
             cid::write_cid_font(&mut doc, cid_font, *type0_num, &mut num)?;
         }
 
-        // 图片 XObject 流对象；软蒙版与显式蒙版作为紧随其后的独立流写出。
+        // 图片 XObject 流对象；软蒙版、显式蒙版与替代图像作为紧随其后的
+        // 独立流写出（替代图像不进入页面资源字典）。
         for (img, nums) in &image_pool {
-            img.validate().map_err(|message| {
-                WriteError::InvalidObject(format!("image XObject: {message}"))
-            })?;
-            let mut stream_dict = if img.image_mask {
-                image_mask_dict(img)
-            } else {
-                let mut dict = Dict::new()
-                    .insert("Type", Value::Name("XObject".into()))
-                    .insert("Subtype", Value::Name("Image".into()))
-                    .insert("Width", Value::Integer(img.width as i64))
-                    .insert("Height", Value::Integer(img.height as i64))
-                    .insert(
-                        "ColorSpace",
-                        color_space_value(&img.color_space, &mut doc, &mut num)?,
-                    )
-                    .insert("BitsPerComponent", Value::Integer(img.bits as i64));
-                if let Some(decode) = &img.decode {
-                    dict = dict.insert("Decode", real_array(decode));
-                }
-                if img.interpolate {
-                    dict = dict.insert("Interpolate", Value::Bool(true));
-                }
-                dict
-            };
-            if let Some(smask_num) = nums.smask {
-                stream_dict = stream_dict.insert("SMask", Value::Ref(smask_num, 0));
-            }
-            match &img.mask {
-                None => {}
-                Some(ImageMask::Explicit(_)) => {
-                    if let Some(mask_num) = nums.mask {
-                        stream_dict = stream_dict.insert("Mask", Value::Ref(mask_num, 0));
-                    }
-                    doc.features.borrow_mut().insert(PdfFeature::ImageMaskEntry);
-                }
-                Some(ImageMask::ColorKey(ranges)) => {
-                    let array = Array(ranges.iter().map(|value| Value::Integer(*value)).collect());
-                    stream_dict = stream_dict.insert("Mask", Value::Array(array));
-                    doc.features.borrow_mut().insert(PdfFeature::ImageMaskEntry);
-                }
-            }
-            doc.set_object(Object::new(
-                nums.base,
-                0,
-                Value::Stream(stream_dict, StreamData::Owned(img.data.clone())),
-            ));
-
-            if let (Some(smask_num), Some(smask)) = (nums.smask, &img.smask) {
-                let mut mask_dict = Dict::new()
-                    .insert("Type", Value::Name("XObject".into()))
-                    .insert("Subtype", Value::Name("Image".into()))
-                    .insert("Width", Value::Integer(smask.width as i64))
-                    .insert("Height", Value::Integer(smask.height as i64))
-                    .insert("ColorSpace", Value::Name("DeviceGray".into()))
-                    .insert("BitsPerComponent", Value::Integer(smask.bits as i64));
-                if let Some(decode) = &smask.decode {
-                    mask_dict = mask_dict.insert("Decode", real_array(decode));
-                }
-                if smask.interpolate {
-                    mask_dict = mask_dict.insert("Interpolate", Value::Bool(true));
-                }
-                doc.set_object(Object::new(
-                    smask_num,
-                    0,
-                    Value::Stream(mask_dict, StreamData::Owned(smask.data.clone())),
-                ));
-                doc.features.borrow_mut().insert(PdfFeature::Transparency);
-            }
-
-            if let (Some(mask_num), Some(ImageMask::Explicit(mask))) = (nums.mask, &img.mask) {
-                doc.set_object(Object::new(
-                    mask_num,
-                    0,
-                    Value::Stream(image_mask_dict(mask), StreamData::Owned(mask.data.clone())),
-                ));
-            }
+            write_image(&mut doc, img, nums, &mut num)?;
         }
 
         // Form XObject 流对象：BBox 必填，Matrix 仅在提供时写出。
@@ -526,6 +495,40 @@ impl PdfBuilder {
             if let Some(group) = &form.group {
                 dict = dict.insert("Group", Value::Dict(group_dict(group, &mut doc, &mut num)?));
                 doc.features.borrow_mut().insert(PdfFeature::Transparency);
+            }
+            // 自有资源字典：显式提供时总是写出（即使为空），从而替代而
+            // 非合并继承自绘制页面的资源。
+            if let Some(resources) = &form.resources {
+                let mut form_resources = Dict::new();
+                if !form_font_nums[handle].is_empty() {
+                    let mut font_dict = Dict::new();
+                    for (k, fnum) in form_font_nums[handle].iter().enumerate() {
+                        font_dict = font_dict.insert(format!("F{}", k + 1), Value::Ref(*fnum, 0));
+                    }
+                    form_resources = form_resources.insert("Font", Value::Dict(font_dict));
+                }
+                if !form_image_nums[handle].is_empty() {
+                    let mut xobj_dict = Dict::new();
+                    for (k, inum) in form_image_nums[handle].iter().enumerate() {
+                        xobj_dict = xobj_dict.insert(format!("Im{}", k + 1), Value::Ref(*inum, 0));
+                    }
+                    form_resources = form_resources.insert("XObject", Value::Dict(xobj_dict));
+                }
+                if !resources.optional_content.is_empty() {
+                    let mut properties = Dict::new();
+                    for (k, group) in resources.optional_content.iter().enumerate() {
+                        properties = properties
+                            .insert(format!("OC{}", k + 1), Value::Ref(ocg_nums[*group], 0));
+                    }
+                    form_resources = form_resources.insert("Properties", Value::Dict(properties));
+                }
+                dict = dict.insert("Resources", Value::Dict(form_resources));
+            }
+            if let Some(group) = form.optional_content {
+                dict = dict.insert("OC", Value::Ref(ocg_nums[group], 0));
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::OptionalContent);
             }
             doc.set_object(Object::new(
                 form_nums[handle],
@@ -564,14 +567,21 @@ impl PdfBuilder {
             doc.set_object(Object::new(pattern_nums[handle], 0, value));
         }
 
-        // 函数类条目（/TR /BG /BG2 /UCR /UCR2）：只写被 ExtGState 引用的
-        // 函数，同一句柄只写一次。Type 0/4 分配独立流对象并返回引用；
-        // Type 2/3 内联为直接字典，Type 3 的子函数由 `write_function`
-        // 递归生成。黑版生成与底色去除函数必须产生单一输出值。
+        // 函数类条目（/TR /BG /BG2 /UCR /UCR2，以及 /SMask /TR 与 /HT 内
+        // 函数）：只写被 ExtGState 引用的函数，同一句柄只写一次。Type 0/4
+        // 分配独立流对象并返回引用；Type 2/3 内联为直接字典，Type 3 的子
+        // 函数由 `write_function` 递归生成。除 ExtGState `/TR` 外均要求
+        // 产生单一输出值。
         let mut graphics_function_values: std::collections::BTreeMap<usize, Value> =
             std::collections::BTreeMap::new();
         for (state, _) in &gs_pool {
-            for (role, handle) in state.function_handles() {
+            if let Some(halftone) = &state.halftone {
+                halftone.validate().map_err(|message| {
+                    WriteError::InvalidObject(format!("invalid graphics state: /HT {message}"))
+                })?;
+            }
+            let auxiliary = state.auxiliary_function_handles();
+            for (role, handle) in state.function_handles().chain(auxiliary) {
                 let function = self.functions.get(handle).ok_or_else(|| {
                     WriteError::InvalidObject(format!(
                         "invalid graphics state: /{role} references unknown function handle {handle}"
@@ -615,12 +625,27 @@ impl PdfBuilder {
             let function_value = |handle: Option<usize>| {
                 handle.map(|handle| graphics_function_values[&handle].clone())
             };
+            let halftone_value = match &state.halftone {
+                None => None,
+                Some(halftone) => {
+                    let mut resolve = |handle| graphics_function_values.get(&handle).cloned();
+                    let value = halftone.to_value(&mut resolve).map_err(|message| {
+                        WriteError::InvalidObject(format!("invalid graphics state: /HT {message}"))
+                    })?;
+                    Some(value)
+                }
+            };
             let functions = GraphicsStateFunctions {
                 transfer: function_value(state.transfer_function),
                 black_generation: function_value(state.black_generation),
                 black_generation_2: function_value(state.black_generation_2),
                 undercolor_removal: function_value(state.undercolor_removal),
                 undercolor_removal_2: function_value(state.undercolor_removal_2),
+                smask_transfer: state
+                    .soft_mask
+                    .as_ref()
+                    .and_then(|soft_mask| function_value(soft_mask.transfer_function)),
+                halftone: halftone_value,
             };
             let dict = state.to_value(font_num, soft_mask_group_num, functions)?;
             doc.set_object(Object::new(*gs_num, 0, Value::Dict(dict)));
@@ -724,6 +749,154 @@ fn group_dict(group: &GroupXObject, doc: &mut Document, num: &mut i64) -> Result
         dict = dict.insert("K", Value::Bool(true));
     }
     Ok(dict)
+}
+
+/// 图像及其从属对象（软蒙版、显式蒙版、替代图像）的对象号。
+struct ImageObjectNums {
+    base: i64,
+    smask: Option<i64>,
+    mask: Option<i64>,
+    alternates: Vec<ImageObjectNums>,
+}
+
+/// 按「基图 → SMask → Mask → 替代图像」顺序分配对象号。
+fn allocate_image_objects(img: &ImageData, num: &mut i64) -> ImageObjectNums {
+    let base = *num;
+    *num += 1;
+    let smask = img.smask.as_ref().map(|_| {
+        let mask_num = *num;
+        *num += 1;
+        mask_num
+    });
+    let mask = if matches!(img.mask, Some(ImageMask::Explicit(_))) {
+        let mask_num = *num;
+        *num += 1;
+        Some(mask_num)
+    } else {
+        None
+    };
+    let alternates = img
+        .alternates
+        .iter()
+        .map(|alternate| allocate_image_objects(alternate, num))
+        .collect();
+    ImageObjectNums {
+        base,
+        smask,
+        mask,
+        alternates,
+    }
+}
+
+/// 写出图像 XObject 及其软蒙版、显式蒙版与替代图像。
+///
+/// 替代图像以 `<< /Image n 0 R >>` 字典数组挂在基图 `/Alternates`
+/// 下（Table 90），自身再作为普通图像流对象写出。
+fn write_image(
+    doc: &mut Document,
+    img: &ImageData,
+    nums: &ImageObjectNums,
+    num: &mut i64,
+) -> Result<(), WriteError> {
+    img.validate()
+        .map_err(|message| WriteError::InvalidObject(format!("image XObject: {message}")))?;
+    let mut stream_dict = if img.image_mask {
+        image_mask_dict(img)
+    } else {
+        let mut dict = Dict::new()
+            .insert("Type", Value::Name("XObject".into()))
+            .insert("Subtype", Value::Name("Image".into()))
+            .insert("Width", Value::Integer(img.width as i64))
+            .insert("Height", Value::Integer(img.height as i64))
+            .insert("ColorSpace", color_space_value(&img.color_space, doc, num)?)
+            .insert("BitsPerComponent", Value::Integer(img.bits as i64));
+        if let Some(decode) = &img.decode {
+            dict = dict.insert("Decode", real_array(decode));
+        }
+        if img.interpolate {
+            dict = dict.insert("Interpolate", Value::Bool(true));
+        }
+        if let Some(intent) = img.intent {
+            dict = dict.insert("Intent", Value::Name(intent.name().into()));
+            doc.features.borrow_mut().insert(PdfFeature::ImageIntent);
+        }
+        if !nums.alternates.is_empty() {
+            let alternates: Vec<Value> = nums
+                .alternates
+                .iter()
+                .map(|alternate| {
+                    Value::Dict(Dict::new().insert("Image", Value::Ref(alternate.base, 0)))
+                })
+                .collect();
+            dict = dict.insert("Alternates", Value::Array(Array(alternates)));
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::AlternateImages);
+        }
+        dict
+    };
+    if let Some(smask_num) = nums.smask {
+        stream_dict = stream_dict.insert("SMask", Value::Ref(smask_num, 0));
+    }
+    match &img.mask {
+        None => {}
+        Some(ImageMask::Explicit(_)) => {
+            if let Some(mask_num) = nums.mask {
+                stream_dict = stream_dict.insert("Mask", Value::Ref(mask_num, 0));
+            }
+            doc.features.borrow_mut().insert(PdfFeature::ImageMaskEntry);
+        }
+        Some(ImageMask::ColorKey(ranges)) => {
+            let array = Array(ranges.iter().map(|value| Value::Integer(*value)).collect());
+            stream_dict = stream_dict.insert("Mask", Value::Array(array));
+            doc.features.borrow_mut().insert(PdfFeature::ImageMaskEntry);
+        }
+    }
+    doc.set_object(Object::new(
+        nums.base,
+        0,
+        Value::Stream(stream_dict, StreamData::Owned(img.data.clone())),
+    ));
+
+    if let (Some(smask_num), Some(smask)) = (nums.smask, &img.smask) {
+        let mut mask_dict = Dict::new()
+            .insert("Type", Value::Name("XObject".into()))
+            .insert("Subtype", Value::Name("Image".into()))
+            .insert("Width", Value::Integer(smask.width as i64))
+            .insert("Height", Value::Integer(smask.height as i64))
+            .insert("ColorSpace", Value::Name("DeviceGray".into()))
+            .insert("BitsPerComponent", Value::Integer(smask.bits as i64));
+        if let Some(decode) = &smask.decode {
+            mask_dict = mask_dict.insert("Decode", real_array(decode));
+        }
+        if smask.interpolate {
+            mask_dict = mask_dict.insert("Interpolate", Value::Bool(true));
+        }
+        // Table 89：`/Matte` 属于软蒙版图像，分量数按基图颜色空间解释。
+        if let Some(matte) = &img.matte {
+            mask_dict = mask_dict.insert("Matte", real_array(matte));
+            doc.features.borrow_mut().insert(PdfFeature::SoftMaskMatte);
+        }
+        doc.set_object(Object::new(
+            smask_num,
+            0,
+            Value::Stream(mask_dict, StreamData::Owned(smask.data.clone())),
+        ));
+        doc.features.borrow_mut().insert(PdfFeature::Transparency);
+    }
+
+    if let (Some(mask_num), Some(ImageMask::Explicit(mask))) = (nums.mask, &img.mask) {
+        doc.set_object(Object::new(
+            mask_num,
+            0,
+            Value::Stream(image_mask_dict(mask), StreamData::Owned(mask.data.clone())),
+        ));
+    }
+
+    for (alternate, alternate_nums) in img.alternates.iter().zip(&nums.alternates) {
+        write_image(doc, alternate, alternate_nums, num)?;
+    }
+    Ok(())
 }
 
 /// 图像蒙版（`/ImageMask true`）的流字典：不写 `/ColorSpace`，

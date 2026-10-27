@@ -47,6 +47,9 @@ impl FeatureProfile {
 /// - `/ShadingType` 或 `/PatternType 2` → Shading
 /// - `/PatternType 1` → TilingPattern
 /// - `/SMask`、`/SMaskInData`、`/ca`、`/CA`、`/BM` → Transparency
+/// - `/Matte` → SoftMaskMatte（1.6）
+/// - 图像字典（`/Subtype /Image`）的 `/Intent` → ImageIntent（1.4）
+/// - 图像字典的 `/Alternates` → AlternateImages（1.3）
 /// - `/OCProperties` 键存在 → OptionalContent
 /// - `/Encrypt` 键存在 → EncryptionRC4
 pub(crate) fn scan_dict_features(features: &mut FeatureProfile, d: &Dict) {
@@ -99,6 +102,20 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         if d.0.contains_key(key) {
             features.insert(PdfFeature::Transparency);
             break;
+        }
+    }
+    // 软蒙版衬底颜色（PDF 1.6）
+    if d.0.contains_key("Matte") {
+        features.insert(PdfFeature::SoftMaskMatte);
+    }
+    // 图像专属条目。/Intent 亦出现在可选内容组（OCG）字典中，故仅对
+    // 图像字典登记，避免把 OCG 的意图误判成 PDF 1.4 图像特性。
+    if d.get("Subtype").and_then(|v| v.as_name()) == Some("Image") {
+        if d.0.contains_key("Intent") {
+            features.insert(PdfFeature::ImageIntent);
+        }
+        if d.0.contains_key("Alternates") {
+            features.insert(PdfFeature::AlternateImages);
         }
     }
     // 可选内容

@@ -161,7 +161,7 @@ pub struct ContentGraphicsState {
     pub char_spacing: f64,
     /// Word spacing (`Tw`).
     pub word_spacing: f64,
-    /// Horizontal scaling factor (`Th`).
+    /// Horizontal scaling factor (`Tz`).
     pub horizontal_scaling: f64,
     /// Text leading (`TL`).
     pub leading: f64,
@@ -333,9 +333,9 @@ impl ContentStateRunner {
                 self.state.word_spacing = *v;
             }
             Op::SetHorizontalScaling(v) => {
-                require_finite("Th", &[*v])?;
+                require_finite("Tz", &[*v])?;
                 if *v < 0.0 {
-                    return Err(invalid("Th", "horizontal scaling must not be negative"));
+                    return Err(invalid("Tz", "horizontal scaling must not be negative"));
                 }
                 self.state.horizontal_scaling = *v;
             }

@@ -1,6 +1,6 @@
 # pdf_engine — Rust PDF 解析/生成库
 
-一个纯 Rust 实现的 PDF 1.x 文件解析与生成库。版本中立的类型系统、宽进严出的读写策略，支持 XRef 流 / 对象流 / FlateDecode / LZWDecode / CCITTFaxDecode / PNG Up Predictor。
+一个纯 Rust 实现的 PDF 1.x 文件解析与生成库。版本中立的类型系统、宽进严出的读写策略，支持 XRef 流 / 对象流 / FlateDecode / LZWDecode / CCITTFaxDecode / PNG Up Predictor，写端可选 Flate 压缩（`StreamCompression`）。
 
 ## 模块架构
 
@@ -119,6 +119,10 @@ assert_eq!(doc2.source_version(), PdfVersion::V1_3);
 
 `core::filters::StreamFilter` 是 PDF 过滤器的统一解码接口：`decode_stream` 按 `/Filter` 规范名调度 `builtin_filters()`，`decode_stream_with` 可注入自定义实现（放在内建实现之前即可覆盖）。依赖第三方库的过滤器**只在自身实现内部**经后端适配器调用——当前 `FlateDecode` 通过 `InflateBackend` 隔离 `flate2`，过滤器接口与调度层不暴露任何第三方类型；`CCITTFaxDecode`（Group 3/4）为 `src/core/ccitt/` 中的纯 Rust 实现，不引入第三方传真库。后续新增 DCT/JPX 等过滤器只需实现 trait 并注册，无需改动调度逻辑。
 
+### 写端压缩与输出体积
+
+写端**默认所有流明文写出**（读端已解压的流剥离过滤器、引用流原样透传），生成文件体积接近输入语义体积。需要缩小输出时，`PdfBuilder::compress_streams(StreamCompression::flate())`（或 `DocumentWriter::with_compression`）启用文档级 Flate 压缩：在序列化咽喉点压缩所有无已声明 `/Filter` 的流（内容流、图像、ObjStm/XRef 容器流），DCT/JPX 等已编码流保持透传，压缩不缩小则保持明文。`with_image_predictor(ImagePredictor::PngUp)` 为 8-bit DeviceGray/RGB/CMYK 图像附加 Predictor 15（PNG Up）以提升压缩率。版本门控：Flate 需 ≥1.2、PNG 预测器需 ≥1.3，不满足即拒绝构建；编码后端经 `DeflateBackend` trait 注入，后端失败返回 `WriteError::Compression` 且不写出任何字节（不静默回退明文）。
+
 ### 宽进严出
 
 - **宽进（读）**：按实际内容解析，忽略声明版本硬门控。文件头声明 1.3 但实际含 XRef 流 → 按 XRef 流解析，仅记说明性 warning。
@@ -163,7 +167,8 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 | `core::reader::Parser` | struct | 文件解析入口（`Parser::new` → `parse_document`） |
 | `core::writer::DocumentWriter` | struct | 序列化入口（`new` → `with_version` → `build`） |
 | `core::writer::write_document` | fn | 便捷包装（writer 默认 1.7） |
-| `core::builder::PdfBuilder` | struct | 逻辑构建层（`with_version` → `page` / `text` → `build`） |
+| `core::builder::PdfBuilder` | struct | 逻辑构建层（`with_version` → `page` / `text` → `compress_streams` → `build`） |
+| `core::writer::StreamCompression` | struct | 写端流压缩策略（`DeflateBackend` 可注入，可选 `ImagePredictor::PngUp`） |
 | `core::filters::decode_stream` | fn | 流过滤器解码（`Flate` / `LZW` / `ASCIIHex` / `RunLength` / …） |
 | `core::filters::decode_stream_with` | fn | 用自定义/扩展过滤器集合解码 |
 | `core::filters::StreamFilter` | trait | 过滤器解码接口（新增或替换实现） |
@@ -176,7 +181,7 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 | 特性 | PDF 最低版本 | reader | writer ≥min | writer <min 时行为 |
 |------|:---:|:---:|:---:|------|
 | 经典 xref 表 | 1.0 | ✅ | ✅ | — |
-| FlateDecode | 1.2 | ✅ | ✅ | — |
+| FlateDecode | 1.2 | ✅ | ✅ | 启用压缩策略时**显式拒绝**（`StreamCompression` 需 ≥1.2） |
 | LZWDecode | 1.0 | ✅ | ✅ | — |
 | CCITTFaxDecode | 1.0 | ✅ | ✅ | — |
 | EncryptionRC4 | 1.1 | ✅ | ✅ | **显式拒绝**（内容特性） |
@@ -186,6 +191,7 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 | 对象流 ObjStm | 1.5 | ✅ | ✅ | **自动降级**为顶层对象 |
 | JPXDecode | 1.5 | ✅ | ✅ | **显式拒绝**（内容特性） |
 | 可选内容 OC | 1.5 | ✅ | ✅ | **显式拒绝**（内容特性） |
+| 软蒙版 `/Matte` | 1.6 | ✅ | ✅ | **显式拒绝**（内容特性，`soft mask matte color`） |
 | Predictor PNG Up / TIFF | * | ✅ | ✅ | 跟随 XRef 流/对象流降级 |
 
 > 标注 `*` 的 Predictor 是 XRef 流/对象流的内建属性，不单独占用最低版本阈值。
