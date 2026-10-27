@@ -76,6 +76,7 @@ pub mod graphics_state;
 pub mod group;
 pub mod image;
 mod lexer;
+pub mod metadata;
 pub mod navigation;
 mod object;
 pub mod optional_content;

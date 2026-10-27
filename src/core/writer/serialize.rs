@@ -72,8 +72,10 @@ impl XrefSerializer for ClassicXrefSerializer {
             .insert("Root", doc.trailer.root_value().clone())
             .insert("Size", Value::Integer(size));
         // 如果源文档有 /Encrypt（加密），透传到经典 trailer。
-        if let Some(enc) = doc.trailer.dict.get("Encrypt") {
-            tdict = tdict.insert("Encrypt", enc.clone());
+        for key in ["Encrypt", "Info", "ID"] {
+            if let Some(value) = doc.trailer.dict.get(key) {
+                tdict = tdict.insert(key, value.clone());
+            }
         }
         write_value(&Value::Dict(tdict), &mut trailer_str);
         s.push_str(&trailer_str);

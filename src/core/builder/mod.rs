@@ -23,6 +23,7 @@
 //! `最大对象号 + 1`。
 
 mod assemble;
+mod metadata;
 mod navigation;
 mod patterns;
 #[cfg(test)]
@@ -30,6 +31,7 @@ mod tests;
 mod text_codes;
 mod types;
 
+pub use metadata::{DocumentInfo, FileIdentifier};
 pub use navigation::OutlineEntry;
 
 pub(crate) use types::GraphicsStateFunctions;
@@ -37,12 +39,13 @@ pub(crate) use types::OpenTypeFlavor;
 pub(crate) use types::Pattern;
 pub(crate) use types::mesh_component_ranges;
 pub use types::{
-    AxialShading, CalGray, CalRGB, CalculatorFunction, CidEncoding, CidFont, CidFontSubtype,
-    CidSystemInfo, CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading,
-    DashPattern, DeviceN, ExponentialFunction, Font, FontDescriptor, FontEncoding, FontProgram,
-    FontWidths, FormResources, FormXObject, FreeFormMeshShading, Function, FunctionShading,
-    GraphicsState, GraphicsStateFont, GroupXObject, Halftone, HalftoneDictionary, ICCBased,
-    ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, MeshFunction, MeshVertex,
+    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, AxialShading, CalGray,
+    CalRGB, CalculatorFunction, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo,
+    CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN,
+    ExponentialFunction, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths,
+    FormResources, FormXObject, FreeFormMeshShading, Function, FunctionShading, GraphicsState,
+    GraphicsStateFont, GroupXObject, Halftone, HalftoneDictionary, ICCBased, ImageData,
+    ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, MeshFunction, MeshVertex,
     OptionalContentGroup, PageSize, PaintType, RadialShading, SampledFunction, Separation, Shading,
     ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
     TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
@@ -138,6 +141,12 @@ pub struct PdfBuilder {
     compression: Option<StreamCompression>,
     /// 文档级导航结构（页面标签、命名目标/页面、大纲）。
     navigation: navigation::NavigationState,
+    /// trailer `/Info` 文档信息字典（14.3.3）；空时不写出。
+    document_info: DocumentInfo,
+    /// trailer `/ID` 文件标识符（14.4）；`None`（默认）时不写出。
+    file_identifier: Option<FileIdentifier>,
+    /// XMP 元数据流原文（14.3.2）；`None`（默认）时不写出。
+    xmp_metadata: Option<Vec<u8>>,
 }
 
 impl Default for PdfBuilder {
@@ -160,6 +169,9 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             compression: None,
             navigation: navigation::NavigationState::default(),
+            document_info: DocumentInfo::default(),
+            file_identifier: None,
+            xmp_metadata: None,
         }
     }
 
@@ -176,6 +188,9 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             compression: None,
             navigation: navigation::NavigationState::default(),
+            document_info: DocumentInfo::default(),
+            file_identifier: None,
+            xmp_metadata: None,
         }
     }
 
@@ -189,6 +204,32 @@ impl PdfBuilder {
     /// [`WriteError::Compression`]，同样零字节、不静默回退明文。
     pub fn compress_streams(&mut self, compression: StreamCompression) -> &mut Self {
         self.compression = Some(compression);
+        self
+    }
+
+    /// 设置 trailer `/Info` 文档信息字典（14.3.3）；`build` 时分配独立
+    /// 对象写出，trailer 以 `/Info` 间接引用挂接。空字典（全部字段未
+    /// 设置）不写出，trailer 与既往一致。
+    pub fn set_document_info(&mut self, info: DocumentInfo) -> &mut Self {
+        self.document_info = info;
+        self
+    }
+
+    /// 设置 trailer `/ID` 文件标识符（14.4）。不调用则不写 `/ID`。
+    /// 增量更新场景（E7）经 [`FileIdentifier::generate`] 生成后复用
+    /// 永久 ID、更新 `update` 字段。
+    pub fn set_file_identifier(&mut self, id: FileIdentifier) -> &mut Self {
+        self.file_identifier = Some(id);
+        self
+    }
+
+    /// 设置 XMP 元数据包（14.3.2）：`build` 时写成独立
+    /// `/Type /Metadata /Subtype /XML` 流对象并在目录挂 `/Metadata`
+    /// 引用。调用方负责 XML良构性；本层原样透传字节。要求目标版本
+    /// ≥1.4，否则 [`build`](Self::build) 返回
+    /// [`WriteError::UnsupportedVersion`] 且零字节输出。
+    pub fn set_xmp_metadata(&mut self, xml: impl Into<Vec<u8>>) -> &mut Self {
+        self.xmp_metadata = Some(xml.into());
         self
     }
 

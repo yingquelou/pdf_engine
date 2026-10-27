@@ -294,6 +294,8 @@
   - 剩余缺口：GoToE/Thread/Sound/Movie/Hide/Set-OCG-State/Rendition/Transition/GoTo-3D-View 未建模；触发事件（/K,/D,/U 等）归 E2/E4 联动；`/D` 远程目标数组的页面号解析未做（远程文档无页面树）。
 - [ ] **E4 AcroForm**（12.7.2–12.7.5）：AcroForm 字典、字段字典、文本/按钮/选择字段、Widget 注解、字段动作；外观流可由 D0 的 Form XObject 写端生成。
 - [ ] **E5 元数据与文件标识**（14.3.2、14.3.3、14.4）：`/Info` 语义封装、XMP `/Metadata` 读写（先透传/基本包，后做属性访问）、`/ID` 生成/更新/校验（经典 xref 路径补 `/ID`）。本增量拥有 `/ID` 生成与校验的唯一实现，E7 复用。
+  - 进度（2026-10-27 读写切片，证据见矩阵 14.3.2/14.3.3/14.4）：读端新增 `reader/metadata.rs`（`Document::document_info`、`Document::file_identifier`、`Document::xmp_metadata`）；写端新增 `builder/metadata.rs`（`DocumentInfo` 链式构造、`FileIdentifier::{new, generate}` FNV-1a 128 位确定性生成、`permanent_matches` 校验 API）与 `PdfBuilder::set_document_info`/`set_file_identifier`/`set_xmp_metadata`；`assemble` 写出 `/Info` 独立对象、trailer `/ID`、目录 `/Metadata` XMP 流（≥1.4 门控）；经典 xref 表 trailer 路径透传 `/Info` `/ID`。测试：`parses_document_info_dictionary`、`parses_file_identifier`、`document_info_is_written_as_indirect_object`、`file_identifier_is_written_to_trailer`、`xmp_metadata_stream_written_to_catalog`、`xmp_metadata_requires_pdf_1_4`、`builder_metadata_roundtrips_through_xref_stream_parser`、`builder_metadata_roundtrips_through_classic_table_parser`、`builder_xmp_metadata_roundtrips_through_parser` 等 18 项。
+  - 剩余缺口：XMP 仅透传级读写（包解析/属性访问未做）；`/Info` 的 `D:` 日期串无类型化解析。
 - [ ] **E6 嵌入文件**（7.11）：Filespec、`/EmbeddedFiles` 名称树、嵌入文件流；名称树复用 E1 的 `/Names` 语义封装；与 FileAttachment 注解联动。
 - [ ] **E7 增量更新写出**（7.5.6 Writer）：`/Prev` 链、新/自由 xref 条目、trailer 合并、`/ID` 更新；复用 E5 的 `/ID` API，不另造生成/校验逻辑；为 F1 数字签名提供基础。
 
@@ -375,7 +377,7 @@
 | `tests/fixtures/minimal-document.pdf` | 基础解析回归 | 待追溯 | 17 KiB | ✅ A6 接入（`tests/fixtures.rs`） |
 | `tests/fixtures/pdflatex-4-pages.pdf` | 页面树/内容流/文本提取 | 待追溯 | 25 KiB | ✅ A6 接入解析；C2 接入内容流；C3 接入状态机；C4 接入标记内容；C5 接入模型往返无损校验 |
 | `tests/fixtures/annotated.pdf` | 注解/动作 | 待追溯 | 1.8 KiB | 已存在，未接入测试；E2/E3 接入 |
-| `tests/fixtures/xmp-metadata.pdf` | XMP/Info | 待追溯 | 2.1 KiB | 已存在，未接入测试；E5 接入 |
+| `tests/fixtures/xmp-metadata.pdf` | XMP/Info | 待追溯 | 2.1 KiB | ✅ E5 接入（`tests/fixtures.rs`：解析 + `/Metadata`/`/Info`/`/ID` 提取） |
 | 待补：JBIG2 扫描件 | D3 | 需许可安全的公开样本或自行生成 | — | 未获取 |
 | 待补：JPX 图像 | D3 | 可使用公开测试图或生成工具（须登记许可） | — | 未获取 |
 | 待补：Shading/Pattern/透明组 | D5/D6 | 优先用 builder 生成合成样本，再补真实样本 | — | D5/D6 合成样本已由 builder 往返集成测试覆盖；真实样本未获取 |

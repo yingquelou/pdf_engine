@@ -16,7 +16,9 @@ use super::{
     CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions, GroupXObject,
     ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
 };
-use crate::core::types::{Array, Dict, Document, Object, PdfFeature, StreamData, Trailer, Value};
+use crate::core::types::{
+    Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value,
+};
 use crate::core::writer::WriteError;
 use shading::{pattern_dict, shading_object_value, tiling_pattern_stream};
 use std::fmt::Write as _;
@@ -315,6 +317,29 @@ impl PdfBuilder {
                     &ocg_nums,
                 )),
             );
+        }
+        // XMP 元数据流（14.3.2）：独立 `/Type /Metadata /Subtype /XML`
+        // 流对象，目录 `/Metadata` 间接引用；要求目标版本 ≥1.4。
+        if let Some(xml) = &self.xmp_metadata {
+            if self.version < PdfVersion::V1_4 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "XMP metadata (/Metadata) require PDF {}, got {}",
+                    PdfVersion::V1_4.as_str(),
+                    self.version.as_str()
+                )));
+            }
+            let meta_num = num;
+            num += 1;
+            let meta_dict = Dict::new()
+                .insert("Type", Value::Name("Metadata".into()))
+                .insert("Subtype", Value::Name("XML".into()))
+                .insert("Length", Value::Integer(xml.len() as i64));
+            doc.set_object(Object::new(
+                meta_num,
+                0,
+                Value::Stream(meta_dict, StreamData::Owned(xml.clone())),
+            ));
+            catalog_dict = catalog_dict.insert("Metadata", Value::Ref(meta_num, 0));
         }
         doc.set_object(Object::new(catalog_num, 0, Value::Dict(catalog_dict)));
 
@@ -654,11 +679,25 @@ impl PdfBuilder {
         // trailer：/Root -> Catalog(1)。/Size 由 writer 按**实际写出**的
         // 最大对象号 + 1 计算（经典表用 `ctx.max_num + 1`，XRef 流用自身
         // 分配到的对象号），此处显式给出以保证与对象号一致。
+        // /Info（14.3.3）：非空时分配独立对象并以间接引用挂接。
+        let mut trailer_dict = Dict::new().insert("Root", Value::Ref(catalog_num, 0));
+        if !self.document_info.is_empty() {
+            let info_num = num;
+            num += 1;
+            doc.set_object(Object::new(
+                info_num,
+                0,
+                Value::Dict(self.document_info.to_dict()),
+            ));
+            trailer_dict = trailer_dict.insert("Info", Value::Ref(info_num, 0));
+        }
+        // /ID（14.4）：显式设置时写 trailer 数组；不调用则保持缺省。
+        if let Some(id) = &self.file_identifier {
+            trailer_dict = trailer_dict.insert("ID", id.to_value());
+        }
         let max_num = num - 1;
         doc.trailer = Trailer {
-            dict: Dict::new()
-                .insert("Root", Value::Ref(catalog_num, 0))
-                .insert("Size", Value::Integer(max_num + 1)),
+            dict: trailer_dict.insert("Size", Value::Integer(max_num + 1)),
         };
         Ok(doc)
     }

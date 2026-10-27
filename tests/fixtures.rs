@@ -164,3 +164,28 @@ fn pdflatex_4_pages_content_model_serialization_roundtrips() {
         );
     }
 }
+
+#[test]
+fn xmp_metadata_fixture_parses_without_error() {
+    let _doc = parse_buf(&read_fixture("xmp-metadata.pdf")).unwrap();
+}
+
+#[test]
+fn xmp_metadata_fixture_exposes_metadata_streams_and_info() {
+    let doc = parse_buf(&read_fixture("xmp-metadata.pdf")).unwrap();
+    let xml = doc
+        .xmp_metadata()
+        .expect("fixture /Metadata stream should decode");
+    assert!(
+        xml.windows(7).any(|w| w == b"xmpmeta") || xml.windows(5).any(|w| w == b"<?xml"),
+        "decoded bytes should look like XML"
+    );
+    assert!(
+        doc.document_info().is_some(),
+        "fixture trailer /Info should resolve",
+    );
+    assert!(
+        doc.file_identifier().is_some(),
+        "fixture trailer /ID should be two 16-byte strings",
+    );
+}
