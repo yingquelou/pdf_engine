@@ -1,6 +1,7 @@
 //! 逻辑层公共数据类型：页面尺寸、字体与编码配置、图片数据。
 //!
 //! 按领域拆分为子模块，并由本模块统一 `pub use`：
+//! - `action`：动作字典（GoTo/GoToR/Named/URI/Launch/JavaScript）；
 //! - `descriptor`：字体描述符度量；
 //! - `encoding`：简单字体编码配置；
 //! - `font`：逻辑字体描述；
@@ -16,6 +17,7 @@
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池。
 
+mod action;
 mod cid;
 mod descriptor;
 mod encoding;
@@ -31,6 +33,7 @@ mod program;
 mod shading;
 mod type3;
 
+pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;

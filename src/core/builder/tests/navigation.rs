@@ -39,6 +39,7 @@ fn entry(title: &str, destination: OutlineDestination) -> OutlineEntry {
     OutlineEntry {
         title: title.into(),
         destination: Some(destination),
+        action: None,
         color: None,
         flags: 0,
         expanded: false,
@@ -285,4 +286,49 @@ fn navigation_version_gates_require_minimum_versions() {
     let mut out = Vec::new();
     b.build(&mut out).expect("PDF 1.3 navigation should build");
     assert!(!out.is_empty());
+}
+
+#[test]
+fn outline_with_action_writes_a_reference() {
+    let mut builder = PdfBuilder::new();
+    builder.page(PageSize::A4);
+    let action_handle = builder.action(crate::core::builder::types::Action::Uri(
+        "https://example.com".into(),
+    ));
+    let entry = OutlineEntry {
+        title: "Link".into(),
+        destination: None,
+        action: Some(action_handle),
+        color: None,
+        flags: 0,
+        expanded: false,
+        children: Vec::new(),
+    };
+    builder.outline(&[entry]);
+    let mut out = Vec::new();
+    builder.build(&mut out).expect("build should succeed");
+    assert!(!out.is_empty(), "output should not be empty");
+}
+
+#[test]
+fn outline_action_requires_pdf_1_2() {
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_1);
+    builder.page(PageSize::A4);
+    let action_handle = builder.action(crate::core::builder::types::Action::Uri(
+        "https://example.com".into(),
+    ));
+    let entry = OutlineEntry {
+        title: "Link".into(),
+        destination: None,
+        action: Some(action_handle),
+        color: None,
+        flags: 0,
+        expanded: false,
+        children: Vec::new(),
+    };
+    builder.outline(&[entry]);
+    let mut out = Vec::new();
+    let error = builder.build(&mut out).expect_err("should fail on PDF 1.1");
+    assert!(matches!(error, WriteError::UnsupportedVersion(_)));
+    assert_eq!(out.len(), 0);
 }

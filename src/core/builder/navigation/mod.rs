@@ -17,21 +17,25 @@ use crate::core::types::{Array, Dict, Document, Object, PdfTextString, PdfVersio
 use crate::core::writer::WriteError;
 
 use super::PdfBuilder;
+use super::types::Action;
 use super::types::text_string_value;
 
 mod validate;
 
 /// 写端大纲条目（ISO 32000-1 12.3.4）。
 ///
-/// `/Dest` 与 `/A` 二选一；本切片只写 `/Dest`，动作由 E3 支持。命名目标
+/// `/Dest` 与 `/A` 二选一；两者均设时优先写 `/A`（PDF 1.2+）。命名目标
 /// 以文本字符串写出，名称树键同样按 PDF 文本字符串编码（ASCII 名称即
 /// 原样字节）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutlineEntry {
     /// 条目标题；非 ASCII 字符按 UTF-16BE 文本字符串写出。
     pub title: String,
-    /// 目标；`None` 时条目只有标题（预留动作场景）。
+    /// 目标；`None` 时条目只有标题或仅有动作。
     pub destination: Option<OutlineDestination>,
+    /// 动作句柄（由 [`PdfBuilder::action`] 注册）；与 `/Dest` 二选一，两者
+    /// 均设时优先写 `/A`（要求 PDF 1.2+）。
+    pub action: Option<usize>,
     /// 标题颜色，各分量 0–1；`None` 时使用查看器默认色。
     pub color: Option<[f64; 3]>,
     /// 标志位：bit 1 斜体、bit 2 粗体，其余位必须为 0。
@@ -49,6 +53,7 @@ pub(crate) struct NavigationState {
     named_destinations: Vec<(String, Destination)>,
     named_pages: Vec<(String, usize)>,
     outline: Vec<OutlineEntry>,
+    actions: Vec<Action>,
 }
 
 impl PdfBuilder {
@@ -97,15 +102,25 @@ impl PdfBuilder {
         self.navigation.outline = entries.to_vec();
         self
     }
+
+    /// 注册一个动作字典（12.6），返回句柄供大纲条目或注解引用。
+    ///
+    /// 动作字典作为间接对象写出；大纲条目的 `/A` 条目要求 PDF 1.2+。
+    pub fn action(&mut self, action: Action) -> usize {
+        let handle = self.navigation.actions.len();
+        self.navigation.actions.push(action);
+        handle
+    }
 }
 
-/// 把导航配置写入已组装的 `Document` 目录；无配置时不产生任何对象。
+/// 把导航配置写入已组装的 `Document` 目录；；无配置时不产生任何对象。
 pub(super) fn apply(
     doc: &mut Document,
     version: PdfVersion,
     page_count: usize,
     navigation: &NavigationState,
 ) -> Result<(), WriteError> {
+    let has_actions = outline_has_actions(&navigation.outline);
     let required = [
         (
             !navigation.page_labels.is_empty(),
@@ -123,6 +138,7 @@ pub(super) fn apply(
             "named pages",
         ),
         (!navigation.outline.is_empty(), PdfVersion::V1_1, "outlines"),
+        (has_actions, PdfVersion::V1_2, "outline actions (/A)"),
     ];
     for (present, minimum, feature) in required {
         if present && version < minimum {
@@ -191,7 +207,13 @@ pub(super) fn apply(
             .max()
             .unwrap_or(0)
             + 1;
-        let root = write_outline(doc, &navigation.outline, &page_refs, &mut next_num)?;
+        let root = write_outline(
+            doc,
+            &navigation.outline,
+            &page_refs,
+            &navigation.actions,
+            &mut next_num,
+        )?;
         catalog = catalog.insert("Outlines", Value::Ref(root, 0));
     }
 
@@ -304,11 +326,21 @@ fn write_outline(
     doc: &mut Document,
     entries: &[OutlineEntry],
     page_refs: &[(i64, i64)],
+    actions: &[Action],
     next_num: &mut i64,
 ) -> Result<i64, WriteError> {
     let root_num = *next_num;
     *next_num += 1;
-    let children = write_outline_items(doc, entries, root_num, page_refs, next_num)?;
+    let mut action_refs = Vec::new();
+    let children = write_outline_items(
+        doc,
+        entries,
+        root_num,
+        page_refs,
+        actions,
+        &mut action_refs,
+        next_num,
+    )?;
     let mut dict = Dict::new().insert("Type", Value::Name("Outlines".into()));
     if let Some((first, last)) = children {
         let visible: u64 = entries
@@ -335,6 +367,8 @@ fn write_outline_items(
     items: &[OutlineEntry],
     parent_num: i64,
     page_refs: &[(i64, i64)],
+    actions: &[Action],
+    action_refs: &mut Vec<i64>,
     next_num: &mut i64,
 ) -> Result<Option<(i64, i64)>, WriteError> {
     let nums: Vec<i64> = items
@@ -347,11 +381,33 @@ fn write_outline_items(
         .collect();
     for (index, item) in items.iter().enumerate() {
         let num = nums[index];
-        let children = write_outline_items(doc, &item.children, num, page_refs, next_num)?;
+        let children = write_outline_items(
+            doc,
+            &item.children,
+            num,
+            page_refs,
+            actions,
+            action_refs,
+            next_num,
+        )?;
         let mut dict = Dict::new()
             .insert("Title", text_string_value(&item.title))
             .insert("Parent", Value::Ref(parent_num, 0));
-        if let Some(destination) = &item.destination {
+        if let Some(action_handle) = item.action {
+            if action_handle < actions.len() {
+                if action_refs.len() <= action_handle {
+                    action_refs.resize(action_handle + 1, 0);
+                }
+                if action_refs[action_handle] == 0 {
+                    let action_num = *next_num;
+                    *next_num += 1;
+                    let action_dict = actions[action_handle].to_dict();
+                    doc.set_object(Object::new(action_num, 0, Value::Dict(action_dict)));
+                    action_refs[action_handle] = action_num;
+                }
+                dict = dict.insert("A", Value::Ref(action_refs[action_handle], 0));
+            }
+        } else if let Some(destination) = &item.destination {
             dict = dict.insert("Dest", outline_destination_value(destination, page_refs)?);
         }
         if let Some(color) = item.color {
@@ -458,4 +514,10 @@ fn page_refs(doc: &Document, catalog: &Dict) -> Result<Vec<(i64, i64)>, WriteErr
                 .ok_or_else(|| invalid("page tree kid is not an indirect reference"))
         })
         .collect()
+}
+
+fn outline_has_actions(entries: &[OutlineEntry]) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.action.is_some() || outline_has_actions(&entry.children))
 }

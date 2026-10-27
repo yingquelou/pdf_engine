@@ -9735,6 +9735,7 @@ fn builder_navigation_roundtrips_through_parser() {
     let chapter = OutlineEntry {
         title: "Chapter 1".into(),
         destination: Some(OutlineDestination::Explicit(Destination::Fit { page: 0 })),
+        action: None,
         color: Some([1.0, 0.0, 0.0]),
         flags: 3,
         expanded: true,
@@ -9745,6 +9746,7 @@ fn builder_navigation_roundtrips_through_parser() {
                     page: 1,
                     top: Some(700.0),
                 })),
+                action: None,
                 color: None,
                 flags: 0,
                 expanded: false,
@@ -9753,6 +9755,7 @@ fn builder_navigation_roundtrips_through_parser() {
             OutlineEntry {
                 title: "Section 1.2".into(),
                 destination: Some(OutlineDestination::Named("fit".into())),
+                action: None,
                 color: None,
                 flags: 0,
                 expanded: false,
@@ -9766,12 +9769,14 @@ fn builder_navigation_roundtrips_through_parser() {
             page: 3,
             rect: [0.0, 0.0, 100.0, 200.0],
         })),
+        action: None,
         color: None,
         flags: 0,
         expanded: false,
         children: vec![OutlineEntry {
             title: "Details".into(),
             destination: Some(OutlineDestination::Explicit(Destination::FitB { page: 0 })),
+            action: None,
             color: None,
             flags: 0,
             expanded: false,
