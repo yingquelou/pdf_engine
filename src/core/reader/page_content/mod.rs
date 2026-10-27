@@ -293,7 +293,7 @@ fn collect_page_content_bytes(document: &Document, page: &Dict) -> Result<Vec<u8
 }
 
 /// Decode `#xx` escapes in a PDF name (ISO 32000-1 7.3.5).
-fn decode_name_escapes(name: &str) -> String {
+pub(crate) fn decode_name_escapes(name: &str) -> String {
     let mut result = String::with_capacity(name.len());
     let mut chars = name.chars().peekable();
     while let Some(c) = chars.next() {

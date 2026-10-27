@@ -67,6 +67,7 @@ pub(super) fn find_subslice(hay: &[u8], needle: &[u8], from: usize) -> Option<us
         .map(|p| p + from)
 }
 
+pub mod action;
 pub mod color_space;
 pub mod content;
 mod document;
@@ -75,6 +76,7 @@ pub mod graphics_state;
 pub mod group;
 pub mod image;
 mod lexer;
+pub mod navigation;
 mod object;
 pub mod optional_content;
 pub mod page_content;

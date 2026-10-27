@@ -23,9 +23,14 @@
 //! `最大对象号 + 1`。
 
 mod assemble;
+mod navigation;
+mod patterns;
 #[cfg(test)]
 mod tests;
+mod text_codes;
 mod types;
+
+pub use navigation::OutlineEntry;
 
 pub(crate) use types::GraphicsStateFunctions;
 pub(crate) use types::OpenTypeFlavor;
@@ -45,7 +50,6 @@ pub use types::{
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
-use crate::core::reader::font::predefined_cmaps::resolve_predefined_cmap;
 use crate::core::types::PdfVersion;
 use crate::core::writer::{DocumentWriter, StreamCompression, WriteError};
 use std::io::Write;
@@ -76,15 +80,8 @@ struct PageBuild {
     color_spaces: Vec<usize>,
     /// 页组属性字典（`/Group`）；提供时整页作为透明组合成。
     group: Option<GroupXObject>,
-}
-
-/// 把 16-bit 字符码（或 Identity 语义下的 CID）按 2 字节大端序
-/// 追加到内容流字节缓冲。
-fn push_two_byte_codes(bytes: &mut Vec<u8>, codes: impl IntoIterator<Item = u16>) {
-    for code in codes {
-        bytes.push((code >> 8) as u8);
-        bytes.push((code & 0xFF) as u8);
-    }
+    /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
+    invalid_code_length: Option<usize>,
 }
 
 /// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序、子集标记、
@@ -139,6 +136,8 @@ pub struct PdfBuilder {
     color_spaces: Vec<ColorSpace>,
     /// D4 写端流压缩策略；`None`（默认）时所有流保持明文写出。
     compression: Option<StreamCompression>,
+    /// 文档级导航结构（页面标签、命名目标/页面、大纲）。
+    navigation: navigation::NavigationState,
 }
 
 impl Default for PdfBuilder {
@@ -160,6 +159,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             compression: None,
+            navigation: navigation::NavigationState::default(),
         }
     }
 
@@ -175,6 +175,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             compression: None,
+            navigation: navigation::NavigationState::default(),
         }
     }
 
@@ -207,6 +208,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             group: None,
+            invalid_code_length: None,
         });
         idx
     }
@@ -408,179 +410,6 @@ impl PdfBuilder {
         idx
     }
 
-    /// 在指定页用已注册的渐变填充当前裁剪区域（`/Sh<n> sh`）。
-    ///
-    /// 同一渐变在一页内只登记一次资源名，重复调用复用同一 `/Sh<n>`
-    /// 与对象号；未知句柄或页索引被忽略。渐变属于 PDF 1.3 特性，低于
-    /// 1.3 的目标版本在构建时返回 [`WriteError::UnsupportedVersion`]。
-    pub fn paint_shading(&mut self, page: usize, shading: usize) -> &mut Self {
-        if shading >= self.shadings.len() {
-            return self;
-        }
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let idx = match p.shadings.iter().position(|&h| h == shading) {
-            Some(i) => i,
-            None => {
-                p.shadings.push(shading);
-                p.shadings.len() - 1
-            }
-        };
-        p.content.paint_shading(format!("Sh{}", idx + 1));
-        self
-    }
-
-    /// 注册一个命名颜色空间，返回文档级句柄。
-    ///
-    /// 句柄供 [`PdfBuilder::set_stroke_color_space`] 与
-    /// [`PdfBuilder::set_fill_color_space`] 使用。仅页面实际引用的颜色
-    /// 空间会写入该页 `/Resources /ColorSpace`，并按首次引用顺序命名为
-    /// `/CS1`、`/CS2`……；同一句柄跨页复用时，ICCBased 配置文件与
-    /// tint 变换函数等流对象只写出一次。
-    pub fn color_space(&mut self, color_space: &ColorSpace) -> usize {
-        let idx = self.color_spaces.len();
-        self.color_spaces.push(color_space.clone());
-        idx
-    }
-
-    /// 在指定页把描边颜色空间切换为已注册的命名颜色空间（`/CS<n> CS`）。
-    ///
-    /// 未知句柄或页索引被忽略。
-    pub fn set_stroke_color_space(&mut self, page: usize, color_space: usize) -> &mut Self {
-        if let Some(name) = self.page_color_space_name(page, color_space) {
-            self.pages[page].content.set_stroke_color_space(name);
-        }
-        self
-    }
-
-    /// 在指定页把填充颜色空间切换为已注册的命名颜色空间（`/CS<n> cs`）。
-    ///
-    /// 未知句柄或页索引被忽略。
-    pub fn set_fill_color_space(&mut self, page: usize, color_space: usize) -> &mut Self {
-        if let Some(name) = self.page_color_space_name(page, color_space) {
-            self.pages[page].content.set_fill_color_space(name);
-        }
-        self
-    }
-
-    /// 在指定页以当前颜色空间的分量设置描边颜色（`c1 … cn SC`）。
-    ///
-    /// 分量个数由当前颜色空间决定；构建器不校验个数。
-    pub fn set_stroke_color_components(&mut self, page: usize, components: &[f64]) -> &mut Self {
-        if let Some(p) = self.pages.get_mut(page) {
-            p.content.set_stroke_color_components(components);
-        }
-        self
-    }
-
-    /// 在指定页以当前颜色空间的分量设置填充颜色（`c1 … cn sc`）。
-    ///
-    /// 分量个数由当前颜色空间决定；构建器不校验个数。
-    pub fn set_fill_color_components(&mut self, page: usize, components: &[f64]) -> &mut Self {
-        if let Some(p) = self.pages.get_mut(page) {
-            p.content.set_fill_color_components(components);
-        }
-        self
-    }
-
-    /// 返回该页的资源名（`/CS<n>`），首次引用时登记；未知页或句柄返回 `None`。
-    fn page_color_space_name(&mut self, page: usize, color_space: usize) -> Option<String> {
-        if color_space >= self.color_spaces.len() {
-            return None;
-        }
-        let p = self.pages.get_mut(page)?;
-        let idx = match p.color_spaces.iter().position(|&h| h == color_space) {
-            Some(i) => i,
-            None => {
-                p.color_spaces.push(color_space);
-                p.color_spaces.len() - 1
-            }
-        };
-        Some(format!("CS{}", idx + 1))
-    }
-
-    /// 在指定页用图案填充矩形：`/Pattern cs /P<n> scn x y w h re f`。
-    ///
-    /// 图案句柄可来自 [`PdfBuilder::shading_pattern`] 或
-    /// [`PdfBuilder::tiling_pattern`]。矩形的定位由图案矩阵与填充区域
-    /// 共同决定；同一图案在一页内复用同一 `/P<n>` 资源名。未知句柄或页
-    /// 索引被忽略。着色图案属于 PDF 1.3 特性，平铺图案属于 PDF 1.2
-    /// 特性；目标版本不足时构建返回 [`WriteError::UnsupportedVersion`]。
-    pub fn fill_rect_with_pattern(
-        &mut self,
-        page: usize,
-        pattern: usize,
-        rect: [f64; 4],
-    ) -> &mut Self {
-        if pattern >= self.patterns.len() {
-            return self;
-        }
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let idx = match p.patterns.iter().position(|&h| h == pattern) {
-            Some(i) => i,
-            None => {
-                p.patterns.push(pattern);
-                p.patterns.len() - 1
-            }
-        };
-        p.content
-            .set_fill_color_space("Pattern")
-            .set_fill_pattern(format!("P{}", idx + 1))
-            .rect(rect[0], rect[1], rect[2], rect[3])
-            .fill();
-        self
-    }
-
-    /// 在指定页用无色平铺图案填充矩形：`/Pattern cs c1 … cn /P<n> scn … re f`。
-    ///
-    /// 图案句柄必须来自 [`PdfBuilder::tiling_pattern`]，且图案须由
-    /// [`TilingPattern::uncolored`] 创建。`components` 按图案字典的
-    /// `/ColorSpace` 解释，数量必须与颜色空间分量数一致且有限；否则
-    /// 该调用被忽略。资源名复用与版本门控同
-    /// [`PdfBuilder::fill_rect_with_pattern`]。
-    pub fn fill_rect_with_uncolored_pattern(
-        &mut self,
-        page: usize,
-        pattern: usize,
-        components: &[f64],
-        rect: [f64; 4],
-    ) -> &mut Self {
-        let expected = match self.patterns.get(pattern) {
-            Some(Pattern::Tiling(pattern)) if pattern.paint_type == PaintType::Uncolored => {
-                pattern.color_space.as_ref().map(ColorSpace::channels)
-            }
-            _ => None,
-        };
-        let Some(expected) = expected else {
-            return self;
-        };
-        if components.len() != expected || components.iter().any(|value| !value.is_finite()) {
-            return self;
-        }
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let idx = match p.patterns.iter().position(|&h| h == pattern) {
-            Some(i) => i,
-            None => {
-                p.patterns.push(pattern);
-                p.patterns.len() - 1
-            }
-        };
-        p.content
-            .set_fill_color_space("Pattern")
-            .set_fill_pattern_with_components(components.to_vec(), format!("P{}", idx + 1))
-            .rect(rect[0], rect[1], rect[2], rect[3])
-            .fill();
-        self
-    }
-
     /// 在指定页开始一段可选内容：`/OC /OC<n> BDC`。
     ///
     /// 组句柄必须是 [`PdfBuilder::optional_content_group`] 的返回值；同页
@@ -647,339 +476,18 @@ impl PdfBuilder {
         self
     }
 
-    /// 在指定页上注册一个 CIDFont 并返回该页内的字体索引（0-based）。
-    ///
-    /// 索引供 [`PdfBuilder::text_cid`] 与 [`PdfBuilder::text_cid_unicode`]
-    /// 使用。同一 CIDFont（整体结构相等判定）在同一页内去重。
-    pub fn cid_font(&mut self, page: usize, cid_font: &CidFont) -> usize {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return 0,
-        };
-        match p.cid_fonts.iter().position(|f| f == cid_font) {
-            Some(i) => i,
-            None => {
-                p.cid_fonts.push(cid_font.clone());
-                p.cid_fonts.len() - 1
-            }
-        }
-    }
-
-    /// 在指定页上用 CIDFont 写一段文字（Identity 语义）。
-    ///
-    /// `cids` 为 CID 序列（16-bit），直接按 `/Identity-H` 语义（字符码
-    /// 即 CID）写成 2 字节大端序十六进制字符串。若字体配置了自定义
-    /// [`CidEncoding`]，请改用 [`PdfBuilder::text_codes`] 传入源字符码，
-    /// 否则内容流中的字节会被嵌入 CMap 当作字符码重新映射。
-    /// 坐标原点在页面左下角，单位 pt。
-    pub fn text_cid(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        cids: &[u16],
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let size = match p.cid_fonts.get(cid_font_idx) {
-            Some(f) => f.size,
-            None => return self,
-        };
-        // 简单字体用 /F1..，CIDFont 用 /CF1.. 避免命名冲突。
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        let mut bytes = Vec::with_capacity(cids.len() * 2);
-        push_two_byte_codes(&mut bytes, cids.iter().copied());
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
-    /// 在指定页上用 CIDFont 写一段文字，并登记 CID → Unicode 映射
-    /// （Identity 语义）。
-    ///
-    /// `glyphs` 为 `(CID, Unicode 文本)` 序列：CID 按 Identity-H 写成
-    /// 2 字节大端序十六进制串，同时写入该 CIDFont 的 `/ToUnicode` CMap
-    /// （`bfchar`/`bfrange` 条目，目标为 UTF-16BE）。同一 CID 的映射以
-    /// 最后一次登记为准；CIDFont 未注册时忽略本次调用。配置自定义
-    /// [`CidEncoding`] 时应改用 [`PdfBuilder::text_codes_unicode`]。
-    pub fn text_cid_unicode(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        glyphs: &[(u16, &str)],
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let size = match p.cid_fonts.get_mut(cid_font_idx) {
-            Some(f) => {
-                for &(cid, text) in glyphs {
-                    f.to_unicode.insert(cid, text.to_owned());
-                }
-                f.size
-            }
-            None => return self,
-        };
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        let mut bytes = Vec::with_capacity(glyphs.len() * 2);
-        push_two_byte_codes(&mut bytes, glyphs.iter().map(|&(cid, _)| cid));
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
-    /// 在指定页上用 CIDFont 按 2 字节字符码写一段文字。
-    ///
-    /// `codes` 是内容流中的**源字符码**，逐个按 2 字节大端序写成十六进制
-    /// 字符串。CIDFont 配置了 [`CidEncoding`] 时由嵌入 CMap 把字符码映射
-    /// 为 CID；未配置时等价于 `/Identity-H`（字符码即 CID）。字符码可以不
-    /// 在编码映射中，此时读端按 CMap 语义得到 CID 0。
-    pub fn text_codes(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        codes: &[u16],
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let size = match p.cid_fonts.get(cid_font_idx) {
-            Some(f) => f.size,
-            None => return self,
-        };
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        let mut bytes = Vec::with_capacity(codes.len() * 2);
-        push_two_byte_codes(&mut bytes, codes.iter().copied());
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
-    /// 在指定页上用 CIDFont 按 2 字节字符码写文字，并登记
-    /// 字符码 → Unicode 映射。
-    ///
-    /// `glyphs` 为 `(字符码, Unicode 文本)` 序列：字符码按 2 字节大端序
-    /// 写入内容流，同时以**字符码**为键登记到该 CIDFont 的 `/ToUnicode`
-    /// CMap（读端按源字符码查询，即使嵌入 CMap 把它映射到不同 CID）。
-    /// 同一字符码的映射以最后一次登记为准；CIDFont 未注册时忽略本次调用。
-    pub fn text_codes_unicode(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        glyphs: &[(u16, &str)],
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let size = match p.cid_fonts.get_mut(cid_font_idx) {
-            Some(f) => {
-                for &(code, text) in glyphs {
-                    f.to_unicode.insert(code, text.to_owned());
-                }
-                f.size
-            }
-            None => return self,
-        };
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        let mut bytes = Vec::with_capacity(glyphs.len() * 2);
-        push_two_byte_codes(&mut bytes, glyphs.iter().map(|&(code, _)| code));
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
-    /// 在指定页上用 CIDFont 按显式字节字符码写一段文字。
-    ///
-    /// `codes` 中每一项是一个完整的源字符码（大端字节序列），长度须为
-    /// 1..=4，与 [`CidEncoding::mapping_bytes`] 登记的码长对应；长度非法
-    /// 的条目被跳过（本 API 无法逐项报错）。CIDFont 未配置编码时等价于
-    /// `/Identity-H`（2 字节码即 CID）。字符码可不在编码映射中，此时读端
-    /// 按 CMap 语义得到 CID 0。
-    ///
-    /// [`CidEncoding::mapping_bytes`]: crate::core::builder::CidEncoding::mapping_bytes
-    pub fn text_code_bytes(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        codes: &[&[u8]],
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let size = match p.cid_fonts.get(cid_font_idx) {
-            Some(f) => f.size,
-            None => return self,
-        };
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        let mut bytes = Vec::new();
-        for code in codes {
-            if (1..=4).contains(&code.len()) {
-                bytes.extend_from_slice(code);
-            }
-        }
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
-    /// 在指定页上按显式字节字符码写文字，并登记字符码 → Unicode 映射。
-    ///
-    /// `glyphs` 为 `(字符码字节序列, Unicode 文本)` 序列：字符码原样写入
-    /// 内容流，同时以**完整字节序列**为键登记到该 CIDFont 的
-    /// `/ToUnicode` CMap（键长度与字符码一致）。长度非法的条目被跳过；
-    /// 同一字符码以最后一次登记为准。
-    pub fn text_code_bytes_unicode(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        glyphs: &[(&[u8], &str)],
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let size = match p.cid_fonts.get_mut(cid_font_idx) {
-            Some(f) => {
-                for &(code, text) in glyphs {
-                    if (1..=4).contains(&code.len()) {
-                        f.to_unicode_bytes.insert(code.to_vec(), text.to_owned());
-                    }
-                }
-                f.size
-            }
-            None => return self,
-        };
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        let mut bytes = Vec::new();
-        for &(code, _) in glyphs {
-            if (1..=4).contains(&code.len()) {
-                bytes.extend_from_slice(code);
-            }
-        }
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
-    /// 在指定页上用配置了预定义 CMap 的 CIDFont 写一段 Unicode 文本。
-    ///
-    /// 每个字符取其 Unicode 码位作为字符码，按 2 字节大端序写入内容流，
-    /// 并以字符码为键登记到该 CIDFont 的 `/ToUnicode` CMap，保持
-    /// 「写入→解析→提取」可还原。字符码必须是目标 CMap **2 字节码空间**
-    /// 内的值（如 `UniGB-UCS2-H` 覆盖全部 BMP；`Adobe-GB1` 等混合码空间
-    /// CMap 只接受其 2 字节区段内的码位）。
-    ///
-    /// 取舍说明（本 API 返回 `&mut Self`，无法逐字报错，参照现有
-    /// 「无法表示」约定跳过而非替换）：
-    /// - 补充平面字符（码位 > U+FFFF）无法用 2 字节码表示，跳过；
-    /// - 码位不在目标 CMap 2 字节码空间内时，写出后读端会把字节拆成
-    ///   较短码或拒绝解码，ToUnicode 无法对应，故同样跳过；
-    ///   被跳过的字符既不写内容流也不登记 ToUnicode。
-    ///
-    /// CIDFont 未注册、未配置 [`CidFont::predefined_encoding`] 或名称不在
-    /// 读端名册内时忽略本次调用（未知名称仍会在 [`PdfBuilder::build`]
-    /// 阶段报错）。
-    pub fn text_predefined_unicode(
-        &mut self,
-        page: usize,
-        cid_font_idx: usize,
-        x: f64,
-        y: f64,
-        text: &str,
-    ) -> &mut Self {
-        let p = match self.pages.get_mut(page) {
-            Some(p) => p,
-            None => return self,
-        };
-        let font = match p.cid_fonts.get_mut(cid_font_idx) {
-            Some(f) => f,
-            None => return self,
-        };
-        let Some(name) = font.predefined_encoding.as_deref() else {
-            return self;
-        };
-        // 名称合法性由 build 统一校验；此处解析失败直接忽略本次文本。
-        let Ok(cmap) = resolve_predefined_cmap(name) else {
-            return self;
-        };
-        let size = font.size;
-        let mut bytes = Vec::with_capacity(text.len() * 2);
-        for ch in text.chars() {
-            let code = u32::from(ch);
-            // 补充平面无法表示为 2 字节码，跳过。
-            if code > u32::from(u16::MAX) {
-                continue;
-            }
-            // 仅接受落在 2 字节码空间内的码位，保证读端按 2 字节解码。
-            let in_codespace = cmap
-                .codespace_ranges
-                .iter()
-                .any(|&(low, high, length)| length == 2 && (low..=high).contains(&code));
-            if !in_codespace {
-                continue;
-            }
-            let code = code as u16;
-            bytes.push((code >> 8) as u8);
-            bytes.push((code & 0xFF) as u8);
-            font.to_unicode.insert(code, ch.to_string());
-        }
-        let font_name = format!("CF{}", cid_font_idx + 1);
-        p.content
-            .begin_text()
-            .set_font(font_name, size)
-            .move_next_line(x, y)
-            .show_text_hex(bytes)
-            .end_text();
-        self
-    }
-
     /// 序列化为 PDF 字节流。
     ///
     /// 内部按固定顺序分配对象号、构造底层 `Document`，再交给
     /// [`DocumentWriter`] 输出。xref/trailer 由 writer 自动生成。
     pub fn build<W: Write>(&mut self, w: &mut W) -> Result<(), WriteError> {
-        let doc = self.assemble_document()?;
+        if let Some(length) = self.pages.iter().find_map(|page| page.invalid_code_length) {
+            return Err(WriteError::InvalidObject(format!(
+                "invalid CID character code length {length} in text_code_bytes (expected 1 to 4 bytes)"
+            )));
+        }
+        let mut doc = self.assemble_document()?;
+        navigation::apply(&mut doc, self.version, self.pages.len(), &self.navigation)?;
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {
             writer = writer.with_compression(compression);

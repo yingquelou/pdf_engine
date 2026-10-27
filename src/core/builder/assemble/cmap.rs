@@ -164,9 +164,14 @@ struct UnicodeEntry<'a> {
 /// 字节长度写出（仅 2 字节码时保持 `<0000> <FFFF>`）。CID 连续、目标为单个
 /// UTF-16 码元且逐 1 递增的极大段写 `bfrange`，其余（代理对、多码元串、
 /// 目标跳变）写 `bfchar`；每节至多 100 条（PDF 32000-1 §9.10.3）。
+///
+/// `usecmap` 为可选的基座名（调用方已按读端名册校验）：写出时置于
+/// `/CMapType 2 def` 之后、codespace 之前，`/CMapName` 相应改为
+/// `/Custom-UCS` 以免与基座同名。
 pub(super) fn to_unicode_cmap(
     two_byte: &BTreeMap<u16, String>,
     byte_keys: &BTreeMap<Vec<u8>, String>,
+    usecmap: Option<&str>,
 ) -> Vec<u8> {
     /// bfchar / bfrange 单节条目上限。
     const SECTION_LIMIT: usize = 100;
@@ -234,14 +239,22 @@ pub(super) fn to_unicode_cmap(
         start = end + 1;
     }
 
-    let mut cmap = String::from(
+    let name = if usecmap.is_some() {
+        "Custom-UCS"
+    } else {
+        "Adobe-Identity-UCS"
+    };
+    let mut cmap = format!(
         "/CIDInit /ProcSet findresource begin\n\
          12 dict begin\n\
          begincmap\n\
          /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n\
-         /CMapName /Adobe-Identity-UCS def\n\
-         /CMapType 2 def\n",
+         /CMapName /{name} def\n\
+         /CMapType 2 def\n"
     );
+    if let Some(base) = usecmap {
+        cmap.push_str(&format!("/{base} usecmap\n"));
+    }
     cmap.push_str(&format!("{} begincodespacerange\n", spaces.len()));
     for (length, low, high) in &spaces {
         cmap.push_str(&format!(

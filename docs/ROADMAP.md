@@ -76,20 +76,20 @@
 - [x] `type1_program/charstring`：实现与测试分文件
 - [x] `reader/font`：`font/{mod,descriptor,encoding,simple,tests}.rs`
 - [x] `reader/text`：`text/{mod,tokenizer,tests}.rs`
+- [x] `reader/font/cid_cmap`：`cid_cmap/{mod,cid,token,to_unicode,tests}.rs`（2026-10-27，B6）
 
 **2026-10-26 实测仍超限、后续增量触及前必须先拆分或同步拆分的模块**（按行数降序；阈值见工程约定 #5：>600 行或 >25 KiB）：
 
 - [ ] `reader/font/truetype/cmap.rs`（1537 行 / 69.2 KiB；任何 cmap 增量前拆分）
-- [ ] `builder/tests/mod.rs`（1484 行 / 48.1 KiB；新增 builder 测试前按主题拆分）
+- [ ] `builder/tests/mod.rs`（1602 行 / 52.2 KiB；新增 builder 测试前按主题拆分；导航测试已独立为 `builder/tests/navigation.rs`）
 - [ ] `builder/tests/cid.rs`（1217 行 / 39.4 KiB；新增 CID 写端测试前拆分）
 - [ ] `reader/font/truetype/sfnt.rs`（1164 行 / 50.0 KiB；SFNT 增量前拆分）
 - [ ] `reader/font/cid.rs`（1140 行 / 40.4 KiB；CID 读端增量前拆分）
 - [ ] `builder/tests/shading.rs`（1087 行 / 36.5 KiB；新增着色写端测试前拆分；D5 为读端增量未触及）
-- [ ] `reader/font/cid_cmap.rs`（1037 行 / 36.6 KiB；B6 前拆分）
 - [ ] `reader/font/type1_program/mod.rs`（1010 行 / 36.0 KiB；Type 1 增量前拆分）
 - [ ] `reader/security/standard.rs`（998 行 / 35.2 KiB；安全增量前拆分）
 - [ ] `builder/types/shading.rs`（982 行 / 32.0 KiB；D6/D7 前拆分；D5 为读端增量未触及）
-- [ ] `builder/mod.rs`（969 行 / 37.9 KiB；新增 builder 公共 API 前拆分）
+- [x] `builder/mod.rs`（已拆分，2026-10-27：912→497 行 / 21.2 KiB；`patterns.rs` 178 行、`text_codes.rs` 105→359 行、`navigation/{mod,validate}.rs` 461+156 行）
 - [ ] `reader/text/tests.rs`（1358 行 / 44.2 KiB；C1 前拆分；B7 继续追加未拆分）
 - [ ] `builder/assemble/mod.rs`（853 行 / 36.6 KiB；组装逻辑变更前拆分）
 - [ ] `reader/font/truetype/glyph.rs`（816 行 / 29.6 KiB；字形增量前拆分）
@@ -110,7 +110,7 @@
 | B 字体与文本 | 字体字典、程序、编码、文本提取（语法层） | 7 | 5 | A | 🚧 |
 | C 内容流读取模型 | 通用 Op/资源/状态/标记内容读取，解除第 8/9/11/14 章读端缺口 | 5 | 5 | A | ✅ |
 | D 图形完整 | 颜色/图像/Shading/透明度的读端模型与写端收尾 | 7 | 3（D1、D4、D5 完成；写端基线见 D0） | A、B、C（D3 只需 A） | 🚧 |
-| E 交互与文档交换 | 导航/注解/表单/元数据/嵌入文件/增量更新 | 7 | 0 | D（E1/E3/E5 只需 A） | ⬜ |
+| E 交互与文档交换 | 导航/注解/表单/元数据/嵌入文件/增量更新 | 7 | 0（E1 读写切片完成，其余子项待补） | D（E1/E3/E5 只需 A） | 🚧 |
 | F 专门领域 | 签名/Tagged PDF/预印/多媒体/其他交换能力 | 5 | 0 | E | ⬜ |
 
 > 计数口径：只统计仍需推进的「增量」；阶段内已完成的历史工作以「基线」列出并指向矩阵，不重复计入增量数。阶段状态以「阶段目标是否全部达成」为准，不以历史基线多少为准。
@@ -164,11 +164,16 @@
 
 **待推进增量**：
 
-- [ ] **B5 Type 3 完善**（9.6.5，🟡）：按 Table 112 补齐**字体级** `/Resources` 的读写（多级间接引用、资源名解析）与 Table 112 要求的 `/Name`、`/FontDescriptor` 条目，以及可选 `/ToUnicode`；无 `/BaseEncoding` 时的精确码位归属（当前以 StandardEncoding 近似）；`d0`/`d1` 指标与文本提取已有。注意：Table 112 只有一个字体级 `/Resources`，CharProcs 内不存在每字形资源字典。
+- [x] **B5 Type 3 完善**（9.6.5，🟡）：按 Table 112 补齐**字体级** `/Resources` 的读写（多级间接引用、资源名解析）与 Table 112 要求的 `/Name`、`/FontDescriptor` 条目，以及可选 `/ToUnicode`；无 `/BaseEncoding` 时的精确码位归属（当前以 StandardEncoding 近似）；`d0`/`d1` 指标与文本提取已有。注意：Table 112 只有一个字体级 `/Resources`，CharProcs 内不存在每字形资源字典。
   - 退出标准：Type 3 字体字典的 Table 112 条目可写→解析→提取往返；字体级 `/Resources` 经多级间接引用可读回；`/Name`/`/FontDescriptor`/`/ToUnicode` 读写往返；负向用例覆盖缺失/非法资源与缺失必需条目。
-- [ ] **B6 CMap/ToUnicode 完整性**（9.7.5、9.10.3，🟡）：补全 Adobe-GB1/CNS1/Japan1/Korea1 ordering 数据（当前为紧凑近似）；读端 ToUnicode `usecmap` 继承基座映射；写端 ToUnicode 支持 `usecmap` 继承（可选）。
+  - 完成说明（2026-10-27，证据见矩阵 9.6.5）：读端 `Type3Font` 新增 `name`/`descriptor`/`has_to_unicode` 字段，`/FontDescriptor` 复用 `parse_descriptor`（含 `/FontFamily`、`/Ascent` 等 Table 122 条目），`/ToUnicode` 校验为流并由文本提取经 `simple_font_to_unicode` 解析；字体级 `/Resources` 支持任意层间接引用（上限 16 层，超出或成环返回类型化错误），`resources()` 返回最终字典，`resource(document, category, name)` 支持类别字典再解引用与资源名 `#xx` 解码后的匹配（与页面资源查找语义一致）。写端 `Type3Font::with_name`/`with_to_unicode` 与 `Font::with_descriptor` 生效：`/Name` 经 `is_valid_pdf_name` 校验后写出，描述符按 `fill_required_defaults` 补齐必填项且不写 `FontFile*`，`/ToUnicode` 复用 CMap 生成器（bfchar/bfrange 分节），`/Resources` 由调用方以 `with_resources` 提供后原样挂到字体字典。测试：`type3_font_parses_name_descriptor_and_to_unicode`、`type3_font_rejects_invalid_name_descriptor_and_to_unicode`、`type3_font_omits_optional_entries_when_absent`、`type3_font_requires_char_procs`、`type3_font_resources_missing_returns_none`、`type3_font_resources_rejects_non_dict_and_unresolved`、`type3_resources_follow_multi_level_indirect_chain`、`type3_resources_reject_reference_cycle_and_depth_overflow`、`type3_resource_resolves_category_chain_and_escaped_names`、`type3_font_writes_name_descriptor_and_to_unicode`、`type3_font_rejects_invalid_name`、`builder_type3_metadata_and_resources_roundtrip_through_parser`。
+  - 剩余缺口：仍不对 CharProcs 求值（只读 `d0`/`d1` 声明指标，不执行绘制操作符）；无 `/BaseEncoding` 时字符码→字形名仍以 StandardEncoding 近似（未实现 Table 112 注的精确归属）；写端不自动生成 `/Resources` 或字形所引用的资源对象，仅透传调用方字典；`/Name` 按 PDF 1.1+ 语义视为可选（PDF 1.0 要求存在，未做版本门控）。
+- [ ] **B6 CMap/ToUnicode 完整性**（9.7.5、9.10.3，🟡）：补全 Adobe-GB1/CNS1/Japan1/Korea1 ordering 数据（当前为紧凑近似）；读端 ToUnicode `usecmap` 基座名册（已内置 `Adobe-Identity-UCS`，其余预定义基座待补）；写端 ToUnicode 支持 `usecmap` 继承（已支持 Identity 基座）。
   - 启动前置：先确定 ordering 数据来源、许可证与体积上限并登记到 fixtures 表，不得引入许可不明的 Adobe 数据文件；`reader/font/cid_cmap.rs` 已超限，触及前先拆分。
   - 退出标准：预定义 CMap 与完整 ordering 样本的字符码→CID 映射正确；数据来源/许可/体积已登记；`usecmap` 基座覆盖/裁剪有测试；`text_code_bytes*` 不再静默跳过非法长度。
+  - 进度（2026-10-27）：拆分前置已完成——`cid_cmap.rs` 拆为 `cid_cmap/{mod,cid,token,to_unicode,tests}.rs`（39/433/193/320/228 行），行为与既有测试不变。读端 ToUnicode `usecmap` 机制落地：`ToUnicodeMap::parse_lenient_with(data, resolve)` 合并基座映射（本地映射覆盖基座、本地声明 codespace 时裁剪越界继承映射、基座不可解析时保留本地映射），`parse_lenient` 通过该路径仅使用本地映射；`usecmap` 基座覆盖/裁剪已有单元测试。写端 `text_code_bytes`/`text_code_bytes_unicode` 不再静默跳过非法码长：记录首个非法长度（`PageBuild.invalid_code_length`），`build` 返回 `WriteError::InvalidObject` 且零字节输出；两方法拆至 `builder/text_codes.rs`。测试：`tounicode_usecmap_inherits_base_and_prefers_local_mappings`、`tounicode_usecmap_clips_inherited_mappings_to_local_codespace`、`tounicode_usecmap_inherits_all_mappings_without_local_codespace`、`tounicode_usecmap_rejects_duplicate_and_malformed_bases`、`text_code_bytes_rejects_illegal_lengths_at_build`、`text_code_bytes_unicode_rejects_illegal_length_at_build`。
+  - 进度（2026-10-27 切片 2）：读端 `ToUnicodeMap` 内置 `Adobe-Identity-UCS` 恒等基座——惰性解析不物化 65536 条映射，仅对 2 字节码按大端 u16 取 Unicode 标量（`char::from_u32` 拒绝孤立代理、本地声明 codespace 时裁剪），`unicode_for` 保持仅本地映射，新增 `resolve_unicode` 供 `Type0Font::decode_codes` 回退；未知基座仍保留本地映射。写端 `CidFont::with_to_unicode_usecmap` 仅接受该基座，`to_unicode_cmap` 在 `/CMapType 2 def` 后写 `/<基座> usecmap`（带基座时 `/CMapName` 改 `/Custom-UCS`），仅声明基座而无显式映射时也生成 CMap，未知基座构建期 `WriteError::InvalidObject` 零字节。测试：`tounicode_identity_base_resolves_unmapped_two_byte_codes`、`tounicode_identity_base_respects_local_codespace`、`tounicode_identity_base_skips_surrogates_and_other_lengths`、`cid_font_to_unicode_usecmap_writes_identity_base`、`cid_font_to_unicode_usecmap_alone_writes_identity_base`、`cid_font_to_unicode_usecmap_rejects_unknown_base`、`builder_to_unicode_identity_base_roundtrips_through_extractor`。
+  - 剩余缺口：完整 ordering 数据与来源/许可/体积登记未完成（fixtures 表登记前不引入 Adobe 数据文件）；预定义 ToUnicode 基座名册仅内置 `Adobe-Identity-UCS`，其余基座名仍按未知处理（保留本地映射）；写端 `usecmap` 只声明继承、不展开写出基座映射，代理对与多码元目标一律写 `bfchar`。
 - [x] **B7 文本提取语义完善**（9.10，🟡）：跳过 `/Artifact` 标记内容、提供可选的带位置/间距的文本片段 API（不做版面分析）；`/ActualText` 替换与隐藏 OCG 过滤已随 C4 落地，B7 只需补回归样本与 OCMD 可见性。
   - 退出标准：`ActualText`、Artifact、隐藏 OCG 三类样本的提取结果正确；现有文本提取测试无回归；`try_extract_page_text` 错误语义保持。
   - 完成说明（2026-10-27，证据见矩阵 9.2/9.10/14.6）：提取端标记栈把 `/Artifact`（含嵌套继承、内联属性、分隔符抑制）整体排除；新增 `TextFragment` 位置模型（`Tm/Td/TD/T*/TL/Ts`、`cm`、`q/Q`、Form `/Matrix`、`BT` 重置；不含字形推进）与 `Document::extract_text_fragments`/`try_extract_page_text_fragments`/`extract_page_text_fragments`，页面文本与片段共用 `extract_page_state`，错误语义不变；新增 OCMD 求值：`OptionalContentProperties::membership_visible` + `membership_visibility`（`/P` 四种策略、`/VE` 的 `And/Or/Not` 递归与短路、未知组状态返回 `None`），文本提取与 `resolve_marked_visibility` 均支持内联/间接 OCMD。测试：`artifact_marked_content_is_skipped`、`nested_sections_inherit_artifact_state`、`artifact_with_inline_properties_is_skipped`、`artifact_breaks_do_not_insert_separators`、`artifact_text_is_absent_from_fragments`、`fragments_report_show_positions_and_merge_same_position_runs`、`fragments_apply_cm_and_q_q_at_the_ctm_level`、`fragments_track_leading_and_text_rise`、`actual_text_replacement_becomes_a_fragment`、`fragments_apply_form_matrix_and_restore_ctm`、`extract_page_text_fragments_reports_page_errors`、`hidden_ocg_text_is_absent_from_fragments`、`membership_policy_matrix`、`membership_visibility_expression_overrides_policy`、`visibility_evaluates_inline_membership_dictionary`、`indirect_ocmd_hides_section_by_policy`、`ocmd_resolved_through_properties_name`、`inline_ocmd_visibility_expression_overrides_policy`、`builder_text_fragments_report_positions`。
@@ -272,15 +277,20 @@
 - 真实样本（含 JBIG2/JPX 图像）可解析，损坏样本不 panic；
 - `cargo test` 全绿。
 
-## 阶段 E：交互与文档交换 ⬜
+## 阶段 E：交互与文档交换 🚧
 
 **目标**：导航、注解、表单、元数据、嵌入文件与增量更新基础可用。
 
 **增量**：
 
 - [ ] **E1 导航与页面标签**（12.3、12.4.2、12.7.6）：显式/命名 Destinations、Outline、Page Labels、Named Pages（`/Pages` 名称树）。本增量拥有 7.7.4 `/Names` 名称字典的语义封装（解析、查找、写回），作为 E6 的前置，不得由 E6 另建一套。
+  - 进度（2026-10-27 读端切片，证据见矩阵 7.7.4/12.3/12.4/12.7.6）：新增 `reader/navigation/`（`mod`/`page_tree`/`name_tree`/`destination`/`outline`/`page_labels`/`tests`）。公开 API：`Document::page_count`、`name_tree(category)`、`named_destination(name)`、`named_page(name)`、`outline()`、`page_labels()`/`page_label(page_index)`；类型 `Destination`（8 种显式目标）、`Outline`/`OutlineItem`/`OutlineDestination`、`PageLabelStyle`/`PageLabelRange`/`PageLabels`、`NavigationError`。名称树与数值树走独立加固遍历（深度 64、节点 4096、间接引用环检测），大纲另有 10000 项上限与深度 64；命名目标兼容 `/Names /Dests` 名称树与旧式目录 `/Dests` 字典（键 `#xx` 解码）；命名页面要求间接页面引用并经页面树索引映射为 0 基页号。测试：`name_tree_reads_flat_and_kid_nodes`、`name_tree_rejects_cycles_and_depth_overflow`、`name_tree_rejects_malformed_nodes`、`explicit_destinations_parse_all_types`、`malformed_destinations_are_typed_errors`、`malformed_named_destination_is_a_typed_error`、`named_destinations_resolve_from_name_tree_and_legacy_dict`、`named_pages_resolve_page_references`、`outline_reads_titles_destinations_and_children`、`outline_rejects_cycles_and_missing_titles`、`outline_is_absent_without_catalog_entry`、`page_labels_format_styles_prefixes_and_starts`、`invalid_page_label_entries_are_typed_errors`、`page_tree_index_maps_indirect_pages_and_detects_cycles`。
+  - 进度（2026-10-27 写端切片，证据见矩阵 7.7.4/12.3/12.4/12.7.6）：新增 `builder/navigation/mod.rs`（461 行）与 `builder/navigation/validate.rs`（156 行）。公开 API：`PdfBuilder::page_labels(&[PageLabelRange])`、`named_destination(name, Destination)`、`named_page(name, page)`、`outline(&[OutlineEntry])`，在 `build` 完成对象组装后统一改写目录（catalog 覆写、导航对象从现有最大对象号之后分配，未改动 `builder/assemble`）：`/PageLabels` 数值树单叶子、`/Names /Dests` 与 `/Names /Pages` 名称树叶子（键按 `PdfTextString` 编码排序、文本串键十六进制写出）、`/Outlines` 根与兄弟链（`/Parent`/`/Prev`/`/Next`/`/First`/`/Last`/`/Count`，展开记可见后代、折叠记负总后代）。构建期校验名称唯一/页码范围与递增/目标操作数有限/缩放 >0/颜色 0–1/大纲深度 64 与条目 10000；版本门控大纲 ≥1.1、命名目标 ≥1.2、页面标签与命名页面 ≥1.3，非法输入与版本不足均零字节。测试：`page_labels_write_number_tree`、`navigation_absent_leaves_catalog_untouched`、`named_destinations_and_pages_write_name_trees`、`outline_writes_linked_items_and_counts`、`navigation_rejects_invalid_input_without_output`、`navigation_version_gates_require_minimum_versions`、`builder_navigation_roundtrips_through_parser`。
+  - 剩余缺口：缩略图（12.3.3）、Collections（12.3.5）、Articles/Presentations（12.4）与 `/Templates` 名称树未建模；大纲 `/A` 动作仅原样保留（语义归 E3，写端仅 `/Dest`）；旧式目录 `/Dests` 不写出；名称树/数值树不写 `/Kids`/`/Limits` 中间节点，读端 `/Limits` 仅透传不校验；其他 `/Names` 类别（EmbeddedFiles/JavaScript 等）归 E6 及后续增量。
 - [ ] **E2 注解通用结构与常用类型**（12.5.1–12.5.6）：Annotation 字典/标志/边框/AP 外观流；先做 Text、Link、FreeText、Highlight、Underline、Squiggly、StrikeOut、Stamp、Ink、Popup、FileAttachment、Widget（Widget 与 E4 联动）。
 - [ ] **E3 动作**（12.6）：GoTo/URI/Named 优先；GoToR/Launch/JavaScript 等按需增补；动作字典读写与注解/大纲联动。
+  - 进度（2026-10-27 读端切片，证据见矩阵 12.6）：新增 `reader/action/{mod,tests}.rs`。公开 API：`Document::action(&Value)` 解析动作字典（支持间接引用），返回 `Action` 枚举（GoTo/GoToR/Named/URI/Launch/JavaScript/Unknown）；`FileSpec` 优先取 `/UF` 再依次 `/F`/`/DOS`/`/Unix`/`/Mac`；`RemoteDestination`（Named/Page）；`NamedAction`（NextPage/PrevPage/FirstPage/LastPage/Other）；类型化 `ActionError::{Malformed,PageNotFound}`。GoTo 的 `/D` 显式目标经页面树映射为 0 基页号（复用 E1 的 `page_tree_index`）；未知 `/S` 保留名称入 `Action::Unknown`。测试：`parses_goto_uri_and_named_actions`、`parses_remote_launch_and_javascript_actions`、`unknown_action_subtype_is_preserved`、`action_values_resolve_indirect_references`、`malformed_actions_are_typed_errors`。
+  - 剩余缺口：写端动作字典未实现；GoToE/Thread/Sound/Movie/Hide/Set-OCG-State/Rendition/Transition/GoTo-3D-View 未建模；触发事件（/K,/D,/U 等）归 E2/E4 联动；`/D` 远程目标数组的页面号解析未做（远程文档无页面树）。
 - [ ] **E4 AcroForm**（12.7.2–12.7.5）：AcroForm 字典、字段字典、文本/按钮/选择字段、Widget 注解、字段动作；外观流可由 D0 的 Form XObject 写端生成。
 - [ ] **E5 元数据与文件标识**（14.3.2、14.3.3、14.4）：`/Info` 语义封装、XMP `/Metadata` 读写（先透传/基本包，后做属性访问）、`/ID` 生成/更新/校验（经典 xref 路径补 `/ID`）。本增量拥有 `/ID` 生成与校验的唯一实现，E7 复用。
 - [ ] **E6 嵌入文件**（7.11）：Filespec、`/EmbeddedFiles` 名称树、嵌入文件流；名称树复用 E1 的 `/Names` 语义封装；与 FileAttachment 注解联动。
@@ -350,11 +360,12 @@
 
 1. **D3 JBIG2 解码**：真实扫描件（MRC）常见，独立于 C；先完成后端选型 spike。
 2. **D2 图像字典/内联图像读端**：依赖 C3（已完成）与 D1（已完成，提供样本解码基础），含解析 `BI…EI` 不可达路径的整改（C5 已把该缺口记入映射层剩余项）；单独评审。已完成（2026-10-27，`reader/image`）。
-3. **B6 ToUnicode/CMap 完整性**：CJK 文本正确性的关键，可与 C/D 并行；启动前拆分 `cid_cmap.rs` 并确定数据许可。
+3. **B6 ToUnicode/CMap 完整性**：CJK 文本正确性的关键，可与 D 并行；`cid_cmap.rs` 已拆分、读端 ToUnicode `usecmap` 继承与非 2 字节码长校验已落地（2026-10-27 切片），读端已内置 `Adobe-Identity-UCS` 基座且写端可声明该基座（2026-10-27 切片 2），尚余完整 ordering 数据（须先确定许可并登记 fixtures）与其余预定义 ToUnicode 基座名册。
 4. **D7 写端图像/表单补全**（8.9.5、8.10、11.5）：已完成（2026-10-27）——图像 `/Intent`/`/Alternates`/`/Matte`，Form 自有 `/Resources`/`/OC`，`/Ref` 与 Reference XObject 经评估不实现（PDF 2.0 弃用、依赖外部文件规格）。
 5. **B7 文本提取语义完善**（9.10）：已完成（2026-10-27）——`/Artifact` 跳过、位置片段 API、OCMD 可见性（含 `/VE`）。
+6. **E1 导航与页面标签**（12.3、12.4.2、12.7.6、7.7.4）：读端与写端切片均已完成（2026-10-27）——名称树、8 种显式目标、命名目标（名称树+旧式字典）、大纲、页面标签、命名页面；写端 `builder/navigation/{mod,validate}.rs` 经目录后处理写出 `/PageLabels`/`/Names`/`/Outlines` 并含版本门控与构建期校验；剩余 12.3/12.4 子项（缩略图/Collections/Articles/Presentations、`/Templates`、`/A`）待后续切片。
 
-并行边界：阶段 C 已全部完成；D2 已完成（图像字典/图像蒙版/内联图像读端 `reader/image`，2026-10-27）；D7 已完成（图像字典条目与 Form 自有 `/Resources`/`/OC`，2026-10-27）；B7 已完成（文本提取语义与 OCMD，2026-10-27）；D3 只依赖 A；D4 已完成（写端 Flate 压缩，2026-10-26）；D1 已完成（颜色空间读端模型 `reader/color_space`，2026-10-26）；D5 已完成（Shading/Pattern 读端模型 `reader/shading`，2026-10-26）；D6 已完成（ExtGState/透明度写端剩余与读端模型 `reader/graphics_state/halftone`、`reader/group`，2026-10-26）；B6 只触及字体模块，可与 D 并行。
+并行边界：阶段 C 已全部完成；E1 读写切片均已完成（导航/页面标签 `reader/navigation` 与 `builder/navigation`，2026-10-27；写端采用目录后处理，未拆分 `builder/assemble/mod.rs`），剩余 12.3/12.4 子项待后续切片；D2 已完成（图像字典/图像蒙版/内联图像读端 `reader/image`，2026-10-27）；D7 已完成（图像字典条目与 Form 自有 `/Resources`/`/OC`，2026-10-27）；B7 已完成（文本提取语义与 OCMD，2026-10-27）；D3 只依赖 A；D4 已完成（写端 Flate 压缩，2026-10-26）；D1 已完成（颜色空间读端模型 `reader/color_space`，2026-10-26）；D5 已完成（Shading/Pattern 读端模型 `reader/shading`，2026-10-26）；D6 已完成（ExtGState/透明度写端剩余与读端模型 `reader/graphics_state/halftone`、`reader/group`，2026-10-26）；B6 已推进 2026-10-27 两个切片（模块拆分、ToUnicode `usecmap` 继承、非法码长构建期报错；内置 Identity 基座与写端 `usecmap`）但整体仍为 🟡（完整 ordering 数据未引入），只触及字体模块，可与 D 并行。
 
 ## 真实样本与 fixtures backlog
 
@@ -368,7 +379,7 @@
 | 待补：JPX 图像 | D3 | 可使用公开测试图或生成工具（须登记许可） | — | 未获取 |
 | 待补：Shading/Pattern/透明组 | D5/D6 | 优先用 builder 生成合成样本，再补真实样本 | — | D5/D6 合成样本已由 builder 往返集成测试覆盖；真实样本未获取 |
 | 待补：AcroForm | E4 | 自行生成最小表单样本 | — | 未获取 |
-| 待补：CJK CID/Type 0 | B6 | 使用开源字体生成最小样本；ordering 数据许可须单独登记 | — | 未获取 |
+| 待补：CJK CID/Type 0 | B6 | 使用开源字体生成最小样本；ordering 数据许可须单独登记 | — | 未获取；2026-10-27 两个切片均未引入 ordering 数据文件，来源/许可/体积仍未登记；内置的 `Adobe-Identity-UCS` 基座为算法恒等解析（无第三方数据文件） |
 | 待补：增量更新/签名 | E7/F1 | 自行构造 v1 + update 样本 | — | 未获取 |
 
 > 纪律：真实 PDF 必须有可追溯来源与许可；无法确认许可的样本不得入库。合成样本由 builder 或脚本生成，生成脚本随 fixture 一并入库。既有 4 个 fixture 来源待追溯，A6 已接入测试，后续决策是否替换为自生成样本。
@@ -382,7 +393,7 @@ flowchart LR
     B --> D["D 图形完整 🚧"]
     C --> D
     A --> D
-    A -.-> E["E 交互与文档交换 ⬜"]
+    A -.-> E["E 交互与文档交换 🚧"]
     D -.-> E
     E --> F["F 专门领域 ⬜"]
     A --> E7["E7 增量更新"]
@@ -397,7 +408,7 @@ flowchart LR
 | 旧规划 | 新规划 | 说明 |
 |---|---|---|
 | 阶段 A 读得全 ✅ | 阶段 A 核心读入与安全 🚧 | 收窄完成口径；JBIG2/JPX/图像字典/内容流读端移出；评审后回退为 🚧 并补 A6 fixture 回归 |
-| 阶段 B 文本可用 🚧 | 阶段 B 字体与文本 🚧 | 条目合并为 7 个增量；完成基线 B1–B4 |
+| 阶段 B 文本可用 🚧 | 阶段 B 字体与文本 🚧 | 条目合并为 7 个增量；B1–B5、B7 已完成，B6 已推进 2026-10-27 两个切片（拆分/ToUnicode `usecmap` 继承/非法码长校验；内置 Identity 基座与写端 `usecmap`），完整 ordering 数据待补 |
 | 阶段 C 图形完整 🚧 | 阶段 C 内容流读取模型 ⬜ + 阶段 D 图形完整 🚧 | 拆出跨章节前置的读端内容流模型 |
 | 阶段 D 交互与交换 ⬜ | 阶段 E 交互与文档交换 ⬜ | 顺延；新增 E7 增量更新 |
 | 阶段 E 专门领域 ⬜ | 阶段 F 专门领域 ⬜ | 顺延；签名/线性化等重新分组 |

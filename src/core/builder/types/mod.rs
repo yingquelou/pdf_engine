@@ -49,6 +49,7 @@ pub use image::{
     Lab, Separation,
 };
 pub use optional_content::OptionalContentGroup;
+pub(crate) use optional_content::text_string_value;
 pub(crate) use pattern::Pattern;
 pub use pattern::{PaintType, TilingPattern, TilingType};
 pub use program::FontProgram;

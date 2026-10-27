@@ -259,3 +259,39 @@ fn invalid_cmap_name_usecmap_base_code_length_and_conflict_are_rejected() {
         assert!(out.is_empty(), "构建失败时不应写出任何字节");
     }
 }
+
+#[test]
+fn text_code_bytes_rejects_illegal_lengths_at_build() {
+    let cases: [&[u8]; 2] = [&[], &[1, 2, 3, 4, 5]];
+    for code in cases {
+        let (mut b, page, index) = builder_with(CidEncoding::new(0).mapping(0x41, 1));
+        b.text_code_bytes(page, index, 10.0, 10.0, &[code, &[0x41]]);
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("非法码长应使构建失败");
+        let expected = format!("code length {}", code.len());
+        assert!(
+            matches!(&error, WriteError::InvalidObject(message) if message.contains(&expected)),
+            "应返回指出非法码长的 InvalidObject: {error}"
+        );
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+#[test]
+fn text_code_bytes_unicode_rejects_illegal_length_at_build() {
+    let (mut b, page, index) = builder_with(CidEncoding::new(0).mapping(0x41, 1));
+    b.text_code_bytes_unicode(
+        page,
+        index,
+        10.0,
+        10.0,
+        &[(&[0x41], "A"), (&[1, 2, 3, 4, 5], "B")],
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("5 字节字符码应使构建失败");
+    assert!(
+        matches!(&error, WriteError::InvalidObject(message) if message.contains("code length 5")),
+        "应返回指出非法码长的 InvalidObject: {error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}

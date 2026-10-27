@@ -296,6 +296,19 @@ pub struct CidFont {
     ///
     /// [`PdfBuilder::text_code_bytes_unicode`]: crate::core::builder::PdfBuilder::text_code_bytes_unicode
     pub to_unicode_bytes: BTreeMap<Vec<u8>, String>,
+    /// 可选 ToUnicode CMap 的 `usecmap` 基座名（不含前导 `/`）。
+    ///
+    /// 写出 `/ToUnicode` CMap 时在 codespace 之前写 `/<基座> usecmap`；
+    /// 此时生成的 `/CMapName` 为 `/Custom-UCS`，避免与基座同名。当前仅
+    /// 支持 `Adobe-Identity-UCS`（读端内置恒等基座：未显式映射的 2 字节
+    /// 字符码按码值解析为 Unicode 标量）；其他名称在
+    /// [`PdfBuilder::build`] 返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    /// 即使没有任何显式映射，设置基座也会生成只含 codespace 与 `usecmap`
+    /// 的 CMap。
+    ///
+    /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+    pub to_unicode_usecmap: Option<String>,
 }
 
 impl CidFont {
@@ -324,6 +337,7 @@ impl CidFont {
             cid_to_gid: None,
             to_unicode: BTreeMap::new(),
             to_unicode_bytes: BTreeMap::new(),
+            to_unicode_usecmap: None,
         }
     }
 
@@ -418,6 +432,18 @@ impl CidFont {
     /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
     pub fn with_cid_to_gid_map(mut self, mapping: &[u16]) -> Self {
         self.cid_to_gid = Some(mapping.to_vec());
+        self
+    }
+
+    /// 设置 ToUnicode CMap 的 `usecmap` 基座（链式构造）。
+    ///
+    /// 名称不含前导 `/`；当前仅支持 `Adobe-Identity-UCS`（读端内置恒等
+    /// 基座），其他名称在 [`PdfBuilder::build`] 返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)。
+    ///
+    /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build
+    pub fn with_to_unicode_usecmap(mut self, name: impl Into<String>) -> Self {
+        self.to_unicode_usecmap = Some(name.into());
         self
     }
 

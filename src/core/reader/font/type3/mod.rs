@@ -10,9 +10,16 @@
 
 mod char_proc;
 
+use std::collections::BTreeSet;
+
 use crate::core::types::{Dict, Document, Value};
 
-use super::{FontError, FontResult, SimpleFontEncoding, number};
+use super::{
+    FontDescriptorMetrics, FontError, FontResult, SimpleFontEncoding, number, parse_descriptor,
+};
+
+/// `/Resources` 间接引用链的最大深度（PDF 32000-1 Table 112）。
+const MAX_RESOURCE_CHAIN: usize = 16;
 
 /// Resolved metadata from a Type 3 font dictionary (PDF 32000-1 §9.6.5).
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +40,15 @@ pub struct Type3Font {
     pub encoding: SimpleFontEncoding,
     /// Glyph procedure names from `/CharProcs`, sorted ascending.
     pub char_procs: Vec<String>,
+    /// 可选 `/Name`（Table 112；PDF 1.0 必需、后续版本可选）。
+    pub name: Option<String>,
+    /// 可选 `/FontDescriptor` 度量（Table 112；Tagged PDF 必需）。
+    pub descriptor: Option<FontDescriptorMetrics>,
+    /// 是否提供 `/ToUnicode` 流（Table 112 可选）。
+    ///
+    /// 只记录条目存在且解析为流；CMap 内容由文本提取经
+    /// `Document::simple_font_to_unicode` 解析。
+    pub has_to_unicode: bool,
     /// 已解析（解引用一层）的 `/CharProcs` 字典：字形名 → 字形程序
     /// （`Value::Stream` 或指向流对象的 `Value::Ref`），
     /// 供 [`Self::glyph_metrics`] 按需解码。
@@ -105,19 +121,55 @@ impl Type3Font {
     ///
     /// Type 3 字体的字形程序是内容流，可引用 `/Resources` 中的
     /// `/XObject`、`/ColorSpace`、`/Pattern` 等资源。字体字典未提供
-    /// `/Resources` 时返回 `Ok(None)`；直接字典原样返回，间接引用经
-    /// `document` 解引用一层后返回。
+    /// `/Resources` 时返回 `Ok(None)`；直接字典原样返回，间接引用沿
+    /// 引用链解引用（最多 [`MAX_RESOURCE_CHAIN`] 层）。
     ///
-    /// 返回 [`FontError::Invalid`] 的情况：间接引用无法解析、
-    /// `/Resources`（或其引用目标）不是字典。
+    /// 返回 [`FontError::Invalid`] 的情况：间接引用无法解析、出现引用环、
+    /// 超出深度上限、`/Resources`（或链终点）不是字典。
     pub fn resources(&self, document: &Document) -> FontResult<Option<Dict>> {
         let Some(value) = &self.resources else {
             return Ok(None);
         };
-        let value = document.resolve_value(value)?;
+        let value = resolve_chain(document, value, "/Resources")?;
         value.as_dict().cloned().map(Some).ok_or_else(|| {
             FontError::Invalid("/Resources in Type 3 font is not a dictionary".to_string())
         })
+    }
+
+    /// 按类别与名称查询字体级资源（PDF 32000-1 Table 112 + 7.3.5）。
+    ///
+    /// `category` 是资源类别键（如 `"XObject"`、`"ColorSpace"`），
+    /// `name` 是资源名（不含前导 `/`）。类别字典本身可为间接引用链。
+    /// 名称先精确匹配，再按 `#xx` 转义解码后匹配；返回值可能仍是间接
+    /// 引用，由调用方按需解引用。
+    ///
+    /// 未提供 `/Resources`、类别缺失或类别不是字典时返回 `Ok(None)`；
+    /// `/Resources` 链本身非法时返回与 [`Self::resources`] 相同的错误。
+    pub fn resource(
+        &self,
+        document: &Document,
+        category: &str,
+        name: &str,
+    ) -> FontResult<Option<Value>> {
+        let Some(resources) = self.resources(document)? else {
+            return Ok(None);
+        };
+        let Some(category_value) = resources.get(category) else {
+            return Ok(None);
+        };
+        let category_value = resolve_chain(document, category_value, "/Resources category")?;
+        let Some(category_dict) = category_value.as_dict() else {
+            return Ok(None);
+        };
+        if let Some(value) = category_dict.get(name) {
+            return Ok(Some(value.clone()));
+        }
+        for (key, value) in category_dict.0.iter() {
+            if crate::core::reader::page_content::decode_name_escapes(key) == name {
+                return Ok(Some(value.clone()));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -177,6 +229,45 @@ impl Document {
         // `/Resources` 可选；原样保存，查询时由 `resources` 解引用。
         let resources = dict.get("Resources").cloned();
 
+        // Table 112：`/Name` 与 `/FontDescriptor` 可选（后者在 Tagged PDF
+        // 中必需），`/ToUnicode` 可选；条目存在时按各自类型严格校验。
+        let name = match dict.get("Name") {
+            Some(value) => {
+                let value = self.resolve_value(value)?;
+                Some(
+                    value
+                        .as_name()
+                        .ok_or_else(|| {
+                            FontError::Invalid("/Name in Type 3 font is not a name".to_string())
+                        })?
+                        .to_string(),
+                )
+            }
+            None => None,
+        };
+        let descriptor = match dict.get("FontDescriptor") {
+            Some(value) => {
+                let value = self.resolve_value(value)?;
+                let descriptor = value.as_dict().ok_or_else(|| {
+                    FontError::Invalid("/FontDescriptor is not a dictionary".to_string())
+                })?;
+                Some(parse_descriptor(self, descriptor)?)
+            }
+            None => None,
+        };
+        let has_to_unicode = match dict.get("ToUnicode") {
+            Some(value) => {
+                let value = self.resolve_value(value)?;
+                if !matches!(value, Value::Stream(_, _)) {
+                    return Err(FontError::Invalid(
+                        "/ToUnicode in Type 3 font is not a stream".to_string(),
+                    ));
+                }
+                true
+            }
+            None => false,
+        };
+
         Ok(Some(Type3Font {
             font_matrix,
             font_bbox,
@@ -184,6 +275,9 @@ impl Document {
             widths,
             encoding,
             char_procs,
+            name,
+            descriptor,
+            has_to_unicode,
             char_proc_streams,
             resources,
         }))
@@ -211,6 +305,32 @@ impl Document {
         }
         Ok(numbers)
     }
+}
+
+/// 沿间接引用链解析 `value`，最多 [`MAX_RESOURCE_CHAIN`] 层。
+fn resolve_chain(document: &Document, value: &Value, label: &str) -> FontResult<Value> {
+    let mut current = value.clone();
+    let mut visited = BTreeSet::new();
+    for _ in 0..=MAX_RESOURCE_CHAIN {
+        let Value::Ref(num, generation) = current else {
+            return Ok(current);
+        };
+        if !visited.insert((num, generation)) {
+            return Err(FontError::Invalid(format!(
+                "{label} in Type 3 font has a reference cycle at {num} {generation} R"
+            )));
+        }
+        let object = document
+            .get_object(num)?
+            .filter(|object| object.generation == generation)
+            .ok_or_else(|| {
+                FontError::Invalid(format!("unresolved object reference {num} {generation} R"))
+            })?;
+        current = object.value;
+    }
+    Err(FontError::Invalid(format!(
+        "{label} in Type 3 font exceeds {MAX_RESOURCE_CHAIN} indirect references"
+    )))
 }
 
 #[cfg(test)]

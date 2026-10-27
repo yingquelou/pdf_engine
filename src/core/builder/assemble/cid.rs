@@ -10,6 +10,9 @@ use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
 use std::collections::BTreeMap;
 
+/// 写端内置的 ToUnicode `usecmap` 基座（读端按恒等关系解析）。
+const IDENTITY_TO_UNICODE_CMAP: &str = "Adobe-Identity-UCS";
+
 /// 写出一个 CIDFont 的全部对象：描述符（含 `/CIDSet` 与嵌入程序流）、
 /// CIDFont 后代字典、Type 0 父字体（含嵌入编码 CMap 与 ToUnicode CMap）。
 /// 描述符缺少的 Table 122 必需项由
@@ -116,6 +119,14 @@ pub(super) fn write_cid_font(
                 "CidFont ToUnicode maps the same 2-byte source code twice".into(),
             ));
         }
+    }
+    // ToUnicode usecmap 基座须在读端内置名册内（当前仅恒等基座）。
+    if let Some(base) = &cid_font.to_unicode_usecmap
+        && base != IDENTITY_TO_UNICODE_CMAP
+    {
+        return Err(WriteError::InvalidObject(format!(
+            "CidFont ToUnicode usecmap base /{base} is not a supported CMap"
+        )));
     }
     // CID 子集请求：CIDFontType0 需嵌入 CFF，CIDFontType2 需嵌入 TrueType。
     if let Some(cids) = &cid_font.subset_cids {
@@ -454,10 +465,17 @@ pub(super) fn write_cid_font(
         ));
         type0_dict = type0_dict.insert("Encoding", Value::Ref(encoding_num, 0));
     }
-    if !cid_font.to_unicode.is_empty() || !cid_font.to_unicode_bytes.is_empty() {
+    if !cid_font.to_unicode.is_empty()
+        || !cid_font.to_unicode_bytes.is_empty()
+        || cid_font.to_unicode_usecmap.is_some()
+    {
         let cmap_num = num;
         num += 1;
-        let cmap = to_unicode_cmap(&cid_font.to_unicode, &cid_font.to_unicode_bytes);
+        let cmap = to_unicode_cmap(
+            &cid_font.to_unicode,
+            &cid_font.to_unicode_bytes,
+            cid_font.to_unicode_usecmap.as_deref(),
+        );
         let cmap_len = cmap.len();
         doc.set_object(Object::new(
             cmap_num,
@@ -476,7 +494,7 @@ pub(super) fn write_cid_font(
 
 /// 校验名称可作为不含前导 `/` 的 PDF Name 原样写出：非空、仅可打印
 /// ASCII，且不含空白、分隔符与 `#`（`#` 在 Name 中表示转义前缀）。
-fn is_valid_pdf_name(name: &str) -> bool {
+pub(super) fn is_valid_pdf_name(name: &str) -> bool {
     !name.is_empty()
         && name.bytes().all(|byte| {
             (0x21..=0x7E).contains(&byte)

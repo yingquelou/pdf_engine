@@ -92,7 +92,7 @@ impl Type0Font {
                 let unicode = self
                     .to_unicode
                     .as_ref()
-                    .and_then(|map| map.unicode_for(&code).map(str::to_owned));
+                    .and_then(|map| map.resolve_unicode(&code));
                 Ok(Type0DecodedCode {
                     code,
                     cid,
@@ -175,8 +175,9 @@ impl Document {
                 ));
             }
         };
-        // `/ToUnicode` 是可选的文本映射；流损坏、引用不可解析或含无法
-        // 解析的 `/usecmap` 时退化为按编码解码，而不是让整个字体不可用。
+        // `/ToUnicode` 是可选的文本映射；流损坏或引用不可解析时退化为按
+        // 编码解码。`Adobe-Identity-UCS` 基座按内置恒等关系解析，其他
+        // 未知基座退化为仅使用本地映射，而不是让整个字体不可用。
         let to_unicode = dict.get("ToUnicode").and_then(|value| {
             let value = self.resolve_value(value).ok()?;
             if !matches!(value, Value::Stream(_, _)) {

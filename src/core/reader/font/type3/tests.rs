@@ -574,3 +574,166 @@ fn type3_font_resources_rejects_non_dict_and_unresolved() {
         "/Resources in Type 3 font is not a dictionary",
     );
 }
+
+/// Table 112 可选条目：`/Name`、`/FontDescriptor` 与 `/ToUnicode`。
+#[test]
+fn type3_font_parses_name_descriptor_and_to_unicode() {
+    let document = Document::new();
+    let descriptor = Dict::new()
+        .insert("Type", Value::Name("FontDescriptor".into()))
+        .insert("FontName", Value::Name("SampleType3".into()))
+        .insert("Flags", Value::Integer(4))
+        .insert(
+            "FontBBox",
+            Value::Array(
+                Array::new()
+                    .push(Value::Integer(0))
+                    .push(Value::Integer(-200))
+                    .push(Value::Integer(1000))
+                    .push(Value::Integer(900)),
+            ),
+        )
+        .insert("ItalicAngle", Value::Integer(0))
+        .insert("Ascent", Value::Integer(800))
+        .insert("Descent", Value::Integer(-200))
+        .insert("CapHeight", Value::Integer(700))
+        .insert("StemV", Value::Integer(80));
+    let font = Value::Dict(
+        type3_dict(differences_encoding())
+            .insert("Name", Value::Name("SampleType3".into()))
+            .insert("FontDescriptor", Value::Dict(descriptor))
+            .insert("ToUnicode", char_proc_with(b"begincmap endcmap")),
+    );
+
+    let parsed = document.type3_font(&font).unwrap().unwrap();
+    assert_eq!(parsed.name.as_deref(), Some("SampleType3"));
+    let descriptor = parsed.descriptor.expect("应解析 /FontDescriptor");
+    assert_eq!(descriptor.font_name.as_deref(), Some("SampleType3"));
+    assert_eq!(descriptor.font_bbox, Some([0.0, -200.0, 1000.0, 900.0]));
+    assert_eq!(descriptor.ascent, Some(800.0));
+    assert!(parsed.has_to_unicode);
+}
+
+/// 可选条目存在但类型非法时整份字体解析失败。
+#[test]
+fn type3_font_rejects_invalid_name_descriptor_and_to_unicode() {
+    let document = Document::new();
+
+    let font = Value::Dict(type3_dict(differences_encoding()).insert("Name", Value::Integer(1)));
+    assert_contains(document.type3_font(&font).unwrap_err(), "/Name");
+
+    let font =
+        Value::Dict(type3_dict(differences_encoding()).insert("FontDescriptor", Value::Integer(1)));
+    assert_contains(
+        document.type3_font(&font).unwrap_err(),
+        "/FontDescriptor is not a dictionary",
+    );
+
+    // /FontDescriptor 缺少必需 /Type。
+    let font = Value::Dict(
+        type3_dict(differences_encoding()).insert("FontDescriptor", Value::Dict(Dict::new())),
+    );
+    assert_contains(document.type3_font(&font).unwrap_err(), "/Type");
+
+    let font = Value::Dict(
+        type3_dict(differences_encoding()).insert("ToUnicode", Value::Name("X".into())),
+    );
+    assert_contains(
+        document.type3_font(&font).unwrap_err(),
+        "/ToUnicode in Type 3 font is not a stream",
+    );
+}
+
+/// 未提供可选条目时字段为 `None` / `false`。
+#[test]
+fn type3_font_omits_optional_entries_when_absent() {
+    let document = Document::new();
+    let parsed = document
+        .type3_font(&type3_font(differences_encoding()))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(parsed.name, None);
+    assert_eq!(parsed.descriptor, None);
+    assert!(!parsed.has_to_unicode);
+}
+
+/// `/Resources` 间接引用链（多级）应解引用到最终字典。
+#[test]
+fn type3_resources_follow_multi_level_indirect_chain() {
+    let document = Document::new();
+    let resources = sample_resources();
+    document.set_object(Object::new(10, 0, Value::Ref(11, 0)));
+    document.set_object(Object::new(11, 0, Value::Ref(12, 0)));
+    document.set_object(Object::new(12, 0, Value::Dict(resources.clone())));
+
+    let font = Value::Dict(type3_dict_with_resources(Value::Ref(10, 0)));
+    let parsed = document.type3_font(&font).unwrap().unwrap();
+    assert_eq!(parsed.resources(&document).unwrap(), Some(resources));
+}
+
+/// 引用环与超出深度上限均返回类型化错误。
+#[test]
+fn type3_resources_reject_reference_cycle_and_depth_overflow() {
+    // 环：10 → 10。
+    let document = Document::new();
+    document.set_object(Object::new(10, 0, Value::Ref(10, 0)));
+    let font = Value::Dict(type3_dict_with_resources(Value::Ref(10, 0)));
+    let parsed = document.type3_font(&font).unwrap().unwrap();
+    assert_contains(
+        parsed.resources(&document).unwrap_err(),
+        "reference cycle at 10 0 R",
+    );
+
+    // 17 层引用超过 16 层上限。
+    let document = Document::new();
+    for num in 100..117 {
+        document.set_object(Object::new(num, 0, Value::Ref(num + 1, 0)));
+    }
+    document.set_object(Object::new(117, 0, Value::Dict(sample_resources())));
+    let font = Value::Dict(type3_dict_with_resources(Value::Ref(100, 0)));
+    let parsed = document.type3_font(&font).unwrap().unwrap();
+    assert_contains(
+        parsed.resources(&document).unwrap_err(),
+        "exceeds 16 indirect references",
+    );
+}
+
+/// 类别字典可为间接引用链；资源名按 `#xx` 解码后匹配。
+#[test]
+fn type3_resource_resolves_category_chain_and_escaped_names() {
+    let document = Document::new();
+    document.set_object(Object::new(
+        20,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Im#201", Value::Ref(40, 0))
+                .insert("Plain", Value::Ref(41, 0)),
+        ),
+    ));
+    let resources = Dict::new().insert("XObject", Value::Ref(20, 0));
+    let font = Value::Dict(type3_dict_with_resources(Value::Dict(resources)));
+    let parsed = document.type3_font(&font).unwrap().unwrap();
+
+    assert_eq!(
+        parsed.resource(&document, "XObject", "Im 1").unwrap(),
+        Some(Value::Ref(40, 0))
+    );
+    assert_eq!(
+        parsed.resource(&document, "XObject", "Plain").unwrap(),
+        Some(Value::Ref(41, 0))
+    );
+    assert_eq!(
+        parsed.resource(&document, "XObject", "Missing").unwrap(),
+        None
+    );
+    // 类别缺失或类别不是字典时返回 None。
+    assert_eq!(parsed.resource(&document, "Pattern", "Im 1").unwrap(), None);
+    document.set_object(Object::new(21, 0, Value::Integer(1)));
+    let font = Value::Dict(type3_dict_with_resources(Value::Dict(
+        Dict::new().insert("XObject", Value::Ref(21, 0)),
+    )));
+    let parsed = document.type3_font(&font).unwrap().unwrap();
+    assert_eq!(parsed.resource(&document, "XObject", "Im 1").unwrap(), None);
+}

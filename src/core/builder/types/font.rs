@@ -87,8 +87,10 @@ pub struct Font {
     /// 可选的 Type 3 字体描述。
     ///
     /// 为 `Some` 时写出 `/Subtype /Type3` 字体字典（`/CharProcs`、
-    /// `/Widths`、`/Encoding` 等），不写 `/BaseFont`、`/FontDescriptor`
-    /// 与字体程序；此时 [`Font::font_program`]、[`Font::subset_glyphs`]、
+    /// `/Widths`、`/Encoding` 等），不写 `/BaseFont` 与字体程序；
+    /// `/FontDescriptor` 仅在通过 [`Font::with_descriptor`] 提供时写出，
+    /// `/Name`、`/ToUnicode`、`/Resources` 由 [`Type3Font`] 设置。
+    /// 此时 [`Font::font_program`]、[`Font::subset_glyphs`]、
     /// [`Font::subset_type1_glyphs`] 与 [`Font::subset_cff_glyphs`] 必须为
     /// `None`（否则构建时报错），[`Font::subset`] 无效果（Type 3 没有
     /// `/BaseFont` 可加子集标签）。
@@ -118,7 +120,9 @@ impl Font {
     /// `/Encoding` 取自各 [`Type3Glyph`] 的字符码与名称，写成只含
     /// `/Differences` 的编码字典；因此 [`PdfBuilder::text`] 可像普通
     /// 简单字体一样按字符查名转码。`name` 固定为 `Type3`（Type 3 字体
-    /// 没有 `/BaseFont`）。
+    /// 没有 `/BaseFont`）；`/Name`、`/ToUnicode` 与 `/Resources` 由
+    /// [`Type3Font`] 提供，`/FontDescriptor` 可经 [`Font::with_descriptor`]
+    /// 添加（Tagged PDF 要求）。
     ///
     /// [`PdfBuilder::text`]: super::super::PdfBuilder::text
     pub fn type3(size: f64, font: Type3Font) -> Self {

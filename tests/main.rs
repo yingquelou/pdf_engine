@@ -7572,6 +7572,48 @@ fn builder_cid_font_to_unicode_roundtrips_through_extractor() {
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Té测😀"));
 }
 
+/// 写入 → 重新解析 → 提取：`/ToUnicode` 的 `Adobe-Identity-UCS` 基座
+/// 应让未显式映射的 2 字节字符码按码值还原为 Unicode。
+#[test]
+fn builder_to_unicode_identity_base_roundtrips_through_extractor() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, PageSize, PdfBuilder,
+    };
+
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_to_unicode_usecmap("Adobe-Identity-UCS");
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid(page, index, 72.0, 700.0, &[0x0041, 0x0042]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let type0 = find_font_dict(&reparsed, "Type0");
+    let font = reparsed
+        .type0_font(&type0)
+        .expect("should parse Type0")
+        .expect("should be Type0");
+    let decoded = font
+        .decode_codes(&[0x00, 0x41, 0x00, 0x42])
+        .expect("should decode");
+    let text: Vec<&str> = decoded
+        .iter()
+        .map(|code| code.unicode.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(text, ["A", "B"]);
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
+}
+
 /// 写入 → 重新解析 → 提取：连续 CID 的 `/ToUnicode` 应以 `bfrange`
 /// 写出，读端仍能把 CID 序列还原为文本。
 #[test]
@@ -7859,6 +7901,70 @@ fn builder_type3_glyph_metrics_roundtrip_with_text_extraction() {
     assert_eq!(parsed.width_for(66), Some(600.0));
 
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB"));
+}
+
+/// 写入 → 重新解析 → 提取：Type 3 的 `/Name`、`/FontDescriptor`、
+/// 字体级 `/Resources` 与 `/ToUnicode` 应完整往返；`/ToUnicode` 优先于
+/// `/Encoding` 决定提取出的文本（9.6.5，Table 112）。
+#[test]
+fn builder_type3_metadata_and_resources_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        Font, FontDescriptor, PageSize, PdfBuilder, Type3Font, Type3Glyph,
+    };
+
+    let resources = Dict::new().insert(
+        "XObject",
+        Value::Dict(Dict::new().insert("Im1", Value::Integer(1))),
+    );
+    let type3 = Type3Font::new()
+        .glyph(Type3Glyph::new(65, "A", 500.0, b"500 0 d0"))
+        .with_name("SampleType3")
+        .with_resources(Value::Dict(resources.clone()))
+        .with_to_unicode(65, "Ω");
+    let descriptor = FontDescriptor::new()
+        .with_family("Sample")
+        .with_ascent(800.0);
+    let font = Font::type3(12.0, type3).with_descriptor(descriptor);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &font, 72.0, 700.0, "A");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let font_dict = find_font_dict(&reparsed, "Type3");
+    let parsed = reparsed
+        .type3_font(&font_dict)
+        .expect("should parse Type 3 font")
+        .expect("should be Type 3");
+
+    assert_eq!(parsed.name.as_deref(), Some("SampleType3"));
+    assert!(parsed.has_to_unicode, "应记录 /ToUnicode 条目");
+    let descriptor = parsed
+        .descriptor
+        .as_ref()
+        .expect("应解析出 /FontDescriptor");
+    assert_eq!(descriptor.font_family.as_deref(), Some("Sample"));
+    assert_eq!(descriptor.ascent, Some(800.0));
+    assert_eq!(
+        parsed.resources(&reparsed).expect("应解析 /Resources"),
+        Some(resources)
+    );
+    assert_eq!(
+        parsed
+            .resource(&reparsed, "XObject", "Im1")
+            .expect("资源查找"),
+        Some(Value::Integer(1))
+    );
+    assert_eq!(
+        parsed.resource(&reparsed, "XObject", "Missing").unwrap(),
+        None
+    );
+
+    // /ToUnicode 映射优先于 /Encoding：字符码 65 提取为 Ω 而非 A。
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("Ω"));
 }
 
 /// 合成一个最小 name-keyed CFF 程序：2 个字形（`.notdef` 与 `Alpha`）、
@@ -9534,4 +9640,204 @@ fn builder_text_fragments_report_positions() {
         reparsed.extract_page_text(0).as_deref(),
         Some("First\nSecond")
     );
+}
+
+/// E1：builder 写出的页面标签、命名目标、命名页面与大纲经解析器还原
+/// （含非 ASCII 文本字符串、全部 8 种显式目标与折叠 Count）。
+#[test]
+fn builder_navigation_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{OutlineEntry, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::navigation::{
+        Destination, OutlineDestination, PageLabelRange, PageLabelStyle,
+    };
+
+    let labels = vec![
+        PageLabelRange {
+            start: 0,
+            style: None,
+            prefix: "Cover".into(),
+            first_number: 1,
+        },
+        PageLabelRange {
+            start: 1,
+            style: Some(PageLabelStyle::Decimal),
+            prefix: "p.".into(),
+            first_number: 1,
+        },
+        PageLabelRange {
+            start: 2,
+            style: Some(PageLabelStyle::UppercaseRoman),
+            prefix: String::new(),
+            first_number: 1,
+        },
+        PageLabelRange {
+            start: 3,
+            style: Some(PageLabelStyle::LowercaseLetters),
+            prefix: "第 ".into(),
+            first_number: 3,
+        },
+    ];
+
+    let mut builder = PdfBuilder::new();
+    for _ in 0..4 {
+        builder.page(PageSize::A4);
+    }
+    builder.page_labels(&labels);
+
+    let destinations = [
+        ("fit", Destination::Fit { page: 0 }),
+        (
+            "fit-h",
+            Destination::FitH {
+                page: 1,
+                top: Some(700.0),
+            },
+        ),
+        (
+            "fit-v",
+            Destination::FitV {
+                page: 2,
+                left: Some(10.0),
+            },
+        ),
+        (
+            "fit-r",
+            Destination::FitR {
+                page: 3,
+                rect: [0.0, 0.0, 100.0, 200.0],
+            },
+        ),
+        ("fit-b", Destination::FitB { page: 0 }),
+        ("fit-bh", Destination::FitBH { page: 1, top: None }),
+        (
+            "fit-bv",
+            Destination::FitBV {
+                page: 2,
+                left: Some(5.0),
+            },
+        ),
+        (
+            "xyz",
+            Destination::Xyz {
+                page: 3,
+                left: Some(1.0),
+                top: Some(2.0),
+                zoom: Some(1.5),
+            },
+        ),
+    ];
+    for (name, destination) in &destinations {
+        builder.named_destination(*name, destination.clone());
+    }
+    builder.named_page("appendix", 3);
+    builder.named_page("start", 0);
+
+    let chapter = OutlineEntry {
+        title: "Chapter 1".into(),
+        destination: Some(OutlineDestination::Explicit(Destination::Fit { page: 0 })),
+        color: Some([1.0, 0.0, 0.0]),
+        flags: 3,
+        expanded: true,
+        children: vec![
+            OutlineEntry {
+                title: "Section 1.1".into(),
+                destination: Some(OutlineDestination::Explicit(Destination::FitH {
+                    page: 1,
+                    top: Some(700.0),
+                })),
+                color: None,
+                flags: 0,
+                expanded: false,
+                children: Vec::new(),
+            },
+            OutlineEntry {
+                title: "Section 1.2".into(),
+                destination: Some(OutlineDestination::Named("fit".into())),
+                color: None,
+                flags: 0,
+                expanded: false,
+                children: Vec::new(),
+            },
+        ],
+    };
+    let appendix = OutlineEntry {
+        title: "附录 A".into(),
+        destination: Some(OutlineDestination::Explicit(Destination::FitR {
+            page: 3,
+            rect: [0.0, 0.0, 100.0, 200.0],
+        })),
+        color: None,
+        flags: 0,
+        expanded: false,
+        children: vec![OutlineEntry {
+            title: "Details".into(),
+            destination: Some(OutlineDestination::Explicit(Destination::FitB { page: 0 })),
+            color: None,
+            flags: 0,
+            expanded: false,
+            children: Vec::new(),
+        }],
+    };
+    builder.outline(&[chapter, appendix]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    assert_eq!(reparsed.page_count().expect("page count"), 4);
+    let parsed_labels = reparsed.page_labels().expect("labels").expect("present");
+    assert_eq!(parsed_labels.ranges(), labels.as_slice());
+    assert_eq!(
+        reparsed.page_label(0).expect("label 0").as_deref(),
+        Some("Cover")
+    );
+    assert_eq!(
+        reparsed.page_label(1).expect("label 1").as_deref(),
+        Some("p.1")
+    );
+    assert_eq!(
+        reparsed.page_label(2).expect("label 2").as_deref(),
+        Some("I")
+    );
+    assert_eq!(
+        reparsed.page_label(3).expect("label 3").as_deref(),
+        Some("第 c")
+    );
+
+    for (name, destination) in &destinations {
+        assert_eq!(
+            reparsed.named_destination(name).expect("named destination"),
+            Some(destination.clone()),
+            "{name}"
+        );
+    }
+
+    assert_eq!(
+        reparsed.named_page("appendix").expect("named page"),
+        Some(3)
+    );
+    assert_eq!(reparsed.named_page("start").expect("named page"), Some(0));
+
+    let outline = reparsed.outline().expect("outline").expect("present");
+    assert_eq!(outline.items.len(), 2);
+    let first = &outline.items[0];
+    assert_eq!(first.title, "Chapter 1");
+    assert_eq!(
+        first.destination,
+        Some(OutlineDestination::Explicit(Destination::Fit { page: 0 }))
+    );
+    assert_eq!(first.color, Some([1.0, 0.0, 0.0]));
+    assert_eq!(first.flags, 3);
+    assert_eq!(first.count, 2);
+    assert_eq!(first.children.len(), 2);
+    assert_eq!(
+        first.children[1].destination,
+        Some(OutlineDestination::Named("fit".into()))
+    );
+    assert_eq!(first.children[1].count, 0);
+    let second = &outline.items[1];
+    assert_eq!(second.title, "附录 A");
+    assert_eq!(second.count, -1);
+    assert_eq!(second.children.len(), 1);
+    assert_eq!(second.children[0].title, "Details");
 }

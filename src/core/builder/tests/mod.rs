@@ -31,6 +31,7 @@ mod form_resources;
 mod function;
 mod graphics_state;
 mod image_entries;
+mod navigation;
 mod optional_content;
 mod page_group;
 mod pattern;

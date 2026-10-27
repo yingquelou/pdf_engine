@@ -1,0 +1,268 @@
+//! 动作字典读取（ISO 32000-1 12.6）。
+//!
+//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript；未知子类型
+//! 保留名称。动作值可为间接引用，`/D` 的显式目标经页面树映射为 0 基页号。
+
+use std::fmt;
+
+use crate::core::reader::content::text_value;
+use crate::core::reader::navigation::{
+    NavigationError, OutlineDestination, destination::parse_outline_destination, page_tree_index,
+    resolve,
+};
+use crate::core::types::{Document, Value};
+
+/// 动作字典（12.6.2 Table 197）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    /// 本地跳转；`/D` 为显式目标数组或命名目标。
+    GoTo(OutlineDestination),
+    /// 跳转到其他文档。
+    GoToR {
+        file: FileSpec,
+        destination: RemoteDestination,
+    },
+    /// 查看器预定义动作（下一页等）。
+    Named(NamedAction),
+    /// 解析 URI。
+    Uri(String),
+    /// 启动外部文件。
+    Launch {
+        file: FileSpec,
+        new_window: Option<bool>,
+    },
+    /// JavaScript 脚本（文本串或流解码后的 UTF-8）。
+    JavaScript(String),
+    /// 未建模的子类型；保留 `/S` 名称，其余条目不解释。
+    Unknown { subtype: String },
+}
+
+/// 文件规格（7.11.2）：优先取 `/UF`，其次 `/F` 与平台相关路径。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileSpec {
+    /// 已解码的文件路径。
+    pub file: String,
+}
+
+/// 远程文档中的目标（GoToR `/D`）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteDestination {
+    /// 远程文档中的命名目标。
+    Named(String),
+    /// 远程文档中的 0 基页号。
+    Page(i64),
+}
+
+/// 查看器预定义动作；`Print`/`SaveAs` 等归入 [`NamedAction::Other`]。
+#[derive(Debug, Clone, PartialEq)]
+pub enum NamedAction {
+    NextPage,
+    PrevPage,
+    FirstPage,
+    LastPage,
+    Other(String),
+}
+
+/// 动作解析中的类型化错误。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActionError {
+    /// 结构缺失、类型错误或引用不可解析。
+    Malformed(String),
+    /// GoTo 目标页面不在页面树中。
+    PageNotFound,
+}
+
+impl fmt::Display for ActionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed(message) => write!(f, "{message}"),
+            Self::PageNotFound => write!(f, "action destination page not found"),
+        }
+    }
+}
+
+impl std::error::Error for ActionError {}
+
+impl From<NavigationError> for ActionError {
+    fn from(error: NavigationError) -> Self {
+        match error {
+            NavigationError::PageNotFound => Self::PageNotFound,
+            other => Self::Malformed(other.to_string()),
+        }
+    }
+}
+
+impl Document {
+    /// 解析动作字典；`value` 可为间接引用。
+    ///
+    /// `/S` 缺失或非名称、必需条目缺失、条目类型错误时返回
+    /// [`ActionError::Malformed`]；GoTo 目标页不在页面树中返回
+    /// [`ActionError::PageNotFound`]。未知 `/S` 返回
+    /// [`Action::Unknown`]（宽容真实文件）。
+    pub fn action(&self, value: &Value) -> Result<Action, ActionError> {
+        let value = resolve(self, value)?;
+        let dict = value
+            .as_dict()
+            .ok_or_else(|| malformed("action is not a dictionary"))?;
+        let subtype = dict
+            .get("S")
+            .and_then(Value::as_name)
+            .ok_or_else(|| malformed("action is missing a name /S"))?
+            .to_owned();
+        match subtype.as_str() {
+            "GoTo" => {
+                let destination = dict
+                    .get("D")
+                    .ok_or_else(|| malformed("GoTo action is missing /D"))?;
+                let pages = page_tree_index(self)?;
+                Ok(Action::GoTo(parse_outline_destination(
+                    self,
+                    destination,
+                    &pages,
+                )?))
+            }
+            "GoToR" => {
+                let file = parse_file_spec(
+                    self,
+                    dict.get("F")
+                        .ok_or_else(|| malformed("GoToR action is missing /F"))?,
+                )?;
+                let destination = parse_remote_destination(
+                    self,
+                    dict.get("D")
+                        .ok_or_else(|| malformed("GoToR action is missing /D"))?,
+                )?;
+                Ok(Action::GoToR { file, destination })
+            }
+            "Named" => {
+                let name = dict
+                    .get("N")
+                    .and_then(Value::as_name)
+                    .ok_or_else(|| malformed("Named action is missing a name /N"))?;
+                Ok(Action::Named(named_action(name)))
+            }
+            "URI" => {
+                let uri = dict
+                    .get("URI")
+                    .ok_or_else(|| malformed("URI action is missing /URI"))?;
+                let uri = resolve(self, uri)?;
+                let uri = text_value(&uri)
+                    .ok_or_else(|| malformed("URI action /URI is not a text string"))?;
+                Ok(Action::Uri(uri))
+            }
+            "Launch" => {
+                let file = parse_file_spec(
+                    self,
+                    dict.get("F")
+                        .ok_or_else(|| malformed("Launch action is missing /F"))?,
+                )?;
+                let new_window = match dict.get("NewWindow") {
+                    None => None,
+                    Some(value) => match resolve(self, value)? {
+                        Value::Bool(flag) => Some(flag),
+                        _ => return Err(malformed("Launch action /NewWindow is not a boolean")),
+                    },
+                };
+                Ok(Action::Launch { file, new_window })
+            }
+            "JavaScript" => {
+                let script = dict
+                    .get("JS")
+                    .ok_or_else(|| malformed("JavaScript action is missing /JS"))?;
+                let script = resolve(self, script)?;
+                let script = match &script {
+                    Value::String(_) | Value::HexString(_) => text_value(&script),
+                    Value::Stream(..) => self
+                        .try_stream_bytes(&script)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok()),
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    malformed("JavaScript action /JS is not a text string or UTF-8 stream")
+                })?;
+                Ok(Action::JavaScript(script))
+            }
+            other => Ok(Action::Unknown {
+                subtype: other.to_owned(),
+            }),
+        }
+    }
+}
+
+fn malformed(message: impl Into<String>) -> ActionError {
+    ActionError::Malformed(message.into())
+}
+
+fn named_action(name: &str) -> NamedAction {
+    match name {
+        "NextPage" => NamedAction::NextPage,
+        "PrevPage" => NamedAction::PrevPage,
+        "FirstPage" => NamedAction::FirstPage,
+        "LastPage" => NamedAction::LastPage,
+        other => NamedAction::Other(other.to_owned()),
+    }
+}
+
+fn parse_file_spec(document: &Document, value: &Value) -> Result<FileSpec, ActionError> {
+    let value = resolve(document, value)?;
+    match &value {
+        Value::String(_) | Value::HexString(_) => text_value(&value)
+            .map(|file| FileSpec { file })
+            .ok_or_else(|| malformed("file specification string is malformed")),
+        Value::Dict(dict) => {
+            for key in ["UF", "F", "DOS", "Unix", "Mac"] {
+                let Some(entry) = dict.get(key) else {
+                    continue;
+                };
+                let entry = resolve(document, entry)?;
+                if let Some(file) = text_value(&entry) {
+                    return Ok(FileSpec { file });
+                }
+            }
+            Err(malformed(
+                "file specification dictionary has no usable path",
+            ))
+        }
+        _ => Err(malformed(
+            "file specification is neither a string nor a dictionary",
+        )),
+    }
+}
+
+fn parse_remote_destination(
+    document: &Document,
+    value: &Value,
+) -> Result<RemoteDestination, ActionError> {
+    let value = resolve(document, value)?;
+    match &value {
+        Value::Name(name) => Ok(RemoteDestination::Named(name.clone())),
+        Value::String(_) | Value::HexString(_) => text_value(&value)
+            .map(RemoteDestination::Named)
+            .ok_or_else(|| malformed("GoToR destination string is malformed")),
+        Value::Integer(page) => Ok(RemoteDestination::Page(*page)),
+        Value::Array(array) => {
+            let first = array
+                .0
+                .first()
+                .ok_or_else(|| malformed("GoToR destination array is empty"))?;
+            let first = resolve(document, first)?;
+            match &first {
+                Value::Integer(page) => Ok(RemoteDestination::Page(*page)),
+                Value::Name(name) => Ok(RemoteDestination::Named(name.clone())),
+                Value::String(_) | Value::HexString(_) => text_value(&first)
+                    .map(RemoteDestination::Named)
+                    .ok_or_else(|| malformed("GoToR destination array name is malformed")),
+                _ => Err(malformed(
+                    "GoToR destination array does not start with a page number or name",
+                )),
+            }
+        }
+        _ => Err(malformed(
+            "GoToR destination is not a name, string, page number or array",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests;

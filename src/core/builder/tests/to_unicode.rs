@@ -188,3 +188,92 @@ fn text_cid_unicode_last_mapping_wins() {
     assert!(s.contains("<0001> <0042>"), "应保留最后一次映射: {s}");
     assert!(!s.contains("<0001> <0041>"), "旧映射不应写出: {s}");
 }
+
+#[test]
+fn cid_font_to_unicode_usecmap_writes_identity_base() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_to_unicode_usecmap("Adobe-Identity-UCS");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    b.text_cid_unicode(p, idx, 10.0, 10.0, &[(1, "A")]);
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/CMapName /Custom-UCS"),
+        "带基座时应改名避免与基座同名: {s}"
+    );
+    assert!(
+        s.contains("/Adobe-Identity-UCS usecmap"),
+        "应写基座继承声明: {s}"
+    );
+    let usecmap_at = s.find("/Adobe-Identity-UCS usecmap").expect("usecmap");
+    let codespace_at = s.find("begincodespacerange").expect("codespace");
+    assert!(
+        usecmap_at < codespace_at,
+        "usecmap 应写在 codespace 之前: {s}"
+    );
+    assert!(s.contains("1 beginbfchar"), "本地映射仍应写出: {s}");
+}
+
+#[test]
+fn cid_font_to_unicode_usecmap_alone_writes_identity_base() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_to_unicode_usecmap("Adobe-Identity-UCS");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    b.text_cid(p, idx, 10.0, 10.0, &[0x0041]);
+    let s = render(&mut b);
+
+    assert!(s.contains("/ToUnicode"), "仅有基座也应生成 CMap: {s}");
+    assert!(s.contains("/Adobe-Identity-UCS usecmap"), "{s}");
+    assert!(
+        s.contains("1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange"),
+        "无映射时应写覆盖全部 2 字节码的 codespace: {s}"
+    );
+    assert!(
+        !s.contains("beginbfchar") && !s.contains("beginbfrange"),
+        "无显式映射时不应写映射节: {s}"
+    );
+    assert!(s.contains("<0041> Tj"), "{s}");
+}
+
+#[test]
+fn cid_font_to_unicode_usecmap_rejects_unknown_base() {
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_to_unicode_usecmap("Custom-UCS");
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    b.text_cid(p, idx, 10.0, 10.0, &[1]);
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("未知 ToUnicode 基座应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("ToUnicode usecmap base"),
+        "{error}"
+    );
+    assert!(out.is_empty());
+}
