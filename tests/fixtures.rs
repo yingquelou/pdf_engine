@@ -189,3 +189,62 @@ fn xmp_metadata_fixture_exposes_metadata_streams_and_info() {
         "fixture trailer /ID should be two 16-byte strings",
     );
 }
+
+#[test]
+fn annotated_fixture_reads_text_highlight_and_ink_annotations() {
+    use pdf_engine::core::reader::annotation::AnnotationSubtype;
+    use pdf_engine::core::types::Value;
+
+    let doc = parse_buf(&read_fixture("annotated.pdf")).unwrap();
+    let annotations = doc
+        .page_annotations(0)
+        .expect("annotated.pdf page 0 annotations");
+    assert_eq!(annotations.len(), 3, "fixture has three inline annotations");
+
+    let text = &annotations[0];
+    assert_eq!(text.subtype, AnnotationSubtype::Text);
+    assert_eq!(
+        text.contents,
+        Some(Value::String("This is a text annotation.".into()))
+    );
+    // /F 4 == Table 165 bit 3 (Print), legacy NoPrint 已反转语义，仅按位保留。
+    assert_eq!(text.flags.bits(), 4);
+    assert!(text.flags.print());
+    assert!(!text.flags.no_view());
+    assert!(text.visible());
+    // 旧式 /Border [0 0 0]：宽度取第二项，虚线数组取第三项。
+    let border = text.border.clone().expect("legacy border");
+    assert_eq!(border.width, Some(0.0));
+    assert_eq!(border.corner_radius, Some(0.0));
+    assert_eq!(border.dash, vec![]);
+
+    let highlight = &annotations[1];
+    assert_eq!(highlight.subtype, AnnotationSubtype::Highlight);
+    assert!(highlight.subtype.is_markup());
+    let quad = highlight.quad_points.as_ref().expect("quad points");
+    assert_eq!(quad.len(), 16, "two quadrilaterals of eight coordinates");
+    assert_eq!(highlight.color, Some(vec![1.0, 1.0, 0.0]));
+    assert_eq!(
+        highlight.contents,
+        Some(Value::String("Highlight comment".into()))
+    );
+    assert_eq!(
+        highlight.modified_date,
+        Some(Value::String("D:19900428000000".into()))
+    );
+
+    let ink = &annotations[2];
+    assert_eq!(ink.subtype, AnnotationSubtype::Ink);
+    assert_eq!(ink.title, Some(Value::String("Lucas".into())));
+    let ink_list = ink
+        .dict
+        .get("InkList")
+        .and_then(Value::as_array)
+        .expect("raw /InkList kept");
+    assert_eq!(ink_list.len(), 1, "one stroke path");
+}
+
+#[test]
+fn annotated_fixture_parses_without_error() {
+    let _doc = parse_buf(&read_fixture("annotated.pdf")).unwrap();
+}

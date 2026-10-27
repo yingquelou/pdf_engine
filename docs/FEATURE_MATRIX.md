@@ -45,6 +45,8 @@
 
 > **2026-10-27 E3 动作字典读端切片**：新增 `reader/action/{mod,tests}.rs`——`Document::action(&Value)` 解析动作字典（支持间接引用），覆盖 6 种常用动作：GoTo（显式目标经页面树映射 0 基页号、命名目标经名称树或旧式 `/Dests`）、GoToR（文件规格优先 `/UF` 再 `/F`/`/DOS`/`/Unix`/`/Mac`、远程目标 Named/Page）、Named（NextPage/PrevPage/FirstPage/LastPage/Other）、URI、Launch（含 `/NewWindow`）、JavaScript（文本串或流 UTF-8）；未知 `/S` 保留名称入 `Action::Unknown`；类型化 `ActionError::{Malformed,PageNotFound}`。测试 5 个：`parses_goto_uri_and_named_actions`、`parses_remote_launch_and_javascript_actions`、`unknown_action_subtype_is_preserved`、`action_values_resolve_indirect_references`、`malformed_actions_are_typed_errors`。12.6 Reader ⬜→🟡（总状态 ⬜→🟡），第 12 章 🟡+1/⬜−1、总计（31✅ / 55🟡 / 61⬜ / 7❌ / 14— = 168）。剩余缺口：写端未实现；GoToE/Thread/Sound/Movie/Hide/Set-OCG-State/Rendition/Transition/GoTo-3D-View 未建模；触发事件（/K,/D,/U 等）归 E2/E4 联动。
 
+> **2026-10-27 E2 注解通用结构读端切片**：新增 `src/core/reader/annotation.rs` + `annotation/tests.rs`——`Document::page_annotations(page_index)` 遍历页面 `/Annots`（直接字典与间接引用、页面树深度 64/环检测、单页 4096 上限），`Annotation` 类型化 12.5.1 通用条目（`/Rect`、`/Subtype` Table 169 全 21 种 + `Unknown`、`/Contents`/`/RC`/`/T`/`/NM`/`/M`/`/CreationDate`、`/C`/`/IC`、`/CA`、`/Popup`、`/A`/`/Dest` 原样保留、未建模条目入 `Annotation::dict`）、12.5.2 `AnnotationFlags` 十位标志与 `visible()`、12.5.4 `AnnotationBorder`（`/BS` 优先于旧式 `/Border`，含 `/BM`；`[0 0 0]` 数字虚线宽容忽略）、12.5.5 `AppearanceStreams` N/D/R + `/AS`、12.5.6.4 标记类 `/QuadPoints`（8 倍数校验）；类型化错误 `AnnotationError::{CatalogMissing,Malformed,PageNotFound,LimitExceeded}`。测试 13 单元（`reads_direct_and_indirect_page_annotations`、`annotation_flags_decode_standard_bits`、`appearance_streams_expose_normal_down_rollover_and_state`、`markup_annotation_reads_quad_points_and_keeps_raw_entries`、`border_prefers_bs_dictionary_over_legacy_array`、`malformed_annotation_dictionaries_are_typed_errors`、`annotation_count_limit_is_enforced`、`page_tree_cycles_and_depth_are_typed_errors` 等）+ fixture 2（`annotated_fixture_reads_text_highlight_and_ink_annotations`、`annotated_fixture_parses_without_error`：真实 `annotated.pdf` 三条内联注解 Text/Highlight/Ink 全部读取）。12.5.1–12.5.5 总状态 ⬜→🟡（Reader ⬜→🟡），第 12 章 🟡+1/⬜−1、总计（32✅ / 58🟡 / 57⬜ / 7❌ / 14— = 168）；12.5.6 子表各行备注更新为「通用结构已识别、子类型专属条目未类型化」（状态不变）。剩余缺口：写端未实现；子类型专属条目（Text `/Name`、Line 端点、Ink `/InkList` 路径等）未类型化；`/Dest` 未解析为目标模型；`/Parent` 注解继承未求值；外观流内容不深入。
+
 ## 图例
 
 - **状态四态**：✅ 已实现 / 🟡 部分实现（缺口见备注）/ ⬜ 未实现 / ❌ 明确不支持（设计决策，附理由）
@@ -68,10 +70,10 @@
 | 第 9 章 文本 | 4 | 12 | 1 | 1 | 2 | 20 |
 | 第 10 章 渲染 | 0 | 2 | 3 | 0 | 1 | 6 |
 | 第 11 章 透明度 | 0 | 4 | 2 | 0 | 2 | 8 |
-| 第 12 章 交互特性 | 0 | 5 | 35 | 1 | 1 | 42 |
+| 第 12 章 交互特性 | 0 | 6 | 34 | 1 | 1 | 42 |
 | 第 13 章 多媒体 | 0 | 0 | 5 | 0 | 1 | 6 |
 | 第 14 章 文档交换 | 1 | 4 | 5 | 1 | 1 | 12 |
-| **总计** | **32** | **57** | **58** | **7** | **14** | **168** |
+| **总计** | **32** | **58** | **57** | **7** | **14** | **168** |
 
 ## 第 7 章 语法（Syntax）
 
@@ -216,7 +218,7 @@
 | 12.2 | Viewer Preferences（/ViewerPreferences） | 1.2 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码（按通用字典透传） |
 | 12.3 | 文档级导航（显式/命名 Destinations、大纲 Outline、缩略图、Collections） | 1.0–1.7（待核） | 🟡 | 🟡 | 🟡 | P2 | 读端 `reader/navigation/destination.rs`：显式目标 8 种类型（XYZ/Fit/FitH/FitV/FitR/FitB/FitBH/FitBV，页引用经页面树索引映射为 0 基页号，可选/空操作数校验）；`Document::named_destination` 先查 `/Names /Dests` 名称树、再查旧式目录 `/Dests` 字典（键按 `#xx` 解码匹配）；`reader/navigation/outline.rs`：`Document::outline` 遍历 `/First`/`/Next` 兄弟链与嵌套子项，`/Title` 按文本串解码、`/Dest` 显式或命名、`/C`/`/F`/`/Count` 解析，10000 项/深度 64/环检测，`/A` 原样保留。测试 `explicit_destinations_parse_all_types`、`malformed_destinations_are_typed_errors`、`malformed_named_destination_is_a_typed_error`、`named_destinations_resolve_from_name_tree_and_legacy_dict`、`outline_reads_titles_destinations_and_children`、`outline_rejects_cycles_and_missing_titles`、`outline_is_absent_without_catalog_entry`、`page_tree_index_maps_indirect_pages_and_detects_cycles`。写端 `builder/navigation/`：`PdfBuilder::named_destination` 写 `/Names /Dests` 名称树叶子（8 种显式目标全类型、可选操作数缺省 `null`、大纲命名目标以文本串引用），`PdfBuilder::outline` 写 `/Outlines` 根与兄弟链（`/Parent`/`/Prev`/`/Next`/`/First`/`/Last`/`/Count`，展开记可见后代数、折叠记负的总后代数，`/Title` 文本串、`/C`、`/F` 仅 bit 1/2），页码越界/非有限操作数/缩放 ≤0/颜色越界/重复名称/深度与条目超限构建期 `InvalidObject`，大纲 ≥1.1、命名目标 ≥1.2 版本门控且零字节；测试 `outline_writes_linked_items_and_counts`、`navigation_rejects_invalid_input_without_output`、`navigation_version_gates_require_minimum_versions`、`builder_navigation_roundtrips_through_parser`。缺口：缩略图（12.3.3）与 Collections（12.3.5）未建模；大纲 `/A` 动作语义归 E3（写端仅 `/Dest`）；旧式目录 `/Dests` 不写出；名称树不写 `/Kids`/`/Limits` |
 | 12.4 | 页面级导航（Page Labels、Articles、Presentations） | 1.1–1.3（待核） | 🟡 | 🟡 | 🟡 | P2 | 读端 `reader/navigation/page_labels.rs`：`Document::page_labels`/`page_label(page_index)` 解析 `/PageLabels` 数值树与标签字典（`/S` D/R/r/A/a、`/P` 文本串前缀、`/St` 起始号 ≥1），十进制/大小写罗马/双射 26 进制字母格式化，区间按起点选择，越界页号返回 `PageNotFound`；测试 `page_labels_format_styles_prefixes_and_starts`、`invalid_page_label_entries_are_typed_errors`。写端 `builder/navigation/`：`PdfBuilder::page_labels` 写 `/PageLabels` 数值树单叶子（`/Nums` 偶数对，`/S` 五种样式、`/P` 仅非空前缀、`/St` 仅 ≠1），起点须严格递增且小于页数、`first_number` ≥1 且不超过 `i64::MAX`，目标版本 ≥1.3（否则零字节 `UnsupportedVersion`），非法输入零字节 `InvalidObject`；测试 `page_labels_write_number_tree`、`navigation_version_gates_require_minimum_versions`、`builder_navigation_roundtrips_through_parser`。缺口：Articles 与 Presentations 未建模；数值树不写 `/Kids` 中间节点 |
-| 12.5.1–12.5.5 | 注解通用结构（Annotation 字典/标志/边框样式/外观流 AP） | 1.1 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码；`tests/fixtures/annotated.pdf` 存在但无任何测试引用 |
+| 12.5.1–12.5.5 | 注解通用结构（Annotation 字典/标志/边框样式/外观流 AP） | 1.1 | 🟡 | ⬜ | 🟡 | P2 | 读端 `reader/annotation.rs`：`Document::page_annotations(page_index)` 遍历页面 `/Annots`（直接字典与间接引用均支持、深度 64/环检测/单页 4096 上限）；`Annotation` 类型化通用条目——`/Rect`（4 项有限数值）、`/Subtype`（Table 169 全 21 种 + `Unknown` 保留原名、`is_markup`）、`/F` 标志 `AnnotationFlags`（Table 165 十个标准位访问器 + `visible()` 判定 Invisible/Hidden/NoView）、`/Contents`/`/RC`/`/T`/`/NM`/`/M`/`/CreationDate` 文本串、`/C`/`/IC` 颜色数组、`/CA` 不透明度（0–1 校验）、边框 12.5.4（`/BS` 字典优先于旧式 `/Border` 数组，含 `/BM` 混合模式；`[0 0 0]` 数字型虚线宽容忽略）、外观流 `/AP`（N/D/R，状态值可为流引用或状态子字典）+`/AS`、标记类 `/QuadPoints`（长度 8 的倍数校验）、`/Popup`；`/A`/`/Dest` 原样保留（语义经 E3 `Document::action` 解析）；未建模条目（`/InkList`、FileSpec、Widget 字段链等）保留在 `Annotation::dict`。类型化错误 `AnnotationError::{CatalogMissing,Malformed,PageNotFound,LimitExceeded}`。测试 13 单元（`reads_direct_and_indirect_page_annotations`、`pages_without_annots_are_empty_and_page_index_is_checked`、`annotation_flags_decode_standard_bits`、`appearance_streams_expose_normal_down_rollover_and_state`、`appearance_without_states_is_dropped`、`markup_annotation_reads_quad_points_and_keeps_raw_entries`、`link_annotation_keeps_action_and_destination_raw`、`border_prefers_bs_dictionary_over_legacy_array`、`malformed_annotation_dictionaries_are_typed_errors`、`unknown_subtype_is_preserved`、`annotation_count_limit_is_enforced`、`page_tree_cycles_and_depth_are_typed_errors`、`annotation_entry_referencing_non_dictionary_is_malformed`）+ fixture 2（`annotated_fixture_reads_text_highlight_and_ink_annotations`、`annotated_fixture_parses_without_error`，真实 `annotated.pdf` 三条内联注解 Text/Highlight/Ink 全部建模、旧式 `/Border [0 0 0]` 宽容读取、16 项 `/QuadPoints`、`/InkList` 原样保留）。缺口：写端未实现；子类型专属条目（Text `/Name` 图标、Line 端点/L ME、Ink `/InkList` 路径求值等）仅原样保留未类型化；`/Dest` 未解析为目标模型；AP 子字典状态名册与外观流内容不深入（归渲染）；注解继承（12.5.2 `/Parent` 无继承求值） |
 | 12.6 | 动作（Action 字典/触发事件/16 种动作类型：GoTo/GoToR/GoToE/Launch/Thread/URI/Sound/Movie/Hide/Named/Set-OCG-State/Rendition/Transition/GoTo-3D-View/JavaScript） | 1.1–1.6（待核） | 🟡 | 🟡 | 🟡 | P2 | 读端 `reader/action/{mod,tests}.rs`：`Document::action(&Value)` 解析动作字典（支持间接引用），覆盖 GoTo（显式目标经页面树映射 0 基页号、命名目标经名称树或旧式 `/Dests`）、GoToR（文件规格优先 `/UF`、远程目标 Named/Page）、Named（NextPage/PrevPage/FirstPage/LastPage/Other）、URI、Launch（含 `/NewWindow`）、JavaScript（文本串或流 UTF-8）；未知 `/S` 保留名称入 `Action::Unknown`；类型化 `ActionError::{Malformed,PageNotFound}`。测试 `parses_goto_uri_and_named_actions`、`parses_remote_launch_and_javascript_actions`、`unknown_action_subtype_is_preserved`、`action_values_resolve_indirect_references`、`malformed_actions_are_typed_errors`。写端 `builder/types/action.rs`：`Action` 枚举（GoTo/GoToR/Named/URI/Launch/JavaScript/Unknown）与 `PdfBuilder::action(Action) -> usize` 注册方法；`OutlineEntry` 扩展 `action: Option<usize>` 字段，`write_outline_items` 写出 `/A` 间接引用；版本门控 PDF 1.2+（`outline actions (/A)`）。测试 `outline_with_action_writes_a_reference`、`outline_action_requires_pdf_1_2`。缺口：GoToE/Thread/Sound/Movie/Hide/Set-OCG-State/Rendition/Transition/GoTo-3D-View 未建模；触发事件（/K,/D,/U 等）归 E2/E4 联动 |
 | 12.7.2–12.7.4 | 交互表单（AcroForm 字典/字段字典/按钮/文本/选择/签名字段） | 1.2 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
 | 12.7.5 | 表单动作（Submit-Form/Reset-Form/Import-Data） | 1.2 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
@@ -231,22 +233,22 @@
 
 | 注解类型 | 引入版本 | 状态 | Reader | Writer | 优先级 | 备注 |
 |---|---|---|---|---|---|---|
-| Text | 1.1 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Link | 1.1 | ⬜ | ⬜ | ⬜ | P2 | 无对应代码（与 12.6 URI/GoTo 动作联动） |
-| FreeText | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Line | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| Square | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| Circle | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| Polygon | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| PolyLine | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| Highlight | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Underline | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Squiggly | 1.4（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| StrikeOut | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Stamp | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Caret | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 无对应代码 |
-| Ink | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
-| Popup | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码 |
+| Text | 1.1 | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Link | 1.1 | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构已识别，`/A` 与 `/Dest` 原样保留（动作语义经 12.6 `Document::action`） |
+| FreeText | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Line | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Square | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Circle | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Polygon | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| PolyLine | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Highlight | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Underline | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Squiggly | 1.4（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| StrikeOut | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Stamp | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Caret | 1.3（待核） | ⬜ | ⬜ | ⬜ | P3 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Ink | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
+| Popup | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 读端通用结构（12.5.1–12.5.5）已识别子类型与公共条目，子类型专属条目未类型化 |
 | FileAttachment | 1.3（待核） | ⬜ | ⬜ | ⬜ | P2 | 无对应代码（依赖 7.11 嵌入文件） |
 | Sound | 1.2 | ⬜ | ⬜ | ⬜ | P3 | 无对应代码（多媒体，见第 13 章） |
 | Movie | 1.2 | ⬜ | ⬜ | ⬜ | P3 | 无对应代码（多媒体；PDF 2.0 已弃用其部分用法） |
