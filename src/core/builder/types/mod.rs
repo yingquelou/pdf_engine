@@ -2,6 +2,7 @@
 //!
 //! 按领域拆分为子模块，并由本模块统一 `pub use`：
 //! - `action`：动作字典（GoTo/GoToR/Named/URI/Launch/JavaScript）；
+//! - `annotation`：注解字典（12.5 通用条目与常用子类型）；
 //! - `descriptor`：字体描述符度量；
 //! - `encoding`：简单字体编码配置；
 //! - `font`：逻辑字体描述；
@@ -18,6 +19,7 @@
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池。
 
 mod action;
+mod annotation;
 mod cid;
 mod descriptor;
 mod encoding;
@@ -34,6 +36,7 @@ mod shading;
 mod type3;
 
 pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
+pub use annotation::{AnnotationBorderStyle, AnnotationDestination, AnnotationKind, PdfAnnotation};
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;

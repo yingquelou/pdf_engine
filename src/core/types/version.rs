@@ -127,6 +127,9 @@ pub enum PdfFeature {
     OptionalContent,
     /// 软蒙版 `/Matte` 衬底颜色（PDF 1.6 引入）。
     SoftMaskMatte,
+    /// 标记类注解（Highlight/Underline/StrikeOut/Caret/Ink 等，Table 169），
+    /// PDF 1.3 引入。
+    MarkupAnnotations,
 }
 
 impl PdfFeature {
@@ -135,9 +138,10 @@ impl PdfFeature {
         match self {
             PdfFeature::EncryptionRC4 => PdfVersion::V1_1,
             PdfFeature::TilingPattern => PdfVersion::V1_2,
-            PdfFeature::ImageMaskEntry | PdfFeature::AlternateImages | PdfFeature::Shading => {
-                PdfVersion::V1_3
-            }
+            PdfFeature::ImageMaskEntry
+            | PdfFeature::AlternateImages
+            | PdfFeature::Shading
+            | PdfFeature::MarkupAnnotations => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
                 PdfVersion::V1_4
             }
@@ -166,6 +170,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::Shading => "shading",
             PdfFeature::OptionalContent => "optional content",
             PdfFeature::SoftMaskMatte => "soft mask matte color",
+            PdfFeature::MarkupAnnotations => "markup annotations",
         };
         write!(f, "{name}")
     }

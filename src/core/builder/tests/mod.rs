@@ -18,6 +18,7 @@
 //! - `color_space`：页级命名颜色空间（`/ColorSpace` 资源与 `CS`/`cs`）；
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
+mod annotation;
 mod cid;
 mod cid_cmap_multibyte;
 mod color_space;

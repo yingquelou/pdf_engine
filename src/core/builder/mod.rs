@@ -39,17 +39,18 @@ pub(crate) use types::OpenTypeFlavor;
 pub(crate) use types::Pattern;
 pub(crate) use types::mesh_component_ranges;
 pub use types::{
-    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, AxialShading, CalGray,
-    CalRGB, CalculatorFunction, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo,
-    CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN,
-    ExponentialFunction, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths,
-    FormResources, FormXObject, FreeFormMeshShading, Function, FunctionShading, GraphicsState,
-    GraphicsStateFont, GroupXObject, Halftone, HalftoneDictionary, ICCBased, ImageData,
-    ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, MeshFunction, MeshVertex,
-    OptionalContentGroup, PageSize, PaintType, RadialShading, SampledFunction, Separation, Shading,
-    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
-    TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
-    Type2Halftone, Type3Font, Type3Glyph,
+    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, AnnotationBorderStyle,
+    AnnotationDestination, AnnotationKind, AxialShading, CalGray, CalRGB, CalculatorFunction,
+    CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth, ColorSpace,
+    CoonsPatch, CoonsPatchShading, DashPattern, DeviceN, ExponentialFunction, Font, FontDescriptor,
+    FontEncoding, FontProgram, FontWidths, FormResources, FormXObject, FreeFormMeshShading,
+    Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
+    HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
+    LatticeMeshShading, MeshFunction, MeshVertex, OptionalContentGroup, PageSize, PaintType,
+    PdfAnnotation, RadialShading, SampledFunction, Separation, Shading, ShadingOptions,
+    ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction, TensorProductPatch,
+    TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font,
+    Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -85,6 +86,13 @@ struct PageBuild {
     group: Option<GroupXObject>,
     /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
     invalid_code_length: Option<usize>,
+}
+
+/// 注解的构建态：绑定的页号与尚未分配对象号的注解字典。
+#[derive(Debug)]
+struct AnnotationEntry {
+    page: usize,
+    annot: PdfAnnotation,
 }
 
 /// 字体去重键：BaseFont 名、字号位模式、编码配置、嵌入程序、子集标记、
@@ -137,6 +145,8 @@ pub struct PdfBuilder {
     patterns: Vec<Pattern>,
     /// 文档级颜色空间池；`PdfBuilder::color_space` 返回其索引。
     color_spaces: Vec<ColorSpace>,
+    /// 文档级注解池；`PdfBuilder::add_annotation` 返回其索引。
+    annotations: Vec<AnnotationEntry>,
     /// D4 写端流压缩策略；`None`（默认）时所有流保持明文写出。
     compression: Option<StreamCompression>,
     /// 文档级导航结构（页面标签、命名目标/页面、大纲）。
@@ -167,6 +177,7 @@ impl PdfBuilder {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            annotations: Vec::new(),
             compression: None,
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
@@ -186,6 +197,7 @@ impl PdfBuilder {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            annotations: Vec::new(),
             compression: None,
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
@@ -396,6 +408,19 @@ impl PdfBuilder {
     pub fn optional_content_group(&mut self, group: &OptionalContentGroup) -> usize {
         let idx = self.optional_content_groups.len();
         self.optional_content_groups.push(group.clone());
+        idx
+    }
+
+    /// 把一个注解（12.5）绑定到 0 基页号，返回文档级句柄。
+    ///
+    /// 句柄供另一注解的 [`PdfAnnotation::with_popup`] 引用。注册的全部
+    /// 注解在 [`PdfBuilder::build`] 时写成独立间接对象并登记进页面
+    /// `/Annots`；页号越界或字典非法（[`PdfAnnotation::validate`] 语义）
+    /// 返回 [`WriteError::InvalidObject`]，子类型版本不足返回
+    /// [`WriteError::UnsupportedVersion`]。
+    pub fn add_annotation(&mut self, page: usize, annot: PdfAnnotation) -> usize {
+        let idx = self.annotations.len();
+        self.annotations.push(AnnotationEntry { page, annot });
         idx
     }
 

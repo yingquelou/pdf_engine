@@ -9926,3 +9926,128 @@ fn xmp_metadata_absent_returns_none() {
     let doc = parse_buf(&buf);
     assert!(doc.xmp_metadata().is_none());
 }
+
+/// 写入 → 重新解析：注解应经页面 `/Annots` 由读端注解模型完整提取，
+/// 含文本条目、标志、`/QuadPoints`、`/Popup` 引用与 `/A` 动作。
+#[test]
+fn builder_annotations_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        Action, AnnotationDestination, AnnotationKind, PageSize, PdfAnnotation, PdfBuilder,
+    };
+    use pdf_engine::core::reader::action::Action as ReaderAction;
+    use pdf_engine::core::reader::annotation::AnnotationSubtype;
+    use pdf_engine::core::reader::navigation::{Destination, OutlineDestination};
+    use pdf_engine::core::types::{PdfTextString, Value};
+
+    fn decode_text(value: &Value) -> String {
+        match value {
+            Value::String(text) => text.clone(),
+            Value::HexString(hex) => {
+                let bytes: Vec<u8> = (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+                    .collect();
+                PdfTextString::decode(&bytes).unwrap().into_string()
+            }
+            other => panic!("expected text string, got {other:?}"),
+        }
+    }
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let p1 = builder.page(PageSize::A4);
+    let popup = builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Popup, [96.0, 690.0, 240.0, 750.0]),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [72.0, 700.0, 92.0, 720.0])
+            .with_contents("Review note")
+            .with_title("Ann")
+            .with_flags(4)
+            .with_popup(popup),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Highlight, [72.0, 650.0, 220.0, 662.0])
+            .with_quad_points(vec![72.0, 662.0, 220.0, 662.0, 72.0, 650.0, 220.0, 650.0])
+            .with_color(vec![1.0, 1.0, 0.0]),
+    );
+    builder.add_annotation(
+        p1,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 100.0, 20.0])
+            .with_action(Action::Uri("https://qoder.com".into())),
+    );
+    builder.add_annotation(
+        p1,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 30.0, 100.0, 50.0]).with_destination(
+            AnnotationDestination::Explicit(Destination::Fit { page: 0 }),
+        ),
+    );
+    builder.add_annotation(
+        p1,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 60.0, 100.0, 80.0])
+            .with_action(Action::GoTo(Destination::Fit { page: 1 })),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let first = doc.page_annotations(0).expect("page 0 annotations");
+    assert_eq!(first.len(), 3);
+    let text = &first[1];
+    assert_eq!(text.subtype, AnnotationSubtype::Text);
+    assert_eq!(text.rect, [72.0, 700.0, 92.0, 720.0]);
+    assert!(text.flags.print());
+    assert_eq!(
+        decode_text(text.contents.as_ref().expect("/Contents")),
+        "Review note"
+    );
+    assert_eq!(decode_text(text.title.as_ref().expect("/T")), "Ann");
+    let popup_ref = text.popup.expect("/Popup reference");
+    let popup_obj = doc
+        .get_object(popup_ref.0)
+        .expect("popup object")
+        .expect("exist");
+    let popup_dict = popup_obj.value.as_dict().expect("popup dict");
+    assert_eq!(
+        popup_dict.get("Subtype"),
+        Some(&Value::Name("Popup".into()))
+    );
+    let highlight = &first[2];
+    assert_eq!(highlight.subtype, AnnotationSubtype::Highlight);
+    assert_eq!(
+        highlight.quad_points.as_ref().expect("/QuadPoints").len(),
+        8
+    );
+    assert_eq!(highlight.color.as_deref(), Some([1.0, 1.0, 0.0].as_slice()));
+
+    let second = doc.page_annotations(1).expect("page 1 annotations");
+    assert_eq!(second.len(), 3);
+    let uri = doc
+        .action(second[0].action.as_ref().expect("/A"))
+        .expect("uri action parses");
+    assert_eq!(uri, ReaderAction::Uri("https://qoder.com".into()));
+    let dest = second[1].destination.as_ref().expect("/Dest");
+    let array = dest.as_array().expect("explicit destination array");
+    let (page_num, _) = array.0[0].as_ref().expect("page reference");
+    let page_obj = doc
+        .get_object(page_num)
+        .expect("page object")
+        .expect("exist");
+    assert_eq!(
+        page_obj.value.as_dict().expect("dict").get("Type"),
+        Some(&Value::Name("Page".into()))
+    );
+    assert_eq!(
+        page_num, 3,
+        "explicit /Dest must reference the first Page object"
+    );
+    let goto = doc
+        .action(second[2].action.as_ref().expect("/A GoTo"))
+        .expect("goto action parses");
+    assert_eq!(
+        goto,
+        ReaderAction::GoTo(OutlineDestination::Explicit(Destination::Fit { page: 1 }))
+    );
+}

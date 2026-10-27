@@ -270,7 +270,7 @@ fn name_tree(entries: Vec<(String, Value)>) -> Value {
     Value::Dict(Dict::new().insert("Names", Value::Array(names)))
 }
 
-fn destination_value(
+pub(super) fn destination_value(
     destination: &Destination,
     page_refs: &[(i64, i64)],
 ) -> Result<Value, WriteError> {

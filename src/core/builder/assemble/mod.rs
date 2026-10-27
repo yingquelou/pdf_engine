@@ -4,8 +4,10 @@
 //! - `fonts`：普通字体字典与字体程序嵌入（含 TrueType / Type 1 子集）；
 //! - `type3`：Type 3 字体字典与字符过程流；
 //! - `cid`：CIDFont 后代字典、Type 0 父字体与相关流；
-//! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap。
+//! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
+//! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）。
 
+mod annotation;
 mod cid;
 mod cmap;
 mod fonts;
@@ -288,6 +290,36 @@ impl PdfBuilder {
             num += 1;
         }
 
+        // 注解：注册的每条注解都写成独立间接对象并按句柄分配对象号
+        // （`/Popup` 互引需要预先建表）；页绑定、字典参数与子类型版本
+        // 在此校验。
+        let mut annotation_nums = vec![0i64; self.annotations.len()];
+        let mut page_annotation_handles: Vec<Vec<usize>> = vec![Vec::new(); self.pages.len()];
+        for (handle, entry) in self.annotations.iter().enumerate() {
+            if entry.page >= self.pages.len() {
+                return Err(WriteError::InvalidObject(format!(
+                    "annotation handle {handle} attached to unknown page {}",
+                    entry.page
+                )));
+            }
+            entry
+                .annot
+                .validate()
+                .map_err(|message| WriteError::InvalidObject(format!("annotation: {message}")))?;
+            let required = entry.annot.kind().min_version();
+            if self.version < required {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "{} annotations require PDF {}, got {}",
+                    entry.annot.kind().name(),
+                    required.as_str(),
+                    self.version.as_str()
+                )));
+            }
+            page_annotation_handles[entry.page].push(handle);
+            annotation_nums[handle] = num;
+            num += 1;
+        }
+
         // —— 构造 Document ——
         let mut doc = Document::new();
         if !used_shadings.is_empty() {
@@ -301,6 +333,17 @@ impl PdfBuilder {
                 Pattern::Tiling(_) => {
                     doc.features.borrow_mut().insert(PdfFeature::TilingPattern);
                 }
+            }
+        }
+        for entry in &self.annotations {
+            if entry.annot.kind().is_markup() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::MarkupAnnotations);
+            }
+            // `/CA` 与 `/BM` 属透明模型（PDF 1.4）；越界值已在注解校验中拒绝。
+            if entry.annot.opacity().is_some() || entry.annot.blend_mode().is_some() {
+                doc.features.borrow_mut().insert(PdfFeature::Transparency);
             }
         }
 
@@ -465,6 +508,13 @@ impl PdfBuilder {
                     page_dict.insert("Group", Value::Dict(group_dict(group, &mut doc, &mut num)?));
                 doc.features.borrow_mut().insert(PdfFeature::Transparency);
             }
+            if !page_annotation_handles[i].is_empty() {
+                let mut annots = Array::new();
+                for &handle in &page_annotation_handles[i] {
+                    annots = annots.push(Value::Ref(annotation_nums[handle], 0));
+                }
+                page_dict = page_dict.insert("Annots", Value::Array(annots));
+            }
             doc.set_object(Object::new(page_num, 0, Value::Dict(page_dict)));
 
             // 内容流序列化；透明度等特性已由 ExtGState 构建路径登记。
@@ -478,6 +528,17 @@ impl PdfBuilder {
                     StreamData::Owned(content_bytes),
                 ),
             ));
+        }
+
+        // 注解间接对象：在页字典写出后组装，`/Dest` 与 `GoTo` 动作的
+        // 页号在此解析为 Page 引用，`/Popup` 句柄解析为注解引用。
+        // 注意 `page_slots` 是 (Page 号, 内容流号) 对，须先映射为
+        // (对象号, 生成号) 引用表再交给导航层。
+        let page_refs: Vec<(i64, i64)> = page_slots.iter().map(|(pn, _)| (*pn, 0)).collect();
+        for (handle, entry) in self.annotations.iter().enumerate() {
+            let dict =
+                annotation::annotation_dict(&entry.annot, handle, &annotation_nums, &page_refs)?;
+            doc.set_object(Object::new(annotation_nums[handle], 0, Value::Dict(dict)));
         }
 
         // 字体对象
@@ -703,7 +764,7 @@ impl PdfBuilder {
     }
 }
 
-fn real_array(values: &[f64]) -> Value {
+pub(super) fn real_array(values: &[f64]) -> Value {
     Value::Array(Array(values.iter().map(|v| Value::Float(*v)).collect()))
 }
 
