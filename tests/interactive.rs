@@ -481,6 +481,80 @@ fn builder_annotation_subtype_entries_roundtrip_through_parser() {
     );
 }
 
+/// 写入 → 重新解析：注解 `/Dest` 的显式数组与命名目标应由
+/// `Document::annotation_destination` 解析为 12.3.2 目标模型，命名键继续经
+/// `Document::named_destination` 在目录 `/Names /Dests` 树中查得实际目标。
+#[test]
+fn builder_annotation_destination_resolves_through_parser() {
+    use pdf_engine::core::builder::{
+        AnnotationDestination, AnnotationKind, PageSize, PdfAnnotation, PdfBuilder,
+    };
+    use pdf_engine::core::reader::navigation::{Destination, OutlineDestination};
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let _p1 = builder.page(PageSize::A4);
+    builder.named_destination(
+        "intro",
+        Destination::Xyz {
+            page: 1,
+            left: Some(0.0),
+            top: Some(700.0),
+            zoom: None,
+        },
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 100.0, 20.0])
+            .with_destination(AnnotationDestination::Named("intro".into())),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 30.0, 100.0, 50.0]).with_destination(
+            AnnotationDestination::Explicit(Destination::Fit { page: 1 }),
+        ),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [72.0, 700.0, 92.0, 720.0])
+            .with_contents("no destination"),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let annots = doc.page_annotations(0).expect("page 0 annotations");
+    assert_eq!(annots.len(), 3);
+
+    assert_eq!(
+        doc.annotation_destination(&annots[0])
+            .expect("named /Dest parses"),
+        Some(OutlineDestination::Named("intro".into())),
+        "命名目标先返回名称键"
+    );
+    assert_eq!(
+        doc.named_destination("intro").expect("name tree"),
+        Some(Destination::Xyz {
+            page: 1,
+            left: Some(0.0),
+            top: Some(700.0),
+            zoom: None,
+        }),
+        "名称键经 `/Dests` 树解析到第 2 页"
+    );
+    assert_eq!(
+        doc.annotation_destination(&annots[1])
+            .expect("explicit /Dest parses"),
+        Some(OutlineDestination::Explicit(Destination::Fit { page: 1 })),
+        "显式数组的页引用解析为 0 基页号"
+    );
+    assert_eq!(
+        doc.annotation_destination(&annots[2])
+            .expect("annotation without /Dest"),
+        None
+    );
+}
+
 /// 写入 → 重新解析：注解 `/AP` 外观流应回读为 Form XObject 流引用，
 /// `/N` 状态、流字典与内容绘制算子完整保留（12.5.5）。
 #[test]

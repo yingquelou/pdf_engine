@@ -4,8 +4,9 @@
 //! - 通用注解字典条目：`/Rect`、`/Subtype`、`/F` 标志（Table 165）、
 //!   `/Contents`、`/T`、`/NM`、`/M`、`/C`、`/CA`、`/AP`/`/AS` 外观流、
 //!   `/BS`/`/BM`/`/Border` 边框（12.5.4）。
-//! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A`、`/Dest` 原样保留，
-//!   动作语义由 E3 的 [`crate::core::reader::action`] 解析。
+//! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A` 原样保留、动作语义由
+//!   E3 的 [`crate::core::reader::action`] 解析，`/Dest` 经
+//!   `Document::annotation_destination` 解析为 12.3.2 目标模型。
 //! - 子类型专有条目类型化（12.5.6）：Text `/Name`、`/Open`、`/State`、
 //!   `/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
@@ -14,6 +15,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::core::reader::navigation::{NavigationError, OutlineDestination};
 use crate::core::types::{Dict, Document, Value};
 
 #[cfg(test)]
@@ -53,6 +55,17 @@ impl fmt::Display for AnnotationError {
 }
 
 impl std::error::Error for AnnotationError {}
+
+impl From<NavigationError> for AnnotationError {
+    fn from(error: NavigationError) -> Self {
+        match error {
+            NavigationError::CatalogMissing => Self::CatalogMissing,
+            NavigationError::Malformed(message) => Self::Malformed(message),
+            NavigationError::PageNotFound => Self::PageNotFound,
+            NavigationError::LimitExceeded(what) => Self::LimitExceeded(what),
+        }
+    }
+}
 
 type Result<T> = std::result::Result<T, AnnotationError>;
 
@@ -330,7 +343,7 @@ pub struct Annotation {
     pub ink_paths: Vec<Vec<f64>>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
-    /// `/Dest` 目标（名称/数组/字典，原样保留）。
+    /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
     pub destination: Option<Value>,
     /// `/Popup` 弹出窗口引用。
     pub popup: Option<(i64, i64)>,
@@ -373,6 +386,33 @@ impl Document {
             out.push(parse_annotation(self, page_index, reference, dict)?);
         }
         Ok(out)
+    }
+
+    /// 解析注解 `/Dest` 为目标模型（12.5.6.20 与 12.3.2）。
+    ///
+    /// 支持目的地数组、名字/文本串（命名目标）与 PDF 1.1 的 `/D` 字典形式；
+    /// 无 `/Dest` 返回 `None`。返回 `Named` 时可继续用
+    /// [`Document::named_destination`] 在目录 `/Dests` 名称树中查找实际目标。
+    pub fn annotation_destination(
+        &self,
+        annotation: &Annotation,
+    ) -> Result<Option<OutlineDestination>> {
+        let Some(value) = annotation.destination.as_ref() else {
+            return Ok(None);
+        };
+        let resolved = crate::core::reader::navigation::resolve(self, value)
+            .map_err(|err| AnnotationError::Malformed(err.to_string()))?;
+        let value = match &resolved {
+            Value::Dict(dict) => dict
+                .get("D")
+                .ok_or_else(|| malformed("annotation /Dest dictionary is missing /D"))?,
+            other => other,
+        };
+        let pages = crate::core::reader::navigation::page_tree_index(self)?;
+        let target = crate::core::reader::navigation::destination::parse_outline_destination(
+            self, value, &pages,
+        )?;
+        Ok(Some(target))
     }
 
     /// 按 0 基页号遍历页面树，返回页面字典（含直接嵌入页）。
