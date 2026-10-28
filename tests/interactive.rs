@@ -481,6 +481,65 @@ fn builder_annotation_subtype_entries_roundtrip_through_parser() {
     );
 }
 
+/// 写入 → 重新解析：Line 注解的端点 `/L`、端点样式 `/LE`、引线 `/LL` `/LLE`、
+/// 题注开关 `/Cap`、意图 `/IT` 与题注条目 `/LLO` `/CP` `/CO`（Table 175/176）
+/// 应回读为读端的类型化字段，`/IC` 填充色经通用条目回读。
+#[test]
+fn builder_line_annotation_entries_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AnnotationKind, CaptionPosition as BuilderCaptionPosition,
+        LineEndStyle as BuilderLineEndStyle, LineIntent as BuilderLineIntent, PageSize,
+        PdfAnnotation, PdfBuilder,
+    };
+    use pdf_engine::core::reader::annotation::{
+        AnnotationSubtype, CaptionPosition, LineEndStyle, LineIntent,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Line, [72.0, 640.0, 300.0, 700.0])
+            .with_line_endpoints([72.0, 700.5, 300.0, 650.0])
+            .with_line_endings(
+                BuilderLineEndStyle::ClosedArrow,
+                BuilderLineEndStyle::ROpenArrow,
+            )
+            .with_interior_color(vec![1.0, 0.0, 0.0])
+            .with_color(vec![0.0, 0.0, 1.0])
+            .with_leader_length(12.5)
+            .with_leader_extension(3.0)
+            .with_caption(true)
+            .with_line_intent(BuilderLineIntent::LineDimension)
+            .with_leader_line_offset(6.0)
+            .with_caption_position(BuilderCaptionPosition::Top)
+            .with_caption_offset([-1.5, 20.0]),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let annots = doc.page_annotations(0).expect("page 0 annotations");
+    assert_eq!(annots.len(), 1);
+    let line = &annots[0];
+    assert_eq!(line.subtype, AnnotationSubtype::Line);
+    assert_eq!(line.line_endpoints, Some([72.0, 700.5, 300.0, 650.0]));
+    assert_eq!(
+        line.line_endings,
+        Some([LineEndStyle::ClosedArrow, LineEndStyle::ROpenArrow]),
+        "/LE 两端样式各自还原"
+    );
+    assert_eq!(line.interior_color, Some(vec![1.0, 0.0, 0.0]));
+    assert_eq!(line.color, Some(vec![0.0, 0.0, 1.0]));
+    assert_eq!(line.leader_length, Some(12.5));
+    assert_eq!(line.leader_extension, Some(3.0));
+    assert_eq!(line.caption, Some(true));
+    assert_eq!(line.line_intent, Some(LineIntent::LineDimension));
+    assert_eq!(line.leader_line_offset, Some(6.0));
+    assert_eq!(line.caption_position, Some(CaptionPosition::Top));
+    assert_eq!(line.caption_offset, Some([-1.5, 20.0]));
+}
+
 /// 写入 → 重新解析：注解 `/Dest` 的显式数组与命名目标应由
 /// `Document::annotation_destination` 解析为 12.3.2 目标模型，命名键继续经
 /// `Document::named_destination` 在目录 `/Names /Dests` 树中查得实际目标。

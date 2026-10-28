@@ -135,6 +135,12 @@ pub enum PdfFeature {
     DigitalSignatures,
     /// 文本注解标记状态条目（`/State`、`/StateModel`），PDF 1.3 引入。
     AnnotationMarkupState,
+    /// Line 注解端点样式与填充色条目（`/LE`、`/IC`，Table 175），PDF 1.4 引入。
+    LineAnnotationArrowEndings,
+    /// Line 注解引线条目（`/LL`、`/LLE`、`/Cap`、`/IT`，Table 175），PDF 1.6 引入。
+    LineAnnotationLeader,
+    /// Line 注解题注设置（`/LLO`、`/CP`、`/CO`，Table 175），PDF 1.7 引入。
+    LineAnnotationCaption,
 }
 
 impl PdfFeature {
@@ -156,7 +162,9 @@ impl PdfFeature {
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
             | PdfFeature::OptionalContent => PdfVersion::V1_5,
-            PdfFeature::SoftMaskMatte => PdfVersion::V1_6,
+            PdfFeature::SoftMaskMatte | PdfFeature::LineAnnotationLeader => PdfVersion::V1_6,
+            PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
+            PdfFeature::LineAnnotationCaption => PdfVersion::V1_7,
         }
     }
 }
@@ -180,6 +188,9 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MarkupAnnotations => "markup annotations",
             PdfFeature::DigitalSignatures => "digital signature field",
             PdfFeature::AnnotationMarkupState => "text annotation markup state",
+            PdfFeature::LineAnnotationArrowEndings => "line annotation arrow endings",
+            PdfFeature::LineAnnotationLeader => "line annotation leader settings",
+            PdfFeature::LineAnnotationCaption => "line annotation caption settings",
         };
         write!(f, "{name}")
     }

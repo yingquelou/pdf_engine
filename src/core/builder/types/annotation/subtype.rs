@@ -1,9 +1,241 @@
 //! 注解子类型专有条目：构造方法、取值访问与构建期校验（12.5.6）。
 //!
-//! 字段本身声明在 [`PdfAnnotation`]（父模块）；子类型归属与取值面的
-//! 约束集中在本文件，非法一律 `InvalidObject`，且全部校验发生在分配对象号之前。
+//! 字段本身声明在 [`PdfAnnotation`]（父模块），Line 专有条目按 [`LineEntries`]
+//! 成组；子类型归属与取值面的约束集中在本文件，
+//! 非法一律 `InvalidObject`，且全部校验发生在分配对象号之前。
 
 use super::{AnnotationKind, PdfAnnotation};
+use crate::core::types::PdfVersion;
+
+/// Line 注解端点样式（`/LE`，Table 176）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEndStyle {
+    /// 方头（`/Square`）。
+    Square,
+    /// 圆头（`/Circle`）。
+    Circle,
+    /// 菱形（`/Diamond`）。
+    Diamond,
+    /// 开口箭头（`/OpenArrow`）。
+    OpenArrow,
+    /// 闭合箭头（`/ClosedArrow`）。
+    ClosedArrow,
+    /// 无端点（`/None`）。
+    None,
+    /// 平头（`/Butt`，PDF 1.5）。
+    Butt,
+    /// 末端反向开口箭头（`/ROpenArrow`，PDF 1.5）。
+    ROpenArrow,
+    /// 末端反向闭合箭头（`/RClosedArrow`，PDF 1.5）。
+    RClosedArrow,
+    /// 斜线（`/Slash`，PDF 1.6）。
+    Slash,
+}
+
+impl LineEndStyle {
+    /// 端点样式名（`/LE` 数组元素）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Square => "Square",
+            Self::Circle => "Circle",
+            Self::Diamond => "Diamond",
+            Self::OpenArrow => "OpenArrow",
+            Self::ClosedArrow => "ClosedArrow",
+            Self::None => "None",
+            Self::Butt => "Butt",
+            Self::ROpenArrow => "ROpenArrow",
+            Self::RClosedArrow => "RClosedArrow",
+            Self::Slash => "Slash",
+        }
+    }
+
+    /// 该样式引入的最低 PDF 版本（Table 176）。
+    pub fn min_version(self) -> PdfVersion {
+        match self {
+            Self::Butt | Self::ROpenArrow | Self::RClosedArrow => PdfVersion::V1_5,
+            Self::Slash => PdfVersion::V1_6,
+            _ => PdfVersion::V1_4,
+        }
+    }
+}
+
+/// Line 注解意图（`/IT`，Table 175，PDF 1.6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineIntent {
+    /// 带箭头装饰的线（`/LineArrow`，缺省）。
+    LineArrow,
+    /// 线性标注，题注给出测量长度（`/LineDimension`）。
+    LineDimension,
+}
+
+impl LineIntent {
+    /// 意图名（`/IT` 值）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::LineArrow => "LineArrow",
+            Self::LineDimension => "LineDimension",
+        }
+    }
+}
+
+/// Line 注解题注位置（`/CP`，仅 `/Cap` 为真时有意义，PDF 1.7）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionPosition {
+    /// 题注内联于端点连线的延长线上（`/Inline`，缺省）。
+    Inline,
+    /// 题注居中置于连线上方，与连线平行（`/Top`）。
+    Top,
+}
+
+impl CaptionPosition {
+    /// 位置名（`/CP` 值）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Inline => "Inline",
+            Self::Top => "Top",
+        }
+    }
+}
+
+/// Line 注解专有条目（12.5.6.13，Table 175）的构建态。
+///
+/// 端点 `/L` 是 Line 子类型的必填条目；`/IC` 填充色由通用条目
+/// [`PdfAnnotation::with_interior_color`] 承担，不在此重复建模。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LineEntries {
+    /// `/L`：`[x1, y1, x2, y2]`。
+    endpoints: Option<[f64; 4]>,
+    /// `/LE`：起点与终点端点样式（PDF 1.4）。
+    endings: Option<[LineEndStyle; 2]>,
+    /// `/LL`：引线长度（PDF 1.6）。
+    leader_length: Option<f64>,
+    /// `/LLE`：引线超出端点的延伸长度（PDF 1.6）。
+    leader_extension: Option<f64>,
+    /// `/Cap`：是否显示题注（PDF 1.6）。
+    caption: Option<bool>,
+    /// `/IT`：注解意图（PDF 1.6）。
+    intent: Option<LineIntent>,
+    /// `/LLO`：题注相对线中点的偏移（PDF 1.7）。
+    leader_line_offset: Option<f64>,
+    /// `/CP`：题注位置（PDF 1.7）。
+    caption_position: Option<CaptionPosition>,
+    /// `/CO`：题注相对 `/LLO` 位置的偏移（PDF 1.7）。
+    caption_offset: Option<[f64; 2]>,
+}
+
+impl LineEntries {
+    /// 端点 `/L`。
+    pub(crate) fn endpoints(&self) -> Option<[f64; 4]> {
+        self.endpoints
+    }
+
+    /// 端点样式 `/LE`。
+    pub(crate) fn endings(&self) -> Option<[LineEndStyle; 2]> {
+        self.endings
+    }
+
+    /// 引线长度 `/LL`。
+    pub(crate) fn leader_length(&self) -> Option<f64> {
+        self.leader_length
+    }
+
+    /// 引线延伸 `/LLE`。
+    pub(crate) fn leader_extension(&self) -> Option<f64> {
+        self.leader_extension
+    }
+
+    /// 题注开关 `/Cap`。
+    pub(crate) fn caption(&self) -> Option<bool> {
+        self.caption
+    }
+
+    /// 意图 `/IT`。
+    pub(crate) fn intent(&self) -> Option<LineIntent> {
+        self.intent
+    }
+
+    /// 题注偏移 `/LLO`。
+    pub(crate) fn leader_line_offset(&self) -> Option<f64> {
+        self.leader_line_offset
+    }
+
+    /// 题注位置 `/CP`。
+    pub(crate) fn caption_position(&self) -> Option<CaptionPosition> {
+        self.caption_position
+    }
+
+    /// 题注相对偏移 `/CO`。
+    pub(crate) fn caption_offset(&self) -> Option<[f64; 2]> {
+        self.caption_offset
+    }
+
+    /// 是否声明了任意 PDF 1.4 端点样式条目（`/LE`）。
+    pub(crate) fn has_arrow_entries(&self) -> bool {
+        self.endings.is_some()
+    }
+
+    /// 是否声明了任意 PDF 1.6 引线条目（`/LL`、`/LLE`、`/Cap`、`/IT`）。
+    pub(crate) fn has_leader_entries(&self) -> bool {
+        self.leader_length.is_some()
+            || self.leader_extension.is_some()
+            || self.caption.is_some()
+            || self.intent.is_some()
+    }
+
+    /// 是否声明了任意 PDF 1.7 题注条目（`/LLO`、`/CP`、`/CO`）。
+    pub(crate) fn has_caption_entries(&self) -> bool {
+        self.leader_line_offset.is_some()
+            || self.caption_position.is_some()
+            || self.caption_offset.is_some()
+    }
+
+    /// 是否声明了任意 Line 专有条目；用于子类型归属校验。
+    fn is_declared(&self) -> bool {
+        self.endpoints.is_some()
+            || self.has_arrow_entries()
+            || self.has_leader_entries()
+            || self.has_caption_entries()
+    }
+
+    /// 校验取值与相互依赖（`/LLE` 需 `/LL`、题注条目需 `/Cap` 为真）。
+    fn validate(&self) -> Result<(), String> {
+        if let Some(endpoints) = self.endpoints
+            && endpoints.iter().any(|v| !v.is_finite())
+        {
+            return Err("Line annotation /L must hold four finite numbers".into());
+        }
+        if let Some(length) = self.leader_length
+            && (!length.is_finite() || length < 0.0)
+        {
+            return Err("Line annotation /LL must be a finite nonnegative number".into());
+        }
+        if self.leader_extension.is_some() && self.leader_length.is_none() {
+            return Err("Line annotation /LLE requires /LL (leader length)".into());
+        }
+        if let Some(extension) = self.leader_extension
+            && (!extension.is_finite() || extension < 0.0)
+        {
+            return Err("Line annotation /LLE must be a finite nonnegative number".into());
+        }
+        if let Some(offset) = self.leader_line_offset
+            && (!offset.is_finite() || offset < 0.0)
+        {
+            return Err("Line annotation /LLO must be a finite nonnegative number".into());
+        }
+        if let Some(offset) = self.caption_offset
+            && !offset.iter().all(|v| v.is_finite())
+        {
+            return Err("Line annotation /CO must hold two finite numbers".into());
+        }
+        let caption_on = self.caption == Some(true);
+        if self.has_caption_entries() && !caption_on {
+            return Err(
+                "Line annotation /LLO, /CP and /CO are meaningful only when /Cap is true".into(),
+            );
+        }
+        Ok(())
+    }
+}
 
 impl PdfAnnotation {
     /// Text 注解图标名 `/Name`（仅 Text 子类型；取值由查看器定义，写成名字）。
@@ -41,6 +273,60 @@ impl PdfAnnotation {
         self.ink_paths.push(path);
         self
     }
+
+    /// Line 注解端点 `/L`（`[x1, y1, x2, y2]`；Line 子类型必填）。
+    pub fn with_line_endpoints(mut self, endpoints: [f64; 4]) -> Self {
+        self.line.endpoints = Some(endpoints);
+        self
+    }
+
+    /// Line 注解两端端点样式（`/LE`，PDF 1.4；缺省 `[/None /None]`）。
+    pub fn with_line_endings(mut self, start: LineEndStyle, end: LineEndStyle) -> Self {
+        self.line.endings = Some([start, end]);
+        self
+    }
+
+    /// Line 注解引线长度 `/LL`（PDF 1.6，非负；缺省 0）。
+    pub fn with_leader_length(mut self, length: f64) -> Self {
+        self.line.leader_length = Some(length);
+        self
+    }
+
+    /// Line 注解引线超出端点的延伸长度 `/LLE`（PDF 1.6，非负；须提供 `/LL`）。
+    pub fn with_leader_extension(mut self, extension: f64) -> Self {
+        self.line.leader_extension = Some(extension);
+        self
+    }
+
+    /// Line 注解是否显示题注 `/Cap`（PDF 1.6，缺省 false）。
+    pub fn with_caption(mut self, caption: bool) -> Self {
+        self.line.caption = Some(caption);
+        self
+    }
+
+    /// Line 注解意图 `/IT`（PDF 1.6；缺省 `LineArrow`）。
+    pub fn with_line_intent(mut self, intent: LineIntent) -> Self {
+        self.line.intent = Some(intent);
+        self
+    }
+
+    /// 题注相对线中点的偏移 `/LLO`（PDF 1.7，非负；仅 `/Cap` 为真时有意义）。
+    pub fn with_leader_line_offset(mut self, offset: f64) -> Self {
+        self.line.leader_line_offset = Some(offset);
+        self
+    }
+
+    /// 题注位置 `/CP`（PDF 1.7；仅 `/Cap` 为真时有意义，缺省 `Inline`）。
+    pub fn with_caption_position(mut self, position: CaptionPosition) -> Self {
+        self.line.caption_position = Some(position);
+        self
+    }
+
+    /// 题注相对 `/LLO` 位置的偏移 `/CO`（PDF 1.7；仅 `/Cap` 为真时有意义，缺省 `[0 0]`）。
+    pub fn with_caption_offset(mut self, offset: [f64; 2]) -> Self {
+        self.line.caption_offset = Some(offset);
+        self
+    }
 }
 
 impl PdfAnnotation {
@@ -73,6 +359,11 @@ impl PdfAnnotation {
         self.state.is_some() || self.state_model.is_some()
     }
 
+    /// Line 注解专有条目（Table 175）。
+    pub(crate) fn line(&self) -> &LineEntries {
+        &self.line
+    }
+
     /// 校验子类型专有条目的归属与取值；由 [`PdfAnnotation::validate`] 调用。
     pub(super) fn validate_subtype_entries(&self) -> Result<(), String> {
         if self.icon_name.is_some() || self.is_open.is_some() {
@@ -87,6 +378,13 @@ impl PdfAnnotation {
         if !self.ink_paths.is_empty() {
             self.require_kind(AnnotationKind::Ink, "/InkList")?;
         }
+        if self.line.is_declared() {
+            self.require_kind(AnnotationKind::Line, "Line annotation entries")?;
+        }
+        if self.kind == AnnotationKind::Line && self.line.endpoints().is_none() {
+            return Err("Line annotation requires /L (endpoint coordinates)".into());
+        }
+        self.line.validate()?;
         if let Some(icon) = &self.icon_name {
             validate_name_value(icon, "annotation /Name")?;
         }

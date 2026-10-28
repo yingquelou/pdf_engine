@@ -9,7 +9,9 @@
 //! - `cid`：CIDFont 描述符与内容流；
 //! - `to_unicode`：ToUnicode CMap；
 //! - `encoding`：自定义 CID 编码 CMap；
-//! - `annotation`：注解字典与 `/Annots`；
+//! - `annotation`：注解字典与 `/Annots` 通用条目与子类型专有条目；
+//! - `annotation_line`：Line 注解专有条目（Table 175/176）与版本门禁；
+//! - `support`：注解字典取用的共享夹具；
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
 //! - `embedded_file`：嵌入文件流、文件规格与 `/EmbeddedFiles` 名称树；
 //! - `form`：Form XObject 字典与资源；
@@ -23,6 +25,7 @@
 
 mod acro_form;
 mod annotation;
+mod annotation_line;
 mod cid;
 mod cid_cmap_multibyte;
 mod color_space;
@@ -43,6 +46,7 @@ mod optional_content;
 mod page_group;
 mod pattern;
 mod shading;
+mod support;
 mod to_unicode;
 mod type3;
 mod widths;

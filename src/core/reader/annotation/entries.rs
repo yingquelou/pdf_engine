@@ -65,6 +65,23 @@ pub(super) fn parse_opacity(dict: &Dict) -> Result<Option<f64>> {
     Ok(Some(number))
 }
 
+/// 可选布尔条目（Line 注解 `/Cap`）；非布尔一律 malformed。
+pub(super) fn parse_optional_bool(dict: &Dict, key: &str) -> Result<Option<bool>> {
+    match dict.get(key) {
+        None => Ok(None),
+        Some(Value::Bool(flag)) => Ok(Some(*flag)),
+        Some(_) => Err(malformed(format!("annotation /{key} must be a boolean"))),
+    }
+}
+
+/// 可选单个数值条目（Line 注解 `/LL`、`/LLE`、`/LLO`）。
+pub(super) fn parse_optional_number(dict: &Dict, key: &str) -> Result<Option<f64>> {
+    match dict.get(key) {
+        None => Ok(None),
+        Some(value) => Ok(Some(number(value, &format!("annotation /{key}"))?)),
+    }
+}
+
 pub(super) fn parse_border(document: &Document, dict: &Dict) -> Result<Option<AnnotationBorder>> {
     let blend_mode = match dict.get("BM") {
         None => None,

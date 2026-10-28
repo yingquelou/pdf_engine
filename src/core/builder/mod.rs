@@ -41,17 +41,17 @@ pub(crate) use types::mesh_component_ranges;
 pub use types::{
     AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AxialShading, CalGray, CalRGB,
-    CalculatorFunction, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics,
-    CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN, EmbeddedFile,
-    ExponentialFunction, FieldValue, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths,
-    FormField, FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading,
-    Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
-    HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
-    LatticeMeshShading, MeshFunction, MeshVertex, OptionalContentGroup, PageSize, PaintType,
-    PdfAnnotation, RadialShading, SampledFunction, Separation, Shading, ShadingOptions,
-    ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction, TensorProductPatch,
-    TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font,
-    Type3Glyph,
+    CalculatorFunction, CaptionPosition, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo,
+    CidVerticalMetrics, CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN,
+    EmbeddedFile, ExponentialFunction, FieldValue, Font, FontDescriptor, FontEncoding, FontProgram,
+    FontWidths, FormField, FormFieldType, FormOption, FormResources, FormXObject,
+    FreeFormMeshShading, Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject,
+    Halftone, HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
+    LatticeMeshShading, LineEndStyle, LineIntent, MeshFunction, MeshVertex, OptionalContentGroup,
+    PageSize, PaintType, PdfAnnotation, RadialShading, SampledFunction, Separation, Shading,
+    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
+    TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
+    Type2Halftone, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};

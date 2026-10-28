@@ -40,7 +40,10 @@ mod shading;
 mod type3;
 
 pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
-pub use annotation::{AnnotationBorderStyle, AnnotationDestination, AnnotationKind, PdfAnnotation};
+pub use annotation::{
+    AnnotationBorderStyle, AnnotationDestination, AnnotationKind, CaptionPosition, LineEndStyle,
+    LineIntent, PdfAnnotation,
+};
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use embedded_file::EmbeddedFile;

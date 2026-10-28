@@ -1,50 +1,11 @@
 //! 注解写端测试：`/Annots` 间接对象、通用条目与目标/弹引引用解析
 //! （ISO 32000-1 12.5.1–12.5.5）。
 
+use super::support::{annot_object, annot_object_with_num, assert_text_entry};
 use super::*;
 use crate::core::content::ContentStream;
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{PdfFeature, Value};
-
-/// 取第 `page_num` 页 `/Annots[index]` 指向的注解字典。
-fn annot_object(doc: &Document, page_num: i64, index: usize) -> Dict {
-    let (num, dict) = annot_object_with_num(doc, page_num, index);
-    let _ = num;
-    dict
-}
-
-fn annot_object_with_num(doc: &Document, page_num: i64, index: usize) -> (i64, Dict) {
-    let page = doc
-        .get_object(page_num)
-        .expect("page object")
-        .expect("page exists")
-        .value;
-    let page_dict = page.as_dict().expect("page dict");
-    let annots = page_dict
-        .get("Annots")
-        .and_then(|v| v.as_array())
-        .expect("page /Annots array");
-    let annot_ref = annots.0[index]
-        .as_ref()
-        .expect("/Annots entry should be an indirect reference");
-    let num = annot_ref.0;
-    let object = doc
-        .get_object(num)
-        .expect("annotation object")
-        .expect("exist");
-    (
-        num,
-        object.value.as_dict().expect("annotation dict").clone(),
-    )
-}
-
-/// 文本条目一律按 `text_string_value` 写成十六进制串。
-fn assert_text_entry(dict: &Dict, key: &str) {
-    match dict.get(key) {
-        Some(Value::HexString(_)) | Some(Value::String(_)) => {}
-        other => panic!("expected text string at {key}, got {other:?}"),
-    }
-}
 
 #[test]
 fn text_annotation_is_written_as_indirect_object() {

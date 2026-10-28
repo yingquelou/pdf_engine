@@ -8,9 +8,11 @@
 //!   E3 的 [`crate::core::reader::action`] 解析，`/Dest` 经
 //!   `Document::annotation_destination` 解析为 12.3.2 目标模型。
 //! - 子类型专有条目类型化（12.5.6，解析在 [`subtype`]）：Text `/Name`、`/Open`、
-//!   `/State`、`/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径。
+//!   `/State`、`/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径；
+//!   Line `/L`、`/LE`、`/LL`、`/LLE`、`/Cap`、`/IT`、`/LLO`、`/CP`、`/CO`
+//!   （Table 175/176，端点样式与意图、题注位置类型化为枚举）。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
-//!   Line 端点、FreeText `/DA` 等）。
+//!   Polygon `/Vertices`、FreeText `/DA` 等）。
 //!
 //! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`。
 
@@ -24,12 +26,13 @@ use crate::core::types::{Dict, Document, Value};
 mod tests;
 
 mod entries;
-mod subtype;
+pub mod subtype;
 
 use entries::{
     parse_appearance, parse_border, parse_number_array, parse_opacity, parse_rect,
     parse_text_string,
 };
+pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
 /// 页面树遍历最大深度。
 const MAX_PAGE_DEPTH: usize = 64;
@@ -347,13 +350,31 @@ pub struct Annotation {
     pub symbol: Option<String>,
     /// `/InkList` Ink 注解路径：每条是 x/y 交替的偶数长度有限数值数组。
     pub ink_paths: Vec<Vec<f64>>,
+    /// Line 注解端点 `/L`：`[x1, y1, x2, y2]`（Table 175 必填条目）。
+    pub line_endpoints: Option<[f64; 4]>,
+    /// Line 注解两端端点样式 `/LE`（Table 176，PDF 1.4；缺省视为 `[/None /None]`）。
+    pub line_endings: Option<[LineEndStyle; 2]>,
+    /// Line 注解引线长度 `/LL`（PDF 1.6，缺省 0）。
+    pub leader_length: Option<f64>,
+    /// Line 注解引线超出端点的延伸长度 `/LLE`（PDF 1.6，需 `/LL`）。
+    pub leader_extension: Option<f64>,
+    /// Line 注解是否显示题注 `/Cap`（PDF 1.6，缺省 false）。
+    pub caption: Option<bool>,
+    /// Line 注解意图 `/IT`（PDF 1.6，缺省 `LineArrow`）。
+    pub line_intent: Option<LineIntent>,
+    /// 题注相对线中点的偏移 `/LLO`（PDF 1.7，仅 `/Cap` 为真时有意义）。
+    pub leader_line_offset: Option<f64>,
+    /// 题注位置 `/CP`（PDF 1.7，仅 `/Cap` 为真时有意义）。
+    pub caption_position: Option<CaptionPosition>,
+    /// 题注相对 `/LLO` 位置的偏移 `/CO`（PDF 1.7，缺省 `[0 0]`）。
+    pub caption_offset: Option<[f64; 2]>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
     pub destination: Option<Value>,
     /// `/Popup` 弹出窗口引用。
     pub popup: Option<(i64, i64)>,
-    /// 完整注解字典，未建模条目（Line `/L`、FreeText `/DA`、`/FS`、`/Parent` 等）经此访问。
+    /// 完整注解字典，未建模条目（FreeText `/DA`、Polygon `/Vertices`、`/FS`、`/Parent` 等）经此访问。
     pub dict: Dict,
 }
 
@@ -545,6 +566,15 @@ fn parse_annotation(
         state_model: entries.state_model,
         symbol: entries.symbol,
         ink_paths: entries.ink_paths,
+        line_endpoints: entries.line_endpoints,
+        line_endings: entries.line_endings,
+        leader_length: entries.leader_length,
+        leader_extension: entries.leader_extension,
+        caption: entries.caption,
+        line_intent: entries.line_intent,
+        leader_line_offset: entries.leader_line_offset,
+        caption_position: entries.caption_position,
+        caption_offset: entries.caption_offset,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

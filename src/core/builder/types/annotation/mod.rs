@@ -10,6 +10,9 @@
 
 mod subtype;
 
+use subtype::LineEntries;
+pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
+
 use super::Action;
 use crate::core::reader::navigation::Destination;
 use crate::core::types::PdfVersion;
@@ -181,6 +184,7 @@ pub struct PdfAnnotation {
     state_model: Option<String>,
     symbol: Option<String>,
     ink_paths: Vec<Vec<f64>>,
+    line: LineEntries,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -219,6 +223,7 @@ impl PdfAnnotation {
             state_model: None,
             symbol: None,
             ink_paths: Vec::new(),
+            line: LineEntries::default(),
             action: None,
             destination: None,
             popup: None,

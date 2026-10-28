@@ -1,12 +1,13 @@
 //! 注解字典写出（12.5.1–12.5.6）：通用条目 + 子类型专有条目（Text `/Name`
-//! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`）+
-//! `/A` `/Dest` `/Popup` `/FS` 引用解析。
+//! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`、
+//! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`）+
+//! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及 Line 条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
 use crate::core::builder::types::{Action, AnnotationDestination, PdfAnnotation};
 use crate::core::reader::navigation::Destination;
-use crate::core::types::{Array, Dict, Value};
+use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
 use super::real_array;
@@ -87,6 +88,38 @@ pub(super) fn annotation_dict(
             .map(|path| real_array(path))
             .collect();
         dict = dict.insert("InkList", Value::Array(Array(paths)));
+    }
+    let line = annot.line();
+    if let Some(endpoints) = line.endpoints() {
+        dict = dict.insert("L", real_array(&endpoints));
+    }
+    if let Some(endings) = line.endings() {
+        let names = endings
+            .iter()
+            .map(|style| Value::Name(style.name().into()))
+            .collect();
+        dict = dict.insert("LE", Value::Array(Array(names)));
+    }
+    if let Some(length) = line.leader_length() {
+        dict = dict.insert("LL", Value::Float(length));
+    }
+    if let Some(extension) = line.leader_extension() {
+        dict = dict.insert("LLE", Value::Float(extension));
+    }
+    if let Some(caption) = line.caption() {
+        dict = dict.insert("Cap", Value::Bool(caption));
+    }
+    if let Some(intent) = line.intent() {
+        dict = dict.insert("IT", Value::Name(intent.name().into()));
+    }
+    if let Some(offset) = line.leader_line_offset() {
+        dict = dict.insert("LLO", Value::Float(offset));
+    }
+    if let Some(position) = line.caption_position() {
+        dict = dict.insert("CP", Value::Name(position.name().into()));
+    }
+    if let Some(offset) = line.caption_offset() {
+        dict = dict.insert("CO", real_array(&offset));
     }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
@@ -189,4 +222,49 @@ fn explicit_destination_value(
         )));
     }
     destination_value(destination, page_refs)
+}
+
+/// Line 专有条目的版本门禁（Table 175/176）。
+///
+/// `/LE` 与端点样式取值各自有版本门起：`/LE` 与 6 种基础样式 PDF 1.4，
+/// `Butt`/`ROpenArrow`/`RClosedArrow` PDF 1.5，`Slash` PDF 1.6；
+/// `/LL` `/LLE` `/Cap` `/IT` PDF 1.6，`/LLO` `/CP` `/CO` PDF 1.7。
+pub(super) fn line_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    let line = annot.line();
+    for feature in [
+        (
+            line.has_arrow_entries(),
+            PdfFeature::LineAnnotationArrowEndings,
+        ),
+        (line.has_leader_entries(), PdfFeature::LineAnnotationLeader),
+        (
+            line.has_caption_entries(),
+            PdfFeature::LineAnnotationCaption,
+        ),
+    ] {
+        let (declared, feature) = feature;
+        if declared && !version.supports(feature) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{feature} require PDF {}, got {}",
+                feature.min_version().as_str(),
+                version.as_str()
+            )));
+        }
+    }
+    if let Some(endings) = line.endings() {
+        for style in endings.iter() {
+            if version < style.min_version() {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "line annotation /LE /{} requires PDF {}, got {}",
+                    style.name(),
+                    style.min_version().as_str(),
+                    version.as_str()
+                )));
+            }
+        }
+    }
+    Ok(())
 }

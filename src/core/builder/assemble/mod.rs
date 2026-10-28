@@ -381,6 +381,8 @@ impl PdfBuilder {
                     self.version.as_str()
                 )));
             }
+            // Line 专有条目按 Table 175/176 的版本门起分组门禁。
+            annotation::line_feature_gate(&entry.annot, self.version)?;
             page_annotation_handles[entry.page].push(handle);
             annotation_nums[handle] = num;
             num += 1;
@@ -439,6 +441,22 @@ impl PdfBuilder {
                 doc.features
                     .borrow_mut()
                     .insert(PdfFeature::AnnotationMarkupState);
+            }
+            let line = entry.annot.line();
+            if line.has_arrow_entries() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::LineAnnotationArrowEndings);
+            }
+            if line.has_leader_entries() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::LineAnnotationLeader);
+            }
+            if line.has_caption_entries() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::LineAnnotationCaption);
             }
         }
 
