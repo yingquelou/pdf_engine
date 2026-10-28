@@ -96,3 +96,23 @@ pub fn sample_doc() -> Document {
     };
     doc
 }
+
+/// 用 zlib 压缩数据（等价于 PDF 的 `/FlateDecode` 编码）。
+pub fn zlib(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(data).unwrap();
+    e.finish().unwrap()
+}
+
+/// 用指定目标版本写出文档（供内容-版本校验类测试复用）。
+pub fn try_write(
+    doc: &Document,
+    version: pdf_engine::core::types::PdfVersion,
+) -> Result<Vec<u8>, pdf_engine::core::writer::WriteError> {
+    let mut buf = Vec::new();
+    pdf_engine::core::writer::DocumentWriter::new()
+        .with_version(version)
+        .build(doc, &mut buf)?;
+    Ok(buf)
+}
