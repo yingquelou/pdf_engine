@@ -13,8 +13,9 @@ use crate::core::types::PdfVersion;
 
 /// 注解子类型（Table 169 写端支持子集）。
 ///
-/// `Sound`/`Movie`/`Widget`/`Screen`/`Redaction` 暂不建模：Widget 归
-/// AcroForm（E4）联动，其余按需增补。
+/// `Sound`/`Movie`/`Screen`/`Redaction` 暂不建模：Widget 由 AcroForm 写端
+/// 的 [`FormField`](super::FormField) 合并字段与 Widget 字典写出（E4），
+/// 其余按需增补。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationKind {
     /// 文本批注（`/Text`，PDF 1.0）。

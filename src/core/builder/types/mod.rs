@@ -11,6 +11,7 @@
 //! - `program`：嵌入字体程序；
 //! - `image`：图片数据与颜色空间；
 //! - `form`：Form XObject 与组属性字典；
+//! - `form_field`：交互表单（AcroForm 字段树与 Widget 注解）；
 //! - `function`：PDF 函数（Type 0/2/3/4）；
 //! - `graphics_state`：图形状态参数（ExtGState）；
 //! - `halftone`：半色调字典（Type 1/2 与包装字典）；
@@ -25,6 +26,7 @@ mod descriptor;
 mod encoding;
 mod font;
 mod form;
+mod form_field;
 mod function;
 mod graphics_state;
 mod halftone;
@@ -42,6 +44,7 @@ pub use descriptor::FontDescriptor;
 pub use encoding::FontEncoding;
 pub use font::{Font, FontWidths};
 pub use form::{FormResources, FormXObject, GroupXObject};
+pub use form_field::{AcroForm, FieldValue, FormField, FormFieldType, FormOption};
 pub use function::{
     CalculatorFunction, ExponentialFunction, Function, SampledFunction, StitchingFunction,
 };

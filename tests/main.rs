@@ -10107,3 +10107,105 @@ fn builder_annotation_appearance_roundtrips_through_parser() {
         "appearance content: {text}"
     );
 }
+
+/// 写入 → 重新解析：AcroForm 字段树、Widget `/Annots`、`/Opt` 与 `/AP`
+/// 外观流应经 `Document::acro_form` 完整回读（12.7.2–12.7.4）。
+#[test]
+fn builder_acro_form_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        AcroForm, FormField, FormOption, FormXObject, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::annotation::AnnotationSubtype;
+    use pdf_engine::core::reader::form::FieldType;
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let mut appearance_content = ContentStream::new();
+    appearance_content
+        .set_fill_gray(0.0)
+        .rect(0.0, 0.0, 10.0, 10.0)
+        .fill();
+    let appearance = builder.form_xobject(&FormXObject::new(
+        [0.0, 0.0, 10.0, 10.0],
+        appearance_content,
+    ));
+
+    let mut form = AcroForm::new()
+        .with_need_appearances(true)
+        .with_default_appearance("/Helv 0 Tf 0 g");
+    let person = FormField::group("person")
+        .with_child(FormField::text("name", [72.0, 700.0, 300.0, 720.0]).with_value("Alice"))
+        .with_child(FormField::text("email", [72.0, 670.0, 300.0, 690.0]).with_value("a@b.c"));
+    form.add_field(p0, person);
+    form.add_field(
+        p0,
+        FormField::choice("color", [72.0, 620.0, 200.0, 640.0])
+            .with_flags(FormField::COMBO)
+            .with_value("R")
+            .with_option(FormOption::new("R").with_display("Red"))
+            .with_option(FormOption::new("G")),
+    );
+    form.add_field(
+        p0,
+        FormField::checkbox("subscribe", [72.0, 590.0, 92.0, 610.0])
+            .with_appearance(appearance)
+            .with_appearance_state("Off"),
+    );
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let form = doc.acro_form().expect("parse form").expect("form present");
+    assert!(form.need_appearances);
+    assert!(form.default_appearance.is_some(), "/DA should be present");
+    assert_eq!(form.fields.len(), 3);
+
+    let person = &form.fields[0];
+    assert_eq!(person.fully_qualified_name, "person");
+    assert_eq!(person.kids.len(), 2);
+    assert_eq!(person.kids[0].fully_qualified_name, "person.name");
+    assert_eq!(person.kids[1].fully_qualified_name, "person.email");
+    assert!(person.kids.iter().all(|kid| kid.is_widget));
+
+    let choice = &form.fields[1];
+    assert_eq!(choice.field_type, Some(FieldType::Choice));
+    assert!(choice.flags.combo());
+    assert_eq!(choice.options.as_ref().map(Vec::len), Some(2));
+
+    let checkbox = &form.fields[2];
+    assert_eq!(checkbox.field_type, Some(FieldType::Button));
+    assert_eq!(checkbox.appearance_state.as_deref(), Some("Off"));
+    let appearance = checkbox
+        .appearance
+        .as_ref()
+        .and_then(|value| value.as_dict())
+        .expect("/AP dictionary");
+    let (form_num, _) = appearance
+        .get("N")
+        .and_then(|value| value.as_ref())
+        .expect("/AP /N");
+    let object = doc
+        .get_object(form_num)
+        .expect("form object")
+        .expect("exists");
+    match object.value {
+        Value::Stream(ref dict, _) => {
+            assert_eq!(dict.get("Subtype"), Some(&Value::Name("Form".into())));
+        }
+        other => panic!("expected Form XObject, got {other:?}"),
+    }
+
+    let widgets = doc.page_annotations(0).expect("page annotations");
+    assert_eq!(
+        widgets.len(),
+        4,
+        "two child widgets, the choice field and the checkbox"
+    );
+    assert!(
+        widgets
+            .iter()
+            .all(|annot| annot.subtype == AnnotationSubtype::Widget)
+    );
+}

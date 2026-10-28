@@ -5,12 +5,14 @@
 //! - `type3`：Type 3 字体字典与字符过程流；
 //! - `cid`：CIDFont 后代字典、Type 0 父字体与相关流；
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
-//! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）。
+//! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）；
+//! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出。
 
 mod annotation;
 mod cid;
 mod cmap;
 mod fonts;
+mod form_field;
 mod shading;
 mod type3;
 
@@ -18,6 +20,7 @@ use super::{
     CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions, GroupXObject,
     ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
 };
+use crate::core::builder::types::text_string_value;
 use crate::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value,
 };
@@ -36,6 +39,21 @@ impl PdfBuilder {
         let catalog_num: i64 = 1;
         let pages_num: i64 = 2;
         let mut num = 3i64;
+
+        // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
+        // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
+        // 保持零字节契约。AcroForm 自 PDF 1.2 起引入。
+        let acro_form = self.acro_form.clone();
+        if let Some(form) = &acro_form {
+            if self.version < PdfVersion::V1_2 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "AcroForm fields require PDF {}, got {}",
+                    PdfVersion::V1_2.as_str(),
+                    self.version.as_str()
+                )));
+            }
+            form_field::validate(form, self.pages.len(), self.forms.len())?;
+        }
 
         // 第一遍：为每页分配 Page 字典号 + 内容流号，并为字体/图片分配号。
         // 但字体/图片对象号要等遍历各页后才能确定连续段，故先扫一遍。
@@ -193,6 +211,13 @@ impl PdfBuilder {
                 used_forms.insert(form);
             }
         }
+        // 表单字段 Widget 的 `/AP` 引用同一 Form XObject 池；句柄上界
+        // 已在 `form_field::validate` 校验。
+        if let Some(form) = &acro_form {
+            for handle in form_field::appearance_handles(form) {
+                used_forms.insert(handle);
+            }
+        }
         let mut form_nums = vec![0i64; self.forms.len()];
         for &handle in &used_forms {
             form_nums[handle] = num;
@@ -346,6 +371,21 @@ impl PdfBuilder {
             num += 1;
         }
 
+        // AcroForm 字段树：按前序分配对象号（根到叶），并把各 Widget
+        // 对象号按生效页号分组，稍后并入页面 `/Annots`。
+        let (field_slots, field_roots) = match &acro_form {
+            Some(form) => form_field::allocate_fields(form, &mut num),
+            None => (Vec::new(), Vec::new()),
+        };
+        let mut page_widget_nums: Vec<Vec<i64>> = vec![Vec::new(); self.pages.len()];
+        for slot in &field_slots {
+            if slot.field.is_widget()
+                && let Some(page) = slot.page
+            {
+                page_widget_nums[page].push(slot.num);
+            }
+        }
+
         // —— 构造 Document ——
         let mut doc = Document::new();
         if !used_shadings.is_empty() {
@@ -409,6 +449,22 @@ impl PdfBuilder {
                 Value::Stream(meta_dict, StreamData::Owned(xml.clone())),
             ));
             catalog_dict = catalog_dict.insert("Metadata", Value::Ref(meta_num, 0));
+        }
+        // 交互表单目录条目（Table 218）：`/Fields` 引用顶层字段，
+        // `/NeedAppearances` 与 `/DA` 仅在声明时写出。
+        if let Some(form) = &acro_form {
+            let fields: Vec<Value> = field_roots
+                .iter()
+                .map(|&index| Value::Ref(field_slots[index].num, 0))
+                .collect();
+            let mut acro = Dict::new().insert("Fields", Value::Array(Array(fields)));
+            if form.need_appearances() {
+                acro = acro.insert("NeedAppearances", Value::Bool(true));
+            }
+            if let Some(appearance) = form.default_appearance() {
+                acro = acro.insert("DA", text_string_value(appearance));
+            }
+            catalog_dict = catalog_dict.insert("AcroForm", Value::Dict(acro));
         }
         doc.set_object(Object::new(catalog_num, 0, Value::Dict(catalog_dict)));
 
@@ -534,10 +590,13 @@ impl PdfBuilder {
                     page_dict.insert("Group", Value::Dict(group_dict(group, &mut doc, &mut num)?));
                 doc.features.borrow_mut().insert(PdfFeature::Transparency);
             }
-            if !page_annotation_handles[i].is_empty() {
+            if !page_annotation_handles[i].is_empty() || !page_widget_nums[i].is_empty() {
                 let mut annots = Array::new();
                 for &handle in &page_annotation_handles[i] {
                     annots = annots.push(Value::Ref(annotation_nums[handle], 0));
+                }
+                for &num in &page_widget_nums[i] {
+                    annots = annots.push(Value::Ref(num, 0));
                 }
                 page_dict = page_dict.insert("Annots", Value::Array(annots));
             }
@@ -570,6 +629,13 @@ impl PdfBuilder {
                 &form_nums,
             )?;
             doc.set_object(Object::new(annotation_nums[handle], 0, Value::Dict(dict)));
+        }
+
+        // 表单字段/Widget 间接对象：`/P` 指向页面字典，`/Kids`/`/Parent`
+        // 已按字段树对象号互引，`/AP` 解析为 Form XObject 流引用。
+        for slot in &field_slots {
+            let dict = form_field::field_dict(slot, &field_slots, &page_refs, &form_nums)?;
+            doc.set_object(Object::new(slot.num, 0, Value::Dict(dict)));
         }
 
         // 字体对象

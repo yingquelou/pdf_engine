@@ -39,18 +39,18 @@ pub(crate) use types::OpenTypeFlavor;
 pub(crate) use types::Pattern;
 pub(crate) use types::mesh_component_ranges;
 pub use types::{
-    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, AnnotationBorderStyle,
-    AnnotationDestination, AnnotationKind, AxialShading, CalGray, CalRGB, CalculatorFunction,
-    CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth, ColorSpace,
-    CoonsPatch, CoonsPatchShading, DashPattern, DeviceN, ExponentialFunction, Font, FontDescriptor,
-    FontEncoding, FontProgram, FontWidths, FormResources, FormXObject, FreeFormMeshShading,
-    Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
-    HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
-    LatticeMeshShading, MeshFunction, MeshVertex, OptionalContentGroup, PageSize, PaintType,
-    PdfAnnotation, RadialShading, SampledFunction, Separation, Shading, ShadingOptions,
-    ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction, TensorProductPatch,
-    TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font,
-    Type3Glyph,
+    AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
+    AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AxialShading, CalGray, CalRGB,
+    CalculatorFunction, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics,
+    CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN, ExponentialFunction,
+    FieldValue, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths, FormField,
+    FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading, Function,
+    FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone, HalftoneDictionary,
+    ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, MeshFunction,
+    MeshVertex, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, RadialShading,
+    SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
+    SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
+    TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -147,6 +147,8 @@ pub struct PdfBuilder {
     color_spaces: Vec<ColorSpace>,
     /// 文档级注解池；`PdfBuilder::add_annotation` 返回其索引。
     annotations: Vec<AnnotationEntry>,
+    /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
+    acro_form: Option<AcroForm>,
     /// D4 写端流压缩策略；`None`（默认）时所有流保持明文写出。
     compression: Option<StreamCompression>,
     /// 文档级导航结构（页面标签、命名目标/页面、大纲）。
@@ -178,6 +180,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             annotations: Vec::new(),
+            acro_form: None,
             compression: None,
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
@@ -198,6 +201,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             annotations: Vec::new(),
+            acro_form: None,
             compression: None,
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
@@ -422,6 +426,19 @@ impl PdfBuilder {
         let idx = self.annotations.len();
         self.annotations.push(AnnotationEntry { page, annot });
         idx
+    }
+
+    /// 设置交互表单（AcroForm，12.7.2–12.7.4）。
+    ///
+    /// 字段树在 [`PdfBuilder::build`] 时写成独立间接对象：目录
+    /// `/AcroForm /Fields` 引用顶层字段，页面 `/Annots` 引用各 Widget，
+    /// 字段间 `/Kids`/`/Parent` 互引。Widget 外观流 `/AP` 复用
+    /// [`PdfBuilder::form_xobject`] 池。页号越界、字段树结构非法或
+    /// `/AP` 句柄未知返回 [`WriteError::InvalidObject`]；目标版本低于
+    /// 1.2 返回 [`WriteError::UnsupportedVersion`]，均不写出任何字节。
+    pub fn set_acro_form(&mut self, form: AcroForm) -> &mut Self {
+        self.acro_form = Some(form);
+        self
     }
 
     /// 注册一个 PDF 函数（§7.10 Type 0/2/3/4），返回文档级句柄。

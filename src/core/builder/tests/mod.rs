@@ -9,6 +9,8 @@
 //! - `cid`：CIDFont 描述符与内容流；
 //! - `to_unicode`：ToUnicode CMap；
 //! - `encoding`：自定义 CID 编码 CMap；
+//! - `annotation`：注解字典与 `/Annots`；
+//! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
 //! - `form`：Form XObject 字典与资源；
 //! - `page_group`：页字典组属性（`/Group`）；
 //! - `optional_content`：可选内容组（`/OCG`）与目录 `/OCProperties`；
@@ -18,6 +20,7 @@
 //! - `color_space`：页级命名颜色空间（`/ColorSpace` 资源与 `CS`/`cs`）；
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
+mod acro_form;
 mod annotation;
 mod cid;
 mod cid_cmap_multibyte;
