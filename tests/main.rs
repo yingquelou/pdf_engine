@@ -10210,6 +10210,84 @@ fn builder_acro_form_roundtrips_through_parser() {
     );
 }
 
+/// 写入 → 重新解析：`/AcroForm /DR /Font` 默认资源应回读为字体间接引用，
+/// 且与页面 `/Resources` 中的同名字体共用同一对象（12.7.2 Table 218）。
+#[test]
+fn builder_acro_form_default_resources_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{AcroForm, Font, FormField, PageSize, PdfBuilder};
+    use pdf_engine::core::types::Value;
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let font = Font::helvetica(12.0);
+    builder.text(page, &font, 72.0, 750.0, "Form");
+    let mut form = AcroForm::new()
+        .with_default_appearance("/Helv 12 Tf 0 g")
+        .with_default_font("Helv", font.clone());
+    form.add_field(
+        page,
+        FormField::text("name", [72.0, 700.0, 300.0, 720.0]).with_value("Alice"),
+    );
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let parsed = doc.acro_form().expect("parse form").expect("form present");
+    assert_eq!(parsed.fields.len(), 1, "one top-level field");
+
+    let dr = parsed
+        .default_resources
+        .as_ref()
+        .and_then(|value| value.as_dict())
+        .expect("/DR dictionary")
+        .clone();
+    let fonts = dr
+        .get("Font")
+        .and_then(|value| value.as_dict())
+        .expect("/DR /Font dictionary")
+        .clone();
+    assert_eq!(fonts.0.len(), 1, "one default font resource");
+    let (font_num, _) = fonts
+        .get("Helv")
+        .and_then(|value| value.as_ref())
+        .expect("/Helv is an indirect reference");
+    let font_dict = doc
+        .get_object(font_num)
+        .expect("font object")
+        .expect("font exists")
+        .value
+        .as_dict()
+        .expect("font dictionary")
+        .clone();
+    assert_eq!(
+        font_dict.get("BaseFont"),
+        Some(&Value::Name("Helvetica".into())),
+        "default resource resolves to a real font"
+    );
+
+    let mut helvetica_objects = Vec::new();
+    for num in 1..30 {
+        if let Some(object) = doc.get_object(num).expect("probe object")
+            && let Some(dict) = object.value.as_dict()
+            && dict.get("Type").and_then(|value| value.as_name()) == Some("Font")
+            && dict.get("BaseFont").and_then(|value| value.as_name()) == Some("Helvetica")
+        {
+            helvetica_objects.push(num);
+        }
+    }
+    assert_eq!(
+        helvetica_objects,
+        vec![font_num],
+        "page resources and /DR share one font object"
+    );
+    assert_eq!(
+        doc.extract_page_text(0).expect("page text").trim(),
+        "Form",
+        "page text still extracts after adding default resources"
+    );
+}
+
 /// 写入 → 重新解析：`/EmbeddedFiles` 名称树、文件规格（`/F` `/UF` `/Desc`
 /// `/EF`）、`/Params`（`/Size` `/CheckSum`）与 FileAttachment 注解 `/FS`
 /// 应经 `Document::embedded_files` 完整回读（7.11.2–7.11.4、12.5.6.14）。

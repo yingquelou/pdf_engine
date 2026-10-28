@@ -1,6 +1,7 @@
 //! 交互表单写端（ISO 32000-1 12.7.2–12.7.4）。
 //!
-//! [`AcroForm`] 持有表单级选项（`/NeedAppearances`、`/DA`）与按页绑定的
+//! [`AcroForm`] 持有表单级选项（`/NeedAppearances`、`/DA`、`/DR` 默认
+//! 字体资源）与按页绑定的
 //! 字段树；[`FormField`] 以链式构造声明字段条目（`/T`、`/FT`、`/Ff`、
 //! `/V`/`/DV`、`/DA`、`/Q`、`/MaxLen`、`/Opt`、`/TU`）与子字段。
 //!
@@ -10,6 +11,8 @@
 //! [`PdfBuilder::form_xobject`](super::super::PdfBuilder::form_xobject) 池。
 //! 经 [`PdfBuilder::set_acro_form`](super::super::PdfBuilder::set_acro_form)
 //! 注册后，由 assemble 写成目录 `/AcroForm` 与独立字段对象。
+
+use super::Font;
 
 /// 字段类型（`/FT`，Table 220）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -406,6 +409,7 @@ impl FormField {
 pub struct AcroForm {
     need_appearances: bool,
     default_appearance: Option<String>,
+    default_fonts: Vec<(String, Font)>,
     fields: Vec<(usize, FormField)>,
 }
 
@@ -427,6 +431,13 @@ impl AcroForm {
         self
     }
 
+    /// `/DR /Font` 默认资源：把外观字符串引用的资源名（如 `Helv`）绑定
+    /// 到字体；同一字体与页面已用字体去重共享对象，重名报错。
+    pub fn with_default_font(mut self, name: impl Into<String>, font: Font) -> Self {
+        self.default_fonts.push((name.into(), font));
+        self
+    }
+
     /// 追加一个顶层字段树；`page` 为该树内未显式指定页号的 Widget 的
     /// 绑定页（0 基）。
     pub fn add_field(&mut self, page: usize, field: FormField) -> &mut Self {
@@ -440,6 +451,10 @@ impl AcroForm {
 
     pub(crate) fn default_appearance(&self) -> Option<&str> {
         self.default_appearance.as_deref()
+    }
+
+    pub(crate) fn default_fonts(&self) -> &[(String, Font)] {
+        &self.default_fonts
     }
 
     pub(crate) fn fields(&self) -> &[(usize, FormField)] {

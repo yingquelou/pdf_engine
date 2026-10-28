@@ -477,6 +477,27 @@ impl PdfBuilder {
             if let Some(appearance) = form.default_appearance() {
                 acro = acro.insert("DA", text_string_value(appearance));
             }
+            // `/DR` 默认资源：外观字符串引用的字体资源名 → 字体对象；
+            // 与页面字体去重共享同一对象号。
+            if !form.default_fonts().is_empty() {
+                let mut dr_fonts = Dict::new();
+                for (name, font) in form.default_fonts() {
+                    let obj_num = match font_pool.iter().position(|(g, _)| same_font(g, font)) {
+                        Some(i) => font_pool[i].1,
+                        None => {
+                            let n = num;
+                            num += 1;
+                            font_pool.push((font.clone(), n));
+                            n
+                        }
+                    };
+                    dr_fonts = dr_fonts.insert(name.clone(), Value::Ref(obj_num, 0));
+                }
+                acro = acro.insert(
+                    "DR",
+                    Value::Dict(Dict::new().insert("Font", Value::Dict(dr_fonts))),
+                );
+            }
             catalog_dict = catalog_dict.insert("AcroForm", Value::Dict(acro));
         }
         // 嵌入文件目录条目（7.11.4）：`/Names /EmbeddedFiles` 名称树；
