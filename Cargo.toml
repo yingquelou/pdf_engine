@@ -35,3 +35,9 @@ path = "src/main.rs"
 
 [dev-dependencies]
 jpeg-encoder = "0.7.1"
+
+# 阶段 E/F 交互集成测试按特性分文件（`tests/interactive/`），因此目标根不是
+# `tests/*.rs` 自动发现的文件，需显式声明路径。
+[[test]]
+name = "interactive"
+path = "tests/interactive/mod.rs"

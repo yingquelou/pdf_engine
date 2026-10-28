@@ -7,6 +7,8 @@
 //! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A` 原样保留、动作语义由
 //!   E3 的 [`crate::core::reader::action`] 解析，`/Dest` 经
 //!   `Document::annotation_destination` 解析为 12.3.2 目标模型。
+//! - 子类型表（12.5.3 Table 169：全 26 种名称、引入版本与标记类归属）在 [`kind`]，
+//!   写端子集经 `AnnotationKind::subtype` 复用同一张表。
 //! - 子类型专有条目类型化（12.5.6，解析在 [`subtype`]）：Text `/Name`、`/Open`、
 //!   `/State`、`/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径；
 //!   Line `/L`、`/LE`、`/LL`、`/LLE`、`/Cap`、`/IT`、`/LLO`、`/CP`、`/CO`
@@ -26,12 +28,14 @@ use crate::core::types::{Dict, Document, Value};
 mod tests;
 
 mod entries;
+mod kind;
 pub mod subtype;
 
 use entries::{
     parse_appearance, parse_border, parse_number_array, parse_opacity, parse_rect,
     parse_text_string,
 };
+pub use kind::{AnnotationSubtype, Row, TABLE_169};
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
 /// 页面树遍历最大深度。
@@ -80,116 +84,6 @@ type Result<T> = std::result::Result<T, AnnotationError>;
 
 fn malformed(message: impl Into<String>) -> AnnotationError {
     AnnotationError::Malformed(message.into())
-}
-
-/// 注解子类型（12.5.3 Table 169；PDF 1.7 全集）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnnotationSubtype {
-    Text,
-    Link,
-    FreeText,
-    Line,
-    Square,
-    Circle,
-    Polygon,
-    PolyLine,
-    Highlight,
-    Underline,
-    Squiggly,
-    StrikeOut,
-    Caret,
-    Ink,
-    Popup,
-    FileAttachment,
-    Sound,
-    Movie,
-    Widget,
-    Screen,
-    Stamp,
-    Redaction,
-    /// 未识别的子类型名，原样保留。
-    Unknown(String),
-}
-
-impl AnnotationSubtype {
-    fn from_name(name: &str) -> Self {
-        match name {
-            "Text" => Self::Text,
-            "Link" => Self::Link,
-            "FreeText" => Self::FreeText,
-            "Line" => Self::Line,
-            "Square" => Self::Square,
-            "Circle" => Self::Circle,
-            "Polygon" => Self::Polygon,
-            "PolyLine" => Self::PolyLine,
-            "Highlight" => Self::Highlight,
-            "Underline" => Self::Underline,
-            "Squiggly" => Self::Squiggly,
-            "StrikeOut" => Self::StrikeOut,
-            "Caret" => Self::Caret,
-            "Ink" => Self::Ink,
-            "Popup" => Self::Popup,
-            "FileAttachment" => Self::FileAttachment,
-            "Sound" => Self::Sound,
-            "Movie" => Self::Movie,
-            "Widget" => Self::Widget,
-            "Screen" => Self::Screen,
-            "Stamp" => Self::Stamp,
-            "Redaction" => Self::Redaction,
-            other => Self::Unknown(other.to_string()),
-        }
-    }
-
-    /// 标准子类型名（Unknown 返回其原始名）。
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Text => "Text",
-            Self::Link => "Link",
-            Self::FreeText => "FreeText",
-            Self::Line => "Line",
-            Self::Square => "Square",
-            Self::Circle => "Circle",
-            Self::Polygon => "Polygon",
-            Self::PolyLine => "PolyLine",
-            Self::Highlight => "Highlight",
-            Self::Underline => "Underline",
-            Self::Squiggly => "Squiggly",
-            Self::StrikeOut => "StrikeOut",
-            Self::Caret => "Caret",
-            Self::Ink => "Ink",
-            Self::Popup => "Popup",
-            Self::FileAttachment => "FileAttachment",
-            Self::Sound => "Sound",
-            Self::Movie => "Movie",
-            Self::Widget => "Widget",
-            Self::Screen => "Screen",
-            Self::Stamp => "Stamp",
-            Self::Redaction => "Redaction",
-            Self::Unknown(other) => other,
-        }
-    }
-
-    /// 是否为标记类注解（Table 172，携带 `/QuadPoints`）。
-    pub fn is_markup(&self) -> bool {
-        matches!(
-            self,
-            Self::Text
-                | Self::Highlight
-                | Self::Underline
-                | Self::Squiggly
-                | Self::StrikeOut
-                | Self::Caret
-                | Self::FreeText
-                | Self::Square
-                | Self::Circle
-                | Self::Polygon
-                | Self::PolyLine
-                | Self::Line
-                | Self::Ink
-                | Self::Stamp
-                | Self::Redaction
-        )
-    }
 }
 
 /// 注解标志位（12.5.2 Table 165）。

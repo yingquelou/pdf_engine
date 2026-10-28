@@ -334,14 +334,43 @@ fn malformed_annotation_dictionaries_are_typed_errors() {
 
 #[test]
 fn unknown_subtype_is_preserved() {
+    // `Hologram` 是 PDF 2.0 的子类型，不在 Table 169 的 PDF 1.7 全集内。
     let annotation =
-        parse_annotation(&doc(vec![]), 0, None, &base_annotation("Watermark")).expect("unknown");
+        parse_annotation(&doc(vec![]), 0, None, &base_annotation("Hologram")).expect("unknown");
     assert_eq!(
         annotation.subtype,
-        AnnotationSubtype::Unknown("Watermark".into())
+        AnnotationSubtype::Unknown("Hologram".into())
     );
-    assert_eq!(annotation.subtype.name(), "Watermark");
+    assert_eq!(annotation.subtype.name(), "Hologram");
     assert!(!annotation.subtype.is_markup());
+    assert_eq!(annotation.subtype.min_version(), None);
+}
+
+/// Table 169 的三列（子类型名、引入版本、是否标记类）逐行核对。
+#[test]
+fn table_169_rows_map_to_names_versions_and_markup_flags() {
+    assert_eq!(TABLE_169.len(), 26, "PDF 1.7 全集应为 26 种");
+    let mut variants = Vec::new();
+    for (name, version, markup) in TABLE_169 {
+        let annotation =
+            parse_annotation(&doc(vec![]), 0, None, &base_annotation(name)).expect("subtype");
+        assert!(
+            !matches!(annotation.subtype, AnnotationSubtype::Unknown(_)),
+            "{name} 应是标准子类型"
+        );
+        assert_eq!(annotation.subtype.name(), name);
+        assert_eq!(
+            annotation.subtype.min_version(),
+            Some(version),
+            "{name} 版本"
+        );
+        assert_eq!(annotation.subtype.is_markup(), markup, "{name} 标记类归属");
+        variants.push(format!("{:?}", annotation.subtype));
+    }
+    variants.sort();
+    let before = variants.len();
+    variants.dedup();
+    assert_eq!(variants.len(), before, "每个 Table 169 行应映射到不同变体");
 }
 
 #[test]
