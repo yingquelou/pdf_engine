@@ -267,6 +267,13 @@ impl Document {
         buf.truncate(filled);
         Some(buf)
     }
+
+    /// 源文件总字节数；无源或元数据查询失败返回 `None`。
+    pub(crate) fn source_len(&self) -> Option<u64> {
+        let src = self.source.as_ref()?;
+        let guard = src.lock().ok()?;
+        guard.get_ref().metadata().ok().map(|meta| meta.len())
+    }
 }
 
 impl PartialEq for Document {

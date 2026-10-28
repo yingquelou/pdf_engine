@@ -9,6 +9,10 @@ aes = "0.8"
 # 仅启用纯 Rust 的 miniz_oxide 后端（rust_backend），不引入 C 版 zlib。
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 md-5 = "0.10"
+# SHA-1/SHA-256 摘要：数字签名（12.8）ByteRange 覆盖字段的摘要计算。
+# 与 md-5 同属 RustCrypto digest 0.10 家族，经 `SignatureBackend` trait 隔离。
+sha1 = "0.10"
+sha2 = "0.10"
 rc4 = "0.1"
 subtle = "2"
 zeroize = "1"

@@ -87,6 +87,7 @@ pub mod page_content;
 mod parser;
 mod security;
 pub mod shading;
+pub mod signature;
 #[cfg(test)]
 mod tests;
 pub mod text;
