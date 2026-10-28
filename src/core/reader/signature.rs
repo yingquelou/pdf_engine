@@ -1,4 +1,4 @@
-//! 数字签名字典读取（12.8.1–12.8.4）。
+//! 数字签名字典读取（12.8.1–12.8.5）。
 //!
 //! - [`Document::document_signatures`]：沿目录 `/AcroForm` 字段树收集
 //!   `/FT /Sig` 字段的 `/V` 签名字典（Table 257）。
@@ -13,6 +13,9 @@
 //!   签名字典引用条目建模为 [`SignatureReference`]，`/TransformParams`
 //!   按 `/TransformMethod` 解析为 [`TransformParams`]
 //!   （DocMDP / FieldMDP / UR）。
+//! - 目录 `/Perms`（12.8.5，Table 268）：文档级权限/变更允许条目经
+//!   [`Document::perms_entry`] 解析为 [`PermsEntry`]，签名字典数组经
+//!   [`Document::perms_signatures`] 读取。
 
 use std::fmt;
 
@@ -317,6 +320,58 @@ impl SignatureReference {
     }
 }
 
+/// 目录 `/Perms` 的标准条目名（12.8.5 Table 268）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermsEntryName {
+    /// `/DocMDP`：文档修改防护（DocMDP 变换）。
+    DocumentPermissions,
+    /// `/UR`：允许阅读器更新表单（UR 变换）。
+    UniversalResources,
+    /// `/Form`：表单字段变更允许（FieldMDP 变换）。
+    FormFieldChanges,
+    /// `/SigFlags`：签署状态位。
+    SignatureFlag,
+    /// 其他/自定义条目，原样保留名称。
+    Unknown(String),
+}
+
+impl PermsEntryName {
+    /// 由 `/Perms` 键名解析。
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "DocMDP" => Self::DocumentPermissions,
+            "UR" => Self::UniversalResources,
+            "Form" => Self::FormFieldChanges,
+            "SigFlags" => Self::SignatureFlag,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+
+    /// 键名（不含前导 `/`）。
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::DocumentPermissions => "DocMDP",
+            Self::UniversalResources => "UR",
+            Self::FormFieldChanges => "Form",
+            Self::SignatureFlag => "SigFlags",
+            Self::Unknown(name) => name,
+        }
+    }
+}
+
+/// 目录 `/Perms` 的单条条目（Table 268）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermsEntry {
+    /// 条目键的类型化名称。
+    pub name: PermsEntryName,
+    /// 原始值（不解析，可能是引用/整数/日期）。
+    pub raw: Value,
+    /// 值解析为字典后的签名字典（仅当 `/Type /Sig`）；否则 `None`。
+    pub signature: Option<DocumentSignature>,
+    /// 文档修改防护级别：仅 `/DocMDP` 字典带整数 `/P` 时填充。
+    pub permission: Option<DocmdpPermission>,
+}
+
 /// 增量摘要接收器：按块喂入覆盖字节，产出最终摘要。
 pub trait DigestSink {
     /// 追加一块字节。
@@ -598,6 +653,79 @@ impl Document {
             }
         }
         Ok(None)
+    }
+
+    /// 目录 `/Perms`（12.8.5 Table 268）中指定条目的解析结果；
+    /// 无 `/Perms` 或无该键返回 `None`。值经一层间接解析；可解析为
+    /// 字典时校验 `/Type /Sig` 并附带 DocMDP 整数 `/P`（仅 `/DocMDP`
+    /// 条目），否则签名字段为 `None`（如 `/SigFlags` 的整数值）。
+    pub fn perms_entry(&self, name: PermsEntryName) -> Result<Option<PermsEntry>> {
+        let cat = catalog(self).map_err(|_| SignatureError::CatalogMissing)?;
+        let Some(perms_value) = cat.get("Perms") else {
+            return Ok(None);
+        };
+        let perms_resolved =
+            resolve(self, perms_value).map_err(|error| malformed(error.to_string()))?;
+        let perms = perms_resolved
+            .as_dict()
+            .ok_or_else(|| malformed("/Perms is not a dictionary"))?;
+        let key = name.as_str();
+        let Some(raw) = perms.get(key) else {
+            return Ok(None);
+        };
+        let resolved = resolve(self, raw).map_err(|error| malformed(error.to_string()))?;
+        let mut signature = None;
+        let mut permission = None;
+        if let Some(dict) = resolved.as_dict()
+            && dict.get("Type").and_then(|item| item.as_name()) == Some("Sig")
+        {
+            signature = Some(self.signature(raw)?);
+            if name == PermsEntryName::DocumentPermissions
+                && let Some(value) = dict.get("P").and_then(|item| item.as_integer())
+            {
+                permission = Some(DocmdpPermission::from_i64(value).ok_or_else(|| {
+                    malformed(format!("/Perms /DocMDP /P must be 1..3, got {value}"))
+                })?);
+            }
+        }
+        Ok(Some(PermsEntry {
+            name,
+            raw: raw.clone(),
+            signature,
+            permission,
+        }))
+    }
+
+    /// 目录 `/Perms /DocMDP` 的文档修改防护级别（12.8.4.3）；无则 `None`。
+    pub fn perms_document_modification_permission(&self) -> Result<Option<DocmdpPermission>> {
+        Ok(self
+            .perms_entry(PermsEntryName::DocumentPermissions)?
+            .and_then(|entry| entry.permission))
+    }
+
+    /// 目录 `/Perms /Sig` 数组（Table 268）的全部签名字典；无键返回空表。
+    pub fn perms_signatures(&self) -> Result<Vec<DocumentSignature>> {
+        let cat = catalog(self).map_err(|_| SignatureError::CatalogMissing)?;
+        let Some(perms_value) = cat.get("Perms") else {
+            return Ok(Vec::new());
+        };
+        let perms_resolved =
+            resolve(self, perms_value).map_err(|error| malformed(error.to_string()))?;
+        let perms = perms_resolved
+            .as_dict()
+            .ok_or_else(|| malformed("/Perms is not a dictionary"))?;
+        let Some(raw) = perms.get("Sig") else {
+            return Ok(Vec::new());
+        };
+        let resolved = resolve(self, raw).map_err(|error| malformed(error.to_string()))?;
+        let array = resolved
+            .as_array()
+            .ok_or_else(|| malformed("/Perms /Sig must be an array of signature dictionaries"))?;
+        let mut out = Vec::new();
+        for item in &array.0 {
+            out.push(self.signature(item)?);
+        }
+        Ok(out)
     }
 }
 
