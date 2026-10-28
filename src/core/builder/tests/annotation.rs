@@ -2,6 +2,7 @@
 //! （ISO 32000-1 12.5.1–12.5.5）。
 
 use super::*;
+use crate::core::content::ContentStream;
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{PdfFeature, Value};
 
@@ -229,6 +230,82 @@ fn markup_requires_pdf_1_3() {
         matches!(error, WriteError::UnsupportedVersion(_)),
         "{error}"
     );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn appearance_streams_written_as_normal_down_rollover_references() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    let mut normal_content = ContentStream::new();
+    normal_content
+        .save_state()
+        .set_fill_gray(0.5)
+        .rect(0.0, 0.0, 20.0, 20.0)
+        .fill()
+        .restore_state();
+    let normal = b.form_xobject(&FormXObject::new([0.0, 0.0, 20.0, 20.0], normal_content));
+    let mut down_content = ContentStream::new();
+    down_content.rect(0.0, 0.0, 20.0, 20.0).fill();
+    let down = b.form_xobject(&FormXObject::new([0.0, 0.0, 20.0, 20.0], down_content));
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Square, [0.0, 0.0, 20.0, 20.0])
+            .with_appearance(normal)
+            .with_appearance_down(down),
+    );
+    let doc = b.assemble_document().expect("assemble");
+    let dict = annot_object(&doc, 3, 0);
+    let ap = dict.get("AP").and_then(|v| v.as_dict()).expect("/AP dict");
+    // 表单对象号紧跟页面槽位（catalog=1、pages=2、page=3、content=4）按句柄分配。
+    assert_eq!(ap.get("N"), Some(&Value::Ref(5, 0)));
+    assert_eq!(ap.get("D"), Some(&Value::Ref(6, 0)));
+    assert!(ap.get("R").is_none());
+    let form = doc
+        .get_object(5)
+        .expect("object")
+        .expect("form exists")
+        .value;
+    let form_dict = match &form {
+        Value::Stream(dict, _) => dict,
+        other => panic!("expected /AP /N stream, got {other:?}"),
+    };
+    assert_eq!(form_dict.get("Subtype"), Some(&Value::Name("Form".into())));
+    assert!(form_dict.get("BBox").is_some());
+}
+
+#[test]
+fn appearance_requires_pdf_1_2() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_1);
+    let p0 = b.page(PageSize::A4);
+    let form = b.form_xobject(&FormXObject::new(
+        [0.0, 0.0, 10.0, 10.0],
+        ContentStream::new(),
+    ));
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_appearance(form),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("1.1 must reject /AP");
+    assert!(
+        matches!(error, WriteError::UnsupportedVersion(_)),
+        "{error}"
+    );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn appearance_handle_out_of_range_is_rejected() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_appearance(3),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("unknown form handle");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
     assert_eq!(out.len(), 0);
 }
 

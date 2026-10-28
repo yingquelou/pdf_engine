@@ -12,12 +12,14 @@ use super::real_array;
 /// 把单个注解写成字典；对象号已由 assemble 主流程按句柄分配。
 ///
 /// `page_refs` 用于把 `/Dest` 与 `GoTo` 动作中的 0 基页号解析为
-/// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 句柄。
+/// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 句柄；
+/// `form_nums` 用于把 `/AP` 外观流句柄解析为 Form XObject 流引用。
 pub(super) fn annotation_dict(
     annot: &PdfAnnotation,
     handle: usize,
     annotation_nums: &[i64],
     page_refs: &[(i64, i64)],
+    form_nums: &[i64],
 ) -> Result<Dict, WriteError> {
     let mut dict = Dict::new()
         .insert("Type", Value::Name("Annot".into()))
@@ -84,6 +86,24 @@ pub(super) fn annotation_dict(
             ))
         })?;
         dict = dict.insert("Popup", Value::Ref(*num, 0));
+    }
+    let mut appearance = Dict::new();
+    for (key, form) in [
+        ("N", annot.appearance_normal()),
+        ("D", annot.appearance_down()),
+        ("R", annot.appearance_rollover()),
+    ] {
+        if let Some(form) = form {
+            let num = form_nums.get(form).ok_or_else(|| {
+                WriteError::InvalidObject(format!(
+                    "annotation handle {handle}: /AP /{key} references unknown form handle {form}"
+                ))
+            })?;
+            appearance = appearance.insert(key, Value::Ref(*num, 0));
+        }
+    }
+    if !appearance.0.is_empty() {
+        dict = dict.insert("AP", Value::Dict(appearance));
     }
     Ok(dict)
 }

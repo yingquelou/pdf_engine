@@ -174,6 +174,25 @@ impl PdfBuilder {
                 used_forms.insert(soft_mask.group);
             }
         }
+        // 注解 `/AP` 外观流引用同一 Form XObject 池（12.5.5）；句柄越界
+        // 在此拒绝，引用到的表单与页面绘制表单一样分配对象号。
+        for (handle, entry) in self.annotations.iter().enumerate() {
+            for form in [
+                entry.annot.appearance_normal(),
+                entry.annot.appearance_down(),
+                entry.annot.appearance_rollover(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if form >= self.forms.len() {
+                    return Err(WriteError::InvalidObject(format!(
+                        "annotation handle {handle}: /AP references unknown form handle {form}"
+                    )));
+                }
+                used_forms.insert(form);
+            }
+        }
         let mut form_nums = vec![0i64; self.forms.len()];
         for &handle in &used_forms {
             form_nums[handle] = num;
@@ -312,6 +331,13 @@ impl PdfBuilder {
                     "{} annotations require PDF {}, got {}",
                     entry.annot.kind().name(),
                     required.as_str(),
+                    self.version.as_str()
+                )));
+            }
+            // `/AP` 外观流自 PDF 1.2 起引入（表 167），与子类型门禁独立。
+            if entry.annot.has_appearance() && self.version < PdfVersion::V1_2 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "annotation appearance streams (/AP) require PDF 1.2, got {}",
                     self.version.as_str()
                 )));
             }
@@ -536,8 +562,13 @@ impl PdfBuilder {
         // (对象号, 生成号) 引用表再交给导航层。
         let page_refs: Vec<(i64, i64)> = page_slots.iter().map(|(pn, _)| (*pn, 0)).collect();
         for (handle, entry) in self.annotations.iter().enumerate() {
-            let dict =
-                annotation::annotation_dict(&entry.annot, handle, &annotation_nums, &page_refs)?;
+            let dict = annotation::annotation_dict(
+                &entry.annot,
+                handle,
+                &annotation_nums,
+                &page_refs,
+                &form_nums,
+            )?;
             doc.set_object(Object::new(annotation_nums[handle], 0, Value::Dict(dict)));
         }
 

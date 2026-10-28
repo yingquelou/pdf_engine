@@ -2,7 +2,8 @@
 //!
 //! [`PdfAnnotation`] 以链式构造覆盖注解字典的通用条目（Table 165/166/169）：
 //! 子类型、`/Rect`、标志、文本条目、颜色、透明度、边框样式（`/BS`）、
-//! `/QuadPoints`、动作 `/A`、目标 `/Dest` 与 `/Popup` 句柄引用。
+//! `/QuadPoints`、动作 `/A`、目标 `/Dest`、外观流 `/AP`（N/D/R）与
+//! `/Popup` 句柄引用。
 //! 经 [`PdfBuilder::add_annotation`](super::super::PdfBuilder::add_annotation)
 //! 绑定到页面后，由 assemble 写为独立间接对象并登记进页面 `/Annots`。
 
@@ -173,6 +174,9 @@ pub struct PdfAnnotation {
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
+    appearance_normal: Option<usize>,
+    appearance_down: Option<usize>,
+    appearance_rollover: Option<usize>,
 }
 
 /// `/C`、`/IC` 颜色数组允许的分量数。
@@ -201,6 +205,9 @@ impl PdfAnnotation {
             action: None,
             destination: None,
             popup: None,
+            appearance_normal: None,
+            appearance_down: None,
+            appearance_rollover: None,
         }
     }
 
@@ -306,6 +313,24 @@ impl PdfAnnotation {
         self
     }
 
+    /// 常态外观流（`/AP` 字典 `/N`）；参数为 [`FormXObject`](super::FormXObject) 句柄。
+    pub fn with_appearance(mut self, handle: usize) -> Self {
+        self.appearance_normal = Some(handle);
+        self
+    }
+
+    /// 按下态外观流（`/AP` 字典 `/D`）；参数为 Form XObject 句柄。
+    pub fn with_appearance_down(mut self, handle: usize) -> Self {
+        self.appearance_down = Some(handle);
+        self
+    }
+
+    /// 悬停态外观流（`/AP` 字典 `/R`）；参数为 Form XObject 句柄。
+    pub fn with_appearance_rollover(mut self, handle: usize) -> Self {
+        self.appearance_rollover = Some(handle);
+        self
+    }
+
     /// 子类型。
     pub fn kind(&self) -> AnnotationKind {
         self.kind
@@ -383,6 +408,25 @@ impl PdfAnnotation {
 
     pub(crate) fn popup(&self) -> Option<usize> {
         self.popup
+    }
+
+    pub(crate) fn appearance_normal(&self) -> Option<usize> {
+        self.appearance_normal
+    }
+
+    pub(crate) fn appearance_down(&self) -> Option<usize> {
+        self.appearance_down
+    }
+
+    pub(crate) fn appearance_rollover(&self) -> Option<usize> {
+        self.appearance_rollover
+    }
+
+    /// 是否声明了任意 `/AP` 外观流。
+    pub(crate) fn has_appearance(&self) -> bool {
+        self.appearance_normal.is_some()
+            || self.appearance_down.is_some()
+            || self.appearance_rollover.is_some()
     }
 
     /// 校验字典一致性；错误串直接用于 [`WriteError`](crate::core::writer::WriteError)。
