@@ -1,4 +1,5 @@
-//! 注解字典写出（12.5.1–12.5.5）：通用条目 + `/A` `/Dest` `/Popup` 引用解析。
+//! 注解字典写出（12.5.1–12.5.5）：通用条目 + `/A` `/Dest` `/Popup` `/FS`
+//! 引用解析。
 
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
@@ -13,13 +14,15 @@ use super::real_array;
 ///
 /// `page_refs` 用于把 `/Dest` 与 `GoTo` 动作中的 0 基页号解析为
 /// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 句柄；
-/// `form_nums` 用于把 `/AP` 外观流句柄解析为 Form XObject 流引用。
+/// `form_nums` 用于把 `/AP` 外观流句柄解析为 Form XObject 流引用；
+/// `embedded_nums` 用于把 `/FS` 句柄解析为文件规格引用。
 pub(super) fn annotation_dict(
     annot: &PdfAnnotation,
     handle: usize,
     annotation_nums: &[i64],
     page_refs: &[(i64, i64)],
     form_nums: &[i64],
+    embedded_nums: &[i64],
 ) -> Result<Dict, WriteError> {
     let mut dict = Dict::new()
         .insert("Type", Value::Name("Annot".into()))
@@ -86,6 +89,14 @@ pub(super) fn annotation_dict(
             ))
         })?;
         dict = dict.insert("Popup", Value::Ref(*num, 0));
+    }
+    if let Some(target) = annot.filespec() {
+        let num = embedded_nums.get(target).ok_or_else(|| {
+            WriteError::InvalidObject(format!(
+                "annotation handle {handle}: /FS references unknown embedded file handle {target}"
+            ))
+        })?;
+        dict = dict.insert("FS", Value::Ref(*num, 0));
     }
     let mut appearance = Dict::new();
     for (key, form) in [

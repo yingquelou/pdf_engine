@@ -72,6 +72,7 @@ pub mod annotation;
 pub mod color_space;
 pub mod content;
 mod document;
+pub mod embedded;
 pub mod font;
 pub mod form;
 pub mod graphics_state;

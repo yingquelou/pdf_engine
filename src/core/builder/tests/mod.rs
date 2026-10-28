@@ -11,6 +11,7 @@
 //! - `encoding`：自定义 CID 编码 CMap；
 //! - `annotation`：注解字典与 `/Annots`；
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
+//! - `embedded_file`：嵌入文件流、文件规格与 `/EmbeddedFiles` 名称树；
 //! - `form`：Form XObject 字典与资源；
 //! - `page_group`：页字典组属性（`/Group`）；
 //! - `optional_content`：可选内容组（`/OCG`）与目录 `/OCProperties`；
@@ -26,6 +27,7 @@ mod cid;
 mod cid_cmap_multibyte;
 mod color_space;
 mod compression;
+mod embedded_file;
 mod encoding;
 mod font;
 mod font_cff;

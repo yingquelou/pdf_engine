@@ -6,11 +6,13 @@
 //! - `cid`：CIDFont 后代字典、Type 0 父字体与相关流；
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
 //! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）；
+//! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出。
 
 mod annotation;
 mod cid;
 mod cmap;
+mod embedded_file;
 mod fonts;
 mod form_field;
 mod shading;
@@ -54,6 +56,9 @@ impl PdfBuilder {
             }
             form_field::validate(form, self.pages.len(), self.forms.len())?;
         }
+
+        // 嵌入文件（7.11）：逐项校验与版本门禁在任何对象写出前完成。
+        embedded_file::validate_registration(&self.embedded, self.version)?;
 
         // 第一遍：为每页分配 Page 字典号 + 内容流号，并为字体/图片分配号。
         // 但字体/图片对象号要等遍历各页后才能确定连续段，故先扫一遍。
@@ -386,6 +391,14 @@ impl PdfBuilder {
             }
         }
 
+        // 嵌入文件：每项一对（文件规格，嵌入流）对象；注解 `/FS` 与目录
+        // `/Names /EmbeddedFiles` 在此之后解析为对象号。
+        let embedded_slots = embedded_file::allocate(&self.embedded, &mut num);
+        let embedded_nums: Vec<i64> = embedded_slots
+            .iter()
+            .map(|slot| slot.filespec_num)
+            .collect();
+
         // —— 构造 Document ——
         let mut doc = Document::new();
         if !used_shadings.is_empty() {
@@ -465,6 +478,15 @@ impl PdfBuilder {
                 acro = acro.insert("DA", text_string_value(appearance));
             }
             catalog_dict = catalog_dict.insert("AcroForm", Value::Dict(acro));
+        }
+        // 嵌入文件目录条目（7.11.4）：`/Names /EmbeddedFiles` 名称树；
+        // 导航层随后写 `/Dests` `/Pages` 时与本字典合并。
+        if !embedded_slots.is_empty() {
+            let names = Dict::new().insert(
+                "EmbeddedFiles",
+                embedded_file::embedded_files_node(&self.embedded, &embedded_slots),
+            );
+            catalog_dict = catalog_dict.insert("Names", Value::Dict(names));
         }
         doc.set_object(Object::new(catalog_num, 0, Value::Dict(catalog_dict)));
 
@@ -616,7 +638,8 @@ impl PdfBuilder {
         }
 
         // 注解间接对象：在页字典写出后组装，`/Dest` 与 `GoTo` 动作的
-        // 页号在此解析为 Page 引用，`/Popup` 句柄解析为注解引用。
+        // 页号在此解析为 Page 引用，`/Popup` 句柄解析为注解引用，
+        // `/FS` 句柄解析为文件规格引用。
         // 注意 `page_slots` 是 (Page 号, 内容流号) 对，须先映射为
         // (对象号, 生成号) 引用表再交给导航层。
         let page_refs: Vec<(i64, i64)> = page_slots.iter().map(|(pn, _)| (*pn, 0)).collect();
@@ -627,6 +650,7 @@ impl PdfBuilder {
                 &annotation_nums,
                 &page_refs,
                 &form_nums,
+                &embedded_nums,
             )?;
             doc.set_object(Object::new(annotation_nums[handle], 0, Value::Dict(dict)));
         }
@@ -637,6 +661,9 @@ impl PdfBuilder {
             let dict = form_field::field_dict(slot, &field_slots, &page_refs, &form_nums)?;
             doc.set_object(Object::new(slot.num, 0, Value::Dict(dict)));
         }
+
+        // 嵌入文件对对象：文件规格 + 嵌入文件流。
+        embedded_file::write_objects(&mut doc, &self.embedded, &embedded_slots, self.version);
 
         // 字体对象
         for (f, fnum) in &font_pool {

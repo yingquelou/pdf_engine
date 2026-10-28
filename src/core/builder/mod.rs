@@ -42,15 +42,16 @@ pub use types::{
     AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AxialShading, CalGray, CalRGB,
     CalculatorFunction, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics,
-    CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN, ExponentialFunction,
-    FieldValue, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths, FormField,
-    FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading, Function,
-    FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone, HalftoneDictionary,
-    ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, MeshFunction,
-    MeshVertex, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, RadialShading,
-    SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
-    SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
-    TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
+    CidWidth, ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceN, EmbeddedFile,
+    ExponentialFunction, FieldValue, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths,
+    FormField, FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading,
+    Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
+    HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
+    LatticeMeshShading, MeshFunction, MeshVertex, OptionalContentGroup, PageSize, PaintType,
+    PdfAnnotation, RadialShading, SampledFunction, Separation, Shading, ShadingOptions,
+    ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction, TensorProductPatch,
+    TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font,
+    Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -147,6 +148,8 @@ pub struct PdfBuilder {
     color_spaces: Vec<ColorSpace>,
     /// 文档级注解池；`PdfBuilder::add_annotation` 返回其索引。
     annotations: Vec<AnnotationEntry>,
+    /// 文档级嵌入文件池；`PdfBuilder::embed_file` 返回其索引。
+    embedded: Vec<EmbeddedFile>,
     /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
     acro_form: Option<AcroForm>,
     /// D4 写端流压缩策略；`None`（默认）时所有流保持明文写出。
@@ -180,6 +183,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             annotations: Vec::new(),
+            embedded: Vec::new(),
             acro_form: None,
             compression: None,
             navigation: navigation::NavigationState::default(),
@@ -201,6 +205,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             annotations: Vec::new(),
+            embedded: Vec::new(),
             acro_form: None,
             compression: None,
             navigation: navigation::NavigationState::default(),
@@ -439,6 +444,21 @@ impl PdfBuilder {
     pub fn set_acro_form(&mut self, form: AcroForm) -> &mut Self {
         self.acro_form = Some(form);
         self
+    }
+
+    /// 注册一个嵌入文件（7.11.3–7.11.4），返回文档级句柄。
+    ///
+    /// `build` 时每个注册项展开为文件规格字典 + 嵌入文件流一对间接对象，
+    /// 并登记进目录 `/Names /EmbeddedFiles` 名称树；句柄供
+    /// [`PdfAnnotation::with_filespec`]（FileAttachment 注解 `/FS`）引用。
+    /// 名称为空/含路径分隔符/重复或名称树键非法返回
+    /// [`WriteError::InvalidObject`]；嵌入文件要求目标版本 ≥1.3，`/Desc`
+    /// 与非 ASCII 展示名（`/UF`）要求 ≥1.4，不满足返回
+    /// [`WriteError::UnsupportedVersion`]，均零字节输出。
+    pub fn embed_file(&mut self, file: EmbeddedFile) -> usize {
+        let handle = self.embedded.len();
+        self.embedded.push(file);
+        handle
     }
 
     /// 注册一个 PDF 函数（§7.10 Type 0/2/3/4），返回文档级句柄。

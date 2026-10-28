@@ -178,6 +178,7 @@ pub struct PdfAnnotation {
     appearance_normal: Option<usize>,
     appearance_down: Option<usize>,
     appearance_rollover: Option<usize>,
+    filespec: Option<usize>,
 }
 
 /// `/C`、`/IC` 颜色数组允许的分量数。
@@ -209,6 +210,7 @@ impl PdfAnnotation {
             appearance_normal: None,
             appearance_down: None,
             appearance_rollover: None,
+            filespec: None,
         }
     }
 
@@ -332,6 +334,14 @@ impl PdfAnnotation {
         self
     }
 
+    /// 附件文件规格 `/FS`（12.5.6.14，PDF 1.3）；参数为
+    /// [`PdfBuilder::embed_file`](crate::core::builder::PdfBuilder::embed_file)
+    /// 注册的嵌入文件句柄。FileAttachment 子类型必须提供。
+    pub fn with_filespec(mut self, handle: usize) -> Self {
+        self.filespec = Some(handle);
+        self
+    }
+
     /// 子类型。
     pub fn kind(&self) -> AnnotationKind {
         self.kind
@@ -423,6 +433,10 @@ impl PdfAnnotation {
         self.appearance_rollover
     }
 
+    pub(crate) fn filespec(&self) -> Option<usize> {
+        self.filespec
+    }
+
     /// 是否声明了任意 `/AP` 外观流。
     pub(crate) fn has_appearance(&self) -> bool {
         self.appearance_normal.is_some()
@@ -478,6 +492,9 @@ impl PdfAnnotation {
             && name.is_empty()
         {
             return Err("annotation /Dest name must not be empty".into());
+        }
+        if self.kind == AnnotationKind::FileAttachment && self.filespec.is_none() {
+            return Err("FileAttachment annotation requires /FS (embedded file handle)".into());
         }
         Ok(())
     }

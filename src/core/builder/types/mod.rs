@@ -4,6 +4,7 @@
 //! - `action`：动作字典（GoTo/GoToR/Named/URI/Launch/JavaScript）；
 //! - `annotation`：注解字典（12.5 通用条目与常用子类型）；
 //! - `descriptor`：字体描述符度量；
+//! - `embedded_file`：嵌入文件与文件规格（7.11）；
 //! - `encoding`：简单字体编码配置；
 //! - `font`：逻辑字体描述；
 //! - `type3`：Type 3 字体与字形；
@@ -23,6 +24,7 @@ mod action;
 mod annotation;
 mod cid;
 mod descriptor;
+mod embedded_file;
 mod encoding;
 mod font;
 mod form;
@@ -41,6 +43,7 @@ pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestinat
 pub use annotation::{AnnotationBorderStyle, AnnotationDestination, AnnotationKind, PdfAnnotation};
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
+pub use embedded_file::EmbeddedFile;
 pub use encoding::FontEncoding;
 pub use font::{Font, FontWidths};
 pub use form::{FormResources, FormXObject, GroupXObject};

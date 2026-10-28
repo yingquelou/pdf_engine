@@ -174,7 +174,13 @@ pub(super) fn apply(
     }
 
     if !navigation.named_destinations.is_empty() || !navigation.named_pages.is_empty() {
-        let mut names = Dict::new();
+        // 与 assemble 阶段已写入的 `/Names` 类别（如 /EmbeddedFiles）合并，
+        // 不覆盖既有字典。
+        let mut names = catalog
+            .get("Names")
+            .and_then(Value::as_dict)
+            .cloned()
+            .unwrap_or_else(Dict::new);
         if !navigation.named_destinations.is_empty() {
             let entries = navigation
                 .named_destinations
@@ -260,7 +266,7 @@ fn page_labels_dict(labels: &[PageLabelRange]) -> Dict {
 }
 
 /// 名称树叶子节点：键按 PDF 文本字符串编码后升序排列。
-fn name_tree(entries: Vec<(String, Value)>) -> Value {
+pub(super) fn name_tree(entries: Vec<(String, Value)>) -> Value {
     let mut entries = entries;
     entries.sort_by_cached_key(|(name, _)| PdfTextString::from(name.as_str()).encode());
     let mut names = Array::new();
