@@ -242,6 +242,18 @@ fn annotated_fixture_reads_text_highlight_and_ink_annotations() {
         .and_then(Value::as_array)
         .expect("raw /InkList kept");
     assert_eq!(ink_list.len(), 1, "one stroke path");
+    let typed = ink.ink_paths.first().expect("typed /InkList path");
+    let raw_path = ink_list.0[0].as_array().expect("path array");
+    assert_eq!(typed.len(), raw_path.len(), "类型化路径与原始数组逐值对应");
+    assert_eq!(typed.len() % 2, 0, "Ink 路径坐标成对出现");
+    for (index, value) in raw_path.0.iter().enumerate() {
+        let coordinate = match value {
+            Value::Integer(number) => number.to_owned() as f64,
+            Value::Float(number) => number.to_owned(),
+            other => panic!("unexpected /InkList value {other:?}"),
+        };
+        assert_eq!(typed[index], coordinate);
+    }
 }
 
 #[test]

@@ -419,6 +419,68 @@ fn builder_annotations_roundtrip_through_parser() {
     );
 }
 
+/// 写入 → 重新解析：Text `/Name` `/Open` `/State` `/StateModel`、Caret `/Symbol`
+/// 与 Ink `/InkList` 等子类型专有条目应回读为读端的类型化字段，非 ASCII
+/// 文本串（`/State`）与名字型条目（`/Name`、`/Symbol`）各自保持原值（12.5.6）。
+#[test]
+fn builder_annotation_subtype_entries_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{AnnotationKind, PageSize, PdfAnnotation, PdfBuilder};
+    use pdf_engine::core::reader::annotation::AnnotationSubtype;
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [72.0, 700.0, 92.0, 720.0])
+            .with_icon_name("Comment")
+            .with_open(true)
+            .with_state("已标记")
+            .with_state_model("Marked"),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Caret, [100.0, 660.0, 112.0, 672.0])
+            .with_symbol("Cross"),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Ink, [120.0, 600.0, 220.0, 660.0])
+            .with_ink_path(vec![120.0, 660.0, 170.0, 630.0, 220.0, 600.0])
+            .with_ink_path(vec![130.0, 610.0, 200.0, 650.0]),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let annots = doc.page_annotations(0).expect("page 0 annotations");
+    assert_eq!(annots.len(), 3);
+
+    let text = &annots[0];
+    assert_eq!(text.subtype, AnnotationSubtype::Text);
+    assert_eq!(text.icon_name, Some("Comment".into()));
+    assert_eq!(text.is_open, Some(true));
+    assert_eq!(text.state, Some("已标记".into()));
+    assert_eq!(text.state_model, Some("Marked".into()));
+    assert_eq!(text.symbol, None, "/Symbol belongs to Caret");
+    assert!(text.ink_paths.is_empty(), "/InkList belongs to Ink");
+
+    let caret = &annots[1];
+    assert_eq!(caret.subtype, AnnotationSubtype::Caret);
+    assert_eq!(caret.symbol, Some("Cross".into()));
+    assert_eq!(caret.icon_name, None);
+
+    let ink = &annots[2];
+    assert_eq!(ink.subtype, AnnotationSubtype::Ink);
+    assert_eq!(
+        ink.ink_paths,
+        vec![
+            vec![120.0, 660.0, 170.0, 630.0, 220.0, 600.0],
+            vec![130.0, 610.0, 200.0, 650.0],
+        ],
+        "/InkList 每条路径的坐标序列应逐值还原"
+    );
+}
+
 /// 写入 → 重新解析：注解 `/AP` 外观流应回读为 Form XObject 流引用，
 /// `/N` 状态、流字典与内容绘制算子完整保留（12.5.5）。
 #[test]

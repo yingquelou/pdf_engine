@@ -133,6 +133,8 @@ pub enum PdfFeature {
     /// 数字签名（`/SigFlags`、`/FT /Sig` 域、签名字典 `/ByteRange` +
     /// `/Contents`），PDF 1.3 引入。
     DigitalSignatures,
+    /// 文本注解标记状态条目（`/State`、`/StateModel`），PDF 1.3 引入。
+    AnnotationMarkupState,
 }
 
 impl PdfFeature {
@@ -145,7 +147,8 @@ impl PdfFeature {
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
             | PdfFeature::MarkupAnnotations
-            | PdfFeature::DigitalSignatures => PdfVersion::V1_3,
+            | PdfFeature::DigitalSignatures
+            | PdfFeature::AnnotationMarkupState => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
                 PdfVersion::V1_4
             }
@@ -176,6 +179,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::SoftMaskMatte => "soft mask matte color",
             PdfFeature::MarkupAnnotations => "markup annotations",
             PdfFeature::DigitalSignatures => "digital signature field",
+            PdfFeature::AnnotationMarkupState => "text annotation markup state",
         };
         write!(f, "{name}")
     }

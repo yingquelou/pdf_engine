@@ -357,3 +357,140 @@ fn destination_on_unknown_page_is_rejected() {
     assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
     assert_eq!(out.len(), 0);
 }
+
+#[test]
+fn text_annotation_writes_icon_open_and_markup_state() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [72.0, 700.0, 92.0, 720.0])
+            .with_icon_name("Paragraph")
+            .with_open(true)
+            .with_state("Accepted")
+            .with_state_model("Review"),
+    );
+    let doc = b.assemble_document().expect("assemble");
+    let dict = annot_object(&doc, 3, 0);
+    assert_eq!(dict.get("Name"), Some(&Value::Name("Paragraph".into())));
+    assert_eq!(dict.get("Open"), Some(&Value::Bool(true)));
+    assert_text_entry(&dict, "State");
+    assert_text_entry(&dict, "StateModel");
+    assert!(
+        doc.features
+            .borrow()
+            .contains(PdfFeature::AnnotationMarkupState),
+        "/State must record the 1.3 markup state feature"
+    );
+}
+
+#[test]
+fn caret_annotation_writes_symbol_name() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Caret, [10.0, 10.0, 20.0, 20.0]).with_symbol("Cross"),
+    );
+    let doc = b.assemble_document().expect("assemble");
+    let dict = annot_object(&doc, 3, 0);
+    assert_eq!(dict.get("Symbol"), Some(&Value::Name("Cross".into())));
+    assert!(dict.get("State").is_none(), "no markup state on Caret");
+}
+
+#[test]
+fn ink_annotation_writes_ink_list_paths() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Ink, [0.0, 0.0, 50.0, 50.0])
+            .with_ink_path(vec![1.0, 2.0, 3.0, 4.0])
+            .with_ink_path(vec![5.0, 6.0]),
+    );
+    let doc = b.assemble_document().expect("assemble");
+    let dict = annot_object(&doc, 3, 0);
+    let paths = dict
+        .get("InkList")
+        .and_then(|v| v.as_array())
+        .expect("/InkList");
+    assert_eq!(paths.0.len(), 2);
+    let first = paths.0[0].as_array().expect("first path").clone();
+    assert_eq!(
+        first.0,
+        vec![
+            Value::Float(1.0),
+            Value::Float(2.0),
+            Value::Float(3.0),
+            Value::Float(4.0)
+        ]
+    );
+    let second = paths.0[1].as_array().expect("second path").clone();
+    assert_eq!(second.0.len(), 2);
+}
+
+#[test]
+fn subtype_entries_are_rejected_on_other_subtypes() {
+    let cases = vec![
+        PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 10.0, 10.0]).with_state("Marked"),
+        PdfAnnotation::new(AnnotationKind::Square, [0.0, 0.0, 10.0, 10.0]).with_icon_name("Note"),
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 10.0, 10.0]).with_open(true),
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_symbol("Cross"),
+        PdfAnnotation::new(AnnotationKind::Caret, [0.0, 0.0, 10.0, 10.0])
+            .with_ink_path(vec![1.0, 2.0]),
+    ];
+    for annot in cases {
+        let mut b = PdfBuilder::new();
+        let p0 = b.page(PageSize::A4);
+        b.add_annotation(p0, annot);
+        let mut out = Vec::new();
+        let error = b
+            .build(&mut out)
+            .expect_err("subtype entry on wrong subtype");
+        let message = error.to_string();
+        assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+        assert!(message.contains("specific to"), "{message}");
+        assert_eq!(out.len(), 0);
+    }
+}
+
+#[test]
+fn invalid_subtype_entry_values_are_rejected() {
+    let cases = vec![
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_icon_name(""),
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_icon_name("No/Icon"),
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_state(""),
+        PdfAnnotation::new(AnnotationKind::Caret, [0.0, 0.0, 10.0, 10.0]).with_symbol("New Line"),
+        PdfAnnotation::new(AnnotationKind::Ink, [0.0, 0.0, 10.0, 10.0]).with_ink_path(vec![1.0]),
+        PdfAnnotation::new(AnnotationKind::Ink, [0.0, 0.0, 10.0, 10.0])
+            .with_ink_path(vec![1.0, f64::NAN]),
+    ];
+    for annot in cases {
+        let mut b = PdfBuilder::new();
+        let p0 = b.page(PageSize::A4);
+        b.add_annotation(p0, annot);
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("invalid subtype entry value");
+        assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+        assert_eq!(out.len(), 0);
+    }
+}
+
+#[test]
+fn markup_state_requires_pdf_1_3() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_state("Marked"),
+    );
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("1.2 must reject /State and /StateModel");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(message) if message.contains("/State")),
+        "{error}"
+    );
+    assert_eq!(out.len(), 0);
+}

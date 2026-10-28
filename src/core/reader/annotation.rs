@@ -6,7 +6,10 @@
 //!   `/BS`/`/BM`/`/Border` 边框（12.5.4）。
 //! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A`、`/Dest` 原样保留，
 //!   动作语义由 E3 的 [`crate::core::reader::action`] 解析。
-//! - 未建模条目保留在 [`Annotation::dict`] 中（InkList、FileSpec、Widget 字段链等）。
+//! - 子类型专有条目类型化（12.5.6）：Text `/Name`、`/Open`、`/State`、
+//!   `/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径。
+//! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
+//!   Line 端点、FreeText `/DA` 等）。
 
 use std::collections::HashSet;
 use std::fmt;
@@ -20,6 +23,10 @@ mod tests;
 const MAX_PAGE_DEPTH: usize = 64;
 /// 单页注解数量上限。
 pub const MAX_ANNOTATIONS_PER_PAGE: usize = 4096;
+/// `/InkList` 路径数上限（防护不可信文件）。
+const MAX_INK_PATHS: usize = 4096;
+/// 单条墨迹路径的坐标数值上限（防护不可信文件）。
+const MAX_INK_PATH_VALUES: usize = 8192;
 
 /// 注解读取中的类型化错误。
 #[derive(Debug, Clone, PartialEq)]
@@ -309,13 +316,25 @@ pub struct Annotation {
     pub appearance_state: Option<String>,
     /// `/QuadPoints`（标记类注解，长度为 8 的倍数）。
     pub quad_points: Option<Vec<f64>>,
+    /// `/Name` 图标名（Text 注解专有条目；名字或文本串，取值由查看器定义）。
+    pub icon_name: Option<String>,
+    /// `/Open` Text 注解气泡是否展开。
+    pub is_open: Option<bool>,
+    /// `/State` Text 注解标记状态（文本串；标准值随 `/StateModel` 而变）。
+    pub state: Option<String>,
+    /// `/StateModel` Text 注解状态模型（文本串，缺省视为 `Marked`）。
+    pub state_model: Option<String>,
+    /// `/Symbol` Caret 注解符号（名字；标准值 `NewLine`、`Cross`）。
+    pub symbol: Option<String>,
+    /// `/InkList` Ink 注解路径：每条是 x/y 交替的偶数长度有限数值数组。
+    pub ink_paths: Vec<Vec<f64>>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 目标（名称/数组/字典，原样保留）。
     pub destination: Option<Value>,
     /// `/Popup` 弹出窗口引用。
     pub popup: Option<(i64, i64)>,
-    /// 完整注解字典，未建模条目（`/InkList`、`/FS`、`/Parent` 等）经此访问。
+    /// 完整注解字典，未建模条目（Line `/L`、FreeText `/DA`、`/FS`、`/Parent` 等）经此访问。
     pub dict: Dict,
 }
 
@@ -473,6 +492,16 @@ fn parse_annotation(
             })
             .transpose()?,
         quad_points: parse_number_array(dict, "QuadPoints", true)?,
+        icon_name: parse_name_or_text(dict, "Name")?,
+        is_open: match dict.get("Open") {
+            None => None,
+            Some(Value::Bool(flag)) => Some(*flag),
+            Some(_) => return Err(malformed("annotation /Open must be a boolean")),
+        },
+        state: parse_name_or_text(dict, "State")?,
+        state_model: parse_name_or_text(dict, "StateModel")?,
+        symbol: parse_name_or_text(dict, "Symbol")?,
+        ink_paths: parse_ink_list(dict)?,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {
@@ -529,6 +558,53 @@ fn parse_number_array(dict: &Dict, key: &str, multiple_of_eight: bool) -> Result
         out.push(number(item, &format!("annotation /{key}"))?);
     }
     Ok(Some(out))
+}
+
+/// 名字或文本串条目（Text 注解 `/Name`/`/State`/`/StateModel`、Caret `/Symbol`）
+/// 统一解码为 `String`；文本串按 `/DF`/UTF-16BE/PDF 文本串规则解码。
+fn parse_name_or_text(dict: &Dict, key: &str) -> Result<Option<String>> {
+    let Some(value) = dict.get(key) else {
+        return Ok(None);
+    };
+    if let Some(name) = value.as_name() {
+        return Ok(Some(name.to_string()));
+    }
+    let decoded = crate::core::reader::content::text_value(value)
+        .ok_or_else(|| malformed(format!("annotation /{key} must be a name or text string")))?;
+    Ok(Some(decoded))
+}
+
+/// `/InkList`：数组的数组，每条路径为 x/y 交替的偶数个有限数值。
+fn parse_ink_list(dict: &Dict) -> Result<Vec<Vec<f64>>> {
+    let Some(value) = dict.get("InkList") else {
+        return Ok(Vec::new());
+    };
+    let outer = value
+        .as_array()
+        .ok_or_else(|| malformed("annotation /InkList is not an array"))?;
+    if outer.0.len() > MAX_INK_PATHS {
+        return Err(malformed("annotation /InkList has too many paths"));
+    }
+    let mut paths = Vec::with_capacity(outer.0.len());
+    for path in outer.0.iter() {
+        let inner = path
+            .as_array()
+            .ok_or_else(|| malformed("annotation /InkList path is not an array"))?;
+        if inner.0.len() % 2 != 0 || inner.0.is_empty() {
+            return Err(malformed(
+                "annotation /InkList path must hold an even, nonzero number of values",
+            ));
+        }
+        if inner.0.len() > MAX_INK_PATH_VALUES {
+            return Err(malformed("annotation /InkList path has too many values"));
+        }
+        let mut points = Vec::with_capacity(inner.0.len());
+        for item in inner.0.iter() {
+            points.push(number(item, "annotation /InkList")?);
+        }
+        paths.push(points);
+    }
+    Ok(paths)
 }
 
 fn parse_opacity(dict: &Dict) -> Result<Option<f64>> {

@@ -371,6 +371,16 @@ impl PdfBuilder {
                     self.version.as_str()
                 )));
             }
+            // `/State` 与 `/StateModel` 为 PDF 1.3 的文本注解标记状态条目。
+            if entry.annot.has_markup_state()
+                && !self.version.supports(PdfFeature::AnnotationMarkupState)
+            {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "text annotation markup state (/State, /StateModel) require PDF {}, got {}",
+                    PdfFeature::AnnotationMarkupState.min_version().as_str(),
+                    self.version.as_str()
+                )));
+            }
             page_annotation_handles[entry.page].push(handle);
             annotation_nums[handle] = num;
             num += 1;
@@ -423,6 +433,12 @@ impl PdfBuilder {
             // `/CA` 与 `/BM` 属透明模型（PDF 1.4）；越界值已在注解校验中拒绝。
             if entry.annot.opacity().is_some() || entry.annot.blend_mode().is_some() {
                 doc.features.borrow_mut().insert(PdfFeature::Transparency);
+            }
+            // `/State` 与 `/StateModel` 为 PDF 1.3 的文本注解标记状态条目。
+            if entry.annot.has_markup_state() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::AnnotationMarkupState);
             }
         }
 

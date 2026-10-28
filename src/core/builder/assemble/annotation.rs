@@ -1,11 +1,12 @@
-//! 注解字典写出（12.5.1–12.5.5）：通用条目 + `/A` `/Dest` `/Popup` `/FS`
-//! 引用解析。
+//! 注解字典写出（12.5.1–12.5.6）：通用条目 + 子类型专有条目（Text `/Name`
+//! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`）+
+//! `/A` `/Dest` `/Popup` `/FS` 引用解析。
 
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
 use crate::core::builder::types::{Action, AnnotationDestination, PdfAnnotation};
 use crate::core::reader::navigation::Destination;
-use crate::core::types::{Dict, Value};
+use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
 use super::real_array;
@@ -63,6 +64,29 @@ pub(super) fn annotation_dict(
     }
     if let Some(quad) = annot.quad_points() {
         dict = dict.insert("QuadPoints", real_array(quad));
+    }
+    if let Some(icon) = annot.icon_name() {
+        dict = dict.insert("Name", Value::Name(icon.into()));
+    }
+    if let Some(open) = annot.is_open() {
+        dict = dict.insert("Open", Value::Bool(open));
+    }
+    if let Some(state) = annot.state() {
+        dict = dict.insert("State", text_string_value(state));
+    }
+    if let Some(model) = annot.state_model() {
+        dict = dict.insert("StateModel", text_string_value(model));
+    }
+    if let Some(symbol) = annot.symbol() {
+        dict = dict.insert("Symbol", Value::Name(symbol.into()));
+    }
+    if !annot.ink_paths().is_empty() {
+        let paths = annot
+            .ink_paths()
+            .iter()
+            .map(|path| real_array(path))
+            .collect();
+        dict = dict.insert("InkList", Value::Array(Array(paths)));
     }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
