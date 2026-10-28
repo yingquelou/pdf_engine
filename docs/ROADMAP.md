@@ -100,7 +100,9 @@
 - [ ] `builder/assemble/shading.rs`（651 行 / 20.9 KiB；组装变更前拆分；D5 为读端增量未触及）
 - [ ] `reader/optional_content.rs`（813 行 / 28.1 KiB；B7 已触及仍未拆分，后续可选内容增量前拆分配置解析与 OCMD 求值）
 - [ ] `builder/tests/graphics_state.rs`（606 行 / 20.5 KiB；新增图形状态测试前拆分）
-- [ ] `tests/main.rs`（8819 行 / 314.8 KiB；集成测试按主题拆分，新增集成测试前先迁出对应主题）
+- [ ] `tests/main.rs`（9561 行 / 339.1 KiB；集成测试按主题拆分，新增集成测试前先迁出对应主题）
+  - 已完成（2026-10-28）：阶段 E/F 交互主题 13 项集成测试迁出为独立目标 `tests/interactive.rs`（994 行 / 37.1 KiB：E1 导航、E2 注解与外观流、E4 AcroForm 与 `/DR`、E5 元数据/XMP、E6 嵌入文件、E7 增量更新、F1 签名增量）；共享辅助（`parse_buf`/`parse_buf_with_password`/`parse_buf_result`/`sample_doc`）迁入 `tests/support/mod.rs`（98 行，`#![allow(dead_code)]`，由各主题文件 `mod support;` 引入）。迁移前后集成测试均为 131 项、全量 1258 通过（1 ignored），测试名与断言未改。**今后新增交互特性（注解/表单/动作/嵌入文件/增量/签名）的集成往返测试写入 `tests/interactive.rs`。**
+  - 待迁出主题：语法与文件结构（第 7 章）、字体与文本（第 9 章）、内容与图形（第 8/10/11 章）、过滤器与加密（7.4/7.6、7.6.x）。
 
 ## 阶段总览
 

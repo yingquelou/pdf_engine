@@ -62,6 +62,8 @@
 
 > **2026-10-28 E4 AcroForm `/DR` 默认资源切片（12.7.2 Table 218 Writer）**：`AcroForm::with_default_font(name, font)`（`builder/types/form_field.rs`）登记文档级 `/DR /Font` 资源名→字体映射，`builder/assemble/mod.rs` 的目录 `/AcroForm` 块把它写成 `<< /Font << /Helv N 0 R >> >>`；字体对象号复用写端 `font_pool` + `same_font` 去重，因此与页面 `/Resources /Font` 指向同一字体对象（不重复写出、不重复编号）。`builder/assemble/form_field.rs` 新增 `validate_default_fonts`：资源名为空、含空白或 PDF 名字定界符 `/[]()<>{}` `%`、与已登记资源重名 → `WriteError::InvalidObject`，校验先于对象号分配故非法输入零字节输出。读端无需改动（`reader/form.rs` 已把 `/DR` 原样保留于 `AcroForm::default_resources`），往返经引用解析验证。测试 4 单元（`acro_form_default_resources_write_font_references`、`acro_form_default_font_shares_object_with_page_font`、`acro_form_rejects_duplicate_default_font_names`、`acro_form_rejects_invalid_default_font_names`）+ 集成 `builder_acro_form_default_resources_roundtrip_through_parser`；全量测试 1250→1255（另 3 doctest、1 ignored）。12.7.2–12.7.4 行状态保持 🟡/🟡/🟡，矩阵计数不变（32✅ / 63🟡 / 52⬜ / 7❌ / 14— = 168）。E4 剩余缺口收窄为：字段事件 `/AA` 与计算顺序 `/CO`、`/DR` 非字体子字典（`/ExtGState`、`/ColorSpace`）、单选/复选组 `/AP` 状态子字典、XFA、真实表单 fixture。
 
+> **2026-10-28 工程债：集成测试按主题拆分（不改功能，矩阵状态与计数不变）**：阶段 E/F 交互主题的 13 项集成往返测试从 `tests/main.rs`（9561 行）迁出为独立测试目标 `tests/interactive.rs`（994 行），共享辅助 `parse_buf*`/`sample_doc` 移入 `tests/support/mod.rs`（98 行，`#![allow(dead_code)]`）。迁移前后集成测试总数 131、全量 1258 通过（1 ignored）不变，测试名与断言零修改；本矩阵各行的测试名证据中位于 `builder_*_roundtrips_through_parser` 主题的条目现属 `tests/interactive.rs` 目标。详见 `docs/ROADMAP.md`「工程债」`tests/main.rs` 条目。
+
 ## 图例
 
 - **状态四态**：✅ 已实现 / 🟡 部分实现（缺口见备注）/ ⬜ 未实现 / ❌ 明确不支持（设计决策，附理由）
