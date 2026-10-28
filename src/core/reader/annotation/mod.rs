@@ -7,10 +7,12 @@
 //! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A` 原样保留、动作语义由
 //!   E3 的 [`crate::core::reader::action`] 解析，`/Dest` 经
 //!   `Document::annotation_destination` 解析为 12.3.2 目标模型。
-//! - 子类型专有条目类型化（12.5.6）：Text `/Name`、`/Open`、`/State`、
-//!   `/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径。
+//! - 子类型专有条目类型化（12.5.6，解析在 [`subtype`]）：Text `/Name`、`/Open`、
+//!   `/State`、`/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
 //!   Line 端点、FreeText `/DA` 等）。
+//!
+//! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`。
 
 use std::collections::HashSet;
 use std::fmt;
@@ -21,14 +23,18 @@ use crate::core::types::{Dict, Document, Value};
 #[cfg(test)]
 mod tests;
 
+mod entries;
+mod subtype;
+
+use entries::{
+    parse_appearance, parse_border, parse_number_array, parse_opacity, parse_rect,
+    parse_text_string,
+};
+
 /// 页面树遍历最大深度。
 const MAX_PAGE_DEPTH: usize = 64;
 /// 单页注解数量上限。
 pub const MAX_ANNOTATIONS_PER_PAGE: usize = 4096;
-/// `/InkList` 路径数上限（防护不可信文件）。
-const MAX_INK_PATHS: usize = 4096;
-/// 单条墨迹路径的坐标数值上限（防护不可信文件）。
-const MAX_INK_PATH_VALUES: usize = 8192;
 
 /// 注解读取中的类型化错误。
 #[derive(Debug, Clone, PartialEq)]
@@ -506,6 +512,7 @@ fn parse_annotation(
         },
         None => AnnotationFlags::default(),
     };
+    let entries = subtype::parse_subtype_entries(dict)?;
 
     Ok(Annotation {
         page_index,
@@ -532,16 +539,12 @@ fn parse_annotation(
             })
             .transpose()?,
         quad_points: parse_number_array(dict, "QuadPoints", true)?,
-        icon_name: parse_name_or_text(dict, "Name")?,
-        is_open: match dict.get("Open") {
-            None => None,
-            Some(Value::Bool(flag)) => Some(*flag),
-            Some(_) => return Err(malformed("annotation /Open must be a boolean")),
-        },
-        state: parse_name_or_text(dict, "State")?,
-        state_model: parse_name_or_text(dict, "StateModel")?,
-        symbol: parse_name_or_text(dict, "Symbol")?,
-        ink_paths: parse_ink_list(dict)?,
+        icon_name: entries.icon_name,
+        is_open: entries.is_open,
+        state: entries.state,
+        state_model: entries.state_model,
+        symbol: entries.symbol,
+        ink_paths: entries.ink_paths,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {
@@ -554,229 +557,4 @@ fn parse_annotation(
         },
         dict: dict.clone(),
     })
-}
-
-fn parse_rect(value: Option<&Value>) -> Result<[f64; 4]> {
-    let value = value.ok_or_else(|| malformed("annotation has no /Rect"))?;
-    let array = value
-        .as_array()
-        .ok_or_else(|| malformed("annotation /Rect is not an array"))?;
-    if array.len() != 4 {
-        return Err(malformed("annotation /Rect must have four numbers"));
-    }
-    let mut out = [0.0f64; 4];
-    for (i, item) in array.iter().enumerate() {
-        out[i] = number(item, "annotation /Rect")?;
-    }
-    Ok(out)
-}
-
-fn parse_text_string(dict: &Dict, key: &str) -> Result<Option<Value>> {
-    match dict.get(key) {
-        None => Ok(None),
-        Some(value @ (Value::String(_) | Value::HexString(_))) => Ok(Some(value.clone())),
-        Some(_) => Err(malformed(format!(
-            "annotation /{key} must be a text string"
-        ))),
-    }
-}
-
-fn parse_number_array(dict: &Dict, key: &str, multiple_of_eight: bool) -> Result<Option<Vec<f64>>> {
-    let Some(value) = dict.get(key) else {
-        return Ok(None);
-    };
-    let array = value
-        .as_array()
-        .ok_or_else(|| malformed(format!("annotation /{key} is not an array")))?;
-    if multiple_of_eight && !array.len().is_multiple_of(8) {
-        return Err(malformed(format!(
-            "annotation /{key} length must be a multiple of 8"
-        )));
-    }
-    let mut out = Vec::with_capacity(array.len());
-    for item in array.iter() {
-        out.push(number(item, &format!("annotation /{key}"))?);
-    }
-    Ok(Some(out))
-}
-
-/// 名字或文本串条目（Text 注解 `/Name`/`/State`/`/StateModel`、Caret `/Symbol`）
-/// 统一解码为 `String`；文本串按 `/DF`/UTF-16BE/PDF 文本串规则解码。
-fn parse_name_or_text(dict: &Dict, key: &str) -> Result<Option<String>> {
-    let Some(value) = dict.get(key) else {
-        return Ok(None);
-    };
-    if let Some(name) = value.as_name() {
-        return Ok(Some(name.to_string()));
-    }
-    let decoded = crate::core::reader::content::text_value(value)
-        .ok_or_else(|| malformed(format!("annotation /{key} must be a name or text string")))?;
-    Ok(Some(decoded))
-}
-
-/// `/InkList`：数组的数组，每条路径为 x/y 交替的偶数个有限数值。
-fn parse_ink_list(dict: &Dict) -> Result<Vec<Vec<f64>>> {
-    let Some(value) = dict.get("InkList") else {
-        return Ok(Vec::new());
-    };
-    let outer = value
-        .as_array()
-        .ok_or_else(|| malformed("annotation /InkList is not an array"))?;
-    if outer.0.len() > MAX_INK_PATHS {
-        return Err(malformed("annotation /InkList has too many paths"));
-    }
-    let mut paths = Vec::with_capacity(outer.0.len());
-    for path in outer.0.iter() {
-        let inner = path
-            .as_array()
-            .ok_or_else(|| malformed("annotation /InkList path is not an array"))?;
-        if inner.0.len() % 2 != 0 || inner.0.is_empty() {
-            return Err(malformed(
-                "annotation /InkList path must hold an even, nonzero number of values",
-            ));
-        }
-        if inner.0.len() > MAX_INK_PATH_VALUES {
-            return Err(malformed("annotation /InkList path has too many values"));
-        }
-        let mut points = Vec::with_capacity(inner.0.len());
-        for item in inner.0.iter() {
-            points.push(number(item, "annotation /InkList")?);
-        }
-        paths.push(points);
-    }
-    Ok(paths)
-}
-
-fn parse_opacity(dict: &Dict) -> Result<Option<f64>> {
-    let Some(value) = dict.get("CA") else {
-        return Ok(None);
-    };
-    let number = number(value, "annotation /CA")?;
-    if !(0.0..=1.0).contains(&number) {
-        return Err(malformed("annotation /CA must be within 0.0–1.0"));
-    }
-    Ok(Some(number))
-}
-
-fn parse_border(document: &Document, dict: &Dict) -> Result<Option<AnnotationBorder>> {
-    let blend_mode = match dict.get("BM") {
-        None => None,
-        Some(value) => Some(
-            value
-                .as_name()
-                .ok_or_else(|| malformed("annotation /BM must be a name"))?
-                .to_string(),
-        ),
-    };
-    let border = if let Some(bs) = dict.get("BS") {
-        let resolved = crate::core::reader::navigation::resolve(document, bs)
-            .map_err(|err| AnnotationError::Malformed(err.to_string()))?;
-        let bs = resolved
-            .as_dict()
-            .ok_or_else(|| malformed("annotation /BS is not a dictionary"))?;
-        let width = match bs.get("W") {
-            None => None,
-            Some(value) => {
-                let width = number(value, "annotation /BS /W")?;
-                if width < 0.0 {
-                    return Err(malformed("annotation /BS /W must be nonnegative"));
-                }
-                Some(width)
-            }
-        };
-        let style = match bs.get("S") {
-            None => None,
-            Some(value) => Some(
-                value
-                    .as_name()
-                    .ok_or_else(|| malformed("annotation /BS /S must be a name"))?
-                    .to_string(),
-            ),
-        };
-        let dash = match bs.get("D") {
-            None => Vec::new(),
-            Some(value) => {
-                let array = value
-                    .as_array()
-                    .ok_or_else(|| malformed("annotation /BS /D is not an array"))?;
-                array
-                    .iter()
-                    .map(|item| number(item, "annotation /BS /D"))
-                    .collect::<Result<Vec<f64>>>()?
-            }
-        };
-        Some(AnnotationBorder {
-            width,
-            style,
-            dash,
-            corner_radius: None,
-            blend_mode: blend_mode.clone(),
-        })
-    } else if let Some(legacy) = dict.get("Border") {
-        let array = legacy
-            .as_array()
-            .ok_or_else(|| malformed("annotation /Border is not an array"))?;
-        if array.len() > 3 {
-            return Err(malformed("annotation /Border array exceeds 3 items"));
-        }
-        let corner = array.0.first().map(|v| number(v, "annotation /Border"));
-        let width = array.0.get(1).map(|v| number(v, "annotation /Border"));
-        let dash = match array.0.get(2) {
-            // 规范允许 [h w] 或 [h w [dash…]]；真实文档常见第三项写成数字
-            // （如 `/Border [0 0 0]`），此处宽容忽略而不报错。
-            Some(dash) => match dash.as_array() {
-                Some(dash) => dash
-                    .iter()
-                    .map(|item| number(item, "annotation /Border dash"))
-                    .collect::<Result<Vec<f64>>>()?,
-                None => Vec::new(),
-            },
-            None => Vec::new(),
-        };
-        Some(AnnotationBorder {
-            width: width.transpose()?,
-            style: None,
-            dash,
-            corner_radius: corner.transpose()?,
-            blend_mode: blend_mode.clone(),
-        })
-    } else {
-        return Ok(blend_mode.map(|mode| AnnotationBorder {
-            blend_mode: Some(mode),
-            ..Default::default()
-        }));
-    };
-    Ok(border)
-}
-
-fn number(value: &Value, context: &str) -> Result<f64> {
-    let number = match value {
-        Value::Float(number) => *number,
-        Value::Integer(number) => *number as f64,
-        _ => return Err(malformed(format!("{context} must be a number"))),
-    };
-    if !number.is_finite() {
-        return Err(malformed(format!("{context} has a nonfinite number")));
-    }
-    Ok(number)
-}
-
-fn parse_appearance(document: &Document, dict: &Dict) -> Result<Option<AppearanceStreams>> {
-    let Some(ap) = dict.get("AP") else {
-        return Ok(None);
-    };
-    let resolved = crate::core::reader::navigation::resolve(document, ap)
-        .map_err(|err| AnnotationError::Malformed(err.to_string()))?;
-    let ap = resolved
-        .as_dict()
-        .ok_or_else(|| malformed("annotation /AP is not a dictionary"))?;
-    let streams = AppearanceStreams {
-        normal: ap.get("N").cloned(),
-        down: ap.get("D").cloned(),
-        rollover: ap.get("R").cloned(),
-    };
-    if streams.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(streams))
 }
