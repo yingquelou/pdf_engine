@@ -92,14 +92,9 @@ impl Document {
     fn resolve_value(&self, value: &Value) -> FontResult<Value> {
         match value {
             Value::Ref(num, generation) => {
-                let object = self
-                    .get_object(*num)?
-                    .filter(|object| object.generation == *generation)
-                    .ok_or_else(|| {
-                        FontError::Invalid(format!(
-                            "unresolved object reference {num} {generation} R"
-                        ))
-                    })?;
+                let object = self.get_object(*num)?.ok_or_else(|| {
+                    FontError::Invalid(format!("unresolved object reference {num} {generation} R"))
+                })?;
                 Ok(object.value)
             }
             _ => Ok(value.clone()),

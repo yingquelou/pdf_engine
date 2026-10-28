@@ -85,7 +85,6 @@ impl Document {
 
         let result = (|| {
             self.get_object(num)?
-                .filter(|object| object.generation == generation)
                 .ok_or_else(|| {
                     err(
                         0,

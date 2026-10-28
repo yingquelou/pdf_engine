@@ -399,13 +399,12 @@ impl Document {
         }
     }
 
-    /// 解一层间接引用；引用对象缺失或代次不符报类型化错误。
+    /// 解一层间接引用；按对象号取最新修订，引用对象缺失报类型化错误。
     fn resolve_one(&self, value: &Value) -> Result<Value> {
         match value {
             Value::Ref(num, generation) => self
                 .get_object(*num)
                 .map_err(|error| malformed(error.to_string()))?
-                .filter(|object| object.generation == *generation)
                 .map(|object| object.value)
                 .ok_or_else(|| {
                     malformed(format!("referenced object {num} {generation} R missing"))

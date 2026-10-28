@@ -858,12 +858,9 @@ impl Document {
     fn resolve_image_value(&self, value: &Value) -> Result<Value> {
         match value {
             Value::Ref(num, generation) => {
-                let object = self
-                    .get_object(*num)?
-                    .filter(|object| object.generation == *generation)
-                    .ok_or_else(|| {
-                        invalid(format!("unresolved object reference {num} {generation} R"))
-                    })?;
+                let object = self.get_object(*num)?.ok_or_else(|| {
+                    invalid(format!("unresolved object reference {num} {generation} R"))
+                })?;
                 Ok(object.value)
             }
             other => Ok(other.clone()),

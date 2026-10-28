@@ -207,13 +207,11 @@ fn combine(state: Option<bool>, operand: Option<bool>, dominates: bool) -> Optio
 impl Document {
     fn resolve_optional_content_value(&self, value: &Value) -> Result<Value> {
         match value {
+            // 按对象号取最新修订，忽略引用中的代号（增量更新后引用可能写旧代）。
             Value::Ref(num, generation) => {
-                let object = self
-                    .get_object(*num)?
-                    .filter(|object| object.generation == *generation)
-                    .ok_or_else(|| {
-                        invalid(format!("unresolved object reference {num} {generation} R"))
-                    })?;
+                let object = self.get_object(*num)?.ok_or_else(|| {
+                    invalid(format!("unresolved object reference {num} {generation} R"))
+                })?;
                 Ok(object.value)
             }
             _ => Ok(value.clone()),
@@ -227,14 +225,11 @@ impl Document {
         let Some((root, generation)) = self.trailer.root() else {
             return Err(invalid("trailer is missing /Root"));
         };
-        let catalog = self
-            .get_object(root)?
-            .filter(|object| object.generation == generation)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "unresolved catalog object reference {root} {generation} R"
-                ))
-            })?;
+        let catalog = self.get_object(root)?.ok_or_else(|| {
+            invalid(format!(
+                "unresolved catalog object reference {root} {generation} R"
+            ))
+        })?;
         let catalog = catalog
             .value
             .as_dict()
@@ -265,14 +260,12 @@ fn parse_properties(document: &Document, dict: &Dict) -> Result<OptionalContentP
                 "/OCProperties /OCGs entries must be indirect references",
             ));
         };
-        let ocg = document
-            .get_object(*object)?
-            .filter(|ocg| ocg.generation == *generation)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "unresolved OCG object reference {object} {generation} R"
-                ))
-            })?;
+        // 按对象号取最新修订，忽略引用中的代号。
+        let ocg = document.get_object(*object)?.ok_or_else(|| {
+            invalid(format!(
+                "unresolved OCG object reference {object} {generation} R"
+            ))
+        })?;
         groups.push(parse_group(document, *object, &ocg.value)?);
     }
 

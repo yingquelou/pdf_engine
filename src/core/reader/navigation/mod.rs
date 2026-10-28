@@ -64,6 +64,10 @@ pub(crate) fn malformed(message: impl Into<String>) -> NavigationError {
 }
 
 /// 解引用间接引用；直接对象原样克隆。
+///
+/// 与 [`Document::get_object`] 一致按对象号取最新修订：增量更新会把
+/// 变更对象升代写出，而历史引用仍写旧代号，严格按引用中的代号过滤
+/// 会把这类合法引用判为悬空（与主流阅读器行为亦不一致）。
 pub(crate) fn resolve(document: &Document, value: &Value) -> Result<Value> {
     match value {
         Value::Ref(num, generation) => document
@@ -71,7 +75,6 @@ pub(crate) fn resolve(document: &Document, value: &Value) -> Result<Value> {
             .map_err(|error| {
                 malformed(format!("failed to read object {num} {generation}: {error}"))
             })?
-            .filter(|object| object.generation == *generation)
             .map(|object| object.value.clone())
             .ok_or_else(|| malformed(format!("object {num} {generation} not found"))),
         other => Ok(other.clone()),

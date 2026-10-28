@@ -72,8 +72,8 @@ impl Document {
 impl Document {
     /// Resolve a Type 1 font dictionary and its metrics from direct or indirect values.
     ///
-    /// Returns `Ok(None)` for non-Type-1 font dictionaries. Malformed font data,
-    /// dangling references, and object-generation mismatches are reported.
+    /// Returns `Ok(None)` for non-Type-1 font dictionaries. Malformed font data
+    /// and dangling references are reported.
     /// Standard 14 fonts may omit `/Widths`; available built-in metrics provide
     /// fallback widths, but embedded font programs are not loaded by this API.
     pub fn type1_font(&self, value: &Value) -> FontResult<Option<Type1Font>> {

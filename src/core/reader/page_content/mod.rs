@@ -159,12 +159,8 @@ impl Document {
 /// Resolve a value, dereferencing indirect references.
 fn resolve_value(document: &Document, value: &Value) -> Option<Value> {
     match value {
-        Value::Ref(num, generation) => document
-            .get_object(*num)
-            .ok()
-            .flatten()
-            .filter(|o| o.generation == *generation)
-            .map(|o| o.value),
+        // 按对象号取最新修订，忽略引用中的代号（增量更新后引用可能写旧代）。
+        Value::Ref(num, _) => document.get_object(*num).ok().flatten().map(|o| o.value),
         _ => Some(value.clone()),
     }
 }

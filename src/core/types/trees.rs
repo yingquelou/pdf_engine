@@ -11,12 +11,14 @@ use crate::core::types::{Array, Dict, Document, Value};
 use std::collections::BTreeMap;
 
 /// 解析间接引用：如果值是 `Ref`，则从文档获取对应对象；否则直接返回。
+///
+/// 按对象号取最新修订，忽略引用中的代号：增量更新会把变更对象升代
+/// 写出，而历史引用仍写旧代号。
 fn resolve_value(document: &Document, value: &Value) -> Result<Value, String> {
     match value {
         Value::Ref(num, generation) => document
             .get_object(*num)
             .map_err(|e| format!("failed to get object {num}: {e}"))?
-            .filter(|o| o.generation == *generation)
             .map(|o| o.value)
             .ok_or_else(|| format!("object {num} generation {generation} not found")),
         _ => Ok(value.clone()),

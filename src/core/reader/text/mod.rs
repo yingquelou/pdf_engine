@@ -640,16 +640,16 @@ impl<'a> ExtractionContext<'a> {
     fn object_visibility(
         &self,
         object: i64,
-        generation: i64,
+        _generation: i64,
         resources: &Dict,
         depth: usize,
     ) -> Option<bool> {
+        // 按对象号取最新修订，忽略引用中的代号（增量更新后引用可能写旧代）。
         let resolved = self
             .document
             .get_object(object)
             .ok()
             .flatten()
-            .filter(|entry| entry.generation == generation)
             .map(|entry| entry.value);
         match resolved {
             Some(Value::Dict(dict)) if dict.get("OC").is_some() => {
@@ -1091,12 +1091,8 @@ fn true_type_builtin_encoding(document: &Document, font_val: &Value) -> Option<V
 
 fn resolve_value(document: &Document, value: &Value) -> Option<Value> {
     match value {
-        Value::Ref(num, generation) => document
-            .get_object(*num)
-            .ok()
-            .flatten()
-            .filter(|o| o.generation == *generation)
-            .map(|o| o.value),
+        // 按对象号取最新修订，忽略引用中的代号（增量更新后引用可能写旧代）。
+        Value::Ref(num, _) => document.get_object(*num).ok().flatten().map(|o| o.value),
         _ => Some(value.clone()),
     }
 }

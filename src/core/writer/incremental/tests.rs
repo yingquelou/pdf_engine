@@ -151,6 +151,62 @@ fn incremental_overrides_object_with_bumped_generation() {
 }
 
 #[test]
+fn bumped_generation_still_resolves_old_generation_references() {
+    // 对象 1 以 `2 0 R` 引用对象 2；增量更新后 2 升为 1 代。
+    // 引用解析按对象号取最新修订（与 get_object 语义一致），旧代号
+    // 引用必须仍可解析，否则增量更新会切断全部入边。
+    let mut doc = Document::new();
+    doc.set_object(Object::new(
+        1,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Catalog".into()))
+                .insert("Payload", Value::Ref(2, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        2,
+        0,
+        Value::Dict(Dict::new().insert("Payload", Value::Integer(42))),
+    ));
+    doc.trailer = Trailer {
+        dict: Dict::new().insert("Root", Value::Ref(1, 0)),
+    };
+    let mut base = Vec::new();
+    DocumentWriter::new()
+        .with_version(PdfVersion::V1_4)
+        .build(&doc, &mut base)
+        .unwrap();
+
+    let parsed = parse_bytes(&base, "genref");
+    parsed.set_object(Object::new(
+        2,
+        0,
+        Value::Dict(Dict::new().insert("Payload", Value::Integer(99))),
+    ));
+    let bytes = incremental_bytes(&parsed);
+    let revised = parse_bytes(&bytes, "genref2");
+    assert_eq!(
+        revised.get_object(2).unwrap().expect("bumped").generation,
+        1
+    );
+    let catalog = revised.get_object(1).unwrap().expect("catalog").value;
+    let entry = catalog
+        .as_dict()
+        .unwrap()
+        .get("Payload")
+        .cloned()
+        .expect("/Payload reference");
+    let resolved = crate::core::reader::navigation::resolve(&revised, &entry)
+        .expect("old-generation reference must resolve to the latest revision");
+    assert_eq!(
+        resolved.as_dict().unwrap().get("Payload"),
+        Some(&Value::Integer(99))
+    );
+}
+
+#[test]
 fn incremental_free_entry_hides_deleted_object() {
     let doc = parse_bytes(&base_bytes(Some(PdfVersion::V1_4)), "del");
     assert!(doc.get_object(2).unwrap().is_some());

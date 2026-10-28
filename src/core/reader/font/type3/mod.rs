@@ -320,12 +320,9 @@ fn resolve_chain(document: &Document, value: &Value, label: &str) -> FontResult<
                 "{label} in Type 3 font has a reference cycle at {num} {generation} R"
             )));
         }
-        let object = document
-            .get_object(num)?
-            .filter(|object| object.generation == generation)
-            .ok_or_else(|| {
-                FontError::Invalid(format!("unresolved object reference {num} {generation} R"))
-            })?;
+        let object = document.get_object(num)?.ok_or_else(|| {
+            FontError::Invalid(format!("unresolved object reference {num} {generation} R"))
+        })?;
         current = object.value;
     }
     Err(FontError::Invalid(format!(

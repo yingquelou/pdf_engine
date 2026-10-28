@@ -917,7 +917,6 @@ impl Document {
             Value::Ref(num, generation) => self
                 .get_object(*num)
                 .map_err(|error| malformed(error.to_string()))?
-                .filter(|object| object.generation == *generation)
                 .map(|object| object.value)
                 .ok_or_else(|| {
                     malformed(format!("referenced object {num} {generation} R missing"))
