@@ -5,7 +5,8 @@
 //! - `version`：输出与内容-版本校验；
 //! - `serialize`：xref/对象流策略与对象布局；
 //! - `context`：写出阶段的偏移/条目状态；
-//! - `document_writer`：`DocumentWriter` 编排与兼容入口。
+//! - `document_writer`：`DocumentWriter` 编排与兼容入口；
+//! - `incremental`：增量更新写出（7.5.6，`/Prev` 链）。
 
 use std::fmt;
 use std::io;
@@ -53,6 +54,7 @@ impl From<io::Error> for WriteError {
 mod compression;
 mod context;
 mod document_writer;
+mod incremental;
 mod serialize;
 #[cfg(test)]
 mod tests;

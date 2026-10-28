@@ -70,6 +70,8 @@ pub struct Document {
     /// 同一对象号若存在多个 generation，以最新修订为准——与 xref
     /// 查找（同样只认最新条目）保持一致。
     pub(crate) cache: RefCell<HashMap<i64, Object>>,
+    /// 标记删除的对象号（E7 增量更新）：写出时产出自由条目遮蔽历史条目。
+    pub(crate) deleted: RefCell<HashSet<i64>>,
     pub(crate) security: Option<Arc<dyn ObjectSecurity>>,
     pub(crate) stream_length_stack: RefCell<HashSet<(i64, i64)>>,
 }
@@ -108,6 +110,7 @@ impl Document {
             features: RefCell::new(features),
             warnings: RefCell::new(Vec::new()),
             cache: RefCell::new(cache),
+            deleted: RefCell::new(HashSet::new()),
             security: None,
             stream_length_stack: RefCell::new(HashSet::new()),
         }
@@ -139,6 +142,7 @@ impl Document {
             features: RefCell::new(features),
             warnings: RefCell::new(warnings),
             cache: RefCell::new(HashMap::new()),
+            deleted: RefCell::new(HashSet::new()),
             security,
             stream_length_stack: RefCell::new(HashSet::new()),
         }
@@ -177,6 +181,20 @@ impl Document {
         // 插入时顺带扫描特性，保持 FeatureProfile 与 cache 同步。
         scan_value_features(&mut self.features.borrow_mut(), &obj.value);
         self.cache.borrow_mut().insert(obj.num, obj);
+    }
+
+    /// 标记删除对象号（7.5.6 增量更新）：从缓存移除并记录对象号，
+    /// 增量段为该号写出自由条目，使读端（按最新条目优先）看不到旧版本。
+    pub fn delete_object(&self, num: i64) {
+        self.cache.borrow_mut().remove(&num);
+        self.deleted.borrow_mut().insert(num);
+    }
+
+    /// 已标记删除的对象号（升序）。
+    pub fn deleted_objects(&self) -> Vec<i64> {
+        let mut v: Vec<i64> = self.deleted.borrow().iter().copied().collect();
+        v.sort_unstable();
+        v
     }
 
     /// 返回缓存中全部对象，按 `num` 升序。供 writer 顺序写出。

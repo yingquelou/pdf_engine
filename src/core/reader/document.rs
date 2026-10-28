@@ -376,6 +376,12 @@ impl Document {
         for sub in &self.xref.0 {
             for (i, e) in sub.entries.iter().enumerate() {
                 let num = sub.start + i as i64;
+                // `/Prev` 链按「最新段在前」排列；已在缓存的对象即最新版本，
+                // 历史段的旧条目（尤其是直接走 get_object_from_obj_stream 的
+                // InObjStream 路径）不得覆盖，否则全量重写会回退到旧版本。
+                if self.cache.borrow().contains_key(&num) {
+                    continue;
+                }
                 match &e.kind {
                     XrefKind::Free => continue,
                     XrefKind::Normal => {

@@ -59,6 +59,25 @@ impl WriteContext {
         }
     }
 
+    /// 增量更新上下文：缓冲已含源文件字节，写出从文件尾开始；
+    /// `base_max_num` 为源文档已占用的最大对象号，新对象号在其后分配。
+    pub(super) fn for_incremental(
+        version: PdfVersion,
+        compression: Option<StreamCompression>,
+        buf: Vec<u8>,
+        base_max_num: i64,
+    ) -> Self {
+        let pos = buf.len() as u64;
+        Self {
+            version,
+            compression,
+            buf,
+            pos,
+            entries: Vec::new(),
+            max_num: base_max_num.max(0),
+        }
+    }
+
     pub(super) fn write_header(&mut self) {
         self.buf.extend_from_slice(b"%PDF-");
         self.buf.extend_from_slice(self.version.as_str().as_bytes());

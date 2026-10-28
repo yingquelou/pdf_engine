@@ -6,6 +6,7 @@ use std::io::Write;
 use super::WriteError;
 use super::compression::StreamCompression;
 use super::context::WriteContext;
+use super::incremental;
 use super::serialize::{
     ClassicXrefSerializer, ObjectLayout, ObjectStreamLayout, PlainObjectLayout, XrefSerializer,
     XrefStreamSerializer,
@@ -131,6 +132,14 @@ impl DocumentWriter {
 
         w.write_all(&ctx.buf)?;
         Ok(())
+    }
+
+    /// 以**增量更新**（7.5.6）序列化 [`Document`]：保留源文件字节，
+    /// 仅追加变更/删除对象与新交叉引用段（`/Prev` 链、trailer 合并、
+    /// `/ID` 更新）。宿主必须是从文件解析的 `Document`；加密文档与
+    /// 改写文件头版本的请求一律拒绝且零字节。详见 [`mod@incremental`]。
+    pub fn build_incremental(&self, doc: &Document, w: &mut dyn Write) -> Result<(), WriteError> {
+        incremental::build(doc, w, self.version, self.compression.clone())
     }
 }
 

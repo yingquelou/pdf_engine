@@ -149,10 +149,11 @@ impl XrefSerializer for XrefStreamSerializer {
         };
         // /Size 由实际写出的对象号决定（含 XRef 流自身）；trailer 的其余
         // 字段（/Root /Info /ID /Encrypt 等）原样并入该字典。
-        let dict = doc
-            .trailer
-            .dict
-            .clone()
+        // /Prev 例外：它指向源文件上一版本的偏移，全量重写输出自包含，
+        // 保留会产生悬空/误触发的 /Prev 链。
+        let mut dict = doc.trailer.dict.clone();
+        dict.0.remove("Prev");
+        let dict = dict
             .insert("Type", Value::Name("XRef".into()))
             .insert("Size", Value::Integer(size))
             .insert("W", ints(&[w1 as i64, w2 as i64, w3 as i64]))
@@ -207,7 +208,7 @@ impl ObjectLayout for ObjectStreamLayout {
 }
 
 /// 计算容纳 `max` 所需的最小字节宽度（大端），不小于 `min`，上限 8。
-fn field_width(max: u64, min: usize) -> usize {
+pub(super) fn field_width(max: u64, min: usize) -> usize {
     let mut w = min.max(1);
     while w < 8 && max >= (1u64 << (8 * w)) {
         w += 1;
@@ -216,7 +217,7 @@ fn field_width(max: u64, min: usize) -> usize {
 }
 
 /// 以 `width` 字节大端把 `v` 写入 `out`。
-fn push_field(out: &mut Vec<u8>, v: u64, width: usize) {
+pub(super) fn push_field(out: &mut Vec<u8>, v: u64, width: usize) {
     for i in (0..width).rev() {
         out.push(((v >> (8 * i)) & 0xff) as u8);
     }
