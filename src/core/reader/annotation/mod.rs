@@ -14,9 +14,11 @@
 //!   Line `/L`、`/LE`、`/LL`、`/LLE`、`/Cap`、`/IT`、`/LLO`、`/CP`、`/CO`
 //!   （Table 175/176，端点样式与意图、题注位置类型化为枚举）；
 //!   FreeText `/DA`、`/Q`、`/DS`、`/CL`、`/IT`、`/BE`、`/RD`、`/LE`
-//!   （Table 174 + Table 167，`/RC` 属标记类通用条目）。
+//!   （Table 174 + Table 167，`/RC` 属标记类通用条目）；
+//!   Square/Circle `/BE`、`/RD`（Table 177，与 FreeText 共用键）；
+//!   Polygon/PolyLine `/Vertices`、`/LE`、`/BE`、`/IT`（Table 178）。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
-//!   Polygon `/Vertices`、Line `/Measure` 等）。
+//!   Line `/Measure`、Polygon `/Measure` 等）。
 //!
 //! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`。
 
@@ -40,7 +42,7 @@ use entries::{
 pub use kind::{AnnotationSubtype, Row, TABLE_169};
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
-    LineIntent,
+    LineIntent, PolygonIntent,
 };
 
 /// 页面树遍历最大深度。
@@ -251,7 +253,8 @@ pub struct Annotation {
     pub ink_paths: Vec<Vec<f64>>,
     /// Line 注解端点 `/L`：`[x1, y1, x2, y2]`（Table 175 必填条目）。
     pub line_endpoints: Option<[f64; 4]>,
-    /// Line 注解两端端点样式 `/LE`（Table 176，PDF 1.4；缺省视为 `[/None /None]`）。
+    /// 端点样式 `/LE`（Table 176）：Line 与 Polygon/PolyLine 的数组形态，
+    /// 缺省视为 `[/None /None]`。
     pub line_endings: Option<[LineEndStyle; 2]>,
     /// Line 注解引线长度 `/LL`（PDF 1.6，缺省 0）。
     pub leader_length: Option<f64>,
@@ -277,19 +280,25 @@ pub struct Annotation {
     pub callout_line: Option<CalloutLine>,
     /// FreeText 意图 `/IT`（PDF 1.6，缺省 `FreeText`）。
     pub free_text_intent: Option<FreeTextIntent>,
-    /// 边框效果字典 `/BE`（PDF 1.6 起 FreeText 可用，Table 167）。
+    /// 边框效果字典 `/BE`（Table 167；FreeText PDF 1.6，
+    /// Square/Circle/Polygon PDF 1.5）。
     pub border_effect: Option<BorderEffect>,
-    /// FreeText 内部文本矩形与 `/Rect` 的四边差值 `/RD`（PDF 1.6，均 ≥0）。
+    /// 注解矩形与实际边界的四边差值 `/RD`（FreeText PDF 1.6、
+    /// Square/Circle PDF 1.5，均 ≥0）。
     pub text_rectangle: Option<[f64; 4]>,
     /// FreeText 引线端点样式 `/LE`（单个名字，PDF 1.6，需 `/CL`）。
     pub callout_ending: Option<LineEndStyle>,
+    /// Polygon/PolyLine 顶点 `/Vertices`（Table 178 必填）：x/y 交替的偶数个数值。
+    pub vertices: Option<Vec<f64>>,
+    /// Polygon/PolyLine 意图 `/IT`（PDF 1.6 云状、1.7 标注）。
+    pub polygon_intent: Option<PolygonIntent>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
     pub destination: Option<Value>,
     /// `/Popup` 弹出窗口引用。
     pub popup: Option<(i64, i64)>,
-    /// 完整注解字典，未建模条目（FreeText `/DA`、Polygon `/Vertices`、`/FS`、`/Parent` 等）经此访问。
+    /// 完整注解字典，未建模条目（`/Measure`、`/FS`、`/Parent` 等）经此访问。
     pub dict: Dict,
 }
 
@@ -498,6 +507,8 @@ fn parse_annotation(
         border_effect: entries.border_effect,
         text_rectangle: entries.text_rectangle,
         callout_ending: entries.callout_ending,
+        vertices: entries.vertices,
+        polygon_intent: entries.polygon_intent,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

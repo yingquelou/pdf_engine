@@ -12,6 +12,7 @@
 //! - `annotation`：注解字典与 `/Annots` 通用条目与子类型专有条目；
 //! - `annotation_line`：Line 注解专有条目（Table 175/176）与版本门禁；
 //! - `annotation_free_text`：FreeText 注解专有条目（Table 174）与版本门禁；
+//! - `annotation_geometry`：Square/Circle/Polygon/PolyLine 几何条目（Table 177/178）与版本门禁；
 //! - `annotation_subtype_table`：写端子类型集与读端 Table 169 的一致性与子类型版本门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
@@ -28,6 +29,7 @@
 mod acro_form;
 mod annotation;
 mod annotation_free_text;
+mod annotation_geometry;
 mod annotation_line;
 mod annotation_subtype_table;
 mod cid;

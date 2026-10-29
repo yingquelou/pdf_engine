@@ -36,6 +36,9 @@ fn build_at(kind: AnnotationKind, version: PdfVersion) -> Result<Vec<u8>, WriteE
     if kind == AnnotationKind::FreeText {
         annot = annot.with_default_appearance("/Helv 12 Tf 0 g");
     }
+    if matches!(kind, AnnotationKind::Polygon | AnnotationKind::PolyLine) {
+        annot = annot.with_vertices(vec![0.0, 0.0, 50.0, 0.0, 50.0, 50.0]);
+    }
     let mut b = PdfBuilder::with_version(version);
     let p0 = b.page(PageSize::A4);
     b.add_annotation(p0, annot);

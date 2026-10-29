@@ -169,6 +169,11 @@ impl LineEntries {
         self.caption_offset
     }
 
+    /// 是否声明了端点条目（`/L`）。
+    pub(crate) fn has_endpoints(&self) -> bool {
+        self.endpoints.is_some()
+    }
+
     /// 是否声明了任意 PDF 1.4 端点样式条目（`/LE`）。
     pub(crate) fn has_arrow_entries(&self) -> bool {
         self.endings.is_some()
@@ -189,12 +194,10 @@ impl LineEntries {
             || self.caption_offset.is_some()
     }
 
-    /// 是否声明了任意 Line 专有条目；用于子类型归属校验。
-    fn is_declared(&self) -> bool {
-        self.endpoints.is_some()
-            || self.has_arrow_entries()
-            || self.has_leader_entries()
-            || self.has_caption_entries()
+    /// 是否声明了任意 Line 独有条目（`/L`、引线与题注）；`/LE` 与
+    /// Polygon/PolyLine 共用，由 [`Self::has_arrow_entries`] 单独归属。
+    fn has_line_only_entries(&self) -> bool {
+        self.has_endpoints() || self.has_leader_entries() || self.has_caption_entries()
     }
 
     /// 校验取值与相互依赖（`/LLE` 需 `/LL`、题注条目需 `/Cap` 为真）。
@@ -378,8 +381,18 @@ impl PdfAnnotation {
         if !self.ink_paths.is_empty() {
             self.require_kind(AnnotationKind::Ink, "/InkList")?;
         }
-        if self.line.is_declared() {
+        if self.line.has_line_only_entries() {
             self.require_kind(AnnotationKind::Line, "Line annotation entries")?;
+        }
+        if self.line.has_arrow_entries() {
+            self.require_kind_in(
+                &[
+                    AnnotationKind::Line,
+                    AnnotationKind::Polygon,
+                    AnnotationKind::PolyLine,
+                ],
+                "annotation /LE (line endings)",
+            )?;
         }
         if self.kind == AnnotationKind::Line && self.line.endpoints().is_none() {
             return Err("Line annotation requires /L (endpoint coordinates)".into());
@@ -409,6 +422,7 @@ impl PdfAnnotation {
             }
         }
         self.validate_free_text_entries()?;
+        self.validate_geometry_entries()?;
         Ok(())
     }
 }

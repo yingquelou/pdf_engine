@@ -49,8 +49,8 @@ pub use types::{
     Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
     HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
     LatticeMeshShading, LineEndStyle, LineIntent, MeshFunction, MeshVertex, OptionalContentGroup,
-    PageSize, PaintType, PdfAnnotation, RadialShading, SampledFunction, Separation, Shading,
-    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
+    PageSize, PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation,
+    Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
     TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
     Type2Halftone, Type3Font, Type3Glyph,
 };

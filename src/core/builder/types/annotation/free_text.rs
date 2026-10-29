@@ -173,21 +173,20 @@ impl FreeTextEntries {
         self.rich_content.is_some() || self.default_style.is_some()
     }
 
-    /// 是否声明了任一 PDF 1.6 标注框条目（`/CL`、`/IT`、`/BE`、`/RD`、`/LE`）。
+    /// 是否声明了 FreeText 独有的 PDF 1.6 条目（`/CL`、`/IT`、`/LE`）。
     pub(crate) fn has_callout_entries(&self) -> bool {
-        self.callout_line.is_some()
-            || self.intent.is_some()
-            || self.border_effect.is_some()
-            || self.text_rectangle.is_some()
-            || self.callout_ending.is_some()
+        self.callout_line.is_some() || self.intent.is_some() || self.callout_ending.is_some()
     }
 
-    /// 是否声明了任意 FreeText 专有条目；用于子类型归属校验。
-    pub(crate) fn is_declared(&self) -> bool {
+    /// 是否声明了 FreeText 独有条目（`/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/LE`）。
+    /// `/BE` 与 `/RD` 与几何类注解共用，不在此判定。
+    fn has_free_text_entries(&self) -> bool {
         self.default_appearance.is_some()
             || self.has_quadding()
             || self.has_rich_content()
-            || self.has_callout_entries()
+            || self.callout_line.is_some()
+            || self.intent.is_some()
+            || self.callout_ending.is_some()
     }
 
     /// 校验取值与相互依赖；`/DA` 的必填性由子类型归属处判断。
@@ -219,20 +218,18 @@ impl FreeTextEntries {
         if let Some(diff) = self.text_rectangle
             && (!diff.iter().all(|v| v.is_finite()) || diff.iter().any(|v| *v < 0.0))
         {
-            return Err("FreeText annotation /RD must hold four finite nonnegative numbers".into());
+            return Err("annotation /RD must hold four finite nonnegative numbers".into());
         }
         if let Some(effect) = &self.border_effect
             && let Some(intensity) = effect.intensity
         {
             if !intensity.is_finite() || !(0.0..=2.0).contains(&intensity) {
                 return Err(format!(
-                    "FreeText annotation /BE /I must be within 0.0–2.0, got {intensity}"
+                    "annotation /BE /I must be within 0.0–2.0, got {intensity}"
                 ));
             }
             if effect.style != BorderEffectStyle::Cloudy {
-                return Err(
-                    "FreeText annotation /BE /I is meaningful only with the cloudy style".into(),
-                );
+                return Err("annotation /BE /I is meaningful only with the cloudy style".into());
             }
         }
         if self.callout_ending.is_some() && self.callout_line.is_none() {
@@ -304,10 +301,32 @@ impl PdfAnnotation {
         &self.free_text
     }
 
-    /// FreeText 专有条目的子类型归属与必填项校验；由 [`PdfAnnotation::validate`] 调用。
+    /// FreeText 独有条目与共享边框条目的子类型归属、`/DA` 必填项校验；
+    /// 由 [`PdfAnnotation::validate`] 调用。
     pub(super) fn validate_free_text_entries(&self) -> Result<(), String> {
-        if self.free_text.is_declared() {
+        if self.free_text.has_free_text_entries() {
             self.require_kind(AnnotationKind::FreeText, "FreeText annotation entries")?;
+        }
+        if self.free_text.border_effect().is_some() {
+            self.require_kind_in(
+                &[
+                    AnnotationKind::FreeText,
+                    AnnotationKind::Square,
+                    AnnotationKind::Circle,
+                    AnnotationKind::Polygon,
+                ],
+                "annotation /BE (border effect)",
+            )?;
+        }
+        if self.free_text.text_rectangle().is_some() {
+            self.require_kind_in(
+                &[
+                    AnnotationKind::FreeText,
+                    AnnotationKind::Square,
+                    AnnotationKind::Circle,
+                ],
+                "annotation /RD (rect differences)",
+            )?;
         }
         if self.kind == AnnotationKind::FreeText && self.free_text.default_appearance().is_none() {
             return Err("FreeText annotation requires /DA (default appearance)".into());

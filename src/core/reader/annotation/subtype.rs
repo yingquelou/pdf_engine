@@ -12,15 +12,22 @@
 //!   `/LLO`、`/CP`、`/CO`（`/IC` 属通用条目，见 `Annotation::interior_color`）
 //! - FreeText（Table 174 + Table 167）：`/DA`、`/Q`、`/DS`、`/CL`、`/IT`、
 //!   `/BE`、`/RD`、`/LE`（`/RC` 属通用条目，`/BS` 属 12.5.4 边框）
+//! - Square/Circle（Table 177）：`/BE`、`/RD`（`/IC` 属通用条目）
+//! - Polygon/PolyLine（Table 178）：`/Vertices`、`/LE`、`/BE`、`/IT`
 //!
-//! `/LE` 有两种形态：Line（Table 175）是 1–2 个名字的数组，FreeText
-//! （Table 174）是单个名字。解析不校验声明的 `/Subtype`，因此数组形态
+//! `/LE` 有两种形态：Line/Polygon/PolyLine 是 1–2 个名字的数组，
+//! FreeText 是单个名字。解析不校验声明的 `/Subtype`，因此数组形态
 //! 只填 [`SubtypeEntries::line_endings`]、裸名字只填
 //! [`SubtypeEntries::callout_ending`]，两者互不报错。
 //!
-//! `/IT` 也归 Line 与 FreeText 两家，名字集合互不相交：命中哪一家就填哪
-//! 一家；两家都不认识的名字才按声明的 `/Subtype` 归属决定落进哪个 `Other`
-//! （非 FreeText 仍按 Line 的 `Other` 保留原文）。
+//! `/IT` 归 Line、FreeText 与 Polygon/PolyLine 三家，名字集合互不相交：
+//! 命中哪一家就填哪一家；三家都不认识的名字才按声明的 `/Subtype` 归属决定
+//! 落进哪个 `Other`（`FreeText` 归 FreeText，`Polygon`/`PolyLine` 归
+//! Polygon，其余仍按 Line 的 `Other` 保留原文）。
+//!
+//! `/BE` 与 `/RD` 是 FreeText 与几何类注解共用的键：`/BE` 为 Table 167
+//! 边框效果（FreeText PDF 1.6，Square/Circle/Polygon PDF 1.5），`/RD` 为
+//! Rect 与实际边界的四边差值（FreeText PDF 1.6，Square/Circle PDF 1.5）。
 
 use super::{
     Result,
@@ -33,6 +40,8 @@ use crate::core::types::{Dict, Value};
 const MAX_INK_PATHS: usize = 4096;
 /// 单条墨迹路径的坐标数值上限（防护不可信文件）。
 const MAX_INK_PATH_VALUES: usize = 8192;
+/// Polygon/PolyLine `/Vertices` 的坐标数值上限（防护不可信文件）。
+const MAX_VERTEX_VALUES: usize = 8192;
 
 /// Line 注解端点样式（`/LE` 数组元素，Table 176）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +212,41 @@ pub enum CalloutLine {
     Knee([f64; 6]),
 }
 
+/// Polygon/PolyLine 注解意图（`/IT`，Table 178）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolygonIntent {
+    /// 云状多边形（`/PolygonCloud`，PDF 1.6）。
+    PolygonCloud,
+    /// 折线标注，题注给出测量长度（`/PolyLineDimension`，PDF 1.7）。
+    PolyLineDimension,
+    /// 多边形标注，题注给出测量长度（`/PolygonDimension`，PDF 1.7）。
+    PolygonDimension,
+    /// 非标准名（原样保留）。
+    Other(String),
+}
+
+impl PolygonIntent {
+    /// 由 `/IT` 名字解析；未知名返回 [`PolygonIntent::Other`]。
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "PolygonCloud" => Self::PolygonCloud,
+            "PolyLineDimension" => Self::PolyLineDimension,
+            "PolygonDimension" => Self::PolygonDimension,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    /// 标准意图名；[`PolygonIntent::Other`] 返回其原文。
+    pub fn name(&self) -> &str {
+        match self {
+            Self::PolygonCloud => "PolygonCloud",
+            Self::PolyLineDimension => "PolyLineDimension",
+            Self::PolygonDimension => "PolygonDimension",
+            Self::Other(other) => other,
+        }
+    }
+}
+
 /// 边框效果样式（`/BE /S`，Table 167）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BorderEffectStyle {
@@ -269,11 +313,13 @@ pub(super) struct SubtypeEntries {
     pub(super) border_effect: Option<BorderEffect>,
     pub(super) text_rectangle: Option<[f64; 4]>,
     pub(super) callout_ending: Option<LineEndStyle>,
+    pub(super) vertices: Option<Vec<f64>>,
+    pub(super) polygon_intent: Option<PolygonIntent>,
 }
 
 /// 解析注解字典中的子类型专有条目。
 pub(super) fn parse_subtype_entries(dict: &Dict) -> Result<SubtypeEntries> {
-    let (line_intent, free_text_intent) = parse_intents(dict)?;
+    let (line_intent, free_text_intent, polygon_intent) = parse_intents(dict)?;
     Ok(SubtypeEntries {
         icon_name: parse_name_or_text(dict, "Name")?,
         is_open: match dict.get("Open") {
@@ -303,26 +349,58 @@ pub(super) fn parse_subtype_entries(dict: &Dict) -> Result<SubtypeEntries> {
         border_effect: parse_border_effect(dict)?,
         text_rectangle: parse_text_rectangle(dict)?,
         callout_ending: parse_bare_line_ending(dict)?,
+        vertices: parse_vertices(dict)?,
+        polygon_intent,
     })
 }
 
-/// `/IT` 同时属于 Line（Table 175）与 FreeText（Table 174），两集合不相交：
-/// 命中哪一侧就填哪一侧；两侧都不认识的名字按声明的 `/Subtype` 归属路由，
-/// 缺省落进 [`LineIntent::Other`] 保留原文。
-fn parse_intents(dict: &Dict) -> Result<(Option<LineIntent>, Option<FreeTextIntent>)> {
+/// `/IT` 同时属于 Line（Table 175）、FreeText（Table 174）与
+/// Polygon/PolyLine（Table 178），三集合互不相交：命中哪一侧就填哪一侧；
+/// 都不认识的名字按声明的 `/Subtype` 归属路由，缺省落进
+/// [`LineIntent::Other`] 保留原文。
+fn parse_intents(
+    dict: &Dict,
+) -> Result<(
+    Option<LineIntent>,
+    Option<FreeTextIntent>,
+    Option<PolygonIntent>,
+)> {
     let Some(name) = parse_name_or_text(dict, "IT")? else {
-        return Ok((None, None));
+        return Ok((None, None, None));
     };
     let free_text = FreeTextIntent::from_name(&name);
     if !matches!(free_text, FreeTextIntent::Other(_)) {
-        return Ok((None, Some(free_text)));
+        return Ok((None, Some(free_text), None));
     }
-    if matches!(LineIntent::from_name(&name), LineIntent::Other(_))
-        && dict.get("Subtype").and_then(Value::as_name) == Some("FreeText")
-    {
-        return Ok((None, Some(free_text)));
+    let line = LineIntent::from_name(&name);
+    if !matches!(line, LineIntent::Other(_)) {
+        return Ok((Some(line), None, None));
     }
-    Ok((Some(LineIntent::from_name(&name)), None))
+    let polygon = PolygonIntent::from_name(&name);
+    if !matches!(polygon, PolygonIntent::Other(_)) {
+        return Ok((None, None, Some(polygon)));
+    }
+    match dict.get("Subtype").and_then(Value::as_name) {
+        Some("FreeText") => Ok((None, Some(free_text), None)),
+        Some("Polygon" | "PolyLine") => Ok((None, None, Some(polygon))),
+        _ => Ok((Some(line), None, None)),
+    }
+}
+
+/// Polygon/PolyLine `/Vertices`：x/y 交替的偶数个有限数值（至少两个顶点）。
+fn parse_vertices(dict: &Dict) -> Result<Option<Vec<f64>>> {
+    let Some(values) = parse_number_array(dict, "Vertices", false)? else {
+        return Ok(None);
+    };
+    if values.len() % 2 != 0 || values.len() < 4 {
+        return Err(malformed(
+            "annotation /Vertices must hold an even number of values for at least two vertices",
+        ));
+    }
+    if values.len() > MAX_VERTEX_VALUES {
+        return Err(malformed("annotation /Vertices has too many values"));
+    }
+    Ok(Some(values))
 }
 
 /// `/Q` 对齐方式（0 左、1 居中、2 右，Table 174）。
@@ -353,7 +431,8 @@ fn parse_callout_line(dict: &Dict) -> Result<Option<CalloutLine>> {
     }
 }
 
-/// `/RD` 内部文本矩形与 `/Rect` 的四边差值，均须 ≥0（Table 174）。
+/// `/RD` 注解矩形与 `/Rect` 的四边差值，均须 ≥0（FreeText Table 174，
+/// Square/Circle Table 177 共用同一键与约束）。
 fn parse_text_rectangle(dict: &Dict) -> Result<Option<[f64; 4]>> {
     let Some(values) = parse_exact_numbers(dict, "RD", 4)? else {
         return Ok(None);
@@ -364,7 +443,8 @@ fn parse_text_rectangle(dict: &Dict) -> Result<Option<[f64; 4]>> {
     Ok(Some([values[0], values[1], values[2], values[3]]))
 }
 
-/// `/BE` 边框效果字典（Table 167）：`/S` 样式名，`/I` 强度 0–2。
+/// `/BE` 边框效果字典（Table 167）：`/S` 样式名，`/I` 强度 0–2
+/// （FreeText 与 Square/Circle/Polygon 共用同一结构与约束）。
 fn parse_border_effect(dict: &Dict) -> Result<Option<BorderEffect>> {
     let Some(value) = dict.get("BE") else {
         return Ok(None);
@@ -414,7 +494,7 @@ fn parse_exact_numbers(dict: &Dict, key: &str, len: usize) -> Result<Option<Vec<
     Ok(Some(values))
 }
 
-/// Line `/LE`：一到两个端点样式名，缺省的一端按 `/None` 处理；
+/// Line/Polygon/PolyLine `/LE`：一到两个端点样式名，缺省的一端按 `/None` 处理；
 /// 单个名字的 FreeText 形态由 [`parse_bare_line_ending`] 承接，此处返回 `None`。
 fn parse_line_endings(dict: &Dict) -> Result<Option<[LineEndStyle; 2]>> {
     let Some(value) = dict.get("LE") else {

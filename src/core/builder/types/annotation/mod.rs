@@ -7,13 +7,17 @@
 //! 经 [`PdfBuilder::add_annotation`](super::super::PdfBuilder::add_annotation)
 //! 绑定到页面后，由 assemble 写为独立间接对象并登记进页面 `/Annots`。
 //! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`（Text/Caret/
-//! Ink/Line）与 `free_text`（FreeText，Table 174）。
+//! Ink/Line）、`free_text`（FreeText，Table 174）与 `geometry`
+//! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）。
 
 mod free_text;
+mod geometry;
 mod subtype;
 
 use free_text::FreeTextEntries;
 pub use free_text::{BorderEffect, BorderEffectStyle, CalloutLine, FreeTextIntent};
+use geometry::GeometryEntries;
+pub use geometry::PolygonIntent;
 use subtype::LineEntries;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
@@ -191,6 +195,7 @@ pub struct PdfAnnotation {
     ink_paths: Vec<Vec<f64>>,
     line: LineEntries,
     free_text: FreeTextEntries,
+    geometry: GeometryEntries,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -231,6 +236,7 @@ impl PdfAnnotation {
             ink_paths: Vec::new(),
             line: LineEntries::default(),
             free_text: FreeTextEntries::default(),
+            geometry: GeometryEntries::default(),
             action: None,
             destination: None,
             popup: None,
@@ -534,6 +540,18 @@ impl PdfAnnotation {
         Err(format!(
             "{entries} are specific to {} annotations, got {}",
             expected.name(),
+            self.kind.name()
+        ))
+    }
+
+    fn require_kind_in(&self, expected: &[AnnotationKind], entries: &str) -> Result<(), String> {
+        if expected.contains(&self.kind) {
+            return Ok(());
+        }
+        let names: Vec<&str> = expected.iter().map(|kind| kind.name()).collect();
+        Err(format!(
+            "{entries} are specific to {} annotations, got {}",
+            names.join(" or "),
             self.kind.name()
         ))
     }

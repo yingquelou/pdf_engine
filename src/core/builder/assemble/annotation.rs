@@ -1,12 +1,15 @@
 //! 注解字典写出（12.5.1–12.5.6）：通用条目 + 子类型专有条目（Text `/Name`
 //! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`、
 //! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
-//! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`）+
-//! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及 Line 与 FreeText 条目的版本门禁。
+//! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
+//! Polygon/PolyLine `/Vertices` `/IT`）+
+//! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
-use crate::core::builder::types::{Action, AnnotationDestination, PdfAnnotation};
+use crate::core::builder::types::{
+    Action, AnnotationDestination, AnnotationKind, PdfAnnotation, PolygonIntent,
+};
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
@@ -154,6 +157,13 @@ pub(super) fn annotation_dict(
     if let Some(style) = free_text.callout_ending() {
         dict = dict.insert("LE", Value::Name(style.name().into()));
     }
+    let geometry = annot.geometry();
+    if let Some(vertices) = geometry.vertices() {
+        dict = dict.insert("Vertices", real_array(vertices));
+    }
+    if let Some(intent) = geometry.intent() {
+        dict = dict.insert("IT", Value::Name(intent.name().into()));
+    }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
         // `to_dict` 的直接构造。
@@ -257,6 +267,56 @@ fn explicit_destination_value(
     destination_value(destination, page_refs)
 }
 
+/// 几何类注解（Square/Circle/Polygon/PolyLine）子类型专有条目对应的特性集合。
+///
+/// `/BE` PDF 1.5（Square/Circle/Polygon）、`/RD` PDF 1.5（Square/Circle）、
+/// `/IT /PolygonCloud` PDF 1.6、`/IT` 标注类 PDF 1.7。FreeText 的同名条目
+/// 归 [`free_text_feature_gate`] 门禁，不在此重复。
+pub(super) fn geometry_features(annot: &PdfAnnotation) -> Vec<PdfFeature> {
+    let mut features = Vec::new();
+    if let Some(intent) = annot.geometry().intent() {
+        features.push(match intent {
+            PolygonIntent::PolygonCloud => PdfFeature::PolygonCloudIntent,
+            PolygonIntent::PolyLineDimension | PolygonIntent::PolygonDimension => {
+                PdfFeature::PolygonDimensionIntent
+            }
+        });
+    }
+    let kind = annot.kind();
+    let border = annot.free_text();
+    if border.border_effect().is_some()
+        && matches!(
+            kind,
+            AnnotationKind::Square | AnnotationKind::Circle | AnnotationKind::Polygon
+        )
+    {
+        features.push(PdfFeature::AnnotationBorderEffect);
+    }
+    if border.text_rectangle().is_some()
+        && matches!(kind, AnnotationKind::Square | AnnotationKind::Circle)
+    {
+        features.push(PdfFeature::AnnotationRectDifferences);
+    }
+    features
+}
+
+/// 几何类专有条目的版本门禁（Table 177/178）。
+pub(super) fn geometry_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    for feature in geometry_features(annot) {
+        if !version.supports(feature) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{feature} require PDF {}, got {}",
+                feature.min_version().as_str(),
+                version.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Line 专有条目的版本门禁（Table 175/176）。
 ///
 /// `/LE` 与端点样式取值各自有版本门起：`/LE` 与 6 种基础样式 PDF 1.4，
@@ -305,19 +365,27 @@ pub(super) fn line_feature_gate(
 /// FreeText 专有条目的版本门禁（Table 174）。
 ///
 /// `/Q` PDF 1.4；`/RC` `/DS` PDF 1.5；`/CL` `/IT` `/BE` `/RD` `/LE` PDF 1.6。
-/// `/DA` 随 FreeText 子类型自 PDF 1.3 起可用，不单独门禁。
+/// `/DA` 随 FreeText 子类型自 PDF 1.3 起可用，不单独门禁。`/BE` 与 `/RD`
+/// 与几何类注解共用，但 FreeText 上仍属 Table 174 的 PDF 1.6 条目；
+/// Square/Circle/Polygon 由 [`geometry_feature_gate`] 按 PDF 1.5 门禁。
 pub(super) fn free_text_feature_gate(
     annot: &PdfAnnotation,
     version: PdfVersion,
 ) -> Result<(), WriteError> {
     let free_text = annot.free_text();
+    let has_shared_border_entries =
+        free_text.border_effect().is_some() || free_text.text_rectangle().is_some();
     for (declared, feature) in [
         (free_text.has_quadding(), PdfFeature::FreeTextQuadding),
         (
             free_text.has_rich_content(),
             PdfFeature::FreeTextRichContent,
         ),
-        (free_text.has_callout_entries(), PdfFeature::FreeTextCallout),
+        (
+            free_text.has_callout_entries()
+                || (annot.kind() == AnnotationKind::FreeText && has_shared_border_entries),
+            PdfFeature::FreeTextCallout,
+        ),
     ] {
         if declared && !version.supports(feature) {
             return Err(WriteError::UnsupportedVersion(format!(

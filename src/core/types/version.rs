@@ -148,6 +148,15 @@ pub enum PdfFeature {
     /// FreeText 标注框条目（`/CL`、`/IT`、`/BE`、`/RD`、`/LE`，Table 174），
     /// PDF 1.6 引入。
     FreeTextCallout,
+    /// 几何类注解边框效果（`/BE`，Table 177/178），PDF 1.5 引入。
+    AnnotationBorderEffect,
+    /// Square/Circle 矩形差值（`/RD`，Table 177），PDF 1.5 引入。
+    AnnotationRectDifferences,
+    /// Polygon 云状意图（`/IT /PolygonCloud`，Table 178），PDF 1.6 引入。
+    PolygonCloudIntent,
+    /// Polygon/PolyLine 标注意图（`/IT /PolygonDimension`、`/PolyLineDimension`，
+    /// Table 178），PDF 1.7 引入。
+    PolygonDimensionIntent,
 }
 
 impl PdfFeature {
@@ -168,10 +177,16 @@ impl PdfFeature {
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
-            | PdfFeature::OptionalContent => PdfVersion::V1_5,
-            PdfFeature::SoftMaskMatte | PdfFeature::LineAnnotationLeader => PdfVersion::V1_6,
+            | PdfFeature::OptionalContent
+            | PdfFeature::AnnotationBorderEffect
+            | PdfFeature::AnnotationRectDifferences => PdfVersion::V1_5,
+            PdfFeature::SoftMaskMatte
+            | PdfFeature::LineAnnotationLeader
+            | PdfFeature::PolygonCloudIntent => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
-            PdfFeature::LineAnnotationCaption => PdfVersion::V1_7,
+            PdfFeature::LineAnnotationCaption | PdfFeature::PolygonDimensionIntent => {
+                PdfVersion::V1_7
+            }
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -204,6 +219,10 @@ impl fmt::Display for PdfFeature {
             PdfFeature::FreeTextQuadding => "free text quadding",
             PdfFeature::FreeTextRichContent => "free text rich content",
             PdfFeature::FreeTextCallout => "free text callout",
+            PdfFeature::AnnotationBorderEffect => "annotation border effect",
+            PdfFeature::AnnotationRectDifferences => "annotation rect differences",
+            PdfFeature::PolygonCloudIntent => "polygon cloud intent",
+            PdfFeature::PolygonDimensionIntent => "polygon dimension intent",
         };
         write!(f, "{name}")
     }

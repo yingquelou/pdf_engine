@@ -425,6 +425,10 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         if *kind == AnnotationKind::FileAttachment {
             annot = annot.with_filespec(filespec);
         }
+        if matches!(kind, AnnotationKind::Polygon | AnnotationKind::PolyLine) {
+            // `/Vertices` 是 Table 178 的必填条目。
+            annot = annot.with_vertices(vec![rect[0], rect[1], rect[2], rect[1], rect[2], rect[3]]);
+        }
         builder.add_annotation(p0, annot);
     }
     let mut buf = Vec::new();
