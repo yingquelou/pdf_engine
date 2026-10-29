@@ -1,10 +1,11 @@
-//! 动作字典写端（ISO 32000-1 12.6）。
+//! 动作字典写端（ISO 32000-1 12.6 / 12.7.5）。
 //!
-//! 覆盖六种常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript。动作字典
-//! 经 [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
+//! 覆盖六种常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）与三种
+//! 表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
+//! [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
 
 use crate::core::reader::navigation::Destination;
-use crate::core::types::{Dict, Value};
+use crate::core::types::{Array, Dict, Value};
 
 use super::text_string_value;
 
@@ -70,9 +71,9 @@ impl ActionNamedAction {
     }
 }
 
-/// 动作字典（12.6.2 Table 197）。
+/// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
 ///
-/// 写端支持六种常用动作；未知子类型不建模，由调用方直接构造字典。
+/// 写端支持九种动作；未知子类型不建模，由调用方直接构造字典。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// 本地跳转；`/D` 为显式目标数组或命名目标。
@@ -97,6 +98,29 @@ pub enum Action {
     },
     /// JavaScript 脚本（按文本串写出）。
     JavaScript(String),
+    /// 提交表单数据（12.7.5.2 Table 236）：`/F` 写成 URL 文件规格。
+    SubmitForm {
+        /// 提交目标 URL；须为可打印 ASCII。
+        url: String,
+        /// 字段全限定名列表（`/Fields`）；空表示全部字段。
+        fields: Vec<String>,
+        /// `/Flags`（Table 237）；0 时省略。
+        flags: u32,
+        /// `/URLType`（PDF 1.7）；`None` 时省略（缺省 `Browser`）。
+        url_type: Option<String>,
+    },
+    /// 重置表单字段（12.7.5.3 Table 238）。
+    ResetForm {
+        /// 字段全限定名列表（`/Fields`）；空表示全部字段。
+        fields: Vec<String>,
+        /// `/Flags`（Table 239）；0 时省略。
+        flags: u32,
+    },
+    /// 从 FDF 文件导入字段数据（12.7.5.4 Table 240）。
+    ImportData {
+        /// FDF 文件路径（`/F` 文件规格文本串）。
+        file: String,
+    },
 }
 
 impl Action {
@@ -109,6 +133,9 @@ impl Action {
             Self::Uri(_) => "URI",
             Self::Launch { .. } => "Launch",
             Self::JavaScript(_) => "JavaScript",
+            Self::SubmitForm { .. } => "SubmitForm",
+            Self::ResetForm { .. } => "ResetForm",
+            Self::ImportData { .. } => "ImportData",
         }
     }
 
@@ -138,9 +165,53 @@ impl Action {
             Self::JavaScript(script) => {
                 dict = dict.insert("JS", text_string_value(script));
             }
+            Self::SubmitForm {
+                url,
+                fields,
+                flags,
+                url_type,
+            } => {
+                dict = dict.insert(
+                    "F",
+                    Value::Dict(
+                        Dict::new()
+                            .insert("FS", Value::Name("URL".into()))
+                            .insert("F", Value::String(url.clone())),
+                    ),
+                );
+                if let Some(name) = url_type {
+                    dict = dict.insert("URLType", Value::Name(name.clone()));
+                }
+                if !fields.is_empty() {
+                    dict = dict.insert("Fields", fields_value(fields));
+                }
+                if *flags != 0 {
+                    dict = dict.insert("Flags", Value::Integer(i64::from(*flags)));
+                }
+            }
+            Self::ResetForm { fields, flags } => {
+                if !fields.is_empty() {
+                    dict = dict.insert("Fields", fields_value(fields));
+                }
+                if *flags != 0 {
+                    dict = dict.insert("Flags", Value::Integer(i64::from(*flags)));
+                }
+            }
+            Self::ImportData { file } => {
+                dict = dict.insert("F", text_string_value(file));
+            }
         }
         dict
     }
+}
+
+fn fields_value(fields: &[String]) -> Value {
+    Value::Array(Array(
+        fields
+            .iter()
+            .map(|field| text_string_value(field))
+            .collect(),
+    ))
 }
 
 fn destination_to_value(dest: &Destination) -> Value {

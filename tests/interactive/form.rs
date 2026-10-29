@@ -244,3 +244,93 @@ fn builder_form_actions_and_calculation_order_roundtrip_through_parser() {
         Some(ReadAction::JavaScript("calculateTax()".into()))
     );
 }
+
+/// 写入 → 重新解析：Link 注解上的三种表单数据动作（12.7.5.2–12.7.5.4）
+/// 经 `Document::action` 还原为 SubmitForm/ResetForm/ImportData 类型化模型。
+#[test]
+fn builder_form_data_actions_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        Action as BuilderAction, AnnotationKind, PageSize, PdfAnnotation, PdfBuilder,
+    };
+    use pdf_engine::core::reader::action::{
+        Action as ReaderAction, ActionField, FileSpec, ResetFormAction, SubmitFormAction,
+    };
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let p0 = builder.page(PageSize::A4);
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 700.0, 300.0, 720.0]).with_action(
+            BuilderAction::SubmitForm {
+                url: "https://example.com/submit".into(),
+                fields: vec!["name".into(), "total".into()],
+                flags: 0x0005,
+                url_type: Some("Browser".into()),
+            },
+        ),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 660.0, 300.0, 680.0]).with_action(
+            BuilderAction::ResetForm {
+                fields: vec!["total".into()],
+                flags: 1,
+            },
+        ),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 620.0, 300.0, 640.0]).with_action(
+            BuilderAction::ImportData {
+                file: "data.fdf".into(),
+            },
+        ),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let annots = doc.page_annotations(0).expect("annotations");
+
+    let submit = doc
+        .action(annots[0].action.as_ref().expect("/A SubmitForm"))
+        .expect("submit-form action parses");
+    assert_eq!(
+        submit,
+        ReaderAction::SubmitForm(SubmitFormAction {
+            file: FileSpec {
+                file: "https://example.com/submit".into()
+            },
+            url_type: Some("Browser".into()),
+            fields: vec![
+                ActionField::Name("name".into()),
+                ActionField::Name("total".into()),
+            ],
+            flags: 0x0005,
+        })
+    );
+
+    let reset = doc
+        .action(annots[1].action.as_ref().expect("/A ResetForm"))
+        .expect("reset-form action parses");
+    assert_eq!(
+        reset,
+        ReaderAction::ResetForm(ResetFormAction {
+            fields: vec![ActionField::Name("total".into())],
+            flags: 1,
+        })
+    );
+
+    let import = doc
+        .action(annots[2].action.as_ref().expect("/A ImportData"))
+        .expect("import-data action parses");
+    assert_eq!(
+        import,
+        ReaderAction::ImportData {
+            file: FileSpec {
+                file: "data.fdf".into()
+            },
+        }
+    );
+}

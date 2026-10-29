@@ -9,6 +9,7 @@
 //! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出。
 
+mod action;
 mod annotation;
 mod cid;
 mod cmap;
@@ -70,6 +71,9 @@ impl PdfBuilder {
                 )));
             }
         }
+
+        // 表单数据动作（12.7.5）：取值校验与版本门禁在任何对象写出前完成。
+        let action_features = self.action_requirements()?;
 
         // 嵌入文件（7.11）：逐项校验与版本门禁在任何对象写出前完成。
         embedded_file::validate_registration(&self.embedded, self.version)?;
@@ -547,6 +551,10 @@ impl PdfBuilder {
             for feature in annotation::link_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);
             }
+        }
+        // 表单数据动作与字段名条目（12.7.5.2–12.7.5.4），写入特征画像。
+        for feature in &action_features {
+            doc.features.borrow_mut().insert(*feature);
         }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &acro_form {

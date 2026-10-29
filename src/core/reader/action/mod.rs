@@ -1,7 +1,8 @@
-//! 动作字典读取（ISO 32000-1 12.6）。
+//! 动作字典读取（ISO 32000-1 12.6 / 12.7.5）。
 //!
-//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript；未知子类型
-//! 保留名称。动作值可为间接引用，`/D` 的显式目标经页面树映射为 0 基页号。
+//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript，以及表单动作
+//! SubmitForm、ResetForm、ImportData；未知子类型保留名称。动作值可为间接
+//! 引用，`/D` 的显式目标经页面树映射为 0 基页号。
 
 use std::fmt;
 
@@ -33,8 +34,53 @@ pub enum Action {
     },
     /// JavaScript 脚本（文本串或流解码后的 UTF-8）。
     JavaScript(String),
+    /// 提交表单数据（12.7.5.2 Table 236）。
+    SubmitForm(SubmitFormAction),
+    /// 重置表单字段（12.7.5.3 Table 238）。
+    ResetForm(ResetFormAction),
+    /// 从 FDF 文件导入字段数据（12.7.5.4 Table 240）。
+    ImportData {
+        /// FDF 文件规格。
+        file: FileSpec,
+    },
     /// 未建模的子类型；保留 `/S` 名称，其余条目不解释。
     Unknown { subtype: String },
+}
+
+/// 表单动作的字段选择条目（SubmitForm/ResetForm `/Fields`，12.7.5.2/12.7.5.3）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActionField {
+    /// 字段全限定名（PDF 1.3 起的文本串）。
+    Name(String),
+    /// 字段字典的间接引用。
+    Reference {
+        /// 对象号。
+        number: i64,
+        /// 生成号。
+        generation: i64,
+    },
+}
+
+/// Submit-Form 动作（12.7.5.2 Table 236）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubmitFormAction {
+    /// 提交目标 URL（`/F`，URL 文件规格，7.11.5）。
+    pub file: FileSpec,
+    /// `/URLType`（PDF 1.7）；缺省 `Browser` 不物化。
+    pub url_type: Option<String>,
+    /// `/Fields` 选择条目；空表示全部字段。
+    pub fields: Vec<ActionField>,
+    /// `/Flags`（Table 237），缺省 0。
+    pub flags: u32,
+}
+
+/// Reset-Form 动作（12.7.5.3 Table 238）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResetFormAction {
+    /// `/Fields` 选择条目；空表示全部字段。
+    pub fields: Vec<ActionField>,
+    /// `/Flags`（Table 239），缺省 0。
+    pub flags: u32,
 }
 
 /// 文件规格（7.11.2）：优先取 `/UF`，其次 `/F` 与平台相关路径。
@@ -183,6 +229,41 @@ impl Document {
                 })?;
                 Ok(Action::JavaScript(script))
             }
+            "SubmitForm" => {
+                let file = parse_file_spec(
+                    self,
+                    dict.get("F")
+                        .ok_or_else(|| malformed("SubmitForm action is missing /F"))?,
+                )?;
+                let url_type = match dict.get("URLType") {
+                    None => None,
+                    Some(value) => match resolve(self, value)? {
+                        Value::Name(name) => Some(name),
+                        _ => return Err(malformed("SubmitForm action /URLType is not a name")),
+                    },
+                };
+                let fields = parse_action_fields(self, dict.get("Fields"))?;
+                let flags = parse_action_flags(self, dict.get("Flags"), "SubmitForm action")?;
+                Ok(Action::SubmitForm(SubmitFormAction {
+                    file,
+                    url_type,
+                    fields,
+                    flags,
+                }))
+            }
+            "ResetForm" => {
+                let fields = parse_action_fields(self, dict.get("Fields"))?;
+                let flags = parse_action_flags(self, dict.get("Flags"), "ResetForm action")?;
+                Ok(Action::ResetForm(ResetFormAction { fields, flags }))
+            }
+            "ImportData" => {
+                let file = parse_file_spec(
+                    self,
+                    dict.get("F")
+                        .ok_or_else(|| malformed("ImportData action is missing /F"))?,
+                )?;
+                Ok(Action::ImportData { file })
+            }
             other => Ok(Action::Unknown {
                 subtype: other.to_owned(),
             }),
@@ -227,6 +308,62 @@ fn parse_file_spec(document: &Document, value: &Value) -> Result<FileSpec, Actio
         _ => Err(malformed(
             "file specification is neither a string nor a dictionary",
         )),
+    }
+}
+
+fn parse_action_fields(
+    document: &Document,
+    value: Option<&Value>,
+) -> Result<Vec<ActionField>, ActionError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let value = resolve(document, value)?;
+    let array = value
+        .as_array()
+        .ok_or_else(|| malformed("action /Fields is not an array"))?;
+    let mut fields = Vec::with_capacity(array.0.len());
+    for item in &array.0 {
+        match item {
+            Value::Ref(number, generation) => {
+                if !matches!(resolve(document, item)?, Value::Dict(_)) {
+                    return Err(malformed(
+                        "action /Fields reference does not resolve to a field dictionary",
+                    ));
+                }
+                fields.push(ActionField::Reference {
+                    number: *number,
+                    generation: *generation,
+                });
+            }
+            Value::String(_) | Value::HexString(_) => {
+                let name = text_value(item)
+                    .ok_or_else(|| malformed("action /Fields name is malformed"))?;
+                fields.push(ActionField::Name(name));
+            }
+            _ => {
+                return Err(malformed(
+                    "action /Fields entry is neither a field reference nor a text string",
+                ));
+            }
+        }
+    }
+    Ok(fields)
+}
+
+fn parse_action_flags(
+    document: &Document,
+    value: Option<&Value>,
+    context: &str,
+) -> Result<u32, ActionError> {
+    let Some(value) = value else {
+        return Ok(0);
+    };
+    match resolve(document, value)? {
+        Value::Integer(flags) if (0..=i64::from(u32::MAX)).contains(&flags) => Ok(flags as u32),
+        _ => Err(malformed(format!(
+            "{context} /Flags is not a non-negative 32-bit integer"
+        ))),
     }
 }
 

@@ -175,6 +175,13 @@ pub enum PdfFeature {
     FormFieldAdditionalActions,
     /// AcroForm 计算顺序（`/CO`，Table 218），PDF 1.3 引入。
     FormCalculationOrder,
+    /// 表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5.2–12.7.5.4），
+    /// PDF 1.2 引入。
+    FormDataActions,
+    /// 表单动作的 `/Fields` 字段全限定名条目（Table 236/238），PDF 1.3 引入。
+    FormActionFieldNames,
+    /// Submit-Form 动作的 `/URLType`（Table 236），PDF 1.7 引入。
+    SubmitFormUrlType,
     /// 页面视口字典（页面 `/VP` 数组，12.9.2 Table 260），PDF 1.6 引入。
     PageViewports,
 }
@@ -184,7 +191,9 @@ impl PdfFeature {
     pub fn min_version(self) -> PdfVersion {
         match self {
             PdfFeature::EncryptionRC4 | PdfFeature::AnnotationBorderDash => PdfVersion::V1_1,
-            PdfFeature::TilingPattern | PdfFeature::LinkAnnotationHighlighting => PdfVersion::V1_2,
+            PdfFeature::TilingPattern
+            | PdfFeature::LinkAnnotationHighlighting
+            | PdfFeature::FormDataActions => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
@@ -193,7 +202,8 @@ impl PdfFeature {
             | PdfFeature::AnnotationMarkupState
             | PdfFeature::LinkAnnotationPressedAction
             | PdfFeature::FormFieldAdditionalActions
-            | PdfFeature::FormCalculationOrder => PdfVersion::V1_3,
+            | PdfFeature::FormCalculationOrder
+            | PdfFeature::FormActionFieldNames => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
                 PdfVersion::V1_4
             }
@@ -212,7 +222,8 @@ impl PdfFeature {
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
-            | PdfFeature::AnnotationMeasure => PdfVersion::V1_7,
+            | PdfFeature::AnnotationMeasure
+            | PdfFeature::SubmitFormUrlType => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -257,6 +268,9 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AnnotationBorderDash => "annotation border dash array",
             PdfFeature::FormFieldAdditionalActions => "form field additional actions",
             PdfFeature::FormCalculationOrder => "form calculation order",
+            PdfFeature::FormDataActions => "form data actions",
+            PdfFeature::FormActionFieldNames => "form action field names",
+            PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",
         };
         write!(f, "{name}")
