@@ -173,6 +173,8 @@ pub enum PdfFeature {
     FormFieldAdditionalActions,
     /// AcroForm 计算顺序（`/CO`，Table 218），PDF 1.3 引入。
     FormCalculationOrder,
+    /// 页面视口字典（页面 `/VP` 数组，12.9.2 Table 260），PDF 1.6 引入。
+    PageViewports,
 }
 
 impl PdfFeature {
@@ -203,7 +205,8 @@ impl PdfFeature {
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
             | PdfFeature::LinkAnnotationQuadPoints
-            | PdfFeature::LinkAnnotationBorderStyle => PdfVersion::V1_6,
+            | PdfFeature::LinkAnnotationBorderStyle
+            | PdfFeature::PageViewports => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -251,6 +254,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AnnotationMeasure => "annotation measure dictionary",
             PdfFeature::FormFieldAdditionalActions => "form field additional actions",
             PdfFeature::FormCalculationOrder => "form calculation order",
+            PdfFeature::PageViewports => "page viewport dictionaries",
         };
         write!(f, "{name}")
     }

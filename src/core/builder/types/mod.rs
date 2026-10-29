@@ -38,6 +38,7 @@ mod pattern;
 mod program;
 mod shading;
 mod type3;
+mod viewport;
 
 pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 pub use annotation::{
@@ -79,6 +80,7 @@ pub use shading::{
     ShadingPattern, TensorProductPatch, TensorProductPatchShading,
 };
 pub use type3::{Type3Font, Type3Glyph};
+pub use viewport::Viewport;
 
 /// 页面尺寸预设。
 ///

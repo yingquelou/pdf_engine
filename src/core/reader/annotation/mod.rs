@@ -49,6 +49,7 @@ use entries::{
 };
 pub use kind::{AnnotationSubtype, Row, TABLE_169};
 pub use link::LinkHighlightMode;
+pub(crate) use measure::parse_measure_value;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,

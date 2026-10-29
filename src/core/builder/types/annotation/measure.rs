@@ -256,7 +256,7 @@ impl Measure {
         self
     }
 
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.ratio.is_empty() {
             return Err("measure /R ratio must not be empty".into());
         }

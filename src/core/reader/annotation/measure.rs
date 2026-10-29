@@ -144,12 +144,20 @@ pub(super) fn parse_measure(document: &Document, dict: &Dict) -> Result<Option<M
     let Some(value) = dict.get("Measure") else {
         return Ok(None);
     };
+    parse_measure_value(document, value).map(Some)
+}
+
+/// 解析一个 measure 字典值（可为间接引用）。
+///
+/// 注解 `/Measure`（12.5.6）与页面视口字典的 `/Measure`（12.9.2 Table 260）
+/// 共用同一解析器。
+pub(crate) fn parse_measure_value(document: &Document, value: &Value) -> Result<Measure> {
     let resolved =
         resolve(document, value).map_err(|err| AnnotationError::Malformed(err.to_string()))?;
     let measure = resolved
         .as_dict()
-        .ok_or_else(|| malformed("annotation /Measure is not a dictionary"))?;
-    Ok(Some(Measure {
+        .ok_or_else(|| malformed("measure dictionary is not a dictionary"))?;
+    Ok(Measure {
         subtype: optional_name(measure, "Subtype")?,
         ratio: optional_text(measure, "R")?,
         x: parse_number_format_array(document, measure, "X")?,
@@ -164,7 +172,7 @@ pub(super) fn parse_measure(document: &Document, dict: &Dict) -> Result<Option<M
             Some(value) => Some(number(value, "measure /CYX")?),
         },
         dict: measure.clone(),
-    }))
+    })
 }
 
 /// 解析数字格式数组：元素须为字典（可为间接引用）。

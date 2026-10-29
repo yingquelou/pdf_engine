@@ -60,6 +60,7 @@ mod shading;
 mod support;
 mod to_unicode;
 mod type3;
+mod viewport;
 mod widths;
 
 use super::*;

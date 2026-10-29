@@ -105,3 +105,51 @@ fn builder_measure_annotation_roundtrips_through_parser() {
     assert!(measure.origin.is_none());
     assert!(measure.conversion_yx.is_none());
 }
+
+/// 写入 → 重新解析：页面 `/VP` 视口数组（Table 260）经读端模型完整提取
+/// （`/BBox` `/Name` `/Measure`），未设置视口的页面返回空数组。
+#[test]
+fn builder_page_viewports_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{Measure, NumberFormat, PageSize, PdfBuilder, Viewport};
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let _p1 = builder.page(PageSize::A4);
+    builder.set_page_viewports(
+        p0,
+        &[
+            Viewport::new([10.0, 20.0, 300.0, 400.0])
+                .with_name("Plan")
+                .with_measure(
+                    Measure::new(
+                        "1 in = 1 ft",
+                        vec![NumberFormat::new("in", 72.0)],
+                        vec![NumberFormat::new("ft", 12.0)],
+                        vec![NumberFormat::new("sq ft", 144.0)],
+                    )
+                    .with_origin([5.0, 6.0]),
+                ),
+            Viewport::new([0.0, 0.0, 50.0, 60.0]),
+        ],
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let viewports = doc.page_viewports(0).expect("viewports");
+    assert_eq!(viewports.len(), 2);
+    assert_eq!(viewports[0].bbox, [10.0, 20.0, 300.0, 400.0]);
+    assert_eq!(viewports[0].name.as_deref(), Some("Plan"));
+    let measure = viewports[0].measure.as_ref().expect("/Measure");
+    assert_eq!(measure.subtype.as_deref(), Some("RL"));
+    assert_eq!(measure.ratio.as_deref(), Some("1 in = 1 ft"));
+    assert_eq!(
+        measure.x.as_ref().map(|x| x[0].unit.as_deref()),
+        Some(Some("in"))
+    );
+    assert_eq!(measure.origin, Some([5.0, 6.0]));
+    assert_eq!(viewports[1].bbox, [0.0, 0.0, 50.0, 60.0]);
+    assert!(viewports[1].name.is_none());
+    assert!(viewports[1].measure.is_none());
+    assert!(doc.page_viewports(1).expect("page 1").is_empty());
+}

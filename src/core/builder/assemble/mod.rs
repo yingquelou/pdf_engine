@@ -74,6 +74,26 @@ impl PdfBuilder {
         // 嵌入文件（7.11）：逐项校验与版本门禁在任何对象写出前完成。
         embedded_file::validate_registration(&self.embedded, self.version)?;
 
+        // 页面视口字典（12.9.2 Table 260）：PDF 1.6 门禁与取值校验在
+        // 任何对象写出前完成。
+        if self.pages.iter().any(|page| !page.viewports.is_empty()) {
+            if !self.version.supports(PdfFeature::PageViewports) {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "{} require PDF {}, got {}",
+                    PdfFeature::PageViewports,
+                    PdfFeature::PageViewports.min_version().as_str(),
+                    self.version.as_str()
+                )));
+            }
+            for (index, page) in self.pages.iter().enumerate() {
+                for viewport in &page.viewports {
+                    viewport.validate().map_err(|message| {
+                        WriteError::InvalidObject(format!("page {index} viewport: {message}"))
+                    })?;
+                }
+            }
+        }
+
         // 第一遍：为每页分配 Page 字典号 + 内容流号，并为字体/图片分配号。
         // 但字体/图片对象号要等遍历各页后才能确定连续段，故先扫一遍。
         // 这里采用「按页交织」分配：每页的 Page、Content 紧邻，
@@ -748,6 +768,14 @@ impl PdfBuilder {
                 page_dict =
                     page_dict.insert("Group", Value::Dict(group_dict(group, &mut doc, &mut num)?));
                 doc.features.borrow_mut().insert(PdfFeature::Transparency);
+            }
+            if !p.viewports.is_empty() {
+                let mut array = Array::new();
+                for viewport in &p.viewports {
+                    array = array.push(Value::Dict(viewport.to_dict()));
+                }
+                page_dict = page_dict.insert("VP", Value::Array(array));
+                doc.features.borrow_mut().insert(PdfFeature::PageViewports);
             }
             if !page_annotation_handles[i].is_empty() || !page_widget_nums[i].is_empty() {
                 let mut annots = Array::new();

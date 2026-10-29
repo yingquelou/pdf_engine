@@ -91,6 +91,7 @@ pub mod signature;
 #[cfg(test)]
 mod tests;
 pub mod text;
+pub mod viewport;
 mod xref;
 
 pub use lexer::Lexer;

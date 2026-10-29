@@ -53,7 +53,7 @@ pub use types::{
     PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation, Shading,
     ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
     TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
-    Type2Halftone, Type3Font, Type3Glyph,
+    Type2Halftone, Type3Font, Type3Glyph, Viewport,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -87,6 +87,8 @@ struct PageBuild {
     color_spaces: Vec<usize>,
     /// 页组属性字典（`/Group`）；提供时整页作为透明组合成。
     group: Option<GroupXObject>,
+    /// 页面视口字典（`/VP` 数组，12.9.2）；按绘制顺序写出。
+    viewports: Vec<Viewport>,
     /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
     invalid_code_length: Option<usize>,
 }
@@ -272,6 +274,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             group: None,
+            viewports: Vec::new(),
             invalid_code_length: None,
         });
         idx
@@ -406,6 +409,21 @@ impl PdfBuilder {
     pub fn set_page_group(&mut self, page: usize, group: &GroupXObject) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.group = Some(group.clone());
+        }
+        self
+    }
+
+    /// 为指定页设置视口字典数组（页面字典 `/VP`，12.9.2 Table 260，PDF 1.6）。
+    ///
+    /// 数组按绘制顺序排列，各视口的 `/BBox` 与 `/Measure` 决定页面不同区域
+    /// 的测量比例。参数在 [`PdfBuilder::build`] 阶段校验：非有限或未按
+    /// 左下/右上规范化的 `/BBox`、空 `/Name`、非法测量字典返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.6 时返回
+    /// [`WriteError::UnsupportedVersion`] 且不写出任何字节。
+    /// 未知页索引被忽略；重复设置替换先前数组。
+    pub fn set_page_viewports(&mut self, page: usize, viewports: &[Viewport]) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.viewports = viewports.to_vec();
         }
         self
     }
