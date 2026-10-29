@@ -43,10 +43,10 @@ mod viewport;
 pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{
-    AnnotationBorderStyle, AnnotationDestination, AnnotationKind, BorderArray, BorderEffect,
-    BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle, LineIntent,
-    LinkHighlightMode, Measure, NumberFormat, NumberFraction, NumberLabelOrder, PdfAnnotation,
-    PolygonIntent,
+    AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,
+    BorderArray, BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent,
+    IconFit, IconScaleWhen, IconScaling, LineEndStyle, LineIntent, LinkHighlightMode, Measure,
+    NumberFormat, NumberFraction, NumberLabelOrder, PdfAnnotation, PolygonIntent,
 };
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;

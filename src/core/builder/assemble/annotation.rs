@@ -4,7 +4,8 @@
 //! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
 //! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`、
 //! Popup `/Parent` `/Open`、Redact `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`
-//! （Table 192）、Line/Polygon/PolyLine `/Measure`）+
+//! （Table 192）、Screen `/MK`（Table 189，见 `annotation_mk`）、
+//! Line/Polygon/PolyLine `/Measure`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 //! `/Popup` 与 `/Parent` 只需声明一侧，另一侧由 `annotation_popup::pair_popups`
 //! 补出（12.5.2、Table 163、Table 183）。
@@ -18,6 +19,7 @@ use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
+use super::annotation_mk::appearance_characteristics_dict;
 use super::annotation_popup::PopupPairs;
 use super::real_array;
 
@@ -204,6 +206,10 @@ pub(super) fn annotation_dict(
             ))
         })?;
         dict = dict.insert("RO", Value::Ref(*num, 0));
+    }
+    if let Some(characteristics) = annot.appearance_characteristics() {
+        let mk = appearance_characteristics_dict(characteristics, handle, form_nums)?;
+        dict = dict.insert("MK", Value::Dict(mk));
     }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用

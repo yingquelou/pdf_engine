@@ -2,8 +2,7 @@
 //!
 //! 引入版本与标记类归属一律取自读端
 //! [`AnnotationSubtype`]（Table 169 唯一权威表），本枚举只提供写端子集。
-//! `Sound`/`Movie`/`Screen`/`PrinterMark`/`TrapNet`/`Watermark`/`3D`
-//! 暂不建模：Widget 由 AcroForm 写端
+//! `Sound`/`Movie`/`PrinterMark`/`TrapNet`/`Watermark`/`3D` 暂不建模：Widget 由 AcroForm 写端
 //! 的 [`FormField`](super::super::FormField) 合并字段与 Widget 字典写出（E4），
 //! 其余按需增补。
 
@@ -49,6 +48,8 @@ pub enum AnnotationKind {
     Stamp,
     /// 涂消（`/Redact`，PDF 1.7，标记类）。
     Redact,
+    /// 屏幕（`/Screen`，PDF 1.5；外观特性字典 `/MK` 的注解级宿主）。
+    Screen,
 }
 
 impl AnnotationKind {
@@ -73,6 +74,7 @@ impl AnnotationKind {
             Self::FileAttachment => AnnotationSubtype::FileAttachment,
             Self::Stamp => AnnotationSubtype::Stamp,
             Self::Redact => AnnotationSubtype::Redact,
+            Self::Screen => AnnotationSubtype::Screen,
         }
     }
 
@@ -97,6 +99,7 @@ impl AnnotationKind {
             Self::FileAttachment => "FileAttachment",
             Self::Stamp => "Stamp",
             Self::Redact => "Redact",
+            Self::Screen => "Screen",
         }
     }
 

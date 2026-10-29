@@ -1,9 +1,9 @@
-//! E2：写端支持的 18 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
+//! E2：写端支持的 19 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
 //! 与写端 `AnnotationKind::subtype()` 一致（12.5.6.1 Table 169，读写共用单点表）。
 
 use super::*;
 
-/// 写端支持的 18 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
+/// 写端支持的 19 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
 /// 与写端 `AnnotationKind::subtype()` 一致，且名称、引入版本与标记类归属
 /// 全部落在同一张 Table 169 上（读写共用单点表）。
 #[test]
@@ -13,7 +13,7 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
     };
     use pdf_engine::core::reader::annotation::TABLE_169;
 
-    const KINDS: [AnnotationKind; 18] = [
+    const KINDS: [AnnotationKind; 19] = [
         AnnotationKind::Text,
         AnnotationKind::Link,
         AnnotationKind::FreeText,
@@ -32,6 +32,7 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         AnnotationKind::FileAttachment,
         AnnotationKind::Stamp,
         AnnotationKind::Redact,
+        AnnotationKind::Screen,
     ];
 
     let mut builder = PdfBuilder::new();
@@ -76,7 +77,7 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         builder.add_annotation(p0, annot);
     }
     let mut buf = Vec::new();
-    builder.build(&mut buf).expect("build 18 subtypes");
+    builder.build(&mut buf).expect("build 19 subtypes");
 
     let doc = parse_buf(&buf);
     let annotations = doc.page_annotations(0).expect("annotations");

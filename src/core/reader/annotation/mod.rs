@@ -22,6 +22,8 @@
 //! - Measure 字典（12.9，Table 261–263）：Line 与 Polygon/PolyLine 的
 //!   `/Measure` 类型化为 [`Measure`]（直角坐标条目 + 数字格式数组），
 //!   解析在 [`measure`]。
+//! - 外观特性字典 `/MK`（Table 189，含图标适配字典 `/IF`，Table 247）类型化为
+//!   [`AppearanceCharacteristics`]，解析在 [`mk`]。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
 //!   Line `/DS` 等）。
 //!
@@ -41,6 +43,7 @@ mod entries;
 mod kind;
 mod link;
 mod measure;
+mod mk;
 mod redact;
 pub mod subtype;
 
@@ -52,6 +55,7 @@ pub use kind::{AnnotationSubtype, Row, TABLE_169};
 pub use link::LinkHighlightMode;
 pub(crate) use measure::parse_measure_value;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
+pub use mk::{AppearanceCharacteristics, IconFit, IconScaleWhen, IconScaling};
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
     LineIntent, PolygonIntent,
@@ -327,6 +331,8 @@ pub struct Annotation {
     /// Redact 叠加外观 `/RO` 原值（Form XObject 流或引用）；
     /// 声明它时 `/IC` `/OverlayText` `/DA` `/Q` 按 Table 192 被忽略。
     pub overlay_appearance: Option<Value>,
+    /// 外观特性字典 `/MK`（Table 189；规范只声明给 Widget 与 Screen 注解）。
+    pub appearance_characteristics: Option<AppearanceCharacteristics>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -510,6 +516,7 @@ fn parse_annotation(
     };
     let entries = subtype::parse_subtype_entries(dict)?;
     let redact = redact::parse_redact_entries(dict)?;
+    let mk = mk::parse_appearance_characteristics(document, dict)?;
 
     Ok(Annotation {
         page_index,
@@ -566,6 +573,7 @@ fn parse_annotation(
         overlay_text: redact.overlay_text,
         repeat_overlay_text: redact.repeat_overlay_text,
         overlay_appearance: redact.overlay_appearance,
+        appearance_characteristics: mk,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

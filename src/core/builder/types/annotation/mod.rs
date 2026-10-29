@@ -11,14 +11,17 @@
 //! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）
 //! 、`link`（Link，Table 173 的 `/H` `/PA`）与 `redact`（Redact，Table 192
 //! 的 `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`）；`measure` 覆盖 12.9 的
-//! `/Measure` 测量字典（Table 261–263）。
+//! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
+//! 与图标适配字典 `/IF`（Table 247），子类型归属守卫集中在 `guard`。
 
 mod border;
 mod free_text;
 mod geometry;
+mod guard;
 mod kind;
 mod link;
 mod measure;
+mod mk;
 mod redact;
 mod subtype;
 
@@ -31,6 +34,7 @@ pub use kind::AnnotationKind;
 use link::LinkEntries;
 pub use link::LinkHighlightMode;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
+pub use mk::{AppearanceCharacteristics, IconFit, IconScaleWhen, IconScaling};
 use redact::RedactEntries;
 use subtype::LineEntries;
 pub(crate) use subtype::validate_name_value;
@@ -107,6 +111,7 @@ pub struct PdfAnnotation {
     geometry: GeometryEntries,
     link: LinkEntries,
     redact: RedactEntries,
+    characteristics: Option<AppearanceCharacteristics>,
     measure: Option<Measure>,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
@@ -155,6 +160,7 @@ impl PdfAnnotation {
             geometry: GeometryEntries::default(),
             link: LinkEntries::default(),
             redact: RedactEntries::default(),
+            characteristics: None,
             measure: None,
             action: None,
             destination: None,
@@ -557,29 +563,6 @@ impl PdfAnnotation {
         }
         self.validate_subtype_entries()?;
         Ok(())
-    }
-
-    fn require_kind(&self, expected: AnnotationKind, entries: &str) -> Result<(), String> {
-        if self.kind == expected {
-            return Ok(());
-        }
-        Err(format!(
-            "{entries} are specific to {} annotations, got {}",
-            expected.name(),
-            self.kind.name()
-        ))
-    }
-
-    fn require_kind_in(&self, expected: &[AnnotationKind], entries: &str) -> Result<(), String> {
-        if expected.contains(&self.kind) {
-            return Ok(());
-        }
-        let names: Vec<&str> = expected.iter().map(|kind| kind.name()).collect();
-        Err(format!(
-            "{entries} are specific to {} annotations, got {}",
-            names.join(" or "),
-            self.kind.name()
-        ))
     }
 }
 

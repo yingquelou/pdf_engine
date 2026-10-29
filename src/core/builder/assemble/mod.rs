@@ -14,6 +14,7 @@
 mod acro_form;
 mod action;
 mod annotation;
+mod annotation_mk;
 mod annotation_popup;
 mod cid;
 mod cmap;
@@ -263,6 +264,21 @@ impl PdfBuilder {
                 if form >= self.forms.len() {
                     return Err(WriteError::InvalidObject(format!(
                         "annotation handle {handle}: /AP references unknown form handle {form}"
+                    )));
+                }
+                used_forms.insert(form);
+            }
+            // `/MK` 的三个图标同样引用 Form XObject 池，越界句柄单独报错。
+            for form in entry
+                .annot
+                .appearance_characteristics()
+                .into_iter()
+                .flat_map(|characteristics| characteristics.icon_handles())
+                .flatten()
+            {
+                if form >= self.forms.len() {
+                    return Err(WriteError::InvalidObject(format!(
+                        "annotation handle {handle}: /MK references unknown form handle {form}"
                     )));
                 }
                 used_forms.insert(form);
