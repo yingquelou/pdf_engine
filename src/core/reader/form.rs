@@ -1,7 +1,9 @@
 //! 交互表单读取（12.7.2–12.7.4）：`/AcroForm` 字典与字段树。
 //!
 //! - 目录 `/AcroForm`（直接字典或间接引用）：`/Fields` 字段树、
-//!   `/NeedAppearances` 布尔、`/DA`、`/DR`、`/XFA`（后两者原样保留）。
+//!   `/NeedAppearances` 布尔、`/DA`、`/XFA`（原样保留）；`/DR` 默认资源
+//!   在 `form/acro_form.rs::DefaultResources` 中类型化（字体原样保留，
+//!   `/ExtGState` `/ColorSpace` `/ProcSet` 解析为各自模型）。
 //! - 字段属性按 12.7.3 继承：`/FT`、`/Ff`、`/V`、`/DV`、`/DA`、`/Q`、
 //!   `/MaxLen`、`/Opt` 取最近祖先提供的值，子节点可覆盖；全限定名由
 //!   `/T` 链以 `.` 连接。
@@ -11,12 +13,16 @@
 //!   类型化；`/CO` 计算顺序按引用解析为字段全限定名（Table 218）。
 //! - 防护：字段树深度 64、节点总数 4096、间接引用环检测。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::core::reader::action::Action;
 use crate::core::reader::content::text_value;
 use crate::core::types::{Dict, Document, Value};
+
+mod acro_form;
+
+pub use acro_form::{AcroForm, DefaultResources};
 
 /// 字段树最大嵌套深度。
 const MAX_FIELD_DEPTH: usize = 64;
@@ -226,24 +232,7 @@ pub struct Field {
 }
 
 /// 目录 `/AcroForm` 字典（12.7.2 Table 218）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct AcroForm {
-    /// `/NeedAppearances`：阅读器是否应为字段生成外观流。
-    pub need_appearances: bool,
-    /// `/DA` 文档级默认外观字符串。
-    pub default_appearance: Option<Value>,
-    /// `/DR` 默认资源字典（字体等，原样保留）。
-    pub default_resources: Option<Value>,
-    /// `/XFA` XFA 表单数据（原样保留；XFA 整体不实现）。
-    pub xfa: Option<Value>,
-    /// `/Fields` 字段树（顶层）。
-    pub fields: Vec<Field>,
-    /// `/CO` 计算顺序（按引用解析为字段全限定名）；缺失时为空。
-    pub calculation_order: Vec<String>,
-    /// 完整 `/AcroForm` 字典。
-    pub dict: Dict,
-}
-
+///
 /// 沿字段树向下传递的继承属性（Table 222）。
 #[derive(Clone, Default)]
 struct Inherited {
@@ -257,99 +246,14 @@ struct Inherited {
     options: Option<Vec<Value>>,
 }
 
-impl Document {
-    /// 读取目录 `/AcroForm`（12.7.2）；文档没有交互表单时返回 `None`。
-    pub fn acro_form(&self) -> Result<Option<AcroForm>> {
-        let catalog = crate::core::reader::navigation::catalog(self)
-            .map_err(|_| FormError::CatalogMissing)?;
-        let Some(value) = catalog.get("AcroForm") else {
-            return Ok(None);
-        };
-        let resolved = crate::core::reader::navigation::resolve(self, value)
-            .map_err(|err| malformed(err.to_string()))?;
-        let dict = resolved
-            .as_dict()
-            .ok_or_else(|| malformed("/AcroForm is not a dictionary"))?;
-
-        let need_appearances = match dict.get("NeedAppearances") {
-            None => false,
-            Some(value) => {
-                let resolved = crate::core::reader::navigation::resolve(self, value)
-                    .map_err(|err| malformed(err.to_string()))?;
-                match resolved {
-                    Value::Bool(flag) => flag,
-                    _ => return Err(malformed("/AcroForm /NeedAppearances is not a boolean")),
-                }
-            }
-        };
-
-        let fields = match dict.get("Fields") {
-            None => Vec::new(),
-            Some(value) => {
-                let resolved = crate::core::reader::navigation::resolve(self, value)
-                    .map_err(|err| malformed(err.to_string()))?;
-                let array = resolved
-                    .as_array()
-                    .ok_or_else(|| malformed("/AcroForm /Fields is not an array"))?;
-                let mut reader = FieldReader {
-                    document: self,
-                    visited: HashSet::new(),
-                    nodes: 0,
-                };
-                reader.read_fields(&array.0, "", &Inherited::default(), 0)?
-            }
-        };
-
-        let calculation_order = parse_calculation_order(self, dict, &fields)?;
-
-        Ok(Some(AcroForm {
-            need_appearances,
-            default_appearance: dict.get("DA").cloned(),
-            default_resources: dict.get("DR").cloned(),
-            xfa: dict.get("XFA").cloned(),
-            fields,
-            calculation_order,
-            dict: dict.clone(),
-        }))
-    }
-}
-
-/// `/CO` 条目必须是指向字段树节点的间接引用，按引用解析为全限定名。
-fn parse_calculation_order(
-    document: &Document,
-    dict: &Dict,
-    fields: &[Field],
-) -> Result<Vec<String>> {
-    let Some(value) = dict.get("CO") else {
-        return Ok(Vec::new());
+/// 读取 `/Fields` 数组为字段树；`/AcroForm` 解析器经此进入字段层。
+fn read_field_tree(document: &Document, entries: &[Value]) -> Result<Vec<Field>> {
+    let mut reader = FieldReader {
+        document,
+        visited: HashSet::new(),
+        nodes: 0,
     };
-    let resolved = crate::core::reader::navigation::resolve(document, value)
-        .map_err(|err| malformed(err.to_string()))?;
-    let array = resolved
-        .as_array()
-        .ok_or_else(|| malformed("/AcroForm /CO is not an array"))?;
-    let mut names = HashMap::new();
-    collect_field_names(fields, &mut names);
-    let mut out = Vec::with_capacity(array.0.len());
-    for entry in &array.0 {
-        let key = entry
-            .as_ref()
-            .ok_or_else(|| malformed("/AcroForm /CO entries must be indirect references"))?;
-        let name = names.get(&key).ok_or_else(|| {
-            malformed("/AcroForm /CO references an object that is not in the field tree")
-        })?;
-        out.push(name.clone());
-    }
-    Ok(out)
-}
-
-fn collect_field_names(fields: &[Field], out: &mut HashMap<(i64, i64), String>) {
-    for field in fields {
-        if let Some(key) = field.reference {
-            out.insert(key, field.fully_qualified_name.clone());
-        }
-        collect_field_names(&field.kids, out);
-    }
+    reader.read_fields(entries, "", &Inherited::default(), 0)
 }
 
 /// 读取 `/AA` 字典：四个标准事件类型化，其余事件原样保留。

@@ -130,19 +130,10 @@ fn builder_acro_form_default_resources_roundtrip_through_parser() {
     let parsed = doc.acro_form().expect("parse form").expect("form present");
     assert_eq!(parsed.fields.len(), 1, "one top-level field");
 
-    let dr = parsed
-        .default_resources
-        .as_ref()
-        .and_then(|value| value.as_dict())
-        .expect("/DR dictionary")
-        .clone();
-    let fonts = dr
-        .get("Font")
-        .and_then(|value| value.as_dict())
-        .expect("/DR /Font dictionary")
-        .clone();
-    assert_eq!(fonts.0.len(), 1, "one default font resource");
-    let (font_num, _) = fonts
+    let dr = parsed.default_resources.as_ref().expect("/DR dictionary");
+    assert_eq!(dr.fonts.len(), 1, "one default font resource");
+    let (font_num, _) = dr
+        .fonts
         .get("Helv")
         .and_then(|value| value.as_ref())
         .expect("/Helv is an indirect reference");
@@ -408,6 +399,8 @@ fn builder_acro_form_default_nonfont_resources_roundtrip_through_parser() {
     use pdf_engine::core::builder::{
         AcroForm, ColorSpace, Font, FormField, GraphicsState, Indexed, PageSize, PdfBuilder,
     };
+    use pdf_engine::core::reader::color_space::ColorSpaceModel;
+    use pdf_engine::core::reader::graphics_state::BlendMode;
 
     let mut builder = PdfBuilder::new();
     let p0 = builder.page(PageSize::A4);
@@ -440,15 +433,10 @@ fn builder_acro_form_default_nonfont_resources_roundtrip_through_parser() {
 
     let doc = parse_buf(&bytes);
     let parsed = doc.acro_form().expect("parse").expect("form present");
-    let dr = parsed
-        .default_resources
-        .as_ref()
-        .and_then(|value| value.as_dict())
-        .expect("/DR");
+    let dr = parsed.default_resources.as_ref().expect("/DR");
     let (font_num, _) = dr
-        .get("Font")
-        .and_then(|value| value.as_dict())
-        .and_then(|fonts| fonts.get("Helv"))
+        .fonts
+        .get("Helv")
         .and_then(|value| value.as_ref())
         .expect("/DR /Font /Helv");
     let font = doc
@@ -458,37 +446,21 @@ fn builder_acro_form_default_nonfont_resources_roundtrip_through_parser() {
     assert!(matches!(&font.value, Value::Dict(dict)
         if dict.get("BaseFont") == Some(&Value::Name("Helvetica".into()))));
 
-    let gs = dr
-        .get("ExtGState")
-        .and_then(|value| value.as_dict())
-        .and_then(|states| states.get("GS1"))
-        .and_then(|value| value.as_dict())
-        .expect("/DR /ExtGState /GS1");
-    assert_eq!(gs.get("Type"), Some(&Value::Name("ExtGState".into())));
-    assert_eq!(gs.get("CA"), Some(&Value::Float(0.5)));
-    assert_eq!(gs.get("ca"), Some(&Value::Float(0.25)));
-    assert_eq!(gs.get("BM"), Some(&Value::Name("Multiply".into())));
+    let gs = dr.ext_g_states.get("GS1").expect("/DR /ExtGState /GS1");
+    assert_eq!(gs.stroke_alpha, Some(0.5));
+    assert_eq!(gs.fill_alpha, Some(0.25));
+    assert_eq!(gs.blend_mode, Some(BlendMode::Name("Multiply".into())));
 
-    let spaces = dr
-        .get("ColorSpace")
-        .and_then(|value| value.as_dict())
-        .expect("/DR /ColorSpace");
-    assert_eq!(spaces.get("CS1"), Some(&Value::Name("DeviceRGB".into())));
-    let indexed = spaces
-        .get("CS2")
-        .and_then(|value| value.as_array())
-        .expect("/CS2");
-    assert_eq!(indexed.0[0], Value::Name("Indexed".into()));
-    assert_eq!(indexed.0[1], Value::Name("DeviceRGB".into()));
-    assert_eq!(indexed.0[2], Value::Integer(1));
-    assert_eq!(indexed.0[3], Value::HexString("000000FFFFFF".into()));
-
-    let proc_set = dr
-        .get("ProcSet")
-        .and_then(|value| value.as_array())
-        .expect("/DR /ProcSet");
     assert_eq!(
-        proc_set.0,
-        vec![Value::Name("PDF".into()), Value::Name("Text".into())]
+        dr.color_spaces.get("CS1"),
+        Some(&ColorSpaceModel::DeviceRGB)
     );
+    let Some(ColorSpaceModel::Indexed(indexed)) = dr.color_spaces.get("CS2") else {
+        panic!("/CS2 must be Indexed");
+    };
+    assert_eq!(*indexed.base, ColorSpaceModel::DeviceRGB);
+    assert_eq!(indexed.hival, 1);
+    assert_eq!(indexed.lookup, vec![0, 0, 0, 0xFF, 0xFF, 0xFF]);
+
+    assert_eq!(dr.proc_set, ["PDF", "Text"]);
 }
