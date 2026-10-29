@@ -1,5 +1,7 @@
 //! E6 读端嵌入文件测试（7.11.2–7.11.4）。
 
+mod related;
+
 use super::*;
 use crate::core::types::{Array, Object, StreamData, Trailer, Xref};
 use md5::{Digest, Md5};
@@ -514,33 +516,38 @@ fn filespec_cycles_and_depth_are_typed_errors() {
 }
 
 #[test]
-fn relative_and_unmodelled_entries_are_preserved() {
+fn platform_names_and_unmodelled_entries_are_preserved() {
     let payload = b"texture.png".to_vec();
     let doc = doc_with_embedded_node(leaf(vec![(
         Value::String("texture.png".into()),
         filespec_dict(vec![
             ("F", Value::String("texture.png".into())),
             ("EF", Value::Ref(80, 0)),
-            ("RF", Value::Ref(81, 0)),
             ("DOS", Value::String("TEXTUR~1.PNG".into())),
+            ("Mac", Value::String("Texture.png".into())),
+            ("Unix", Value::String("texture.png".into())),
+            ("CI", Value::Dict(Dict::new())),
         ]),
     )]));
     doc.set_object(embedded_stream(80, Dict::new(), &payload));
-    doc.set_object(Object::new(
-        81,
-        0,
-        filespec_dict(vec![("F", Value::String("../texture.png".into()))]),
-    ));
 
     let filespec = doc
         .embedded_file("texture.png")
         .expect("lookup")
         .expect("present");
-    // `/RF` 原样保留引用，不解析相对路径。
-    assert_eq!(filespec.relative, Some(Value::Ref(81, 0)));
     assert_eq!(
-        filespec.dict.get("DOS").and_then(text_value).as_deref(),
-        Some("TEXTUR~1.PNG")
+        filespec.dos_name.as_deref(),
+        Some(b"TEXTUR~1.PNG".as_slice())
     );
+    assert_eq!(
+        filespec.mac_name.as_deref(),
+        Some(b"Texture.png".as_slice())
+    );
+    assert_eq!(
+        filespec.unix_name.as_deref(),
+        Some(b"texture.png".as_slice())
+    );
+    // 未建模条目（`/CI` 集合项字典）经完整字典访问。
+    assert!(filespec.dict.get("CI").is_some());
     assert_eq!(filespec.primary().expect("stream").data, payload);
 }

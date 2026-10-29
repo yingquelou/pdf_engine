@@ -2,11 +2,13 @@
 //!
 //! - 目录 `/Names /EmbeddedFiles` 名称树（复用 E1 的名称字典语义）→
 //!   [`Document::embedded_files`]，键按 PDF 文本串解码。
-//! - 文件规格字典（Table 42）：`/F`、`/UF`、`/Desc`、`/EF`、`/RF`
-//!   （相对引用仅原样保留，不解析外部文件系统引用）。
+//! - 文件规格字典（Table 44）：`/FS`、`/F`、`/UF`、`/Desc`、平台条目
+//!   `/DOS`/`/Mac`/`/Unix`、`/ID`、`/V`、`/EF`、`/RF`。
 //! - `/EF` 的三种载体（直接流、嵌套文件规格、双元素数组）统一展平为
 //!   [`Filespec::embedded`]，数组按声明顺序保留低版本与 Unicode 名版本。
-//! - 嵌入文件流（Table 40）：`/Subtype` MIME 名、`/Params` 的 `/Size`、
+//! - `/RF` 关联文件数组（7.11.4.2）按载体键展开为
+//!   [`RelatedFile`] 对（名字 + 嵌入文件流）。
+//! - 嵌入文件流（Table 45）：`/Subtype` MIME 名、`/Params` 的 `/Size`、
 //!   `/CheckSum`、`/CreationDate`、`/ModDate`；`/CheckSum` 校验按
 //!   7.11.4.3 忽略数据中的 ASCII 空白字符。
 //! - 防护：文件规格嵌套深度 8、引用环检测、单个文件规格流数量上限。
@@ -22,7 +24,7 @@ use crate::core::types::{Dict, Document, Value};
 
 /// 文件规格与 `/EF` 载体的最大嵌套深度。
 const MAX_FILESPEC_DEPTH: usize = 8;
-/// 单个文件规格可展开的嵌入文件流上限。
+/// 单个文件规格可展开的嵌入文件流上限（含 `/RF` 关联文件）。
 const MAX_EMBEDDED_STREAMS: usize = 64;
 
 /// 嵌入文件读取中的类型化错误。
@@ -62,23 +64,45 @@ fn from_navigation(error: NavigationError) -> EmbeddedFileError {
     }
 }
 
-/// 文件规格字典（7.11.4 Table 42）。
+/// 文件规格字典（7.11.3 Table 44）。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Filespec {
     /// 文件规格对象的间接引用；直接嵌入时为 `None`。
     pub reference: Option<(i64, i64)>,
+    /// `/FS` 文件系统名（不含斜杠；标准仅 `URL`，其余为注册名）。
+    pub file_system: Option<String>,
     /// `/F` 7 位 ASCII 文件名。
     pub short_name: Option<String>,
     /// `/UF` Unicode 文件名（PDF 1.4+）。
     pub unicode_name: Option<String>,
     /// `/Desc` 说明文本串（PDF 1.4+）。
     pub description: Option<String>,
+    /// `/DOS` 平台文件名字节串（规范已弃用，仅读取）。
+    pub dos_name: Option<Vec<u8>>,
+    /// `/Mac` 平台文件名字节串（规范已弃用，仅读取）。
+    pub mac_name: Option<Vec<u8>>,
+    /// `/Unix` 平台文件名字节串（规范已弃用，仅读取）。
+    pub unix_name: Option<Vec<u8>>,
+    /// `/ID` 被引用文件的标识符（两个字节串，7.11.4）。
+    pub file_id: Option<[Vec<u8>; 2]>,
+    /// `/V` 易变标记（PDF 1.2，缺省 `false`）；缺失时为 `None`。
+    pub volatile: Option<bool>,
     /// `/EF` 展平后的嵌入文件流；空表示引用型/外部文件规格。
     pub embedded: Vec<EmbeddedFile>,
-    /// `/RF` 相对文件规格（PDF 1.6）原样保留，不解析。
-    pub relative: Option<Value>,
-    /// 完整文件规格字典，未建模条目（`/DOS`、`/Mac`、`/Unix`、`/ID` 等）经此访问。
+    /// `/RF` 关联文件数组（PDF 1.3）：载体键（`F`/`UF`/`DOS`/`Mac`/`Unix`）
+    /// → 名字与嵌入文件流对。
+    pub related_files: BTreeMap<String, Vec<RelatedFile>>,
+    /// 完整文件规格字典，未建模条目（`/CI` 等）经此访问。
     pub dict: Dict,
+}
+
+/// `/RF` 关联文件对（7.11.4.2）：文件名字与对应的嵌入文件流。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelatedFile {
+    /// 关联文件名字（文本串解码结果）。
+    pub name: String,
+    /// 关联文件内容。
+    pub file: EmbeddedFile,
 }
 
 impl Filespec {
@@ -235,27 +259,108 @@ impl Document {
             .ok_or_else(|| malformed("file specification is not a dictionary"))?;
         validate_optional_text(dict, "F")?;
         validate_optional_text(dict, "UF")?;
+        validate_optional_byte_string(dict, "DOS")?;
+        validate_optional_byte_string(dict, "Mac")?;
+        validate_optional_byte_string(dict, "Unix")?;
+        let file_system = match dict.get("FS") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_name()
+                    .ok_or_else(|| malformed("/Filespec /FS is not a name"))?
+                    .to_string(),
+            ),
+        };
+        let volatile = match dict.get("V") {
+            None => None,
+            Some(Value::Bool(flag)) => Some(*flag),
+            Some(_) => return Err(malformed("/Filespec /V is not a boolean")),
+        };
         let mut embedded = Vec::new();
         if let Some(ef) = dict.get("EF") {
             self.collect_embedded(ef, depth + 1, visited, &mut embedded)?;
         }
-        if embedded.len() > MAX_EMBEDDED_STREAMS {
+        let related_files = match dict.get("RF") {
+            None => BTreeMap::new(),
+            Some(rf) => {
+                let ef = dict
+                    .get("EF")
+                    .ok_or_else(|| malformed("/RF requires an /EF dictionary"))?;
+                let resolved_ef =
+                    resolve(self, ef).map_err(|error| malformed(error.to_string()))?;
+                let ef_dict = resolved_ef
+                    .as_dict()
+                    .ok_or_else(|| malformed("/EF must be a dictionary when /RF is present"))?;
+                self.parse_related_files(rf, ef_dict)?
+            }
+        };
+        let related_count: usize = related_files.values().map(Vec::len).sum();
+        if embedded.len() + related_count > MAX_EMBEDDED_STREAMS {
             return Err(EmbeddedFileError::LimitExceeded(
                 "embedded file stream count",
             ));
         }
         Ok(Filespec {
             reference,
+            file_system,
             short_name: dict.get("F").and_then(text_value),
             unicode_name: dict.get("UF").and_then(text_value),
             description: dict.get("Desc").and_then(text_value),
+            dos_name: dict.get("DOS").and_then(string_bytes),
+            mac_name: dict.get("Mac").and_then(string_bytes),
+            unix_name: dict.get("Unix").and_then(string_bytes),
+            file_id: parse_file_id(dict.get("ID"))?,
+            volatile,
             embedded,
-            relative: dict.get("RF").cloned(),
+            related_files,
             dict: dict.clone(),
         })
     }
 
-    /// `/EF` 三种载体：流、嵌套文件规格、二者组成的数组。
+    /// `/RF` 关联文件数组（7.11.4.2）：每个载体键都须出现在 `/EF` 中，
+    /// 值为 `[文件名 流 文件名 流 ...]`（2n 个元素）。
+    fn parse_related_files(
+        &self,
+        value: &Value,
+        ef_dict: &Dict,
+    ) -> Result<BTreeMap<String, Vec<RelatedFile>>> {
+        let resolved = resolve(self, value).map_err(|error| malformed(error.to_string()))?;
+        let rf_dict = resolved
+            .as_dict()
+            .ok_or_else(|| malformed("/RF is not a dictionary"))?;
+        let mut out = BTreeMap::new();
+        for (carrier, entry) in &rf_dict.0 {
+            if !ef_dict.0.contains_key(carrier) {
+                return Err(malformed(format!("/RF key /{carrier} is absent from /EF")));
+            }
+            let resolved_entry =
+                resolve(self, entry).map_err(|error| malformed(error.to_string()))?;
+            let array = resolved_entry
+                .as_array()
+                .ok_or_else(|| malformed(format!("/RF /{carrier} is not an array")))?;
+            if array.len() < 2 || !array.len().is_multiple_of(2) {
+                return Err(malformed(format!(
+                    "/RF /{carrier} must hold an even number of name/stream pairs"
+                )));
+            }
+            let mut pairs = Vec::with_capacity(array.len() / 2);
+            for pair in array.0.chunks(2) {
+                let name = text_value(&pair[0]).ok_or_else(|| {
+                    malformed(format!("/RF /{carrier} file name is not a text string"))
+                })?;
+                let reference = pair[1].as_ref();
+                let resolved_file =
+                    resolve(self, &pair[1]).map_err(|error| malformed(error.to_string()))?;
+                let file = self.parse_embedded_stream(&resolved_file, reference)?;
+                pairs.push(RelatedFile { name, file });
+            }
+            out.insert(carrier.clone(), pairs);
+        }
+        Ok(out)
+    }
+
+    /// `/EF` 载体：流、文件规格字典、载体字典（`/F` `/UF` `/DOS` `/Mac` `/Unix`）
+    /// 或前三者组成的数组。
     fn collect_embedded(
         &self,
         value: &Value,
@@ -268,6 +373,12 @@ impl Document {
             Value::Stream(_, _) => {
                 let reference = value.as_ref().or(resolved.as_ref());
                 out.push(self.parse_embedded_stream(&resolved, reference)?);
+                Ok(())
+            }
+            Value::Dict(dict) if is_ef_carrier_dict(dict) => {
+                for entry in dict.0.values() {
+                    self.collect_embedded(entry, depth, visited, out)?;
+                }
                 Ok(())
             }
             Value::Dict(_) => {
@@ -283,7 +394,7 @@ impl Document {
                 Ok(())
             }
             other => Err(malformed(format!(
-                "/EF value must be a file stream, file specification or array, got {other:?}"
+                "/EF value must be a stream, file specification, carrier dictionary or array, got {other:?}"
             ))),
         }
     }
@@ -375,6 +486,17 @@ fn decode_tree_key(raw: &str) -> String {
         .unwrap_or_else(|_| raw.to_string())
 }
 
+/// `/EF` 载体字典（Table 44 `/EF`）：键仅取五个载体名，值均为流。
+fn is_ef_carrier_dict(dict: &Dict) -> bool {
+    const CARRIERS: [&str; 5] = ["F", "UF", "DOS", "Mac", "Unix"];
+    !dict.0.is_empty()
+        && dict.0.keys().all(|key| CARRIERS.contains(&key.as_str()))
+        && dict
+            .0
+            .values()
+            .all(|value| !matches!(value, Value::String(_) | Value::HexString(_)))
+}
+
 /// `/F` 与 `/UF` 缺失可以，但存在时必须是文本串。
 fn validate_optional_text(dict: &Dict, key: &str) -> Result<()> {
     match dict.get(key) {
@@ -382,6 +504,33 @@ fn validate_optional_text(dict: &Dict, key: &str) -> Result<()> {
         Some(value) if text_value(value).is_some() => Ok(()),
         Some(_) => Err(malformed(format!("/Filespec /{key} is not a text string"))),
     }
+}
+
+/// `/DOS` `/Mac` `/Unix` 缺失可以，但存在时必须是字节串。
+fn validate_optional_byte_string(dict: &Dict, key: &str) -> Result<()> {
+    match dict.get(key) {
+        None => Ok(()),
+        Some(value) if string_bytes(value).is_some() => Ok(()),
+        Some(_) => Err(malformed(format!("/Filespec /{key} is not a byte string"))),
+    }
+}
+
+/// `/ID`：两个字节串组成的文件标识符数组（7.11.4）。
+fn parse_file_id(value: Option<&Value>) -> Result<Option<[Vec<u8>; 2]>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let array = value
+        .as_array()
+        .ok_or_else(|| malformed("/Filespec /ID is not an array"))?;
+    if array.len() != 2 {
+        return Err(malformed("/Filespec /ID must hold two byte strings"));
+    }
+    let first = string_bytes(&array.0[0])
+        .ok_or_else(|| malformed("/Filespec /ID entry is not a byte string"))?;
+    let second = string_bytes(&array.0[1])
+        .ok_or_else(|| malformed("/Filespec /ID entry is not a byte string"))?;
+    Ok(Some([first, second]))
 }
 
 fn string_bytes(value: &Value) -> Option<Vec<u8>> {

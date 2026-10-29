@@ -87,7 +87,7 @@ pub(super) fn embedded_files_node(files: &[EmbeddedFile], slots: &[EmbeddedSlot]
     name_tree(entries)
 }
 
-/// 写出文件规格字典与嵌入文件流；`/EF` 直接引用流对象（Table 42）。
+/// 写出文件规格字典与嵌入文件流；`/EF` 按 Table 44 写载体字典。
 pub(super) fn write_objects(
     doc: &mut Document,
     files: &[EmbeddedFile],
@@ -105,7 +105,14 @@ pub(super) fn write_objects(
         if let Some(description) = file.description() {
             filespec = filespec.insert("Desc", text_string_value(description));
         }
-        filespec = filespec.insert("EF", Value::Ref(slot.stream_num, 0));
+        let mut carriers = Dict::new();
+        if file.short_name().is_some() {
+            carriers = carriers.insert("F", Value::Ref(slot.stream_num, 0));
+        }
+        if version >= PdfVersion::V1_4 {
+            carriers = carriers.insert("UF", Value::Ref(slot.stream_num, 0));
+        }
+        filespec = filespec.insert("EF", Value::Dict(carriers));
         doc.set_object(Object::new(slot.filespec_num, 0, Value::Dict(filespec)));
 
         let mut dict = Dict::new().insert("Type", Value::Name("EmbeddedFile".into()));

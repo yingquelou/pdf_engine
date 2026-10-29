@@ -38,12 +38,14 @@ fn single_embedded_entry(doc: &Document) -> (Value, i64, Dict) {
     (array.0[0].clone(), num, object_dict(doc, num))
 }
 
-/// 取文件规格 `/EF` 引用的流对象字典与字节。
+/// 取文件规格 `/EF` 载体字典（`/F`）引用的流对象字典与字节。
 fn ef_stream(doc: &Document, filespec: &Dict) -> (i64, Dict, Vec<u8>) {
     let (num, _) = filespec
         .get("EF")
+        .and_then(Value::as_dict)
+        .and_then(|carriers| carriers.get("F"))
         .and_then(Value::as_ref)
-        .expect("/EF should reference the embedded stream");
+        .expect("/EF /F should reference the embedded stream");
     let object = doc
         .get_object(num)
         .expect("stream lookup")
