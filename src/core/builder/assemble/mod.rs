@@ -424,6 +424,8 @@ impl PdfBuilder {
                     self.version.as_str()
                 )));
             }
+            // 旧式 `/Border` 虚线项（Table 164）PDF 1.1 门禁。
+            annotation::border_feature_gate(&entry.annot, self.version)?;
             // Line 专有条目按 Table 175/176 的版本门起分组门禁。
             annotation::line_feature_gate(&entry.annot, self.version)?;
             // FreeText 专有条目按 Table 174 的版本门起分组门禁。
@@ -492,6 +494,15 @@ impl PdfBuilder {
                 doc.features
                     .borrow_mut()
                     .insert(PdfFeature::AnnotationMarkupState);
+            }
+            if entry
+                .annot
+                .border_array()
+                .is_some_and(|border| border.has_dash())
+            {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::AnnotationBorderDash);
             }
             let line = entry.annot.line();
             if line.has_arrow_entries() {

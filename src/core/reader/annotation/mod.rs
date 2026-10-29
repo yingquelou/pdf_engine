@@ -212,16 +212,16 @@ impl AppearanceStreams {
 /// 边框样式（12.5.4）：优先 `/BS` 字典，回退旧式 `/Border` 数组。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AnnotationBorder {
-    /// `/BS /W` 或 `/Border` 第二项（宽度）。
+    /// `/BS /W` 或 `/Border` 第三项（宽度）。
     pub width: Option<f64>,
     /// `/BS /S`：Solid/Beveled/Dashed/Inset/Underline。
     pub style: Option<String>,
-    /// `/BS /D` 或 `/Border` 第三项的虚线数组。
+    /// `/BS /D` 或 `/Border` 第四项的虚线数组。
     pub dash: Vec<f64>,
     /// `/BM` 混合模式名。
     pub blend_mode: Option<String>,
-    /// 旧式 `/Border` 第一项（水平圆角半径），`/BS` 路径下为 `None`。
-    pub corner_radius: Option<f64>,
+    /// 旧式 `/Border` 前两项（水平、垂直圆角半径），`/BS` 路径下为 `None`。
+    pub corner_radii: Option<[f64; 2]>,
 }
 
 /// 单条注解：通用条目类型化，未建模条目保留在 [`Self::dict`]。

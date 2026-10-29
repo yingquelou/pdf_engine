@@ -592,3 +592,45 @@ fn builder_free_text_annotation_entries_roundtrip_through_parser() {
         "单名字 /LE 不写进 Line 的双端点数组"
     );
 }
+
+/// 旧式 `/Border` 数组（Table 164）写→解析：三数圆角/宽度与第四项虚线
+/// 数组逐项还原，且与 `/BS` 边框样式字典互不污染。
+#[test]
+fn builder_legacy_border_array_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        AnnotationBorderStyle, AnnotationKind, BorderArray, PageSize, PdfAnnotation, PdfBuilder,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Circle, [72.0, 600.0, 200.0, 700.0])
+            .with_border_array(BorderArray::new(2.0, 1.0, 0.5).with_dash(vec![3.0, 2.0])),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Square, [72.0, 480.0, 200.0, 560.0])
+            .with_border_width(1.5)
+            .with_border_style(AnnotationBorderStyle::Dashed)
+            .with_border_dash(vec![4.0, 1.0]),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    assert_eq!(annotations.len(), 2);
+
+    let legacy = annotations[0].border.as_ref().expect("legacy /Border");
+    assert_eq!(legacy.corner_radii, Some([2.0, 1.0]));
+    assert_eq!(legacy.width, Some(0.5));
+    assert_eq!(legacy.dash, vec![3.0, 2.0]);
+    assert!(legacy.style.is_none(), "旧式数组不带 /S 样式");
+
+    let styled = annotations[1].border.as_ref().expect("/BS");
+    assert_eq!(styled.corner_radii, None);
+    assert_eq!(styled.width, Some(1.5));
+    assert_eq!(styled.style.as_deref(), Some("D"));
+    assert_eq!(styled.dash, vec![4.0, 1.0]);
+}

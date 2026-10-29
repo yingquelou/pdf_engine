@@ -10,6 +10,7 @@
 //! - `to_unicode`：ToUnicode CMap；
 //! - `encoding`：自定义 CID 编码 CMap；
 //! - `annotation`：注解字典与 `/Annots` 通用条目与子类型专有条目；
+//! - `annotation_border`：旧式 `/Border` 数组（Table 164）与通用 `/BS` 门禁；
 //! - `annotation_line`：Line 注解专有条目（Table 175/176）与版本门禁；
 //! - `annotation_free_text`：FreeText 注解专有条目（Table 174）与版本门禁；
 //! - `annotation_geometry`：Square/Circle/Polygon/PolyLine 几何条目（Table 177/178）与版本门禁；
@@ -30,6 +31,7 @@
 mod acro_form;
 mod annotation;
 mod annotation_appearance;
+mod annotation_border;
 mod annotation_contract;
 mod annotation_free_text;
 mod annotation_geometry;

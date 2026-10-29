@@ -168,6 +168,8 @@ pub enum PdfFeature {
     /// 注解 measure 字典（`/Measure`，Table 261–263；Line 与
     /// Polygon/PolyLine 自 Table 175/178），PDF 1.7 引入。
     AnnotationMeasure,
+    /// 旧式注解边框数组的虚线项（`/Border` 第四项，Table 164），PDF 1.1 引入。
+    AnnotationBorderDash,
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
     /// Table 196），PDF 1.3 引入。
     FormFieldAdditionalActions,
@@ -181,7 +183,7 @@ impl PdfFeature {
     /// 该特性引入的最低 PDF 版本（按 ISO 32000-1）。
     pub fn min_version(self) -> PdfVersion {
         match self {
-            PdfFeature::EncryptionRC4 => PdfVersion::V1_1,
+            PdfFeature::EncryptionRC4 | PdfFeature::AnnotationBorderDash => PdfVersion::V1_1,
             PdfFeature::TilingPattern | PdfFeature::LinkAnnotationHighlighting => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
@@ -252,6 +254,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::LinkAnnotationQuadPoints => "link annotation quad points",
             PdfFeature::LinkAnnotationBorderStyle => "link annotation border style",
             PdfFeature::AnnotationMeasure => "annotation measure dictionary",
+            PdfFeature::AnnotationBorderDash => "annotation border dash array",
             PdfFeature::FormFieldAdditionalActions => "form field additional actions",
             PdfFeature::FormCalculationOrder => "form calculation order",
             PdfFeature::PageViewports => "page viewport dictionaries",

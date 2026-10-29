@@ -133,35 +133,35 @@ pub(super) fn parse_border(document: &Document, dict: &Dict) -> Result<Option<An
             width,
             style,
             dash,
-            corner_radius: None,
+            corner_radii: None,
             blend_mode: blend_mode.clone(),
         })
     } else if let Some(legacy) = dict.get("Border") {
         let array = legacy
             .as_array()
             .ok_or_else(|| malformed("annotation /Border is not an array"))?;
-        if array.len() > 3 {
-            return Err(malformed("annotation /Border array exceeds 3 items"));
+        // Table 164：PDF 1.0 为 [水平圆角, 垂直圆角, 宽度]，
+        // PDF 1.1 起可带第四项虚线数组。
+        if !(3..=4).contains(&array.len()) {
+            return Err(malformed("annotation /Border array needs 3 or 4 items"));
         }
-        let corner = array.0.first().map(|v| number(v, "annotation /Border"));
-        let width = array.0.get(1).map(|v| number(v, "annotation /Border"));
-        let dash = match array.0.get(2) {
-            // 规范允许 [h w] 或 [h w [dash…]]；真实文档常见第三项写成数字
-            // （如 `/Border [0 0 0]`），此处宽容忽略而不报错。
-            Some(dash) => match dash.as_array() {
-                Some(dash) => dash
-                    .iter()
-                    .map(|item| number(item, "annotation /Border dash"))
-                    .collect::<Result<Vec<f64>>>()?,
-                None => Vec::new(),
-            },
+        let horizontal = number(&array.0[0], "annotation /Border")?;
+        let vertical = number(&array.0[1], "annotation /Border")?;
+        let width = number(&array.0[2], "annotation /Border")?;
+        let dash = match array.0.get(3) {
             None => Vec::new(),
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| malformed("annotation /Border dash is not an array"))?
+                .iter()
+                .map(|item| number(item, "annotation /Border dash"))
+                .collect::<Result<Vec<f64>>>()?,
         };
         Some(AnnotationBorder {
-            width: width.transpose()?,
+            width: Some(width),
             style: None,
             dash,
-            corner_radius: corner.transpose()?,
+            corner_radii: Some([horizontal, vertical]),
             blend_mode: blend_mode.clone(),
         })
     } else {

@@ -212,10 +212,10 @@ fn annotated_fixture_reads_text_highlight_and_ink_annotations() {
     assert!(text.flags.print());
     assert!(!text.flags.no_view());
     assert!(text.visible());
-    // 旧式 /Border [0 0 0]：宽度取第二项，虚线数组取第三项。
+    // 旧式 /Border [0 0 0]：前两项为水平/垂直圆角半径，第三项为宽度。
     let border = text.border.clone().expect("legacy border");
     assert_eq!(border.width, Some(0.0));
-    assert_eq!(border.corner_radius, Some(0.0));
+    assert_eq!(border.corner_radii, Some([0.0, 0.0]));
     assert_eq!(border.dash, vec![]);
 
     let highlight = &annotations[1];

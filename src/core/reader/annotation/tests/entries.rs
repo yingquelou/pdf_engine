@@ -237,7 +237,7 @@ fn border_prefers_bs_dictionary_over_legacy_array() {
     assert_eq!(border.style.as_deref(), Some("Dashed"));
     assert_eq!(border.dash, vec![3.0, 2.0]);
     assert_eq!(border.blend_mode.as_deref(), Some("Multiply"));
-    assert_eq!(border.corner_radius, None);
+    assert_eq!(border.corner_radii, None);
 
     let legacy = parse_annotation(
         &doc(vec![]),
@@ -248,14 +248,15 @@ fn border_prefers_bs_dictionary_over_legacy_array() {
             Value::Array(Array(vec![
                 Value::Integer(2),
                 Value::Integer(1),
+                Value::Integer(4),
                 Value::Array(Array(vec![Value::Integer(5), Value::Integer(5)])),
             ])),
         ),
     )
     .expect("legacy border");
     let border = legacy.border.expect("border");
-    assert_eq!(border.corner_radius, Some(2.0));
-    assert_eq!(border.width, Some(1.0));
+    assert_eq!(border.corner_radii, Some([2.0, 1.0]));
+    assert_eq!(border.width, Some(4.0));
     assert_eq!(border.dash, vec![5.0, 5.0]);
     assert_eq!(border.style, None);
 
@@ -270,14 +271,27 @@ fn border_prefers_bs_dictionary_over_legacy_array() {
     assert_eq!(border.width, None);
     assert_eq!(border.blend_mode.as_deref(), Some("Normal"));
 
-    let bad_border = base_annotation("Circle").insert(
-        "Border",
-        Value::Array(Array((0..4).map(Value::Integer).collect())),
-    );
-    assert!(matches!(
-        parse_annotation(&doc(vec![]), 0, None, &bad_border),
-        Err(AnnotationError::Malformed(_))
-    ));
+    for bad in [
+        Value::Array(Array(vec![Value::Integer(0), Value::Integer(0)])),
+        Value::Array(Array((0..5).map(Value::Integer).collect())),
+        Value::Array(Array(vec![
+            Value::Integer(0),
+            Value::Integer(0),
+            Value::Integer(1),
+            Value::Integer(2),
+        ])),
+        Value::Array(Array(vec![
+            Value::Name("wide".into()),
+            Value::Integer(0),
+            Value::Integer(1),
+        ])),
+    ] {
+        let bad_border = base_annotation("Circle").insert("Border", bad);
+        assert!(matches!(
+            parse_annotation(&doc(vec![]), 0, None, &bad_border),
+            Err(AnnotationError::Malformed(_))
+        ));
+    }
 
     let bad_ca = base_annotation("Text").insert("CA", Value::Float(1.5));
     assert!(matches!(

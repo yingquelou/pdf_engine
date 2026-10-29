@@ -12,6 +12,7 @@
 //! 与 `link`（Link，Table 173 的 `/H` `/PA`）；`measure` 覆盖 12.9 的
 //! `/Measure` 测量字典（Table 261–263）。
 
+mod border;
 mod free_text;
 mod geometry;
 mod kind;
@@ -19,6 +20,7 @@ mod link;
 mod measure;
 mod subtype;
 
+pub use border::BorderArray;
 use free_text::FreeTextEntries;
 pub use free_text::{BorderEffect, BorderEffectStyle, CalloutLine, FreeTextIntent};
 use geometry::GeometryEntries;
@@ -88,6 +90,7 @@ pub struct PdfAnnotation {
     border_width: Option<f64>,
     border_style: Option<AnnotationBorderStyle>,
     border_dash: Vec<f64>,
+    border_array: Option<BorderArray>,
     quad_points: Option<Vec<f64>>,
     icon_name: Option<String>,
     is_open: Option<bool>,
@@ -134,6 +137,7 @@ impl PdfAnnotation {
             border_width: None,
             border_style: None,
             border_dash: Vec::new(),
+            border_array: None,
             quad_points: None,
             icon_name: None,
             is_open: None,
@@ -234,6 +238,13 @@ impl PdfAnnotation {
     /// 虚线模式（`/BS` 字典 `/D`；至少两项）。
     pub fn with_border_dash(mut self, dash: Vec<f64>) -> Self {
         self.border_dash = dash;
+        self
+    }
+
+    /// 旧式边框数组（`/Border`，Table 164）；与 [`Self::with_border_width`]、
+    /// [`Self::with_border_style`]、[`Self::with_border_dash`] 互斥。
+    pub fn with_border_array(mut self, border: BorderArray) -> Self {
+        self.border_array = Some(border);
         self
     }
 
@@ -370,6 +381,10 @@ impl PdfAnnotation {
         &self.border_dash
     }
 
+    pub(crate) fn border_array(&self) -> Option<&BorderArray> {
+        self.border_array.as_ref()
+    }
+
     pub(crate) fn quad_points(&self) -> Option<&[f64]> {
         self.quad_points.as_deref()
     }
@@ -457,6 +472,18 @@ impl PdfAnnotation {
             if self.border_dash.iter().any(|v| !v.is_finite() || *v < 0.0) {
                 return Err("annotation /BS /D entries must be finite nonnegative".into());
             }
+        }
+        if let Some(border) = &self.border_array {
+            if self.border_width.is_some()
+                || self.border_style.is_some()
+                || !self.border_dash.is_empty()
+            {
+                return Err(
+                    "annotation /Border and /BS are mutually exclusive (/BS supersedes /Border)"
+                        .into(),
+                );
+            }
+            border.validate()?;
         }
         if let Some(quad) = &self.quad_points {
             if quad.len() % 8 != 0 {

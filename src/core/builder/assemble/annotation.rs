@@ -68,6 +68,9 @@ pub(super) fn annotation_dict(
     if let Some(bs) = border_style_dict(annot) {
         dict = dict.insert("BS", Value::Dict(bs));
     }
+    if let Some(border) = annot.border_array() {
+        dict = dict.insert("Border", Value::Array(border.to_array()));
+    }
     if let Some(quad) = annot.quad_points() {
         dict = dict.insert("QuadPoints", real_array(quad));
     }
@@ -418,6 +421,25 @@ pub(super) fn link_feature_gate(
                 version.as_str()
             )));
         }
+    }
+    Ok(())
+}
+
+/// 旧式 `/Border` 虚线项（Table 164，PDF 1.1）的版本门禁。
+pub(super) fn border_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    if let Some(border) = annot.border_array()
+        && border.has_dash()
+        && !version.supports(PdfFeature::AnnotationBorderDash)
+    {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "{} require PDF {}, got {}",
+            PdfFeature::AnnotationBorderDash,
+            PdfFeature::AnnotationBorderDash.min_version().as_str(),
+            version.as_str()
+        )));
     }
     Ok(())
 }
