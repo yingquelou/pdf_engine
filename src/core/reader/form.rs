@@ -21,8 +21,10 @@ use crate::core::reader::content::text_value;
 use crate::core::types::{Dict, Document, Value};
 
 mod acro_form;
+mod flags;
 
 pub use acro_form::{AcroForm, DefaultResources};
+pub use flags::FieldFlags;
 
 /// 字段树最大嵌套深度。
 const MAX_FIELD_DEPTH: usize = 64;
@@ -93,69 +95,6 @@ impl FieldType {
             Self::Signature => "Sig",
             Self::Unknown(name) => name,
         }
-    }
-}
-
-/// 字段标志位（Table 221 `/Ff`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct FieldFlags(u32);
-
-impl FieldFlags {
-    pub fn from_bits(bits: u32) -> Self {
-        Self(bits)
-    }
-
-    pub fn bits(self) -> u32 {
-        self.0
-    }
-
-    fn bit(self, index: u32) -> bool {
-        self.0 & (1 << index) != 0
-    }
-
-    /// bit 1：只读。
-    pub fn read_only(self) -> bool {
-        self.bit(0)
-    }
-
-    /// bit 2：必填。
-    pub fn required(self) -> bool {
-        self.bit(1)
-    }
-
-    /// bit 3：不导出。
-    pub fn no_export(self) -> bool {
-        self.bit(2)
-    }
-
-    /// bit 13：多行文本。
-    pub fn multiline(self) -> bool {
-        self.bit(12)
-    }
-
-    /// bit 14：密码文本。
-    pub fn password(self) -> bool {
-        self.bit(13)
-    }
-
-    /// bit 16：单选按钮。
-    pub fn radio(self) -> bool {
-        self.bit(15)
-    }
-
-    /// bit 17：按钮（无持久值）。
-    pub fn pushbutton(self) -> bool {
-        self.bit(16)
-    }
-
-    /// bit 18：组合框（选择字段）。
-    pub fn combo(self) -> bool {
-        self.bit(17)
-    }
-
-    /// bit 22：多选（选择字段）。
-    pub fn multi_select(self) -> bool {
-        self.bit(21)
     }
 }
 
