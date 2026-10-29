@@ -267,13 +267,16 @@ impl PdfAnnotation {
         self
     }
 
-    /// 弹出窗口引用 `/Popup`；参数为另一注解的注册句柄。
+    /// 弹出窗口引用 `/Popup`；参数为另一注解的注册句柄，该注解须是
+    /// `Popup` 子类型。只声明本端即可：弹出框的 `/Parent` 由写出阶段自动
+    /// 补出（12.5.2、Table 163/183）。
     pub fn with_popup(mut self, handle: usize) -> Self {
         self.popup = Some(handle);
         self
     }
 
     /// Popup 父注解 `/Parent`（Table 183，仅 Popup 子类型）；参数为另一注解的注册句柄。
+    /// 只声明本端即可：父注解的 `/Popup` 由写出阶段自动补出。
     pub fn with_popup_parent(mut self, handle: usize) -> Self {
         self.popup_parent = Some(handle);
         self

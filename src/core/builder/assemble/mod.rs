@@ -6,6 +6,7 @@
 //! - `cid`：CIDFont 后代字典、Type 0 父字体与相关流；
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
 //! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）；
+//! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出与配对冲突校验；
 //! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出；
 //! - `acro_form`：AcroForm `/DR` 默认资源字典（字体/ExtGState/ColorSpace/ProcSet）。
@@ -13,6 +14,7 @@
 mod acro_form;
 mod action;
 mod annotation;
+mod annotation_popup;
 mod cid;
 mod cmap;
 mod embedded_file;
@@ -815,11 +817,21 @@ impl PdfBuilder {
         // 注意 `page_slots` 是 (Page 号, 内容流号) 对，须先映射为
         // (对象号, 生成号) 引用表再交给导航层。
         let page_refs: Vec<(i64, i64)> = page_slots.iter().map(|(pn, _)| (*pn, 0)).collect();
+        // 12.5.2/Table 163/183：`/Popup` 与 `/Parent` 只需声明一侧，另一侧
+        // 在此补出；配对矛盾与无父弹出框在写出任何注解字典前拒绝。
+        let popup_pairs = annotation_popup::pair_popups(
+            &self
+                .annotations
+                .iter()
+                .map(|entry| &entry.annot)
+                .collect::<Vec<_>>(),
+        )?;
         for (handle, entry) in self.annotations.iter().enumerate() {
             let dict = annotation::annotation_dict(
                 &entry.annot,
                 handle,
                 &annotation_nums,
+                &popup_pairs,
                 &page_refs,
                 &form_nums,
                 &embedded_nums,

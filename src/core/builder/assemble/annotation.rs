@@ -5,6 +5,8 @@
 //! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`、
 //! Popup `/Parent` `/Open`、Line/Polygon/PolyLine `/Measure`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
+//! `/Popup` 与 `/Parent` 只需声明一侧，另一侧由 `annotation_popup::pair_popups`
+//! 补出（12.5.2、Table 163、Table 183）。
 
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
@@ -15,18 +17,21 @@ use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
+use super::annotation_popup::PopupPairs;
 use super::real_array;
 
 /// 把单个注解写成字典；对象号已由 assemble 主流程按句柄分配。
 ///
 /// `page_refs` 用于把 `/Dest` 与 `GoTo` 动作中的 0 基页号解析为
 /// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 与 `/Parent` 句柄；
+/// `popup_pairs` 提供按单侧声明补出的另一端；
 /// `form_nums` 用于把 `/AP` 外观流句柄解析为 Form XObject 流引用；
 /// `embedded_nums` 用于把 `/FS` 句柄解析为文件规格引用。
 pub(super) fn annotation_dict(
     annot: &PdfAnnotation,
     handle: usize,
     annotation_nums: &[i64],
+    popup_pairs: &PopupPairs,
     page_refs: &[(i64, i64)],
     form_nums: &[i64],
     embedded_nums: &[i64],
@@ -196,7 +201,7 @@ pub(super) fn annotation_dict(
         let value = annotation_destination_value(destination, page_refs)?;
         dict = dict.insert("Dest", value);
     }
-    if let Some(popup) = annot.popup() {
+    if let Some(popup) = annot.popup().or_else(|| popup_pairs.popup_of(handle)) {
         let num = annotation_nums.get(popup).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /Popup references unknown annotation handle {popup}"
@@ -204,7 +209,10 @@ pub(super) fn annotation_dict(
         })?;
         dict = dict.insert("Popup", Value::Ref(*num, 0));
     }
-    if let Some(parent) = annot.popup_parent() {
+    if let Some(parent) = annot
+        .popup_parent()
+        .or_else(|| popup_pairs.parent_of(handle))
+    {
         if parent == handle {
             return Err(WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /Parent must not reference the annotation itself"
