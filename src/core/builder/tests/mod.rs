@@ -18,6 +18,7 @@
 //! - `annotation_subtype_table`：写端子类型集与读端 Table 169 的一致性与子类型版本门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
+//! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
 //! - `embedded_file`：嵌入文件流、文件规格与 `/EmbeddedFiles` 名称树；
 //! - `form`：Form XObject 字典与资源；
@@ -51,6 +52,7 @@ mod font_cff;
 mod font_program;
 mod form;
 mod form_action;
+mod form_appearance;
 mod form_resources;
 mod function;
 mod graphics_state;

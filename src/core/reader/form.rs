@@ -210,6 +210,9 @@ pub struct Field {
     pub rect: Option<[f64; 4]>,
     /// Widget `/AP` 外观流（原样保留）。
     pub appearance: Option<Value>,
+    /// Widget 常态外观状态子字典（`/AP /N` 为字典时）的状态名 → 外观值；
+    /// `/N` 为单一流或缺失时为空。
+    pub appearance_normal_states: Vec<(String, Value)>,
     /// Widget `/AS` 当前外观状态名。
     pub appearance_state: Option<String>,
     /// Widget `/P` 所在页面引用。
@@ -496,6 +499,10 @@ impl FieldReader<'_> {
             None
         };
         let appearance = dict.get("AP").cloned();
+        let appearance_normal_states = match &appearance {
+            Some(value) => parse_appearance_states(self.document, value)?,
+            None => Vec::new(),
+        };
         let appearance_state = match dict.get("AS") {
             Some(value) => Some(
                 value
@@ -554,6 +561,7 @@ impl FieldReader<'_> {
             is_widget,
             rect,
             appearance,
+            appearance_normal_states,
             appearance_state,
             page,
             actions,
@@ -577,6 +585,34 @@ fn parse_bits(value: &Value, context: &str) -> Result<u32> {
         Value::Integer(bits) if *bits >= 0 && *bits <= u32::MAX as i64 => Ok(*bits as u32),
         _ => Err(malformed(format!("{context} is not a nonnegative integer"))),
     }
+}
+
+fn parse_appearance_states(
+    document: &Document,
+    appearance: &Value,
+) -> Result<Vec<(String, Value)>> {
+    // `/AP` 是可选条目：悬空引用不应让整个表单解析失败，原值仍可从
+    // `Field::appearance` 取得。
+    let Ok(resolved) = crate::core::reader::navigation::resolve(document, appearance) else {
+        return Ok(Vec::new());
+    };
+    let Some(dict) = resolved.as_dict() else {
+        return Ok(Vec::new());
+    };
+    let Some(normal) = dict.get("N") else {
+        return Ok(Vec::new());
+    };
+    let Ok(normal) = crate::core::reader::navigation::resolve(document, normal) else {
+        return Ok(Vec::new());
+    };
+    let Some(states) = normal.as_dict() else {
+        return Ok(Vec::new());
+    };
+    Ok(states
+        .0
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect())
 }
 
 fn parse_integer(value: &Value, context: &str) -> Result<i64> {

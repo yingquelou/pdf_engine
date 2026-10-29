@@ -41,6 +41,7 @@ mod type3;
 mod viewport;
 
 pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
+pub(crate) use annotation::validate_name_value;
 pub use annotation::{
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, BorderArray, BorderEffect,
     BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle, LineIntent,

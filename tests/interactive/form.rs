@@ -44,7 +44,7 @@ fn builder_acro_form_roundtrips_through_parser() {
         p0,
         FormField::checkbox("subscribe", [72.0, 590.0, 92.0, 610.0])
             .with_appearance(appearance)
-            .with_appearance_state("Off"),
+            .with_selected_appearance_state("Off"),
     );
     builder.set_acro_form(form);
 
@@ -333,4 +333,70 @@ fn builder_form_data_actions_roundtrip_through_parser() {
             },
         }
     );
+}
+
+/// 写入 → 重新解析：Widget `/AP /N` 状态子字典与 `/AS` 应经
+/// `Document::acro_form` 回读为类型化状态列表（12.5.5 Table 168）。
+#[test]
+fn builder_form_appearance_states_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{AcroForm, FormField, FormXObject, PageSize, PdfBuilder};
+    use pdf_engine::core::content::ContentStream;
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let off = builder.form_xobject(&FormXObject::new(
+        [0.0, 0.0, 20.0, 20.0],
+        ContentStream::new(),
+    ));
+    let mut on_content = ContentStream::new();
+    on_content
+        .set_fill_gray(0.0)
+        .rect(2.0, 2.0, 16.0, 16.0)
+        .fill();
+    let on = builder.form_xobject(&FormXObject::new([0.0, 0.0, 20.0, 20.0], on_content));
+
+    let mut form = AcroForm::new();
+    form.add_field(
+        p0,
+        FormField::radio("agree", [72.0, 700.0, 92.0, 720.0])
+            .with_appearance_state("Off", off)
+            .with_appearance_state("Yes", on)
+            .with_selected_appearance_state("Yes"),
+    );
+    builder.set_acro_form(form);
+    let mut bytes = Vec::new();
+    builder.build(&mut bytes).expect("build");
+
+    let doc = parse_buf(&bytes);
+    let form = doc.acro_form().expect("parse").expect("form present");
+    let field = &form.fields[0];
+    assert_eq!(field.appearance_state.as_deref(), Some("Yes"));
+    let normal = field
+        .appearance
+        .as_ref()
+        .and_then(|value| value.as_dict())
+        .and_then(|ap| ap.get("N"))
+        .and_then(|value| value.as_dict())
+        .expect("/AP /N state dictionary");
+    let written_off = normal.get("Off").expect("Off state entry");
+    let written_on = normal.get("Yes").expect("Yes state entry");
+    assert_ne!(written_off, written_on, "states reference distinct forms");
+    let states: Vec<(&str, &Value)> = field
+        .appearance_normal_states
+        .iter()
+        .map(|(state, value)| (state.as_str(), value))
+        .collect();
+    assert_eq!(
+        states,
+        vec![("Off", written_off), ("Yes", written_on)],
+        "state names are sorted and references preserved"
+    );
+    for (state, value) in &field.appearance_normal_states {
+        let (num, _) = value
+            .as_ref()
+            .unwrap_or_else(|| panic!("{state} state entry is a reference"));
+        let object = doc.get_object(num).expect("lookup").expect("exists");
+        assert!(matches!(object.value, Value::Stream(ref dict, _)
+            if dict.get("Subtype") == Some(&Value::Name("Form".into()))));
+    }
 }

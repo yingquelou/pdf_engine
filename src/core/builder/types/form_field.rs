@@ -136,6 +136,7 @@ pub struct FormField {
     rect: Option<[f64; 4]>,
     annotation_flags: u32,
     appearance_normal: Option<usize>,
+    appearance_states: Vec<(String, usize)>,
     appearance_down: Option<usize>,
     appearance_rollover: Option<usize>,
     appearance_state: Option<String>,
@@ -188,6 +189,7 @@ impl FormField {
             rect,
             annotation_flags: 0,
             appearance_normal: None,
+            appearance_states: Vec::new(),
             appearance_down: None,
             appearance_rollover: None,
             appearance_state: None,
@@ -218,6 +220,18 @@ impl FormField {
             Some(FormFieldType::Button),
             Some(name.into()),
             Some(rect),
+            Self::RADIO,
+        )
+    }
+
+    /// 单选按钮组（`/FT /Btn` + `/Radio`，无 `/Rect`）：子 Widget 经
+    /// [`FormField::with_child`] 添加，各自携带 `/AP /N` 状态子字典与
+    /// `/AS`（Table 189）。
+    pub fn radio_group(name: impl Into<String>) -> Self {
+        Self::node(
+            Some(FormFieldType::Button),
+            Some(name.into()),
+            None,
             Self::RADIO,
         )
     }
@@ -335,8 +349,15 @@ impl FormField {
         self
     }
 
-    /// 当前外观状态名 `/AS`（按钮的 `/V` 同步使用 Name 值）。
-    pub fn with_appearance_state(mut self, state: impl Into<String>) -> Self {
+    /// 常态外观状态字典条目（`/AP /N << /state 句柄 >>`，Table 189）；
+    /// 与单一流 `with_appearance` 互斥。多状态外观用于单选/复选框组。
+    pub fn with_appearance_state(mut self, state: impl Into<String>, handle: usize) -> Self {
+        self.appearance_states.push((state.into(), handle));
+        self
+    }
+
+    /// 当前外观状态名 `/AS`（须为已登记的常态外观状态）。
+    pub fn with_selected_appearance_state(mut self, state: impl Into<String>) -> Self {
         self.appearance_state = Some(state.into());
         self
     }
@@ -416,6 +437,10 @@ impl FormField {
 
     pub(crate) fn appearance_normal(&self) -> Option<usize> {
         self.appearance_normal
+    }
+
+    pub(crate) fn appearance_states(&self) -> &[(String, usize)] {
+        &self.appearance_states
     }
 
     pub(crate) fn appearance_down(&self) -> Option<usize> {

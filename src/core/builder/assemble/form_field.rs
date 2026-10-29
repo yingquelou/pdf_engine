@@ -8,7 +8,7 @@
 
 use crate::core::builder::types::{
     AcroForm, Action, FieldActionEvent, FieldValue, Font, FormField, FormFieldType, FormOption,
-    text_string_value,
+    text_string_value, validate_name_value,
 };
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
@@ -173,14 +173,16 @@ fn validate_node(
             "form field {name}: /Opt is only valid for choice fields"
         )));
     }
-    for handle in [
+    validate_appearance_states(field)?;
+    let handles = [
         field.appearance_normal(),
         field.appearance_down(),
         field.appearance_rollover(),
     ]
     .into_iter()
     .flatten()
-    {
+    .chain(field.appearance_states().iter().map(|(_, handle)| *handle));
+    for handle in handles {
         if handle >= form_count {
             return Err(invalid(format!(
                 "form field {name}: /AP references unknown form handle {handle}"
@@ -192,6 +194,49 @@ fn validate_node(
         validate_node(
             child, page, field_type, page_count, form_count, &fqn, calculate,
         )?;
+    }
+    Ok(())
+}
+
+/// `/AP /N` 状态子字典（Table 189）：仅 Widget、与单一流互斥、状态名合法
+/// 且唯一；`/AS` 在有状态字典时必须指向已登记状态。
+fn validate_appearance_states(field: &FormField) -> Result<(), WriteError> {
+    let invalid = |message: String| WriteError::InvalidObject(message);
+    let name = field.partial_name().unwrap_or("<widget>");
+    if field.appearance_states().is_empty() {
+        return Ok(());
+    }
+    if field.rect().is_none() {
+        return Err(invalid(format!(
+            "form field {name}: appearance states require a widget rectangle (/Rect)"
+        )));
+    }
+    if field.appearance_normal().is_some() {
+        return Err(invalid(format!(
+            "form field {name}: /AP /N cannot be both a stream and a state sub-dictionary"
+        )));
+    }
+    for (index, (state, _)) in field.appearance_states().iter().enumerate() {
+        validate_name_value(state, "form field appearance state")
+            .map_err(|message| invalid(format!("form field {name}: {message}")))?;
+        if field.appearance_states()[..index]
+            .iter()
+            .any(|(existing, _)| existing == state)
+        {
+            return Err(invalid(format!(
+                "form field {name}: appearance state {state} is registered twice"
+            )));
+        }
+    }
+    if let Some(state) = field.appearance_state()
+        && !field
+            .appearance_states()
+            .iter()
+            .any(|(name, _)| name == state)
+    {
+        return Err(invalid(format!(
+            "form field {name}: /AS names unregistered appearance state {state}"
+        )));
     }
     Ok(())
 }
@@ -275,7 +320,8 @@ fn collect_appearances(field: &FormField, handles: &mut Vec<usize>) {
             field.appearance_rollover(),
         ]
         .into_iter()
-        .flatten(),
+        .flatten()
+        .chain(field.appearance_states().iter().map(|(_, handle)| *handle)),
     );
     for child in field.kids() {
         collect_appearances(child, handles);
@@ -428,8 +474,28 @@ pub(super) fn field_dict(
             dict = dict.insert("P", Value::Ref(page_num, generation));
         }
         let mut appearance = Dict::new();
+        if field.appearance_states().is_empty() {
+            if let Some(handle) = field.appearance_normal() {
+                let num = form_nums.get(handle).ok_or_else(|| {
+                    WriteError::InvalidObject(format!(
+                        "form field {name}: /AP /N references unknown form handle {handle}"
+                    ))
+                })?;
+                appearance = appearance.insert("N", Value::Ref(*num, 0));
+            }
+        } else {
+            let mut states = Dict::new();
+            for (state, handle) in field.appearance_states() {
+                let num = form_nums.get(*handle).ok_or_else(|| {
+                    WriteError::InvalidObject(format!(
+                        "form field {name}: /AP /N state {state} references unknown form handle {handle}"
+                    ))
+                })?;
+                states = states.insert(state.clone(), Value::Ref(*num, 0));
+            }
+            appearance = appearance.insert("N", Value::Dict(states));
+        }
         for (key, handle) in [
-            ("N", field.appearance_normal()),
             ("D", field.appearance_down()),
             ("R", field.appearance_rollover()),
         ] {

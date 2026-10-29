@@ -30,6 +30,7 @@ use link::LinkEntries;
 pub use link::LinkHighlightMode;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 use subtype::LineEntries;
+pub(crate) use subtype::validate_name_value;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
 use super::Action;

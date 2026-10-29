@@ -171,7 +171,7 @@ fn choice_and_button_fields_write_options_and_flags() {
     );
     form.add_field(
         page,
-        FormField::radio("agree", [72.0, 590.0, 92.0, 610.0]).with_appearance_state("Off"),
+        FormField::radio("agree", [72.0, 590.0, 92.0, 610.0]).with_selected_appearance_state("Off"),
     );
     builder.set_acro_form(form);
     let doc = builder.assemble_document().expect("assemble");
@@ -206,7 +206,7 @@ fn widget_appearance_references_pool_form_streams() {
         FormField::checkbox("subscribe", [72.0, 560.0, 92.0, 580.0])
             .with_appearance(handle)
             .with_appearance_down(handle)
-            .with_appearance_state("Yes"),
+            .with_selected_appearance_state("Yes"),
     );
     builder.set_acro_form(form);
     let doc = builder.assemble_document().expect("assemble");

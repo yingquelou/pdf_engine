@@ -190,6 +190,58 @@ fn widget_node_keeps_appearance_state_and_page_reference() {
 }
 
 #[test]
+fn widget_normal_appearance_states_are_extracted() {
+    let states = Dict::new()
+        .insert("Off", Value::Ref(30, 0))
+        .insert("On", Value::Ref(31, 0));
+    let widget_dict = widget(arr(vec![
+        Value::Integer(0),
+        Value::Integer(0),
+        Value::Integer(20),
+        Value::Integer(20),
+    ]))
+    .insert("FT", name("Btn"))
+    .insert("AP", Value::Ref(40, 0))
+    .insert("AS", name("On"));
+    let doc = doc_with_acro_form(Value::Dict(
+        Dict::new().insert("Fields", arr(vec![Value::Dict(widget_dict)])),
+    ));
+    insert(
+        &doc,
+        40,
+        Value::Dict(Dict::new().insert("N", Value::Dict(states))),
+    );
+    let form = doc.acro_form().expect("parse").expect("present");
+    let field = &form.fields[0];
+    assert_eq!(field.appearance_state.as_deref(), Some("On"));
+    assert_eq!(
+        field.appearance_normal_states,
+        vec![
+            ("Off".to_string(), Value::Ref(30, 0)),
+            ("On".to_string(), Value::Ref(31, 0)),
+        ],
+        "indirect /AP resolves and state names stay sorted"
+    );
+
+    let single = widget(arr(vec![
+        Value::Integer(0),
+        Value::Integer(0),
+        Value::Integer(20),
+        Value::Integer(20),
+    ]))
+    .insert("FT", name("Btn"))
+    .insert(
+        "AP",
+        Value::Dict(Dict::new().insert("N", Value::Ref(30, 0))),
+    );
+    let doc = doc_with_acro_form(Value::Dict(
+        Dict::new().insert("Fields", arr(vec![Value::Dict(single)])),
+    ));
+    let form = doc.acro_form().expect("parse").expect("present");
+    assert!(form.fields[0].appearance_normal_states.is_empty());
+}
+
+#[test]
 fn choice_button_and_signature_types() {
     let doc = doc_with_acro_form(Value::Dict(Dict::new().insert(
         "Fields",
