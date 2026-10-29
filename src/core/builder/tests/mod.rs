@@ -19,6 +19,7 @@
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
+//! - `form_merged`：同全限定名字段多重表示的 `/V`、`/DV` 一致性（12.7.3.2）；
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
 //! - `acro_form_resources`：AcroForm `/DR` 非字体默认资源（ExtGState/ColorSpace/ProcSet）；
 //! - `embedded_file`：嵌入文件流、文件规格与 `/EmbeddedFiles` 名称树；
@@ -56,6 +57,7 @@ mod font_program;
 mod form;
 mod form_action;
 mod form_appearance;
+mod form_merged;
 mod form_option;
 mod form_resources;
 mod function;

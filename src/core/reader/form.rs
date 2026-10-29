@@ -12,6 +12,8 @@
 //!   外观流内容求值归渲染，动作 `/A` 语义归 E3。
 //! - 字段 `/AA` 附加动作（`/K` `/F` `/V` `/C`，Table 196）经动作模型
 //!   类型化；`/CO` 计算顺序按引用解析为字段全限定名（Table 218）。
+//! - 同一全限定名的多重表示（12.7.3.2）在 `form/merged.rs` 归并为
+//!   [`LogicalField`]，并校验各表示的 `/FT` `/V` `/DV` 一致。
 //! - 防护：字段树深度 64、节点总数 4096、间接引用环检测。
 
 use std::collections::HashSet;
@@ -23,10 +25,12 @@ use crate::core::types::{Dict, Document, Value};
 
 mod acro_form;
 mod flags;
+mod merged;
 mod options;
 
 pub use acro_form::{AcroForm, DefaultResources};
 pub use flags::FieldFlags;
+pub use merged::LogicalField;
 pub use options::FormOption;
 
 /// 字段树最大嵌套深度。

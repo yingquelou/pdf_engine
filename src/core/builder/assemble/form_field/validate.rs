@@ -1,14 +1,14 @@
 //! 字段树校验：页号、矩形、`/FT` 继承、字段类型专属条目、外观句柄、
-//! `/AA` 触发事件与 `/CO` 计算顺序（Table 220–231）。
+//! `/AA` 触发事件、同名字段多重表示与 `/CO` 计算顺序（Table 220–231）。
 
 use crate::core::builder::types::{
-    AcroForm, Action, FieldActionEvent, FormField, FormFieldType, validate_name_value,
+    AcroForm, Action, FieldActionEvent, FieldValue, FormField, FormFieldType, validate_name_value,
 };
 use crate::core::types::{PdfFeature, PdfVersion};
 use crate::core::writer::WriteError;
 
 /// 校验整棵字段树：页号、矩形、`/FT` 继承、字段类型专属条目、外观句柄、
-/// `/AA` 触发事件与 `/CO` 计算顺序。
+/// `/AA` 触发事件、同名字段多重表示与 `/CO` 计算顺序。
 pub(crate) fn validate(
     form: &AcroForm,
     page_count: usize,
@@ -29,6 +29,7 @@ pub(crate) fn validate(
             &mut calculate,
         )?;
     }
+    validate_shared_representations(form)?;
     validate_calculation_order(form, &calculate)
 }
 
@@ -168,6 +169,64 @@ fn validate_node(
         validate_node(
             child, page, field_type, page_count, form_count, version, &fqn, calculate,
         )?;
+    }
+    Ok(())
+}
+
+/// 最近具名祖先（即当前全限定名的所有者）声明的 `/V` 与 `/DV`。
+struct FieldOwner<'a> {
+    fqn: String,
+    value: Option<&'a FieldValue>,
+    default_value: Option<&'a FieldValue>,
+}
+
+/// 同一全限定名的多重表示（12.7.3.2）：无 `/T` 的节点复用父链的名字，
+/// 因而是同一底层字段的表示，其显式声明的 `/V`、`/DV` 须与最近具名祖先一致
+/// （缺省即继承，不构成冲突）；`/FT` 由继承得出，无需另查。
+fn validate_shared_representations(form: &AcroForm) -> Result<(), WriteError> {
+    for (_, field) in form.fields() {
+        check_representations(field, "", None)?;
+    }
+    Ok(())
+}
+
+fn check_representations<'a>(
+    field: &'a FormField,
+    parent_fqn: &str,
+    owner: Option<&FieldOwner<'a>>,
+) -> Result<(), WriteError> {
+    let part = field.partial_name().filter(|name| !name.is_empty());
+    let fqn = match part {
+        Some(name) if parent_fqn.is_empty() => name.to_string(),
+        Some(name) => format!("{parent_fqn}.{name}"),
+        None => parent_fqn.to_string(),
+    };
+    let named = match part {
+        Some(_) => FieldOwner {
+            fqn: fqn.clone(),
+            value: field.value(),
+            default_value: field.default_value(),
+        },
+        None => {
+            if let Some(owner) = owner {
+                for (entry, declared, inherited) in [
+                    ("/V", field.value(), owner.value),
+                    ("/DV", field.default_value(), owner.default_value),
+                ] {
+                    if declared.or(inherited) != inherited {
+                        return Err(WriteError::InvalidObject(format!(
+                            "form field {}: representations sharing a fully qualified name must declare the same {entry}",
+                            owner.fqn
+                        )));
+                    }
+                }
+            }
+            // 无 `/T` 的节点只能是 Widget 表示，规范不允许其再有子节点。
+            return Ok(());
+        }
+    };
+    for child in field.kids() {
+        check_representations(child, &fqn, Some(&named))?;
     }
     Ok(())
 }

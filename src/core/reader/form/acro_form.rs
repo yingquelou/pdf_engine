@@ -87,6 +87,8 @@ impl Document {
             Some(value) => Some(parse_default_resources(self, value)?),
         };
         let calculation_order = parse_calculation_order(self, dict, &fields)?;
+        // 12.7.3.2：同全限定名的多重表示须有相同的 /FT、/V、/DV。
+        super::merged::validate_representations(self, &fields)?;
 
         Ok(Some(AcroForm {
             need_appearances,

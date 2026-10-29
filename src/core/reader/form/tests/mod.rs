@@ -2,6 +2,7 @@
 
 mod choice;
 mod flags;
+mod merged;
 mod options;
 
 use super::*;
