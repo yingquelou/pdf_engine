@@ -57,7 +57,7 @@ impl PdfBuilder {
                     self.version.as_str()
                 )));
             }
-            form_field::validate(form, self.pages.len(), self.forms.len())?;
+            form_field::validate(form, self.pages.len(), self.forms.len(), self.version)?;
             if form_field::has_additional_actions(form)
                 && !self
                     .version

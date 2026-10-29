@@ -55,6 +55,7 @@ mod font_program;
 mod form;
 mod form_action;
 mod form_appearance;
+mod form_option;
 mod form_resources;
 mod function;
 mod graphics_state;

@@ -183,9 +183,10 @@ fn choice_and_button_fields_write_options_and_flags() {
     assert!(choice.flags.combo());
     let options = choice.options.as_ref().expect("/Opt");
     assert_eq!(options.len(), 2);
-    let pair = options[0].as_array().expect("export/display pair");
-    assert_eq!(pair.0.len(), 2);
-    assert!(matches!(options[1], Value::HexString(_) | Value::String(_)));
+    assert_eq!(options[0].export(), "R");
+    assert_eq!(options[0].display(), Some("Red"));
+    assert_eq!(options[1].export(), "G");
+    assert_eq!(options[1].display(), None);
     let radio = &parsed.fields[1];
     assert_eq!(radio.field_type, Some(FieldType::Button));
     assert!(radio.flags.radio());

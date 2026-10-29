@@ -10,7 +10,7 @@ use crate::core::builder::types::{
     AcroForm, Action, FieldActionEvent, FieldValue, FormField, FormFieldType, FormOption,
     text_string_value, validate_name_value,
 };
-use crate::core::types::{Array, Dict, Value};
+use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
 use super::real_array;
@@ -33,6 +33,7 @@ pub(super) fn validate(
     form: &AcroForm,
     page_count: usize,
     form_count: usize,
+    version: PdfVersion,
 ) -> Result<(), WriteError> {
     super::acro_form::validate_default_resources(form)?;
     let mut calculate = Vec::new();
@@ -43,6 +44,7 @@ pub(super) fn validate(
             None,
             page_count,
             form_count,
+            version,
             "",
             &mut calculate,
         )?;
@@ -50,12 +52,14 @@ pub(super) fn validate(
     validate_calculation_order(form, &calculate)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_node(
     field: &FormField,
     inherited_page: Option<usize>,
     inherited_type: Option<FormFieldType>,
     page_count: usize,
     form_count: usize,
+    version: PdfVersion,
     parent_fqn: &str,
     calculate: &mut Vec<String>,
 ) -> Result<(), WriteError> {
@@ -141,10 +145,26 @@ fn validate_node(
             "form field {name}: /MaxLen is only valid for text fields"
         )));
     }
-    if !field.options().is_empty() && field_type != Some(FormFieldType::Choice) {
-        return Err(invalid(format!(
-            "form field {name}: /Opt is only valid for choice fields"
-        )));
+    if !field.options().is_empty() {
+        match field_type {
+            Some(FormFieldType::Choice) => {}
+            Some(FormFieldType::Button) => {
+                if !version.supports(PdfFeature::FormButtonOptions) {
+                    return Err(WriteError::UnsupportedVersion(format!(
+                        "{} require PDF {}, got {}",
+                        PdfFeature::FormButtonOptions,
+                        PdfFeature::FormButtonOptions.min_version().as_str(),
+                        version.as_str()
+                    )));
+                }
+                validate_button_options(field, &fqn)?;
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "form field {name}: /Opt is only valid for choice and button fields"
+                )));
+            }
+        }
     }
     validate_appearance_states(field)?;
     let handles = [
@@ -165,8 +185,54 @@ fn validate_node(
 
     for child in field.kids() {
         validate_node(
-            child, page, field_type, page_count, form_count, &fqn, calculate,
+            child, page, field_type, page_count, form_count, version, &fqn, calculate,
         )?;
+    }
+    Ok(())
+}
+
+/// 复选框与单选按钮字段的 `/Opt`（Table 227）：元素只能是单个文本串，
+/// 条目数须等于 Widget 数；存在 `/Opt` 时各 Widget 的非 `Off` 外观
+/// 状态名须为其在 `/Kids` 中的位置序号（`/0`、`/1` …）。
+fn validate_button_options(field: &FormField, fqn: &str) -> Result<(), WriteError> {
+    let invalid = |message: String| WriteError::InvalidObject(message);
+    if field.flags() & FormField::PUSHBUTTON != 0 {
+        return Err(invalid(format!(
+            "form field {fqn}: /Opt is not valid for pushbutton fields"
+        )));
+    }
+    for option in field.options() {
+        if option.display().is_some() {
+            return Err(invalid(format!(
+                "form field {fqn}: button /Opt entries must be single text strings"
+            )));
+        }
+    }
+    let widget_count = field.kids().len().max(1);
+    if field.options().len() != widget_count {
+        return Err(invalid(format!(
+            "form field {fqn}: /Opt has {} entries but the field has {widget_count} widget annotations",
+            field.options().len()
+        )));
+    }
+    for (index, kid) in field.kids().iter().enumerate() {
+        if kid.rect().is_none() {
+            return Err(invalid(format!(
+                "form field {fqn}: /Opt requires every child to be a widget annotation"
+            )));
+        }
+        let positional = index.to_string();
+        let on_states: Vec<&str> = kid
+            .appearance_states()
+            .iter()
+            .map(|(state, _)| state.as_str())
+            .filter(|state| *state != "Off")
+            .collect();
+        if on_states != [positional.as_str()] {
+            return Err(invalid(format!(
+                "form field {fqn}: /Opt requires widget {index} on state /{positional}, found {on_states:?}"
+            )));
+        }
     }
     Ok(())
 }

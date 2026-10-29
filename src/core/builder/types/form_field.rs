@@ -87,9 +87,12 @@ impl From<String> for FieldValue {
     }
 }
 
-/// 选择字段选项（`/Opt` 数组元素，Table 226）。
+/// 选项条目（`/Opt` 数组元素，Table 231）。
 ///
-/// 仅导出值写单文本串；同时提供显示文本时写 `[导出值 显示文本]`。
+/// 选择字段：仅导出值写单文本串；同时提供显示文本时写
+/// `[导出值 显示文本]`。按钮字段（复选框/单选组）的 `/Opt` 只允许
+/// 导出值，且须按 [`FormField::with_option`] 的顺序与 Widget 逐一对应
+/// （Table 227）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormOption {
     export: String,
@@ -329,7 +332,11 @@ impl FormField {
         self
     }
 
-    /// 追加一个选择字段选项（`/Opt`）。
+    /// 追加一个选项（`/Opt`）。
+    ///
+    /// 选择字段接受 `[导出值 显示文本]` 对（Table 231）；复选框与单选
+    /// 按钮字段只接受导出值，条目数须等于 Widget 数，且各 Widget 的
+    /// 非 `Off` 外观状态名须为其位置序号（`/0`、`/1` …，Table 227）。
     pub fn with_option(mut self, option: FormOption) -> Self {
         self.options.push(option);
         self

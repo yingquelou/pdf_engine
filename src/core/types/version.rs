@@ -173,6 +173,8 @@ pub enum PdfFeature {
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
     /// Table 196），PDF 1.3 引入。
     FormFieldAdditionalActions,
+    /// 复选框与单选按钮字段的 `/Opt` 导出值数组（Table 227），PDF 1.4 引入。
+    FormButtonOptions,
     /// AcroForm 计算顺序（`/CO`，Table 218），PDF 1.3 引入。
     FormCalculationOrder,
     /// 表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5.2–12.7.5.4），
@@ -204,9 +206,10 @@ impl PdfFeature {
             | PdfFeature::FormFieldAdditionalActions
             | PdfFeature::FormCalculationOrder
             | PdfFeature::FormActionFieldNames => PdfVersion::V1_3,
-            PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
-                PdfVersion::V1_4
-            }
+            PdfFeature::JBIG2Decode
+            | PdfFeature::Transparency
+            | PdfFeature::ImageIntent
+            | PdfFeature::FormButtonOptions => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -267,6 +270,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AnnotationMeasure => "annotation measure dictionary",
             PdfFeature::AnnotationBorderDash => "annotation border dash array",
             PdfFeature::FormFieldAdditionalActions => "form field additional actions",
+            PdfFeature::FormButtonOptions => "button form field options",
             PdfFeature::FormCalculationOrder => "form calculation order",
             PdfFeature::FormDataActions => "form data actions",
             PdfFeature::FormActionFieldNames => "form action field names",

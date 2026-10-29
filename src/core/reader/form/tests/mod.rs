@@ -1,6 +1,7 @@
 //! E4 读端表单测试。
 
 mod flags;
+mod options;
 
 use super::*;
 use crate::core::reader::color_space::ColorSpaceModel;

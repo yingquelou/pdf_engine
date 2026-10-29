@@ -5,8 +5,9 @@
 //!   在 `form/acro_form.rs::DefaultResources` 中类型化（字体原样保留，
 //!   `/ExtGState` `/ColorSpace` `/ProcSet` 解析为各自模型）。
 //! - 字段属性按 12.7.3 继承：`/FT`、`/Ff`、`/V`、`/DV`、`/DA`、`/Q`、
-//!   `/MaxLen`、`/Opt` 取最近祖先提供的值，子节点可覆盖；全限定名由
-//!   `/T` 链以 `.` 连接。
+//!   `/MaxLen` 取最近祖先提供的值，子节点可覆盖；`/Opt` 类型化为
+//!   [`FormOption`]（Table 227 按钮字段可继承、Table 231 选择字段不继承）；
+//!   全限定名由 `/T` 链以 `.` 连接。
 //! - Widget 节点（`/Subtype /Widget`）建模 `/Rect`、`/AP`、`/AS` 与 `/P`；
 //!   外观流内容求值归渲染，动作 `/A` 语义归 E3。
 //! - 字段 `/AA` 附加动作（`/K` `/F` `/V` `/C`，Table 196）经动作模型
@@ -22,9 +23,11 @@ use crate::core::types::{Dict, Document, Value};
 
 mod acro_form;
 mod flags;
+mod options;
 
 pub use acro_form::{AcroForm, DefaultResources};
 pub use flags::FieldFlags;
+pub use options::FormOption;
 
 /// 字段树最大嵌套深度。
 const MAX_FIELD_DEPTH: usize = 64;
@@ -147,8 +150,9 @@ pub struct Field {
     pub quadding: Option<i64>,
     /// `/MaxLen` 文本最大长度（含继承）。
     pub max_len: Option<i64>,
-    /// `/Opt` 选择字段选项数组（含继承）。
-    pub options: Option<Vec<Value>>,
+    /// `/Opt` 选项数组：选择字段按 Table 231 类型化，按钮字段为
+    /// Widget 开状态名称（Table 227，仅按钮字段可继承）。
+    pub options: Option<Vec<FormOption>>,
     /// 该节点自身是否为 Widget 注解（`/Subtype /Widget`）。
     pub is_widget: bool,
     /// Widget `/Rect`。
@@ -182,7 +186,7 @@ struct Inherited {
     default_appearance: Option<Value>,
     quadding: Option<i64>,
     max_len: Option<i64>,
-    options: Option<Vec<Value>>,
+    options: Option<Vec<FormOption>>,
 }
 
 /// 读取 `/Fields` 数组为字段树；`/AcroForm` 解析器经此进入字段层。
@@ -323,16 +327,16 @@ impl FieldReader<'_> {
             }
             None => inherited.max_len,
         };
+        // `/Opt` 仅按钮字段可继承（Table 227）；选择字段的选项不随字段树
+        // 下传（Table 231 未标记 inheritable）。
         let options = match dict.get("Opt") {
-            Some(value) => {
-                let resolved = crate::core::reader::navigation::resolve(self.document, value)
-                    .map_err(|err| malformed(err.to_string()))?;
-                let array = resolved
-                    .as_array()
-                    .ok_or_else(|| malformed("form field /Opt is not an array"))?;
-                Some(array.0.clone())
-            }
-            None => inherited.options.clone(),
+            Some(value) => Some(options::parse_options(
+                self.document,
+                value,
+                field_type.as_ref(),
+            )?),
+            None if matches!(field_type, Some(FieldType::Button)) => inherited.options.clone(),
+            None => None,
         };
 
         let is_widget = matches!(dict.get("Subtype").and_then(Value::as_name), Some("Widget"));

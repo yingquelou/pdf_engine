@@ -66,7 +66,12 @@ fn builder_acro_form_roundtrips_through_parser() {
     let choice = &form.fields[1];
     assert_eq!(choice.field_type, Some(FieldType::Choice));
     assert!(choice.flags.combo());
-    assert_eq!(choice.options.as_ref().map(Vec::len), Some(2));
+    let options = choice.options.as_ref().expect("/Opt");
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0].export(), "R");
+    assert_eq!(options[0].display(), Some("Red"));
+    assert_eq!(options[1].export(), "G");
+    assert_eq!(options[1].display(), None);
 
     let checkbox = &form.fields[2];
     assert_eq!(checkbox.field_type, Some(FieldType::Button));
@@ -498,4 +503,74 @@ fn builder_text_field_flags_roundtrip_through_parser() {
     assert!(field.flags.rich_text());
     assert!(!field.flags.multiline());
     assert!(!field.flags.multi_select());
+}
+
+/// Table 227：单选组 `/Opt` 按 Widget 顺序写出单一文本串，开状态名
+/// 位置化（`/0`、`/1`），序列化 → 解析后应类型化回读。
+#[test]
+fn builder_radio_group_options_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AcroForm, FormField, FormOption, FormXObject, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::form::FieldType;
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let form_handle = |builder: &mut PdfBuilder| {
+        builder.form_xobject(&FormXObject::new(
+            [0.0, 0.0, 20.0, 20.0],
+            ContentStream::new(),
+        ))
+    };
+    let off = form_handle(&mut builder);
+    let first = form_handle(&mut builder);
+    let second = form_handle(&mut builder);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::radio_group("agree")
+            .with_option(FormOption::new("cardbrand1"))
+            .with_option(FormOption::new("cardbrand2"))
+            .with_child(
+                FormField::widget([72.0, 560.0, 92.0, 580.0])
+                    .with_appearance_state("Off", off)
+                    .with_appearance_state("0", first)
+                    .with_selected_appearance_state("0"),
+            )
+            .with_child(
+                FormField::widget([100.0, 560.0, 120.0, 580.0])
+                    .with_appearance_state("Off", off)
+                    .with_appearance_state("1", second)
+                    .with_selected_appearance_state("Off"),
+            ),
+    );
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let form = doc.acro_form().expect("parse form").expect("form present");
+    let group = &form.fields[0];
+    assert_eq!(group.field_type, Some(FieldType::Button));
+    assert!(group.flags.radio());
+    let options = group.options.as_ref().expect("/Opt");
+    assert_eq!(
+        options
+            .iter()
+            .map(|option| (option.export(), option.display()))
+            .collect::<Vec<_>>(),
+        vec![("cardbrand1", None), ("cardbrand2", None)]
+    );
+    assert_eq!(group.kids.len(), 2);
+    assert_eq!(group.kids[0].appearance_state.as_deref(), Some("0"));
+    assert_eq!(group.kids[1].appearance_state.as_deref(), Some("Off"));
+    let states = |kid: &pdf_engine::core::reader::form::Field| {
+        kid.appearance_normal_states
+            .iter()
+            .map(|(state, _)| state.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(states(&group.kids[0]), vec!["0", "Off"]);
+    assert_eq!(states(&group.kids[1]), vec!["1", "Off"]);
 }
