@@ -2,7 +2,9 @@
 //!
 //! `/DA` 是 Table 174 的必填条目；`/Q` PDF 1.4，`/RC` `/DS` PDF 1.5，
 //! `/CL` `/IT` `/BE` `/RD` `/LE` PDF 1.6（`/BE` 结构见 Table 167）。
-//! `/RC` 在表中可为文本串或文本流，写端只提供文本串形态。
+//! `/CL` 仅在 `/IT /FreeTextCallout` 下有意义，callout 意图必须提供
+//! `/CL`（Table 174）。`/RC` 在表中可为文本串或文本流，写端只提供
+//! 文本串形态。
 
 use super::subtype::LineEndStyle;
 use super::{AnnotationKind, PdfAnnotation};
@@ -232,6 +234,16 @@ impl FreeTextEntries {
                 return Err("annotation /BE /I is meaningful only with the cloudy style".into());
             }
         }
+        if self.callout_line.is_some() && self.intent != Some(FreeTextIntent::FreeTextCallout) {
+            return Err(
+                "FreeText annotation /CL is meaningful only with /IT /FreeTextCallout".into(),
+            );
+        }
+        if self.intent == Some(FreeTextIntent::FreeTextCallout) && self.callout_line.is_none() {
+            return Err(
+                "FreeText annotation /IT /FreeTextCallout requires /CL (callout line)".into(),
+            );
+        }
         if self.callout_ending.is_some() && self.callout_line.is_none() {
             return Err("FreeText annotation /LE requires /CL (callout line)".into());
         }
@@ -331,6 +343,19 @@ impl PdfAnnotation {
         if self.kind == AnnotationKind::FreeText && self.free_text.default_appearance().is_none() {
             return Err("FreeText annotation requires /DA (default appearance)".into());
         }
-        self.free_text.validate()
+        self.free_text.validate()?;
+        // `/RD` 的四边差值之和须小于 `/Rect` 对应边长（Table 174/177）。
+        if let Some(diff) = self.free_text.text_rectangle() {
+            let [left, top, right, bottom] = diff;
+            let width = (self.rect[2] - self.rect[0]).abs();
+            let height = (self.rect[3] - self.rect[1]).abs();
+            if left + right >= width || top + bottom >= height {
+                return Err(
+                    "annotation /RD differences must leave a positive inner rectangle within /Rect"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
     }
 }

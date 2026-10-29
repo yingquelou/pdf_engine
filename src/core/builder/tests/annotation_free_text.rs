@@ -167,8 +167,10 @@ fn invalid_free_text_entry_values_are_rejected() {
         // /RC /DS 不得为空串
         base().with_rich_content(""),
         base().with_default_style(""),
-        // /CL 须为有限数
-        base().with_callout_line(CalloutLine::Straight([0.0, f64::NAN, 1.0, 2.0])),
+        // /CL 须为有限数（意图与引线配对由专用测试覆盖）
+        base()
+            .with_callout_line(CalloutLine::Straight([0.0, f64::NAN, 1.0, 2.0]))
+            .with_free_text_intent(FreeTextIntent::FreeTextCallout),
         // /RD 均 ≥0 且有限
         base().with_text_rectangle([0.0, -1.0, 0.0, 0.0]),
         base().with_text_rectangle([0.0, f64::INFINITY, 0.0, 0.0]),
@@ -185,6 +187,46 @@ fn invalid_free_text_entry_values_are_rejected() {
         let error = build_one(annot, PdfVersion::V1_7).expect_err("invalid FreeText entry value");
         assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
     }
+}
+
+#[test]
+fn free_text_callout_line_and_intent_are_coupled() {
+    let base = || {
+        PdfAnnotation::new(AnnotationKind::FreeText, [0.0, 0.0, 10.0, 10.0])
+            .with_default_appearance("/F1 12 Tf")
+    };
+    let line = CalloutLine::Straight([0.0, 0.0, 5.0, 5.0]);
+    // `/CL` 仅在 `/IT /FreeTextCallout` 下有意义（Table 174）。
+    for annot in [
+        base().with_callout_line(line),
+        base()
+            .with_callout_line(line)
+            .with_free_text_intent(FreeTextIntent::FreeText),
+        base()
+            .with_callout_line(line)
+            .with_free_text_intent(FreeTextIntent::FreeTextTypeWriter),
+    ] {
+        let error = build_one(annot, PdfVersion::V1_7).expect_err("/CL without callout intent");
+        let message = error.to_string();
+        assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+        assert!(message.contains("/IT /FreeTextCallout"), "{message}");
+    }
+    // callout 意图必须通过 `/CL` 关联到页面区域。
+    let error = build_one(
+        base().with_free_text_intent(FreeTextIntent::FreeTextCallout),
+        PdfVersion::V1_7,
+    )
+    .expect_err("callout intent without /CL");
+    let message = error.to_string();
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+    assert!(message.contains("requires /CL"), "{message}");
+    build_one(
+        base()
+            .with_callout_line(line)
+            .with_free_text_intent(FreeTextIntent::FreeTextCallout),
+        PdfVersion::V1_6,
+    )
+    .expect("/CL with callout intent at 1.6");
 }
 
 #[test]
@@ -229,12 +271,15 @@ fn free_text_callout_entries_require_pdf_1_6() {
             .with_default_appearance("/F1 12 Tf")
     };
     let cases = vec![
-        annot().with_callout_line(CalloutLine::Straight([0.0, 0.0, 5.0, 5.0])),
+        annot()
+            .with_callout_line(CalloutLine::Straight([0.0, 0.0, 5.0, 5.0]))
+            .with_free_text_intent(FreeTextIntent::FreeTextCallout),
         annot().with_free_text_intent(FreeTextIntent::FreeTextTypeWriter),
         annot().with_border_effect(BorderEffect::new(BorderEffectStyle::NoEffect)),
         annot().with_text_rectangle([0.0, 0.0, 0.0, 0.0]),
         annot()
             .with_callout_line(CalloutLine::Straight([0.0, 0.0, 5.0, 5.0]))
+            .with_free_text_intent(FreeTextIntent::FreeTextCallout)
             .with_callout_ending(LineEndStyle::OpenArrow),
     ];
     for annot in cases {

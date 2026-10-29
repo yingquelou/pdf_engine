@@ -151,7 +151,10 @@ fn geometry_entries_are_rejected_on_other_subtypes() {
         PdfAnnotation::new(AnnotationKind::PolyLine, [0.0, 0.0, 10.0, 10.0])
             .with_vertices(vec![0.0, 0.0, 5.0, 5.0])
             .with_border_effect(BorderEffect::new(BorderEffectStyle::Cloudy)),
-        // `/LE` 是 Line 与 Polygon/PolyLine 的共用键，Square 不得写。
+        // `/LE` 仅 Line 与 PolyLine 有意义，Polygon/Square 不得写。
+        PdfAnnotation::new(AnnotationKind::Polygon, [0.0, 0.0, 10.0, 10.0])
+            .with_vertices(vec![0.0, 0.0, 5.0, 5.0])
+            .with_line_endings(LineEndStyle::OpenArrow, LineEndStyle::None),
         PdfAnnotation::new(AnnotationKind::Square, [0.0, 0.0, 10.0, 10.0])
             .with_line_endings(LineEndStyle::OpenArrow, LineEndStyle::None),
     ];
@@ -211,6 +214,36 @@ fn invalid_geometry_entry_values_are_rejected() {
         .expect_err("polyline intent mismatch");
         assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
     }
+}
+
+#[test]
+fn rect_differences_must_fit_inside_rect() {
+    let square = || PdfAnnotation::new(AnnotationKind::Square, [0.0, 0.0, 10.0, 10.0]);
+    // 四边差值之和须小于对应边长（Table 174/177）。
+    for diff in [
+        [5.0, 0.0, 5.0, 0.0],
+        [0.0, 5.0, 0.0, 5.0],
+        [6.0, 0.0, 4.0, 0.0],
+    ] {
+        let error = build_one(square().with_text_rectangle(diff), PdfVersion::V1_5)
+            .expect_err("/RD must leave an inner rectangle");
+        assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    }
+    let free_text = || {
+        PdfAnnotation::new(AnnotationKind::FreeText, [10.0, 10.0, 20.0, 20.0])
+            .with_default_appearance("/F1 12 Tf")
+    };
+    let error = build_one(
+        free_text().with_text_rectangle([0.0, 6.0, 0.0, 4.0]),
+        PdfVersion::V1_6,
+    )
+    .expect_err("FreeText /RD must fit inside /Rect");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    build_one(
+        square().with_text_rectangle([4.9, 4.9, 4.9, 4.9]),
+        PdfVersion::V1_5,
+    )
+    .expect("/RD leaves a positive inner rectangle");
 }
 
 #[test]

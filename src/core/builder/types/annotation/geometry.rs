@@ -3,8 +3,9 @@
 //! `/Vertices` 是两种子类型的必填条目；`/IT` 意图取值与子类型一一对应——
 //! `PolygonCloud`（PDF 1.6）与 `PolygonDimension`（PDF 1.7）只属于 Polygon，
 //! `PolyLineDimension`（PDF 1.7）只属于 PolyLine。
-//! `/LE`（端点样式数组）、`/BE`（边框效果）与 `/RD`（矩形差值）是跨子类型
-//! 共用键，归属矩阵分别在 `subtype.rs` 与 `free_text.rs` 中校验，此处不重复。
+//! `/LE`（端点样式数组，仅 PolyLine 有意义）、`/BE`（边框效果）与 `/RD`
+//! （矩形差值）是跨子类型共用键，归属矩阵分别在 `subtype.rs` 与
+//! `free_text.rs` 中校验，此处不重复。
 
 use super::{AnnotationKind, PdfAnnotation};
 use crate::core::types::PdfVersion;

@@ -194,8 +194,8 @@ impl LineEntries {
             || self.caption_offset.is_some()
     }
 
-    /// 是否声明了任意 Line 独有条目（`/L`、引线与题注）；`/LE` 与
-    /// Polygon/PolyLine 共用，由 [`Self::has_arrow_entries`] 单独归属。
+    /// 是否声明了任意 Line 独有条目（`/L`、引线与题注）；`/LE` 仅
+    /// Line/PolyLine 可用，由 [`Self::has_arrow_entries`] 单独归属。
     fn has_line_only_entries(&self) -> bool {
         self.has_endpoints() || self.has_leader_entries() || self.has_caption_entries()
     }
@@ -283,7 +283,7 @@ impl PdfAnnotation {
         self
     }
 
-    /// Line 注解两端端点样式（`/LE`，PDF 1.4；缺省 `[/None /None]`）。
+    /// Line/PolyLine 注解两端端点样式（`/LE`，PDF 1.4；缺省 `[/None /None]`）。
     pub fn with_line_endings(mut self, start: LineEndStyle, end: LineEndStyle) -> Self {
         self.line.endings = Some([start, end]);
         self
@@ -395,11 +395,7 @@ impl PdfAnnotation {
         }
         if self.line.has_arrow_entries() {
             self.require_kind_in(
-                &[
-                    AnnotationKind::Line,
-                    AnnotationKind::Polygon,
-                    AnnotationKind::PolyLine,
-                ],
+                &[AnnotationKind::Line, AnnotationKind::PolyLine],
                 "annotation /LE (line endings)",
             )?;
         }
