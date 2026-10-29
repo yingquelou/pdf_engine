@@ -107,6 +107,8 @@ pub struct PdfAnnotation {
     appearance_normal: Option<usize>,
     appearance_down: Option<usize>,
     appearance_rollover: Option<usize>,
+    appearance_states: Vec<(String, usize)>,
+    appearance_state: Option<String>,
     filespec: Option<usize>,
 }
 
@@ -151,6 +153,8 @@ impl PdfAnnotation {
             appearance_normal: None,
             appearance_down: None,
             appearance_rollover: None,
+            appearance_states: Vec::new(),
+            appearance_state: None,
             filespec: None,
         }
     }
@@ -281,6 +285,20 @@ impl PdfAnnotation {
         self
     }
 
+    /// 常态外观状态子字典 `/AP /N << /State … >>` 的一项（PDF 1.2）；
+    /// 参数为状态名与该状态的 Form XObject 句柄。与 [`Self::with_appearance`]
+    /// 互斥（`/N` 不能同时是流与字典）。
+    pub fn with_appearance_state(mut self, state: impl Into<String>, handle: usize) -> Self {
+        self.appearance_states.push((state.into(), handle));
+        self
+    }
+
+    /// 选中的外观状态 `/AS`；须已在 `/AP /N` 状态子字典注册。
+    pub fn with_selected_appearance_state(mut self, state: impl Into<String>) -> Self {
+        self.appearance_state = Some(state.into());
+        self
+    }
+
     /// 附件文件规格 `/FS`（12.5.6.14，PDF 1.3）；参数为
     /// [`PdfBuilder::embed_file`](crate::core::builder::PdfBuilder::embed_file)
     /// 注册的嵌入文件句柄。FileAttachment 子类型必须提供。
@@ -384,6 +402,14 @@ impl PdfAnnotation {
         self.appearance_rollover
     }
 
+    pub(crate) fn appearance_states(&self) -> &[(String, usize)] {
+        &self.appearance_states
+    }
+
+    pub(crate) fn appearance_state(&self) -> Option<&str> {
+        self.appearance_state.as_deref()
+    }
+
     pub(crate) fn filespec(&self) -> Option<usize> {
         self.filespec
     }
@@ -393,6 +419,7 @@ impl PdfAnnotation {
         self.appearance_normal.is_some()
             || self.appearance_down.is_some()
             || self.appearance_rollover.is_some()
+            || !self.appearance_states.is_empty()
     }
 
     /// 校验字典一致性；错误串直接用于 [`WriteError`](crate::core::writer::WriteError)。
@@ -449,6 +476,35 @@ impl PdfAnnotation {
                 ],
                 "annotation /QuadPoints",
             )?;
+        }
+        // `/AP /N` 只能是流或状态子字典之一，状态名须唯一且合法。
+        if !self.appearance_states.is_empty() {
+            if self.appearance_normal.is_some() {
+                return Err(
+                    "annotation /AP /N cannot be both a stream and a state sub-dictionary".into(),
+                );
+            }
+            for (index, (state, _)) in self.appearance_states.iter().enumerate() {
+                subtype::validate_name_value(state, "annotation appearance state")?;
+                if self.appearance_states[..index]
+                    .iter()
+                    .any(|(existing, _)| existing == state)
+                {
+                    return Err(format!(
+                        "annotation appearance state {state} is registered twice"
+                    ));
+                }
+            }
+        }
+        if let Some(state) = &self.appearance_state {
+            if self.appearance_states.is_empty() {
+                return Err("annotation /AS requires an /AP /N state sub-dictionary".into());
+            }
+            if !self.appearance_states.iter().any(|(name, _)| name == state) {
+                return Err(format!(
+                    "annotation /AS names unregistered appearance state {state}"
+                ));
+            }
         }
         if self.action.is_some() && self.destination.is_some() {
             return Err("annotation /Dest is not permitted when /A is present".into());

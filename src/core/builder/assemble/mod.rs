@@ -197,17 +197,26 @@ impl PdfBuilder {
                 used_forms.insert(soft_mask.group);
             }
         }
-        // 注解 `/AP` 外观流引用同一 Form XObject 池（12.5.5）；句柄越界
-        // 在此拒绝，引用到的表单与页面绘制表单一样分配对象号。
+        // 注解 `/AP` 外观流引用同一 Form XObject 池（12.5.5）：`/N` 单一流、
+        // `/N` 状态子字典各状态、`/D` 与 `/R` 都计入；句柄越界在此拒绝，
+        // 引用到的表单与页面绘制表单一样分配对象号。
         for (handle, entry) in self.annotations.iter().enumerate() {
-            for form in [
+            let mut handles: Vec<usize> = [
                 entry.annot.appearance_normal(),
                 entry.annot.appearance_down(),
                 entry.annot.appearance_rollover(),
             ]
             .into_iter()
             .flatten()
-            {
+            .collect();
+            handles.extend(
+                entry
+                    .annot
+                    .appearance_states()
+                    .iter()
+                    .map(|(_, form)| *form),
+            );
+            for form in handles {
                 if form >= self.forms.len() {
                     return Err(WriteError::InvalidObject(format!(
                         "annotation handle {handle}: /AP references unknown form handle {form}"

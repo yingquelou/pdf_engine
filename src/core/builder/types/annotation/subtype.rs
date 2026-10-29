@@ -462,7 +462,7 @@ impl PdfAnnotation {
 }
 
 /// 名字型条目取值：非空且不含空白与 PDF 名字定界符。
-fn validate_name_value(value: &str, context: &str) -> Result<(), String> {
+pub(super) fn validate_name_value(value: &str, context: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err(format!("{context} must not be empty"));
     }

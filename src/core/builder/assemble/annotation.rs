@@ -223,8 +223,27 @@ pub(super) fn annotation_dict(
         dict = dict.insert("FS", Value::Ref(*num, 0));
     }
     let mut appearance = Dict::new();
+    if !annot.appearance_states().is_empty() {
+        // `/N` 为状态名 → 外观流引用（Widget 多状态外观，Table 168）。
+        let mut states = Dict::new();
+        for (state, form) in annot.appearance_states() {
+            let num = form_nums.get(*form).ok_or_else(|| {
+                WriteError::InvalidObject(format!(
+                    "annotation handle {handle}: /AP /N state {state} references unknown form handle {form}"
+                ))
+            })?;
+            states = states.insert(state.clone(), Value::Ref(*num, 0));
+        }
+        appearance = appearance.insert("N", Value::Dict(states));
+    } else if let Some(form) = annot.appearance_normal() {
+        let num = form_nums.get(form).ok_or_else(|| {
+            WriteError::InvalidObject(format!(
+                "annotation handle {handle}: /AP /N references unknown form handle {form}"
+            ))
+        })?;
+        appearance = appearance.insert("N", Value::Ref(*num, 0));
+    }
     for (key, form) in [
-        ("N", annot.appearance_normal()),
         ("D", annot.appearance_down()),
         ("R", annot.appearance_rollover()),
     ] {
@@ -239,6 +258,9 @@ pub(super) fn annotation_dict(
     }
     if !appearance.0.is_empty() {
         dict = dict.insert("AP", Value::Dict(appearance));
+    }
+    if let Some(state) = annot.appearance_state() {
+        dict = dict.insert("AS", Value::Name(state.into()));
     }
     Ok(dict)
 }
