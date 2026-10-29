@@ -255,7 +255,7 @@ pub struct Annotation {
     pub quad_points: Option<Vec<f64>>,
     /// `/Name` 图标名（Text 注解专有条目；名字或文本串，取值由查看器定义）。
     pub icon_name: Option<String>,
-    /// `/Open` Text 注解气泡是否展开。
+    /// `/Open` Text/Popup 注解气泡是否展开（Table 172/183；Popup 缺省 false）。
     pub is_open: Option<bool>,
     /// `/State` Text 注解标记状态（文本串；标准值随 `/StateModel` 而变）。
     pub state: Option<String>,
@@ -317,6 +317,9 @@ pub struct Annotation {
     pub destination: Option<Value>,
     /// `/Popup` 弹出窗口引用。
     pub popup: Option<(i64, i64)>,
+    /// `/Parent` 父注解引用（Table 183：Popup 关联的父注解；
+    /// Widget 上指向字段字典）。
+    pub parent: Option<(i64, i64)>,
     /// 完整注解字典，未建模条目（`/Measure`、`/FS`、`/Parent` 等）经此访问。
     pub dict: Dict,
 }
@@ -549,6 +552,14 @@ fn parse_annotation(
                 value
                     .as_ref()
                     .ok_or_else(|| malformed("annotation /Popup must be an indirect reference"))?,
+            ),
+        },
+        parent: match dict.get("Parent") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_ref()
+                    .ok_or_else(|| malformed("annotation /Parent must be an indirect reference"))?,
             ),
         },
         dict: dict.clone(),

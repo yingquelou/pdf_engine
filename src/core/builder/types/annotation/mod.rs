@@ -2,8 +2,8 @@
 //!
 //! [`PdfAnnotation`] 以链式构造覆盖注解字典的通用条目（Table 165/166/169）：
 //! 子类型、`/Rect`、标志、文本条目、颜色、透明度、边框样式（`/BS`）、
-//! `/QuadPoints`、动作 `/A`、目标 `/Dest`、外观流 `/AP`（N/D/R）与
-//! `/Popup` 句柄引用。
+//! `/QuadPoints`、动作 `/A`、目标 `/Dest`、外观流 `/AP`（N/D/R）、
+//! `/Popup` 句柄引用与 Popup 父注解 `/Parent` 句柄引用（Table 183）。
 //! 经 [`PdfBuilder::add_annotation`](super::super::PdfBuilder::add_annotation)
 //! 绑定到页面后，由 assemble 写为独立间接对象并登记进页面 `/Annots`。
 //! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`（Text/Caret/
@@ -13,6 +13,7 @@
 
 mod free_text;
 mod geometry;
+mod kind;
 mod link;
 mod subtype;
 
@@ -20,120 +21,14 @@ use free_text::FreeTextEntries;
 pub use free_text::{BorderEffect, BorderEffectStyle, CalloutLine, FreeTextIntent};
 use geometry::GeometryEntries;
 pub use geometry::PolygonIntent;
+pub use kind::AnnotationKind;
 use link::LinkEntries;
 pub use link::LinkHighlightMode;
 use subtype::LineEntries;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
 use super::Action;
-use crate::core::reader::annotation::AnnotationSubtype;
 use crate::core::reader::navigation::Destination;
-use crate::core::types::PdfVersion;
-
-/// 注解子类型（Table 169 写端支持子集）。
-///
-/// `Sound`/`Movie`/`Screen`/`Redact`/`PrinterMark`/`TrapNet`/`Watermark`/`3D`
-/// 暂不建模：Widget 由 AcroForm 写端
-/// 的 [`FormField`](super::FormField) 合并字段与 Widget 字典写出（E4），
-/// 其余按需增补。引入版本与标记类归属一律取自读端
-/// [`AnnotationSubtype`]（Table 169 唯一权威表），本枚举只提供写端子集。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnnotationKind {
-    /// 文本批注（`/Text`，PDF 1.0）。
-    Text,
-    /// 链接（`/Link`，PDF 1.0）。
-    Link,
-    /// 自由文本（`/FreeText`，PDF 1.3）。
-    FreeText,
-    /// 直线（`/Line`，PDF 1.3）。
-    Line,
-    /// 矩形（`/Square`，PDF 1.3）。
-    Square,
-    /// 椭圆（`/Circle`，PDF 1.3）。
-    Circle,
-    /// 多边形（`/Polygon`，PDF 1.5）。
-    Polygon,
-    /// 折线（`/PolyLine`，PDF 1.5）。
-    PolyLine,
-    /// 高亮（`/Highlight`，PDF 1.3）。
-    Highlight,
-    /// 下划线（`/Underline`，PDF 1.3）。
-    Underline,
-    /// 波浪线（`/Squiggly`，PDF 1.4）。
-    Squiggly,
-    /// 删除线（`/StrikeOut`，PDF 1.3）。
-    StrikeOut,
-    /// 插入点（`/Caret`，PDF 1.5）。
-    Caret,
-    /// 墨迹（`/Ink`，PDF 1.3）。
-    Ink,
-    /// 弹出窗口（`/Popup`，PDF 1.3）。
-    Popup,
-    /// 文件附件（`/FileAttachment`，PDF 1.3）。
-    FileAttachment,
-    /// 图章（`/Stamp`，PDF 1.3）。
-    Stamp,
-}
-
-impl AnnotationKind {
-    /// 对应的读端子类型（Table 169 同一枚举）；版本与标记类归属由其单点给出。
-    pub fn subtype(self) -> AnnotationSubtype {
-        match self {
-            Self::Text => AnnotationSubtype::Text,
-            Self::Link => AnnotationSubtype::Link,
-            Self::FreeText => AnnotationSubtype::FreeText,
-            Self::Line => AnnotationSubtype::Line,
-            Self::Square => AnnotationSubtype::Square,
-            Self::Circle => AnnotationSubtype::Circle,
-            Self::Polygon => AnnotationSubtype::Polygon,
-            Self::PolyLine => AnnotationSubtype::PolyLine,
-            Self::Highlight => AnnotationSubtype::Highlight,
-            Self::Underline => AnnotationSubtype::Underline,
-            Self::Squiggly => AnnotationSubtype::Squiggly,
-            Self::StrikeOut => AnnotationSubtype::StrikeOut,
-            Self::Caret => AnnotationSubtype::Caret,
-            Self::Ink => AnnotationSubtype::Ink,
-            Self::Popup => AnnotationSubtype::Popup,
-            Self::FileAttachment => AnnotationSubtype::FileAttachment,
-            Self::Stamp => AnnotationSubtype::Stamp,
-        }
-    }
-
-    /// 标准子类型名（`/Subtype` 值）。
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Text => "Text",
-            Self::Link => "Link",
-            Self::FreeText => "FreeText",
-            Self::Line => "Line",
-            Self::Square => "Square",
-            Self::Circle => "Circle",
-            Self::Polygon => "Polygon",
-            Self::PolyLine => "PolyLine",
-            Self::Highlight => "Highlight",
-            Self::Underline => "Underline",
-            Self::Squiggly => "Squiggly",
-            Self::StrikeOut => "StrikeOut",
-            Self::Caret => "Caret",
-            Self::Ink => "Ink",
-            Self::Popup => "Popup",
-            Self::FileAttachment => "FileAttachment",
-            Self::Stamp => "Stamp",
-        }
-    }
-
-    /// 该子类型引入的最低 PDF 版本（Table 169）。
-    pub fn min_version(self) -> PdfVersion {
-        self.subtype()
-            .min_version()
-            .expect("写端子类型必属 Table 169 标准集")
-    }
-
-    /// 是否为标记类注解（Table 169 的 `Markup` 列，可携带 `/QuadPoints`）。
-    pub fn is_markup(self) -> bool {
-        self.subtype().is_markup()
-    }
-}
 
 /// 注解边框样式（`/BS` 字典 `/S`，Table 162）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +99,7 @@ pub struct PdfAnnotation {
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
+    popup_parent: Option<usize>,
     appearance_normal: Option<usize>,
     appearance_down: Option<usize>,
     appearance_rollover: Option<usize>,
@@ -246,6 +142,7 @@ impl PdfAnnotation {
             action: None,
             destination: None,
             popup: None,
+            popup_parent: None,
             appearance_normal: None,
             appearance_down: None,
             appearance_rollover: None,
@@ -355,6 +252,12 @@ impl PdfAnnotation {
         self
     }
 
+    /// Popup 父注解 `/Parent`（Table 183，仅 Popup 子类型）；参数为另一注解的注册句柄。
+    pub fn with_popup_parent(mut self, handle: usize) -> Self {
+        self.popup_parent = Some(handle);
+        self
+    }
+
     /// 常态外观流（`/AP` 字典 `/N`）；参数为 [`FormXObject`](super::FormXObject) 句柄。
     pub fn with_appearance(mut self, handle: usize) -> Self {
         self.appearance_normal = Some(handle);
@@ -458,6 +361,10 @@ impl PdfAnnotation {
 
     pub(crate) fn popup(&self) -> Option<usize> {
         self.popup
+    }
+
+    pub(crate) fn popup_parent(&self) -> Option<usize> {
+        self.popup_parent
     }
 
     pub(crate) fn appearance_normal(&self) -> Option<usize> {

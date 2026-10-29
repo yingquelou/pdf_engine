@@ -247,7 +247,7 @@ impl PdfAnnotation {
         self
     }
 
-    /// Text 注解气泡展开状态 `/Open`（仅 Text 子类型）。
+    /// 气泡展开状态 `/Open`（Text 与 Popup 子类型；Table 172/183，缺省 false）。
     pub fn with_open(mut self, open: bool) -> Self {
         self.is_open = Some(open);
         self
@@ -369,8 +369,17 @@ impl PdfAnnotation {
 
     /// 校验子类型专有条目的归属与取值；由 [`PdfAnnotation::validate`] 调用。
     pub(super) fn validate_subtype_entries(&self) -> Result<(), String> {
-        if self.icon_name.is_some() || self.is_open.is_some() {
-            self.require_kind(AnnotationKind::Text, "/Name and /Open")?;
+        if self.icon_name.is_some() {
+            self.require_kind(AnnotationKind::Text, "annotation /Name")?;
+        }
+        if self.is_open.is_some() {
+            self.require_kind_in(
+                &[AnnotationKind::Text, AnnotationKind::Popup],
+                "annotation /Open",
+            )?;
+        }
+        if self.popup_parent.is_some() {
+            self.require_kind(AnnotationKind::Popup, "annotation /Parent")?;
         }
         if self.has_markup_state() {
             self.require_kind(AnnotationKind::Text, "/State and /StateModel")?;

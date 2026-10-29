@@ -2,7 +2,8 @@
 //! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`、
 //! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
 //! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
-//! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`）+
+//! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`、
+//! Popup `/Parent` `/Open`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
@@ -19,7 +20,7 @@ use super::real_array;
 /// 把单个注解写成字典；对象号已由 assemble 主流程按句柄分配。
 ///
 /// `page_refs` 用于把 `/Dest` 与 `GoTo` 动作中的 0 基页号解析为
-/// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 句柄；
+/// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 与 `/Parent` 句柄；
 /// `form_nums` 用于把 `/AP` 外观流句柄解析为 Form XObject 流引用；
 /// `embedded_nums` 用于把 `/FS` 句柄解析为文件规格引用。
 pub(super) fn annotation_dict(
@@ -196,6 +197,19 @@ pub(super) fn annotation_dict(
             ))
         })?;
         dict = dict.insert("Popup", Value::Ref(*num, 0));
+    }
+    if let Some(parent) = annot.popup_parent() {
+        if parent == handle {
+            return Err(WriteError::InvalidObject(format!(
+                "annotation handle {handle}: /Parent must not reference the annotation itself"
+            )));
+        }
+        let num = annotation_nums.get(parent).ok_or_else(|| {
+            WriteError::InvalidObject(format!(
+                "annotation handle {handle}: /Parent references unknown annotation handle {parent}"
+            ))
+        })?;
+        dict = dict.insert("Parent", Value::Ref(*num, 0));
     }
     if let Some(target) = annot.filespec() {
         let num = embedded_nums.get(target).ok_or_else(|| {

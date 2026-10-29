@@ -15,6 +15,7 @@
 //! - Square/Circle（Table 177）：`/BE`、`/RD`（`/IC` 属通用条目）
 //! - Polygon/PolyLine（Table 178）：`/Vertices`、`/LE`、`/BE`、`/IT`
 //! - Link（Table 173）：`/H` 高亮模式、`/PA` 按下 URI 动作（解析在 [`super::link`]）
+//! - Popup（Table 183）：`/Open` 与 Text 共用（`/Parent` 由父模块按通用引用解析）
 //!
 //! `/LE` 有两种形态：Line/Polygon/PolyLine 是 1–2 个名字的数组，
 //! FreeText 是单个名字。解析不校验声明的 `/Subtype`，因此数组形态

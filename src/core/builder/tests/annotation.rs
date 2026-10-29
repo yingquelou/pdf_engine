@@ -110,6 +110,86 @@ fn popup_handle_resolves_to_annotation_reference() {
 }
 
 #[test]
+fn popup_annotation_writes_parent_and_open_entries() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    let parent = b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Text, [72.0, 700.0, 92.0, 720.0])
+            .with_contents("Review"),
+    );
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Popup, [96.0, 690.0, 240.0, 750.0])
+            .with_popup_parent(parent)
+            .with_open(true),
+    );
+    let doc = b.assemble_document().expect("assemble");
+    let (parent_num, _) = annot_object_with_num(&doc, 3, 0);
+    let popup_dict = annot_object(&doc, 3, 1);
+    assert_eq!(popup_dict.get("Parent"), Some(&Value::Ref(parent_num, 0)));
+    assert_eq!(popup_dict.get("Open"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn popup_parent_is_rejected_outside_popup_subtype() {
+    for annot in [
+        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_popup_parent(0),
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 10.0, 10.0]).with_popup_parent(0),
+    ] {
+        let mut b = PdfBuilder::new();
+        let p0 = b.page(PageSize::A4);
+        b.add_annotation(p0, annot);
+        let mut out = Vec::new();
+        let error = b
+            .build(&mut out)
+            .expect_err("/Parent on non-Popup annotation");
+        let message = error.to_string();
+        assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+        assert!(message.contains("specific to Popup"), "{message}");
+        assert_eq!(out.len(), 0);
+    }
+}
+
+#[test]
+fn popup_parent_must_reference_a_registered_annotation() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Popup, [0.0, 0.0, 10.0, 10.0]).with_popup_parent(99),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("unknown /Parent handle");
+    let message = error.to_string();
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+    assert!(
+        message.contains("unknown annotation handle 99"),
+        "{message}"
+    );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn popup_parent_must_not_reference_itself() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Popup, [0.0, 0.0, 10.0, 10.0]).with_popup_parent(0),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("self-referencing /Parent");
+    let message = error.to_string();
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+    assert!(
+        message.contains("must not reference the annotation itself"),
+        "{message}"
+    );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
 fn markup_annotation_writes_quad_points_and_records_feature() {
     let mut b = PdfBuilder::new();
     let p0 = b.page(PageSize::A4);

@@ -23,6 +23,33 @@ fn text_annotation_reads_icon_open_flag_and_markup_state() {
 }
 
 #[test]
+fn popup_annotation_reads_parent_reference_and_open_flag() {
+    let dict = base_annotation("Popup")
+        .insert("Parent", Value::Ref(9, 0))
+        .insert("Open", Value::Bool(true));
+    let annotation =
+        parse_annotation(&doc(vec![catalog_object()]), 0, None, &dict).expect("popup annotation");
+    assert_eq!(annotation.parent, Some((9, 0)));
+    assert_eq!(annotation.is_open, Some(true));
+
+    let plain = parse_annotation(
+        &doc(vec![catalog_object()]),
+        0,
+        None,
+        &base_annotation("Popup"),
+    )
+    .expect("popup without /Parent");
+    assert!(plain.parent.is_none());
+    assert!(plain.is_open.is_none());
+
+    let bad_parent = base_annotation("Popup").insert("Parent", Value::Dict(Dict::new()));
+    assert!(matches!(
+        parse_annotation(&doc(vec![]), 0, None, &bad_parent),
+        Err(AnnotationError::Malformed(_))
+    ));
+}
+
+#[test]
 fn caret_annotation_reads_symbol_and_absent_entries_stay_none() {
     let dict = base_annotation("Caret").insert("Symbol", Value::Name("NewLine".into()));
     let annotation =
