@@ -12,7 +12,7 @@
 //! 经 [`PdfBuilder::set_acro_form`](super::super::PdfBuilder::set_acro_form)
 //! 注册后，由 assemble 写成目录 `/AcroForm` 与独立字段对象。
 
-use super::Font;
+use super::{Action, Font};
 
 /// 字段类型（`/FT`，Table 220）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +35,31 @@ impl FormFieldType {
             Self::Button => "Btn",
             Self::Choice => "Ch",
             Self::Signature => "Sig",
+        }
+    }
+}
+
+/// 表单字段附加动作触发事件（`/AA` 字典键，Table 196；均 PDF 1.3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FieldActionEvent {
+    /// 修改字符或选择时执行（`/K`，JavaScript 动作）。
+    Keystroke,
+    /// 格式化显示值前执行（`/F`）。
+    Format,
+    /// 字段值变化时校验（`/V`）。
+    Validate,
+    /// 其他字段变化时重算本字段（`/C`）。
+    Calculate,
+}
+
+impl FieldActionEvent {
+    /// 事件键名（`/AA` 字典键）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Keystroke => "K",
+            Self::Format => "F",
+            Self::Validate => "V",
+            Self::Calculate => "C",
         }
     }
 }
@@ -115,6 +140,7 @@ pub struct FormField {
     appearance_rollover: Option<usize>,
     appearance_state: Option<String>,
     page: Option<usize>,
+    actions: Vec<(FieldActionEvent, Action)>,
     kids: Vec<FormField>,
 }
 
@@ -166,6 +192,7 @@ impl FormField {
             appearance_rollover: None,
             appearance_state: None,
             page: None,
+            actions: Vec::new(),
             kids: Vec::new(),
         }
     }
@@ -326,6 +353,14 @@ impl FormField {
         self
     }
 
+    /// 表单字段附加动作 `/AA`（Table 196，PDF 1.3）：`event` 对应 `/K`
+    /// `/F` `/V` `/C` 四个触发键；同一事件只能声明一次，且规范限定为
+    /// JavaScript 动作。
+    pub fn with_action(mut self, event: FieldActionEvent, action: Action) -> Self {
+        self.actions.push((event, action));
+        self
+    }
+
     /// 该节点是否为 Widget 注解（声明了 `/Rect`）。
     pub(crate) fn is_widget(&self) -> bool {
         self.rect.is_some()
@@ -399,6 +434,10 @@ impl FormField {
         self.page
     }
 
+    pub(crate) fn actions(&self) -> &[(FieldActionEvent, Action)] {
+        &self.actions
+    }
+
     pub(crate) fn kids(&self) -> &[FormField] {
         &self.kids
     }
@@ -410,6 +449,7 @@ pub struct AcroForm {
     need_appearances: bool,
     default_appearance: Option<String>,
     default_fonts: Vec<(String, Font)>,
+    calculation_order: Option<Vec<String>>,
     fields: Vec<(usize, FormField)>,
 }
 
@@ -445,6 +485,14 @@ impl AcroForm {
         self
     }
 
+    /// 计算顺序 `/CO`（Table 218，PDF 1.3）：按全限定名列出带 `/C`
+    /// 计算动作的字段，定义重算顺序；缺省时按字段树前序自动生成。
+    /// 显式名录必须恰好覆盖全部计算字段且不得重复。
+    pub fn with_calculation_order(mut self, names: Vec<String>) -> Self {
+        self.calculation_order = Some(names);
+        self
+    }
+
     pub(crate) fn need_appearances(&self) -> bool {
         self.need_appearances
     }
@@ -455,6 +503,10 @@ impl AcroForm {
 
     pub(crate) fn default_fonts(&self) -> &[(String, Font)] {
         &self.default_fonts
+    }
+
+    pub(crate) fn calculation_order(&self) -> Option<&[String]> {
+        self.calculation_order.as_deref()
     }
 
     pub(crate) fn fields(&self) -> &[(usize, FormField)] {

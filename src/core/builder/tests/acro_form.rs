@@ -453,3 +453,277 @@ fn acro_form_rejects_invalid_default_font_names() {
         );
     }
 }
+
+/// 构造单页文档并按顺序加入字段；期望校验失败且不写出任何字节。
+fn form_with_fields_error(form: AcroForm, fields: Vec<FormField>) -> WriteError {
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = form;
+    for field in fields {
+        form.add_field(page, field);
+    }
+    builder.set_acro_form(form);
+    let mut out = Vec::new();
+    let error = builder
+        .build(&mut out)
+        .expect_err("invalid form must be rejected");
+    assert!(out.is_empty(), "failed build must not write bytes");
+    error
+}
+
+fn calculate_field(name: &str, rect: [f64; 4]) -> FormField {
+    FormField::text(name, rect).with_action(
+        FieldActionEvent::Calculate,
+        Action::JavaScript("recalc()".into()),
+    )
+}
+
+#[test]
+fn field_actions_write_aa_dictionary_and_roundtrip() {
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::text("amount", [72.0, 700.0, 300.0, 720.0])
+            .with_action(
+                FieldActionEvent::Keystroke,
+                Action::JavaScript("AFNumber_Keystroke(2)".into()),
+            )
+            .with_action(
+                FieldActionEvent::Format,
+                Action::JavaScript("AFNumber_Format(2)".into()),
+            )
+            .with_action(
+                FieldActionEvent::Validate,
+                Action::JavaScript("validateAmount()".into()),
+            ),
+    );
+    builder.set_acro_form(form);
+    let doc = builder.assemble_document().expect("assemble");
+
+    let fields = acro_dict(&doc)
+        .get("Fields")
+        .and_then(|value| value.as_array())
+        .expect("/Fields")
+        .clone();
+    let (field_num, _) = fields.0[0].as_ref().expect("field reference");
+    let field = object_dict(&doc, field_num);
+    let aa = field
+        .get("AA")
+        .and_then(|value| value.as_dict())
+        .expect("/AA")
+        .clone();
+    assert_eq!(aa.0.len(), 3, "three typed trigger events");
+    for key in ["K", "F", "V"] {
+        let action = aa
+            .get(key)
+            .and_then(|value| value.as_dict())
+            .unwrap_or_else(|| panic!("/AA /{key}"));
+        assert_eq!(
+            action.get("S"),
+            Some(&Value::Name("JavaScript".into())),
+            "/AA /{key} subtype"
+        );
+        assert_text_entry(action, "JS");
+    }
+
+    let parsed = doc.acro_form().expect("read").expect("form present");
+    let actions = parsed.fields[0].actions.as_ref().expect("/AA");
+    assert_eq!(
+        actions.keystroke,
+        Some(crate::core::reader::action::Action::JavaScript(
+            "AFNumber_Keystroke(2)".into()
+        ))
+    );
+    assert_eq!(
+        actions.format,
+        Some(crate::core::reader::action::Action::JavaScript(
+            "AFNumber_Format(2)".into()
+        ))
+    );
+    assert_eq!(
+        actions.validate,
+        Some(crate::core::reader::action::Action::JavaScript(
+            "validateAmount()".into()
+        ))
+    );
+    assert!(actions.calculate.is_none());
+    assert!(actions.other.is_empty());
+}
+
+#[test]
+fn field_actions_reject_duplicates_non_javascript_and_unnamed_calculate() {
+    let rect = [72.0, 700.0, 200.0, 720.0];
+    let duplicate = FormField::text("x", rect)
+        .with_action(
+            FieldActionEvent::Validate,
+            Action::JavaScript("first()".into()),
+        )
+        .with_action(
+            FieldActionEvent::Validate,
+            Action::JavaScript("second()".into()),
+        );
+    let error = build_error(duplicate, 0);
+    assert!(
+        matches!(&error, WriteError::InvalidObject(message) if message.contains("declared twice")),
+        "duplicate /AA event: {error:?}"
+    );
+
+    let non_javascript = FormField::text("x", rect).with_action(
+        FieldActionEvent::Keystroke,
+        Action::Uri("https://example.com".into()),
+    );
+    let error = build_error(non_javascript, 0);
+    assert!(
+        matches!(&error, WriteError::InvalidObject(message) if message.contains("JavaScript action")),
+        "non-JavaScript /AA action: {error:?}"
+    );
+
+    let unnamed = FormField::widget(rect).with_action(
+        FieldActionEvent::Calculate,
+        Action::JavaScript("recalc()".into()),
+    );
+    let error = build_error(unnamed, 0);
+    assert!(
+        matches!(&error, WriteError::InvalidObject(message) if message.contains("non-empty partial name")),
+        "unnamed calculate field: {error:?}"
+    );
+}
+
+#[test]
+fn calculation_order_explicit_names_are_written_in_declared_order() {
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new().with_calculation_order(vec!["tax".into(), "total".into()]);
+    form.add_field(page, calculate_field("total", [72.0, 700.0, 200.0, 720.0]));
+    form.add_field(page, calculate_field("tax", [72.0, 670.0, 200.0, 690.0]));
+    builder.set_acro_form(form);
+    let doc = builder.assemble_document().expect("assemble");
+
+    let co = acro_dict(&doc)
+        .get("CO")
+        .and_then(|value| value.as_array())
+        .expect("/CO")
+        .clone();
+    let nums: Vec<i64> =
+        co.0.iter()
+            .map(|value| value.as_ref().expect("/CO entries are indirect").0)
+            .collect();
+    let parsed = doc.acro_form().expect("read").expect("form present");
+    assert_eq!(parsed.calculation_order, ["tax", "total"]);
+    let total_num = parsed.fields[0].reference.expect("total reference").0;
+    let tax_num = parsed.fields[1].reference.expect("tax reference").0;
+    assert_eq!(
+        nums,
+        vec![tax_num, total_num],
+        "explicit /CO order wins over field tree order"
+    );
+}
+
+#[test]
+fn calculation_order_defaults_to_tree_preorder_for_calculate_fields() {
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(page, FormField::text("plain", [72.0, 730.0, 200.0, 750.0]));
+    form.add_field(page, calculate_field("total", [72.0, 700.0, 200.0, 720.0]));
+    form.add_field(page, calculate_field("tax", [72.0, 670.0, 200.0, 690.0]));
+    builder.set_acro_form(form);
+    let doc = builder.assemble_document().expect("assemble");
+
+    let co = acro_dict(&doc)
+        .get("CO")
+        .and_then(|value| value.as_array())
+        .expect("/CO")
+        .clone();
+    assert_eq!(co.0.len(), 2, "only fields with /C actions are listed");
+    let parsed = doc.acro_form().expect("read").expect("form present");
+    assert_eq!(parsed.calculation_order, ["total", "tax"]);
+    let plain = &parsed.fields[0];
+    assert!(plain.actions.is_none(), "no /AA for a plain field");
+}
+
+#[test]
+fn calculation_order_rejects_unknown_missing_and_duplicate_entries() {
+    let rect = [72.0, 700.0, 200.0, 720.0];
+
+    let no_calculate = FormField::text("amount", rect);
+    let error = form_with_fields_error(
+        AcroForm::new().with_calculation_order(vec!["amount".into()]),
+        vec![no_calculate],
+    );
+    assert!(
+        matches!(&error, WriteError::InvalidObject(message) if message.contains("is not a field with a /C calculation action")),
+        "non-calculate entry: {error:?}"
+    );
+
+    let missing = form_with_fields_error(
+        AcroForm::new().with_calculation_order(vec!["total".into()]),
+        vec![
+            calculate_field("total", rect),
+            calculate_field("tax", [72.0, 670.0, 200.0, 690.0]),
+        ],
+    );
+    assert!(
+        matches!(&missing, WriteError::InvalidObject(message) if message.contains("must list every field")),
+        "missing /CO entry: {missing:?}"
+    );
+
+    let duplicate = form_with_fields_error(
+        AcroForm::new().with_calculation_order(vec!["total".into(), "total".into()]),
+        vec![calculate_field("total", rect)],
+    );
+    assert!(
+        matches!(&duplicate, WriteError::InvalidObject(message) if message.contains("lists field total twice")),
+        "duplicate /CO entry: {duplicate:?}"
+    );
+
+    let unknown = form_with_fields_error(
+        AcroForm::new().with_calculation_order(vec!["ghost".into()]),
+        vec![calculate_field("total", rect)],
+    );
+    assert!(
+        matches!(&unknown, WriteError::InvalidObject(message) if message.contains("ghost")),
+        "unknown /CO entry: {unknown:?}"
+    );
+}
+
+#[test]
+fn field_actions_require_pdf_1_3() {
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_2);
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::text("amount", [72.0, 700.0, 200.0, 720.0]).with_action(
+            FieldActionEvent::Keystroke,
+            Action::JavaScript("recalc()".into()),
+        ),
+    );
+    builder.set_acro_form(form);
+    let mut out = Vec::new();
+    let error = builder.build(&mut out).expect_err("PDF 1.2 rejects /AA");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(message) if message.contains("form field additional actions")),
+        "unexpected error: {error:?}"
+    );
+    assert!(out.is_empty());
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_3);
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::text("amount", [72.0, 700.0, 200.0, 720.0]).with_action(
+            FieldActionEvent::Calculate,
+            Action::JavaScript("recalc()".into()),
+        ),
+    );
+    builder.set_acro_form(form);
+    let doc = builder.assemble_document().expect("PDF 1.3 accepts /AA");
+    assert!(
+        acro_dict(&doc).get("CO").is_some(),
+        "/CO written for /C fields"
+    );
+}

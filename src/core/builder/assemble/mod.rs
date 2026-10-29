@@ -55,6 +55,20 @@ impl PdfBuilder {
                 )));
             }
             form_field::validate(form, self.pages.len(), self.forms.len())?;
+            if form_field::has_additional_actions(form)
+                && !self
+                    .version
+                    .supports(PdfFeature::FormFieldAdditionalActions)
+            {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "{} require PDF {}, got {}",
+                    PdfFeature::FormFieldAdditionalActions,
+                    PdfFeature::FormFieldAdditionalActions
+                        .min_version()
+                        .as_str(),
+                    self.version.as_str()
+                )));
+            }
         }
 
         // 嵌入文件（7.11）：逐项校验与版本门禁在任何对象写出前完成。
@@ -503,6 +517,23 @@ impl PdfBuilder {
                 doc.features.borrow_mut().insert(feature);
             }
         }
+        // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
+        if let Some(form) = &acro_form {
+            if form_field::has_additional_actions(form) {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::FormFieldAdditionalActions);
+            }
+            if form_field::has_calculate_actions(form)
+                || form
+                    .calculation_order()
+                    .is_some_and(|order| !order.is_empty())
+            {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::FormCalculationOrder);
+            }
+        }
 
         // Catalog
         let mut catalog_dict = Dict::new()
@@ -575,6 +606,13 @@ impl PdfBuilder {
                     "DR",
                     Value::Dict(Dict::new().insert("Font", Value::Dict(dr_fonts))),
                 );
+            }
+            // `/CO` 计算顺序：显式名录按声明顺序引用字段对象；缺省时按
+            // 字段树前序自动列出全部带 `/C` 动作的字段。
+            let order = form_field::calculation_order_nums(form, &field_slots)?;
+            if !order.is_empty() {
+                let refs: Vec<Value> = order.iter().map(|&n| Value::Ref(n, 0)).collect();
+                acro = acro.insert("CO", Value::Array(Array(refs)));
             }
             catalog_dict = catalog_dict.insert("AcroForm", Value::Dict(acro));
         }

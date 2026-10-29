@@ -7,7 +7,8 @@
 //! 流引用，与页面绘制及注解外观共享同一对象池。
 
 use crate::core::builder::types::{
-    AcroForm, FieldValue, Font, FormField, FormFieldType, FormOption, text_string_value,
+    AcroForm, Action, FieldActionEvent, FieldValue, Font, FormField, FormFieldType, FormOption,
+    text_string_value,
 };
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
@@ -21,20 +22,32 @@ pub(super) struct FieldSlot<'a> {
     pub parent_num: Option<i64>,
     /// 生效页号（自身 `/P` 覆盖或从父节点继承）。
     pub page: Option<usize>,
+    /// 全限定名（`/T` 链以 `.` 连接；无名 Widget 继承父名）。
+    pub fqn: String,
     pub children: Vec<usize>,
 }
 
-/// 校验整棵字段树：页号、矩形、`/FT` 继承、字段类型专属条目与外观句柄。
+/// 校验整棵字段树：页号、矩形、`/FT` 继承、字段类型专属条目、外观句柄、
+/// `/AA` 触发事件与 `/CO` 计算顺序。
 pub(super) fn validate(
     form: &AcroForm,
     page_count: usize,
     form_count: usize,
 ) -> Result<(), WriteError> {
     validate_default_fonts(form.default_fonts())?;
+    let mut calculate = Vec::new();
     for (page, field) in form.fields() {
-        validate_node(field, Some(*page), None, page_count, form_count)?;
+        validate_node(
+            field,
+            Some(*page),
+            None,
+            page_count,
+            form_count,
+            "",
+            &mut calculate,
+        )?;
     }
-    Ok(())
+    validate_calculation_order(form, &calculate)
 }
 
 /// `/DR /Font` 资源名：非空、不含名称定界符、不重名。
@@ -70,11 +83,37 @@ fn validate_node(
     inherited_type: Option<FormFieldType>,
     page_count: usize,
     form_count: usize,
+    parent_fqn: &str,
+    calculate: &mut Vec<String>,
 ) -> Result<(), WriteError> {
     let name = field.partial_name().unwrap_or("<widget>");
     let invalid = |message: String| WriteError::InvalidObject(message);
     let page = field.page().or(inherited_page);
     let field_type = field.field_type().or(inherited_type);
+    let fqn = match field.partial_name() {
+        Some(part) if !part.is_empty() => {
+            if parent_fqn.is_empty() {
+                part.to_string()
+            } else {
+                format!("{parent_fqn}.{part}")
+            }
+        }
+        _ => parent_fqn.to_string(),
+    };
+
+    validate_actions(field)?;
+    if field
+        .actions()
+        .iter()
+        .any(|(event, _)| *event == FieldActionEvent::Calculate)
+    {
+        if field.partial_name().is_none_or(str::is_empty) {
+            return Err(invalid(format!(
+                "form field {name}: a /C calculation action requires a non-empty partial name (/T)"
+            )));
+        }
+        calculate.push(fqn.clone());
+    }
 
     if let Some(rect) = field.rect() {
         if rect.iter().any(|value| !value.is_finite()) {
@@ -150,7 +189,71 @@ fn validate_node(
     }
 
     for child in field.kids() {
-        validate_node(child, page, field_type, page_count, form_count)?;
+        validate_node(
+            child, page, field_type, page_count, form_count, &fqn, calculate,
+        )?;
+    }
+    Ok(())
+}
+
+/// `/AA` 触发事件：每个事件至多一次，且 Table 196 限定为 JavaScript 动作。
+fn validate_actions(field: &FormField) -> Result<(), WriteError> {
+    let name = field.partial_name().unwrap_or("<widget>");
+    let invalid = |message: String| WriteError::InvalidObject(message);
+    let mut seen = std::collections::BTreeSet::new();
+    for (event, action) in field.actions() {
+        if !seen.insert(*event) {
+            return Err(invalid(format!(
+                "form field {name}: /AA /{} is declared twice",
+                event.name()
+            )));
+        }
+        if !matches!(action, Action::JavaScript(_)) {
+            return Err(invalid(format!(
+                "form field {name}: /AA /{} must be a JavaScript action",
+                event.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `/CO` 名录必须恰好覆盖全部带 `/C` 计算动作的字段（缺省时自动生成）。
+fn validate_calculation_order(form: &AcroForm, calculate: &[String]) -> Result<(), WriteError> {
+    let invalid = |message: String| WriteError::InvalidObject(message);
+    let Some(order) = form.calculation_order() else {
+        return Ok(());
+    };
+    if calculate.is_empty() {
+        if order.is_empty() {
+            return Ok(());
+        }
+        return Err(invalid(format!(
+            "AcroForm /CO entry {} is not a field with a /C calculation action",
+            order[0]
+        )));
+    }
+    let expected: std::collections::BTreeSet<&str> = calculate.iter().map(String::as_str).collect();
+    if expected.len() != calculate.len() {
+        return Err(invalid(
+            "AcroForm /CO requires unique fully qualified names for /C fields".into(),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for name in order {
+        if !seen.insert(name.as_str()) {
+            return Err(invalid(format!("AcroForm /CO lists field {name} twice")));
+        }
+        if !expected.contains(name.as_str()) {
+            return Err(invalid(format!(
+                "AcroForm /CO entry {name} is not a field with a /C calculation action"
+            )));
+        }
+    }
+    if seen.len() != expected.len() {
+        return Err(invalid(
+            "AcroForm /CO must list every field with a /C calculation action".into(),
+        ));
     }
     Ok(())
 }
@@ -179,6 +282,32 @@ fn collect_appearances(field: &FormField, handles: &mut Vec<usize>) {
     }
 }
 
+/// 是否存在字段级 `/AA` 附加动作（供 assemble 做 PDF 1.3 门禁）。
+pub(super) fn has_additional_actions(form: &AcroForm) -> bool {
+    form.fields()
+        .iter()
+        .any(|(_, field)| node_has_actions(field))
+}
+
+fn node_has_actions(field: &FormField) -> bool {
+    !field.actions().is_empty() || field.kids().iter().any(node_has_actions)
+}
+
+/// 是否存在 `/C` 计算动作（决定是否必须写出 `/CO`）。
+pub(super) fn has_calculate_actions(form: &AcroForm) -> bool {
+    form.fields()
+        .iter()
+        .any(|(_, field)| node_has_calculate(field))
+}
+
+fn node_has_calculate(field: &FormField) -> bool {
+    field
+        .actions()
+        .iter()
+        .any(|(event, _)| *event == FieldActionEvent::Calculate)
+        || field.kids().iter().any(node_has_calculate)
+}
+
 /// 按前序为整棵字段树分配对象号；返回扁平节点表与顶层根下标。
 pub(super) fn allocate_fields<'a>(
     form: &'a AcroForm,
@@ -187,7 +316,7 @@ pub(super) fn allocate_fields<'a>(
     let mut slots = Vec::new();
     let mut roots = Vec::new();
     for (page, field) in form.fields() {
-        roots.push(allocate_node(field, Some(*page), None, num, &mut slots));
+        roots.push(allocate_node(field, Some(*page), None, num, &mut slots, ""));
     }
     (slots, roots)
 }
@@ -198,24 +327,77 @@ fn allocate_node<'a>(
     parent_num: Option<i64>,
     num: &mut i64,
     slots: &mut Vec<FieldSlot<'a>>,
+    parent_fqn: &str,
 ) -> usize {
     let index = slots.len();
     let field_num = *num;
     *num += 1;
+    let fqn = match field.partial_name() {
+        Some(part) if !part.is_empty() => {
+            if parent_fqn.is_empty() {
+                part.to_string()
+            } else {
+                format!("{parent_fqn}.{part}")
+            }
+        }
+        _ => parent_fqn.to_string(),
+    };
     slots.push(FieldSlot {
         field,
         num: field_num,
         parent_num,
         page: field.page().or(inherited_page),
+        fqn: fqn.clone(),
         children: Vec::new(),
     });
     let page = slots[index].page;
     let mut children = Vec::with_capacity(field.kids().len());
     for child in field.kids() {
-        children.push(allocate_node(child, page, Some(field_num), num, slots));
+        children.push(allocate_node(
+            child,
+            page,
+            Some(field_num),
+            num,
+            slots,
+            &fqn,
+        ));
     }
     slots[index].children = children;
     index
+}
+
+/// `/CO` 引用的字段对象号：显式名录按调用方顺序解析，缺省按字段树前序
+/// 取全部计算字段。
+pub(super) fn calculation_order_nums(
+    form: &AcroForm,
+    slots: &[FieldSlot<'_>],
+) -> Result<Vec<i64>, WriteError> {
+    match form.calculation_order() {
+        Some(order) => order
+            .iter()
+            .map(|name| {
+                slots
+                    .iter()
+                    .find(|slot| &slot.fqn == name)
+                    .map(|slot| slot.num)
+                    .ok_or_else(|| {
+                        WriteError::InvalidObject(format!(
+                            "AcroForm /CO references unknown field {name}"
+                        ))
+                    })
+            })
+            .collect(),
+        None => Ok(slots
+            .iter()
+            .filter(|slot| {
+                slot.field
+                    .actions()
+                    .iter()
+                    .any(|(event, _)| *event == FieldActionEvent::Calculate)
+            })
+            .map(|slot| slot.num)
+            .collect()),
+    }
 }
 
 /// 写出单个字段/Widget 节点字典。
@@ -297,6 +479,13 @@ pub(super) fn field_dict(
     }
     if let Some(tooltip) = field.tooltip() {
         dict = dict.insert("TU", text_string_value(tooltip));
+    }
+    if !field.actions().is_empty() {
+        let mut additional = Dict::new();
+        for (event, action) in field.actions() {
+            additional = additional.insert(event.name(), Value::Dict(action.to_dict()));
+        }
+        dict = dict.insert("AA", Value::Dict(additional));
     }
     if !slot.children.is_empty() {
         let kids: Vec<Value> = slot

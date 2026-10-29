@@ -7,11 +7,14 @@
 //!   `/T` 链以 `.` 连接。
 //! - Widget 节点（`/Subtype /Widget`）建模 `/Rect`、`/AP`、`/AS` 与 `/P`；
 //!   外观流内容求值归渲染，动作 `/A` 语义归 E3。
+//! - 字段 `/AA` 附加动作（`/K` `/F` `/V` `/C`，Table 196）经动作模型
+//!   类型化；`/CO` 计算顺序按引用解析为字段全限定名（Table 218）。
 //! - 防护：字段树深度 64、节点总数 4096、间接引用环检测。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::core::reader::action::Action;
 use crate::core::reader::content::text_value;
 use crate::core::types::{Dict, Document, Value};
 
@@ -150,6 +153,32 @@ impl FieldFlags {
     }
 }
 
+/// 字段附加动作（`/AA`，12.6.3 Table 196 触发事件）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldActions {
+    /// `/K` 按键时触发。
+    pub keystroke: Option<Action>,
+    /// `/F` 格式化时触发。
+    pub format: Option<Action>,
+    /// `/V` 校验时触发。
+    pub validate: Option<Action>,
+    /// `/C` 计算时触发。
+    pub calculate: Option<Action>,
+    /// 其他触发事件（名称原样保留，动作值原样保留）。
+    pub other: Vec<(String, Value)>,
+}
+
+impl FieldActions {
+    /// 是否未声明任何触发事件。
+    pub fn is_empty(&self) -> bool {
+        self.keystroke.is_none()
+            && self.format.is_none()
+            && self.validate.is_none()
+            && self.calculate.is_none()
+            && self.other.is_empty()
+    }
+}
+
 /// 字段树节点（含合并后的继承属性与 Widget 数据）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
@@ -185,9 +214,11 @@ pub struct Field {
     pub appearance_state: Option<String>,
     /// Widget `/P` 所在页面引用。
     pub page: Option<(i64, i64)>,
+    /// `/AA` 附加动作；未声明时为 `None`。
+    pub actions: Option<FieldActions>,
     /// 子字段/子 Widget。
     pub kids: Vec<Field>,
-    /// 完整字段字典，未建模条目（`/AA`、`/DS`、`/RV` 等）经此访问。
+    /// 完整字段字典，未建模条目（`/DS`、`/RV`、`/I` 等）经此访问。
     pub dict: Dict,
 }
 
@@ -204,6 +235,8 @@ pub struct AcroForm {
     pub xfa: Option<Value>,
     /// `/Fields` 字段树（顶层）。
     pub fields: Vec<Field>,
+    /// `/CO` 计算顺序（按引用解析为字段全限定名）；缺失时为空。
+    pub calculation_order: Vec<String>,
     /// 完整 `/AcroForm` 字典。
     pub dict: Dict,
 }
@@ -264,15 +297,90 @@ impl Document {
             }
         };
 
+        let calculation_order = parse_calculation_order(self, dict, &fields)?;
+
         Ok(Some(AcroForm {
             need_appearances,
             default_appearance: dict.get("DA").cloned(),
             default_resources: dict.get("DR").cloned(),
             xfa: dict.get("XFA").cloned(),
             fields,
+            calculation_order,
             dict: dict.clone(),
         }))
     }
+}
+
+/// `/CO` 条目必须是指向字段树节点的间接引用，按引用解析为全限定名。
+fn parse_calculation_order(
+    document: &Document,
+    dict: &Dict,
+    fields: &[Field],
+) -> Result<Vec<String>> {
+    let Some(value) = dict.get("CO") else {
+        return Ok(Vec::new());
+    };
+    let resolved = crate::core::reader::navigation::resolve(document, value)
+        .map_err(|err| malformed(err.to_string()))?;
+    let array = resolved
+        .as_array()
+        .ok_or_else(|| malformed("/AcroForm /CO is not an array"))?;
+    let mut names = HashMap::new();
+    collect_field_names(fields, &mut names);
+    let mut out = Vec::with_capacity(array.0.len());
+    for entry in &array.0 {
+        let key = entry
+            .as_ref()
+            .ok_or_else(|| malformed("/AcroForm /CO entries must be indirect references"))?;
+        let name = names.get(&key).ok_or_else(|| {
+            malformed("/AcroForm /CO references an object that is not in the field tree")
+        })?;
+        out.push(name.clone());
+    }
+    Ok(out)
+}
+
+fn collect_field_names(fields: &[Field], out: &mut HashMap<(i64, i64), String>) {
+    for field in fields {
+        if let Some(key) = field.reference {
+            out.insert(key, field.fully_qualified_name.clone());
+        }
+        collect_field_names(&field.kids, out);
+    }
+}
+
+/// 读取 `/AA` 字典：四个标准事件类型化，其余事件原样保留。
+fn parse_actions(document: &Document, value: &Value) -> Result<FieldActions> {
+    let resolved = crate::core::reader::navigation::resolve(document, value)
+        .map_err(|err| malformed(err.to_string()))?;
+    let dict = resolved
+        .as_dict()
+        .ok_or_else(|| malformed("form field /AA is not a dictionary"))?;
+    let mut actions = FieldActions {
+        keystroke: None,
+        format: None,
+        validate: None,
+        calculate: None,
+        other: Vec::new(),
+    };
+    for (key, value) in &dict.0 {
+        let slot = match key.as_str() {
+            "K" => &mut actions.keystroke,
+            "F" => &mut actions.format,
+            "V" => &mut actions.validate,
+            "C" => &mut actions.calculate,
+            _ => {
+                actions.other.push((key.clone(), value.clone()));
+                continue;
+            }
+        };
+        *slot = Some(
+            document
+                .action(value)
+                .map_err(|err| malformed(format!("form field /AA /{key}: {err}")))?,
+        );
+    }
+    Ok(actions)
 }
 
 struct FieldReader<'a> {
@@ -404,6 +512,10 @@ impl FieldReader<'_> {
                 })?),
                 None => None,
             };
+        let actions = match dict.get("AA") {
+            Some(value) => Some(parse_actions(self.document, value)?),
+            None => None,
+        };
 
         let merged = Inherited {
             field_type: field_type.clone(),
@@ -444,6 +556,7 @@ impl FieldReader<'_> {
             appearance,
             appearance_state,
             page,
+            actions,
             kids,
             dict: dict.clone(),
         })

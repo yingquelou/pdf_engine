@@ -181,3 +181,66 @@ fn builder_acro_form_default_resources_roundtrip_through_parser() {
         "page text still extracts after adding default resources"
     );
 }
+
+/// 写入 → 重新解析：字段 `/AA` 触发动作（Table 196）与 `/CO` 计算顺序
+/// （Table 218）应完整回读，显式名录保持声明顺序。
+#[test]
+fn builder_form_actions_and_calculation_order_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AcroForm, Action, FieldActionEvent, FormField, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::reader::action::Action as ReadAction;
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new().with_calculation_order(vec!["tax".into(), "total".into()]);
+    form.add_field(
+        page,
+        FormField::text("total", [72.0, 700.0, 300.0, 720.0])
+            .with_action(
+                FieldActionEvent::Calculate,
+                Action::JavaScript("calculateTotal()".into()),
+            )
+            .with_action(
+                FieldActionEvent::Format,
+                Action::JavaScript("formatTotal()".into()),
+            ),
+    );
+    form.add_field(
+        page,
+        FormField::text("tax", [72.0, 670.0, 300.0, 690.0]).with_action(
+            FieldActionEvent::Calculate,
+            Action::JavaScript("calculateTax()".into()),
+        ),
+    );
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let parsed = doc.acro_form().expect("parse form").expect("form present");
+    assert_eq!(
+        parsed.calculation_order,
+        ["tax", "total"],
+        "explicit /CO order survives the roundtrip"
+    );
+
+    let total = &parsed.fields[0];
+    let actions = total.actions.as_ref().expect("/AA present");
+    assert_eq!(
+        actions.calculate,
+        Some(ReadAction::JavaScript("calculateTotal()".into()))
+    );
+    assert_eq!(
+        actions.format,
+        Some(ReadAction::JavaScript("formatTotal()".into()))
+    );
+    assert!(actions.keystroke.is_none());
+
+    let tax = &parsed.fields[1];
+    let tax_actions = tax.actions.as_ref().expect("/AA present");
+    assert_eq!(
+        tax_actions.calculate,
+        Some(ReadAction::JavaScript("calculateTax()".into()))
+    );
+}

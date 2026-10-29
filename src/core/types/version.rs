@@ -168,6 +168,11 @@ pub enum PdfFeature {
     /// 注解 measure 字典（`/Measure`，Table 261–263；Line 与
     /// Polygon/PolyLine 自 Table 175/178），PDF 1.7 引入。
     AnnotationMeasure,
+    /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
+    /// Table 196），PDF 1.3 引入。
+    FormFieldAdditionalActions,
+    /// AcroForm 计算顺序（`/CO`，Table 218），PDF 1.3 引入。
+    FormCalculationOrder,
 }
 
 impl PdfFeature {
@@ -182,7 +187,9 @@ impl PdfFeature {
             | PdfFeature::MarkupAnnotations
             | PdfFeature::DigitalSignatures
             | PdfFeature::AnnotationMarkupState
-            | PdfFeature::LinkAnnotationPressedAction => PdfVersion::V1_3,
+            | PdfFeature::LinkAnnotationPressedAction
+            | PdfFeature::FormFieldAdditionalActions
+            | PdfFeature::FormCalculationOrder => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
                 PdfVersion::V1_4
             }
@@ -242,6 +249,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::LinkAnnotationQuadPoints => "link annotation quad points",
             PdfFeature::LinkAnnotationBorderStyle => "link annotation border style",
             PdfFeature::AnnotationMeasure => "annotation measure dictionary",
+            PdfFeature::FormFieldAdditionalActions => "form field additional actions",
+            PdfFeature::FormCalculationOrder => "form calculation order",
         };
         write!(f, "{name}")
     }

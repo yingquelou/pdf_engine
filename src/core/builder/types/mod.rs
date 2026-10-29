@@ -51,7 +51,9 @@ pub use embedded_file::EmbeddedFile;
 pub use encoding::FontEncoding;
 pub use font::{Font, FontWidths};
 pub use form::{FormResources, FormXObject, GroupXObject};
-pub use form_field::{AcroForm, FieldValue, FormField, FormFieldType, FormOption};
+pub use form_field::{
+    AcroForm, FieldActionEvent, FieldValue, FormField, FormFieldType, FormOption,
+};
 pub use function::{
     CalculatorFunction, ExponentialFunction, Function, SampledFunction, StitchingFunction,
 };
