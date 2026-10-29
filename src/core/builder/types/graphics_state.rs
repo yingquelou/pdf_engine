@@ -406,6 +406,15 @@ impl GraphicsState {
         .filter_map(|(name, handle)| handle.map(|handle| (name, handle)))
     }
 
+    /// 是否不依赖外部对象（`/Font`、`/SMask`、函数句柄或 `/HT`）。
+    /// `/DR` 默认 ExtGState 只接受自包含状态。
+    pub(crate) fn is_self_contained(&self) -> bool {
+        self.font.is_none()
+            && self.soft_mask.is_none()
+            && self.halftone.is_none()
+            && self.auxiliary_function_handles().is_empty()
+    }
+
     /// 须为单输出的附加函数句柄：`/SMask /TR` 与 `/HT` 内函数。
     pub(crate) fn auxiliary_function_handles(&self) -> Vec<(&'static str, usize)> {
         let mut handles = Vec::new();

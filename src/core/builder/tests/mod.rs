@@ -20,6 +20,7 @@
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
+//! - `acro_form_resources`：AcroForm `/DR` 非字体默认资源（ExtGState/ColorSpace/ProcSet）；
 //! - `embedded_file`：嵌入文件流、文件规格与 `/EmbeddedFiles` 名称树；
 //! - `form`：Form XObject 字典与资源；
 //! - `page_group`：页字典组属性（`/Group`）；
@@ -31,6 +32,7 @@
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
 mod acro_form;
+mod acro_form_resources;
 mod annotation;
 mod annotation_appearance;
 mod annotation_border;

@@ -7,7 +7,7 @@
 //! 流引用，与页面绘制及注解外观共享同一对象池。
 
 use crate::core::builder::types::{
-    AcroForm, Action, FieldActionEvent, FieldValue, Font, FormField, FormFieldType, FormOption,
+    AcroForm, Action, FieldActionEvent, FieldValue, FormField, FormFieldType, FormOption,
     text_string_value, validate_name_value,
 };
 use crate::core::types::{Array, Dict, Value};
@@ -34,7 +34,7 @@ pub(super) fn validate(
     page_count: usize,
     form_count: usize,
 ) -> Result<(), WriteError> {
-    validate_default_fonts(form.default_fonts())?;
+    super::acro_form::validate_default_resources(form)?;
     let mut calculate = Vec::new();
     for (page, field) in form.fields() {
         validate_node(
@@ -48,33 +48,6 @@ pub(super) fn validate(
         )?;
     }
     validate_calculation_order(form, &calculate)
-}
-
-/// `/DR /Font` 资源名：非空、不含名称定界符、不重名。
-fn validate_default_fonts(fonts: &[(String, Font)]) -> Result<(), WriteError> {
-    let mut seen = std::collections::BTreeSet::new();
-    let invalid = |message: String| WriteError::InvalidObject(message);
-    for (name, _) in fonts {
-        if name.is_empty() {
-            return Err(invalid(
-                "AcroForm /DR font resource name must not be empty".into(),
-            ));
-        }
-        if name.chars().any(|c| {
-            c.is_whitespace()
-                || matches!(c, '/' | '[' | ']' | '(' | ')' | '<' | '>' | '{' | '}' | '%')
-        }) {
-            return Err(invalid(format!(
-                "AcroForm /DR font resource name {name:?} contains name delimiters"
-            )));
-        }
-        if !seen.insert(name.as_str()) {
-            return Err(invalid(format!(
-                "AcroForm /DR declares duplicate font resource name {name:?}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn validate_node(

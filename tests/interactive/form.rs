@@ -400,3 +400,95 @@ fn builder_form_appearance_states_roundtrip_through_parser() {
             if dict.get("Subtype") == Some(&Value::Name("Form".into()))));
     }
 }
+
+/// `/DR` 非字体默认资源（`/ExtGState`、`/ColorSpace`、`/ProcSet`）经写入→
+/// 解析后由 `AcroForm::default_resources` 原样回读，字体引用可解析。
+#[test]
+fn builder_acro_form_default_nonfont_resources_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AcroForm, ColorSpace, Font, FormField, GraphicsState, Indexed, PageSize, PdfBuilder,
+    };
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let mut form = AcroForm::new()
+        .with_default_font("Helv", Font::helvetica(12.0))
+        .with_default_ext_gstate(
+            "GS1",
+            GraphicsState::new()
+                .with_stroke_alpha(0.5)
+                .with_fill_alpha(0.25)
+                .with_blend_mode("Multiply"),
+        )
+        .with_default_color_space("CS1", ColorSpace::DeviceRGB)
+        .with_default_color_space(
+            "CS2",
+            ColorSpace::Indexed(Indexed::new(
+                ColorSpace::DeviceRGB,
+                1,
+                vec![0, 0, 0, 0xFF, 0xFF, 0xFF],
+            )),
+        )
+        .with_proc_set(vec!["PDF".into(), "Text".into()]);
+    form.add_field(
+        p0,
+        FormField::text("name", [72.0, 700.0, 300.0, 720.0]).with_value("Alice"),
+    );
+    builder.set_acro_form(form);
+    let mut bytes = Vec::new();
+    builder.build(&mut bytes).expect("build");
+
+    let doc = parse_buf(&bytes);
+    let parsed = doc.acro_form().expect("parse").expect("form present");
+    let dr = parsed
+        .default_resources
+        .as_ref()
+        .and_then(|value| value.as_dict())
+        .expect("/DR");
+    let (font_num, _) = dr
+        .get("Font")
+        .and_then(|value| value.as_dict())
+        .and_then(|fonts| fonts.get("Helv"))
+        .and_then(|value| value.as_ref())
+        .expect("/DR /Font /Helv");
+    let font = doc
+        .get_object(font_num)
+        .expect("font lookup")
+        .expect("font object exists");
+    assert!(matches!(&font.value, Value::Dict(dict)
+        if dict.get("BaseFont") == Some(&Value::Name("Helvetica".into()))));
+
+    let gs = dr
+        .get("ExtGState")
+        .and_then(|value| value.as_dict())
+        .and_then(|states| states.get("GS1"))
+        .and_then(|value| value.as_dict())
+        .expect("/DR /ExtGState /GS1");
+    assert_eq!(gs.get("Type"), Some(&Value::Name("ExtGState".into())));
+    assert_eq!(gs.get("CA"), Some(&Value::Float(0.5)));
+    assert_eq!(gs.get("ca"), Some(&Value::Float(0.25)));
+    assert_eq!(gs.get("BM"), Some(&Value::Name("Multiply".into())));
+
+    let spaces = dr
+        .get("ColorSpace")
+        .and_then(|value| value.as_dict())
+        .expect("/DR /ColorSpace");
+    assert_eq!(spaces.get("CS1"), Some(&Value::Name("DeviceRGB".into())));
+    let indexed = spaces
+        .get("CS2")
+        .and_then(|value| value.as_array())
+        .expect("/CS2");
+    assert_eq!(indexed.0[0], Value::Name("Indexed".into()));
+    assert_eq!(indexed.0[1], Value::Name("DeviceRGB".into()));
+    assert_eq!(indexed.0[2], Value::Integer(1));
+    assert_eq!(indexed.0[3], Value::HexString("000000FFFFFF".into()));
+
+    let proc_set = dr
+        .get("ProcSet")
+        .and_then(|value| value.as_array())
+        .expect("/DR /ProcSet");
+    assert_eq!(
+        proc_set.0,
+        vec![Value::Name("PDF".into()), Value::Name("Text".into())]
+    );
+}

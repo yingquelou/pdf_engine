@@ -12,7 +12,7 @@
 //! 经 [`PdfBuilder::set_acro_form`](super::super::PdfBuilder::set_acro_form)
 //! 注册后，由 assemble 写成目录 `/AcroForm` 与独立字段对象。
 
-use super::{Action, Font};
+use super::{Action, ColorSpace, Font, GraphicsState};
 
 /// 字段类型（`/FT`，Table 220）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,6 +474,9 @@ pub struct AcroForm {
     need_appearances: bool,
     default_appearance: Option<String>,
     default_fonts: Vec<(String, Font)>,
+    default_ext_gstates: Vec<(String, GraphicsState)>,
+    default_color_spaces: Vec<(String, ColorSpace)>,
+    proc_set: Vec<String>,
     calculation_order: Option<Vec<String>>,
     fields: Vec<(usize, FormField)>,
 }
@@ -503,6 +506,31 @@ impl AcroForm {
         self
     }
 
+    /// `/DR /ExtGState` 默认图形状态资源：外观流用 `/name gs` 引用。
+    /// 只接受不依赖外部对象（字体、软蒙版、函数或半色调）的自包含状态。
+    pub fn with_default_ext_gstate(
+        mut self,
+        name: impl Into<String>,
+        state: GraphicsState,
+    ) -> Self {
+        self.default_ext_gstates.push((name.into(), state));
+        self
+    }
+
+    /// `/DR /ColorSpace` 默认颜色空间资源（Table 34），外观流用
+    /// `/name cs` 引用。
+    pub fn with_default_color_space(mut self, name: impl Into<String>, space: ColorSpace) -> Self {
+        self.default_color_spaces.push((name.into(), space));
+        self
+    }
+
+    /// `/DR /ProcSet` 过程集名称数组（Table 34）：常用 `/PDF`、`/Text`、
+    /// `/ImageB`、`/ImageC`、`/ImageI`；名称须合法且不重复。
+    pub fn with_proc_set(mut self, names: Vec<String>) -> Self {
+        self.proc_set = names;
+        self
+    }
+
     /// 追加一个顶层字段树；`page` 为该树内未显式指定页号的 Widget 的
     /// 绑定页（0 基）。
     pub fn add_field(&mut self, page: usize, field: FormField) -> &mut Self {
@@ -528,6 +556,18 @@ impl AcroForm {
 
     pub(crate) fn default_fonts(&self) -> &[(String, Font)] {
         &self.default_fonts
+    }
+
+    pub(crate) fn default_ext_gstates(&self) -> &[(String, GraphicsState)] {
+        &self.default_ext_gstates
+    }
+
+    pub(crate) fn default_color_spaces(&self) -> &[(String, ColorSpace)] {
+        &self.default_color_spaces
+    }
+
+    pub(crate) fn proc_set(&self) -> &[String] {
+        &self.proc_set
     }
 
     pub(crate) fn calculation_order(&self) -> Option<&[String]> {

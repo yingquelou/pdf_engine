@@ -7,8 +7,10 @@
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
 //! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）；
 //! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
-//! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出。
+//! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出；
+//! - `acro_form`：AcroForm `/DR` 默认资源字典（字体/ExtGState/ColorSpace/ProcSet）。
 
+mod acro_form;
 mod action;
 mod annotation;
 mod cid;
@@ -625,26 +627,12 @@ impl PdfBuilder {
             if let Some(appearance) = form.default_appearance() {
                 acro = acro.insert("DA", text_string_value(appearance));
             }
-            // `/DR` 默认资源：外观字符串引用的字体资源名 → 字体对象；
-            // 与页面字体去重共享同一对象号。
-            if !form.default_fonts().is_empty() {
-                let mut dr_fonts = Dict::new();
-                for (name, font) in form.default_fonts() {
-                    let obj_num = match font_pool.iter().position(|(g, _)| same_font(g, font)) {
-                        Some(i) => font_pool[i].1,
-                        None => {
-                            let n = num;
-                            num += 1;
-                            font_pool.push((font.clone(), n));
-                            n
-                        }
-                    };
-                    dr_fonts = dr_fonts.insert(name.clone(), Value::Ref(obj_num, 0));
-                }
-                acro = acro.insert(
-                    "DR",
-                    Value::Dict(Dict::new().insert("Font", Value::Dict(dr_fonts))),
-                );
+            // `/DR` 默认资源（Table 218/34）：字体与页面去重共享对象；
+            // ExtGState/ColorSpace/ProcSet 由子模块构建。
+            if let Some(dr) =
+                acro_form::default_resources(form, &mut doc, &mut num, &mut font_pool)?
+            {
+                acro = acro.insert("DR", dr);
             }
             // `/CO` 计算顺序：显式名录按声明顺序引用字段对象；缺省时按
             // 字段树前序自动列出全部带 `/C` 动作的字段。
