@@ -433,6 +433,7 @@ impl PdfAnnotation {
         self.validate_link_entries()?;
         self.validate_free_text_entries()?;
         self.validate_geometry_entries()?;
+        self.validate_measure_entries()?;
         Ok(())
     }
 }

@@ -19,8 +19,11 @@
 //!   Polygon/PolyLine `/Vertices`、`/LE`、`/BE`、`/IT`（Table 178）；
 //!   Link `/H` 高亮模式与 `/PA` 按下 URI 动作（Table 173，`/PA` 经
 //!   `Document::annotation_pressed_action` 解析为 12.6 动作模型）。
+//! - Measure 字典（12.9，Table 261–263）：Line 与 Polygon/PolyLine 的
+//!   `/Measure` 类型化为 [`Measure`]（直角坐标条目 + 数字格式数组），
+//!   解析在 [`measure`]。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
-//!   Line `/Measure`、Polygon `/Measure` 等）。
+//!   Line `/DS` 等）。
 //!
 //! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`。
 
@@ -37,6 +40,7 @@ mod tests;
 mod entries;
 mod kind;
 mod link;
+mod measure;
 pub mod subtype;
 
 use entries::{
@@ -45,6 +49,7 @@ use entries::{
 };
 pub use kind::{AnnotationSubtype, Row, TABLE_169};
 pub use link::LinkHighlightMode;
+pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
     LineIntent, PolygonIntent,
@@ -320,7 +325,9 @@ pub struct Annotation {
     /// `/Parent` 父注解引用（Table 183：Popup 关联的父注解；
     /// Widget 上指向字段字典）。
     pub parent: Option<(i64, i64)>,
-    /// 完整注解字典，未建模条目（`/Measure`、`/FS`、`/Parent` 等）经此访问。
+    /// `/Measure` 测量字典（12.9；Line 与 Polygon/PolyLine，PDF 1.7）。
+    pub measure: Option<Measure>,
+    /// 完整注解字典，未建模条目（`/FS`、Widget 字段条目等）经此访问。
     pub dict: Dict,
 }
 
@@ -562,6 +569,7 @@ fn parse_annotation(
                     .ok_or_else(|| malformed("annotation /Parent must be an indirect reference"))?,
             ),
         },
+        measure: measure::parse_measure(document, dict)?,
         dict: dict.clone(),
     })
 }

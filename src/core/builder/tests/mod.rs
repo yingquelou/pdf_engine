@@ -33,6 +33,7 @@ mod annotation_free_text;
 mod annotation_geometry;
 mod annotation_line;
 mod annotation_link;
+mod annotation_measure;
 mod annotation_subtype_table;
 mod cid;
 mod cid_cmap_multibyte;

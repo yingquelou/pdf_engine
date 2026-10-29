@@ -165,6 +165,9 @@ pub enum PdfFeature {
     LinkAnnotationQuadPoints,
     /// Link 注解边框样式（`/BS`，Table 173），PDF 1.6 引入。
     LinkAnnotationBorderStyle,
+    /// 注解 measure 字典（`/Measure`，Table 261–263；Line 与
+    /// Polygon/PolyLine 自 Table 175/178），PDF 1.7 引入。
+    AnnotationMeasure,
 }
 
 impl PdfFeature {
@@ -195,9 +198,9 @@ impl PdfFeature {
             | PdfFeature::LinkAnnotationQuadPoints
             | PdfFeature::LinkAnnotationBorderStyle => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
-            PdfFeature::LineAnnotationCaption | PdfFeature::PolygonDimensionIntent => {
-                PdfVersion::V1_7
-            }
+            PdfFeature::LineAnnotationCaption
+            | PdfFeature::PolygonDimensionIntent
+            | PdfFeature::AnnotationMeasure => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -238,6 +241,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::LinkAnnotationPressedAction => "link annotation pressed action",
             PdfFeature::LinkAnnotationQuadPoints => "link annotation quad points",
             PdfFeature::LinkAnnotationBorderStyle => "link annotation border style",
+            PdfFeature::AnnotationMeasure => "annotation measure dictionary",
         };
         write!(f, "{name}")
     }

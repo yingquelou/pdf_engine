@@ -387,6 +387,8 @@ impl PdfBuilder {
             annotation::free_text_feature_gate(&entry.annot, self.version)?;
             // 几何类专有条目按 Table 177/178 的版本门起分组门禁。
             annotation::geometry_feature_gate(&entry.annot, self.version)?;
+            // `/Measure` 测量字典（12.9）PDF 1.7 门禁。
+            annotation::measure_feature_gate(&entry.annot, self.version)?;
             // Link 专有条目按 Table 173 的版本门起分组门禁。
             annotation::link_feature_gate(&entry.annot, self.version)?;
             page_annotation_handles[entry.page].push(handle);
@@ -482,6 +484,11 @@ impl PdfBuilder {
             }
             for feature in annotation::geometry_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);
+            }
+            if entry.annot.measure().is_some() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::AnnotationMeasure);
             }
             for feature in annotation::link_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);

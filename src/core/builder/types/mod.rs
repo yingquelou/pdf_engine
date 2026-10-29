@@ -43,7 +43,7 @@ pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestinat
 pub use annotation::{
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, BorderEffect, BorderEffectStyle,
     CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle, LineIntent, LinkHighlightMode,
-    PdfAnnotation, PolygonIntent,
+    Measure, NumberFormat, NumberFraction, NumberLabelOrder, PdfAnnotation, PolygonIntent,
 };
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;

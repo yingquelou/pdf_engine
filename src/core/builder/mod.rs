@@ -48,11 +48,12 @@ pub use types::{
     FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading, FreeTextIntent,
     Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
     HalftoneDictionary, ICCBased, ImageData, ImageIntent, ImageMask, Indexed, Lab,
-    LatticeMeshShading, LineEndStyle, LineIntent, LinkHighlightMode, MeshFunction, MeshVertex,
-    OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent, RadialShading,
-    SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
-    SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
-    TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
+    LatticeMeshShading, LineEndStyle, LineIntent, LinkHighlightMode, Measure, MeshFunction,
+    MeshVertex, NumberFormat, NumberFraction, NumberLabelOrder, OptionalContentGroup, PageSize,
+    PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation, Shading,
+    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, StitchingFunction,
+    TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType, Type1Halftone,
+    Type2Halftone, Type3Font, Type3Glyph,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};

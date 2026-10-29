@@ -9,12 +9,14 @@
 //! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`（Text/Caret/
 //! Ink/Line）、`free_text`（FreeText，Table 174）、`geometry`
 //! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）
-//! 与 `link`（Link，Table 173 的 `/H` `/PA`）。
+//! 与 `link`（Link，Table 173 的 `/H` `/PA`）；`measure` 覆盖 12.9 的
+//! `/Measure` 测量字典（Table 261–263）。
 
 mod free_text;
 mod geometry;
 mod kind;
 mod link;
+mod measure;
 mod subtype;
 
 use free_text::FreeTextEntries;
@@ -24,6 +26,7 @@ pub use geometry::PolygonIntent;
 pub use kind::AnnotationKind;
 use link::LinkEntries;
 pub use link::LinkHighlightMode;
+pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 use subtype::LineEntries;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
@@ -96,6 +99,7 @@ pub struct PdfAnnotation {
     free_text: FreeTextEntries,
     geometry: GeometryEntries,
     link: LinkEntries,
+    measure: Option<Measure>,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -139,6 +143,7 @@ impl PdfAnnotation {
             free_text: FreeTextEntries::default(),
             geometry: GeometryEntries::default(),
             link: LinkEntries::default(),
+            measure: None,
             action: None,
             destination: None,
             popup: None,

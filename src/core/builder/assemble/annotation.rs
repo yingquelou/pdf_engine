@@ -3,7 +3,7 @@
 //! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
 //! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
 //! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`、
-//! Popup `/Parent` `/Open`）+
+//! Popup `/Parent` `/Open`、Line/Polygon/PolyLine `/Measure`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
@@ -164,6 +164,9 @@ pub(super) fn annotation_dict(
     }
     if let Some(intent) = geometry.intent() {
         dict = dict.insert("IT", Value::Name(intent.name().into()));
+    }
+    if let Some(measure) = annot.measure() {
+        dict = dict.insert("Measure", Value::Dict(measure.to_dict()));
     }
     let link = annot.link();
     if let Some(highlight) = link.highlight() {
@@ -334,6 +337,22 @@ pub(super) fn geometry_feature_gate(
                 version.as_str()
             )));
         }
+    }
+    Ok(())
+}
+
+/// 注解 `/Measure` 测量字典（Table 261–263）自 PDF 1.7 起可用（Table 175/178）。
+pub(super) fn measure_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    if annot.measure().is_some() && !version.supports(PdfFeature::AnnotationMeasure) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "{} require PDF {}, got {}",
+            PdfFeature::AnnotationMeasure,
+            PdfFeature::AnnotationMeasure.min_version().as_str(),
+            version.as_str()
+        )));
     }
     Ok(())
 }
