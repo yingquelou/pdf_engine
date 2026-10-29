@@ -69,6 +69,38 @@ fn builder_xmp_metadata_roundtrips_through_parser() {
     assert_eq!(doc.xmp_metadata().as_deref(), Some(xml.as_slice()));
 }
 
+/// 写入 → 重新解析：类型化日期与 `/Trapped` 经读端还原（14.3.3 Table 317）。
+#[test]
+fn builder_metadata_typed_dates_and_trapped_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{DocumentInfo, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::metadata::TrappedState;
+    use pdf_engine::core::types::PdfDate;
+
+    let created = PdfDate::parse("D:20261029120000+08'00'").expect("date");
+    let modified = PdfDate::parse("D:20261030093015Z").expect("date");
+    let mut builder = PdfBuilder::new();
+    builder.page(PageSize::A4);
+    builder.set_document_info(
+        DocumentInfo::new()
+            .title("Dated")
+            .creation_date_pdf(created)
+            .mod_date_pdf(modified)
+            .trapped(TrappedState::Unknown),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let info = doc.document_info().expect("/Info should roundtrip");
+    assert_eq!(info.creation_date_parsed(), Some(created));
+    assert_eq!(info.mod_date_parsed(), Some(modified));
+    assert_eq!(info.trapped_state(), Some(TrappedState::Unknown));
+    assert_eq!(
+        info.dict.get("Trapped"),
+        Some(&pdf_engine::core::types::Value::Name("Unknown".into()))
+    );
+}
+
 /// 读端：无 `/Metadata` 的文档返回 `None`。
 #[test]
 fn xmp_metadata_absent_returns_none() {

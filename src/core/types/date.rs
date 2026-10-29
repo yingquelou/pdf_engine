@@ -78,13 +78,13 @@ impl PdfDate {
                 _ => PdfDateError::InvalidSecond,
             };
             let value = field.expect("field was just populated");
-            let max = match index {
-                0 => 12,
-                2 => 23,
-                3 | 4 => 59,
-                _ => u8::MAX,
+            let (min, max) = match index {
+                0 => (1, 12),
+                1 => (1, 31),
+                2 => (0, 23),
+                _ => (0, 59),
             };
-            if value == 0 || value > max {
+            if value < min || value > max {
                 return Err(error);
             }
         }

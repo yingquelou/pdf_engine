@@ -189,6 +189,24 @@ fn document_signatures_finds_sig_field_value() {
 }
 
 #[test]
+fn signature_date_parses_to_pdf_date() {
+    let (_, _, sig) = parsed_signed("date");
+    let date = sig.date_parsed().expect("/M parses");
+    assert_eq!(date.year(), 2026);
+    assert_eq!(date.month(), Some(10));
+    assert_eq!(date.day(), Some(28));
+    assert_eq!(date.hour(), Some(0));
+    assert_eq!(date.minute(), Some(0));
+    assert_eq!(date.second(), Some(0));
+    assert_eq!(date.to_pdf_string(), "D:20261028000000Z");
+    assert_eq!(
+        date.timezone(),
+        crate::core::types::PdfDateTimezone::Utc,
+        "/M carries an explicit UTC marker"
+    );
+}
+
+#[test]
 fn byte_range_segments_exclude_contents_placeholder() {
     let (doc, bytes, sig) = parsed_signed("ranges");
     let ranges = doc

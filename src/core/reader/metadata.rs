@@ -1,9 +1,47 @@
 //! 元数据与文件标识读取（14.3、14.4）。
 //!
-//! - `DocumentInfo`：trailer `/Info` 文档信息字典语义封装（Title/Author/Subject/Keywords/Creator/Producer/CreationDate/ModDate）。
+//! - `DocumentInfo`：trailer `/Info` 文档信息字典语义封装（Title/Author/Subject/Keywords/Creator/Producer/CreationDate/ModDate/Trapped），
+//!   CreationDate/ModDate 可经 [`DocumentInfo::creation_date_parsed`] 解析为 [`PdfDate`]，
+//!   Table 317 之外的自定义条目保留在 [`DocumentInfo::dict`]。
 //! - `file_identifier`：trailer `/ID` 文件标识符读取（永久 ID + 更新 ID）。
 
-use crate::core::types::{Document, Value};
+use crate::core::reader::content::text_value;
+use crate::core::types::{Dict, Document, PdfDate, Value};
+
+/// `/Info /Trapped` 取值（14.3.3 Table 317，PDF 1.3）。
+///
+/// 规范要求以名字 `True`/`False`/`Unknown` 写出（不是布尔值）；
+/// 缺省值为 `Unknown`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrappedState {
+    /// 文档已完成陷印（名字 `True`）。
+    Trapped,
+    /// 文档尚未陷印（名字 `False`）。
+    NotTrapped,
+    /// 未知或仅部分陷印（名字 `Unknown`，缺省语义）。
+    Unknown,
+}
+
+impl TrappedState {
+    /// 由 `/Trapped` 名字解析；其他名字返回 `None`。
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "True" => Some(Self::Trapped),
+            "False" => Some(Self::NotTrapped),
+            "Unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
+    /// 名字（不含前导 `/`）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Trapped => "True",
+            Self::NotTrapped => "False",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
 
 /// 文档信息字典（14.3.3 Table 317）。
 ///
@@ -19,6 +57,36 @@ pub struct DocumentInfo {
     pub producer: Option<Value>,
     pub creation_date: Option<Value>,
     pub mod_date: Option<Value>,
+    /// `/Trapped` 原始值（PDF 1.3；标准取值为名字 `True`/`False`/`Unknown`）。
+    pub trapped: Option<Value>,
+    /// 完整 `/Info` 字典；Table 317 之外的自定义文本串条目经此访问。
+    pub dict: Dict,
+}
+
+impl DocumentInfo {
+    /// `/CreationDate` 文本串解析为 PDF 日期（7.9.4）；
+    /// 缺失、非文本串、解码失败或格式非法返回 `None`。
+    pub fn creation_date_parsed(&self) -> Option<PdfDate> {
+        self.creation_date.as_ref().and_then(parse_pdf_date)
+    }
+
+    /// `/ModDate` 文本串解析为 PDF 日期（7.9.4）；规则同 [`Self::creation_date_parsed`]。
+    pub fn mod_date_parsed(&self) -> Option<PdfDate> {
+        self.mod_date.as_ref().and_then(parse_pdf_date)
+    }
+
+    /// `/Trapped` 标准名字解析（Table 317）；缺失、非名字或非标准名字返回 `None`。
+    pub fn trapped_state(&self) -> Option<TrappedState> {
+        self.trapped
+            .as_ref()?
+            .as_name()
+            .and_then(TrappedState::from_name)
+    }
+}
+
+/// 文本串日期值按 7.9.4 解析；非文本串、解码失败或格式非法返回 `None`。
+pub(crate) fn parse_pdf_date(value: &Value) -> Option<PdfDate> {
+    PdfDate::parse(&text_value(value)?).ok()
 }
 
 impl Document {
@@ -43,6 +111,8 @@ impl Document {
             producer: dict.get("Producer").cloned(),
             creation_date: dict.get("CreationDate").cloned(),
             mod_date: dict.get("ModDate").cloned(),
+            trapped: dict.get("Trapped").cloned(),
+            dict: dict.clone(),
         })
     }
 
@@ -203,6 +273,54 @@ mod tests {
         let (perm, upd) = doc.file_identifier().expect("ID should exist");
         assert_eq!(perm, [1u8; 16]);
         assert_eq!(upd, [2u8; 16]);
+    }
+
+    #[test]
+    fn document_info_parses_typed_dates_trapped_and_custom_entries() {
+        let dict = Dict::new()
+            .insert(
+                "CreationDate",
+                Value::String("D:20261029120000+08'00'".into()),
+            )
+            .insert("ModDate", Value::String("D:20261301".into()))
+            .insert("Trapped", Value::Name("Unknown".into()))
+            .insert("Custom", Value::String("custom value".into()));
+        let doc = make_doc_with_info(dict);
+        let info = doc.document_info().expect("info should exist");
+
+        let created = info.creation_date_parsed().expect("/CreationDate parses");
+        assert_eq!(created.year(), 2026);
+        assert_eq!(created.month(), Some(10));
+        assert_eq!(created.day(), Some(29));
+        assert_eq!(created.hour(), Some(12));
+        assert_eq!(created.minute(), Some(0));
+        assert_eq!(created.second(), Some(0));
+        assert_eq!(created.to_pdf_string(), "D:20261029120000+08'00'");
+
+        // 13 月不是合法日期：原始值仍保留，类型化解析为 None。
+        assert!(info.mod_date.is_some());
+        assert_eq!(info.mod_date_parsed(), None);
+
+        assert_eq!(info.trapped_state(), Some(TrappedState::Unknown));
+        assert_eq!(
+            info.dict.get("Custom"),
+            Some(&Value::String("custom value".into()))
+        );
+    }
+
+    #[test]
+    fn document_info_typed_accessors_require_well_formed_values() {
+        let dict = Dict::new()
+            .insert("CreationDate", Value::Integer(20261029))
+            .insert("ModDate", Value::String("20261029".into()))
+            .insert("Trapped", Value::Bool(true));
+        let doc = make_doc_with_info(dict);
+        let info = doc.document_info().expect("info should exist");
+        // 非文本串日期、缺 `D:` 前缀的日期、布尔 `/Trapped` 均不类型化。
+        assert_eq!(info.creation_date_parsed(), None);
+        assert_eq!(info.mod_date_parsed(), None);
+        assert!(info.trapped.is_some());
+        assert_eq!(info.trapped_state(), None);
     }
 
     #[test]

@@ -105,6 +105,22 @@ fn xmp_metadata_stream_written_to_catalog() {
 }
 
 #[test]
+fn info_trapped_requires_pdf_1_3() {
+    use crate::core::reader::metadata::TrappedState;
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
+    b.page(PageSize::A4);
+    b.set_document_info(DocumentInfo::new().trapped(TrappedState::Unknown));
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("should reject 1.2");
+    assert!(
+        matches!(error, WriteError::UnsupportedVersion(_)),
+        "{error}"
+    );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
 fn xmp_metadata_requires_pdf_1_4() {
     let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
     b.page(PageSize::A4);

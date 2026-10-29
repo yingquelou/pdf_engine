@@ -1044,7 +1044,7 @@ impl PdfBuilder {
             doc.set_object(Object::new(
                 info_num,
                 0,
-                Value::Dict(self.document_info.to_dict()),
+                Value::Dict(self.document_info.to_dict(self.version)?),
             ));
             trailer_dict = trailer_dict.insert("Info", Value::Ref(info_num, 0));
         }

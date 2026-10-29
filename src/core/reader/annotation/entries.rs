@@ -3,8 +3,9 @@
 //! `/Rect`、文本串条目、数值数组（`/C`、`/IC`、`/QuadPoints`）、`/CA` 不透明度、
 //! 边框（`/BS` 优先旧式 `/Border`，12.5.4）与外观流 `/AP`（12.5.5）。
 
-use super::{AnnotationBorder, AnnotationError, AppearanceStreams, Result, malformed};
-use crate::core::types::{Dict, Document, Value};
+use super::{Annotation, AnnotationBorder, AnnotationError, AppearanceStreams, Result, malformed};
+use crate::core::reader::metadata::parse_pdf_date;
+use crate::core::types::{Dict, Document, PdfDate, Value};
 
 pub(super) fn parse_rect(value: Option<&Value>) -> Result<[f64; 4]> {
     let value = value.ok_or_else(|| malformed("annotation has no /Rect"))?;
@@ -28,6 +29,18 @@ pub(super) fn parse_text_string(dict: &Dict, key: &str) -> Result<Option<Value>>
         Some(_) => Err(malformed(format!(
             "annotation /{key} must be a text string"
         ))),
+    }
+}
+
+impl Annotation {
+    /// `/M` 修改日期解析为 PDF 日期（7.9.4）；缺失或格式非法返回 `None`。
+    pub fn modified_date_parsed(&self) -> Option<PdfDate> {
+        self.modified_date.as_ref().and_then(parse_pdf_date)
+    }
+
+    /// `/CreationDate` 创建日期解析为 PDF 日期（7.9.4）；缺失或格式非法返回 `None`。
+    pub fn creation_date_parsed(&self) -> Option<PdfDate> {
+        self.creation_date.as_ref().and_then(parse_pdf_date)
     }
 }
 

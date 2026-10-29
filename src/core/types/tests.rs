@@ -146,6 +146,11 @@ fn pdf_date_parses_partial_fields_and_timezone_forms() {
     assert_eq!(date.day(), Some(29));
     assert_eq!(date.to_pdf_string(), "D:20240229");
 
+    let date = PdfDate::parse("D:20240101000000").unwrap();
+    assert_eq!(date.hour(), Some(0));
+    assert_eq!(date.minute(), Some(0));
+    assert_eq!(date.second(), Some(0));
+
     for (input, timezone) in [
         ("D:20240102030405Z", PdfDateTimezone::Utc),
         (

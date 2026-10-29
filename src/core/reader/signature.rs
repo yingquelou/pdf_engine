@@ -174,6 +174,13 @@ impl DocumentSignature {
             _ => None,
         }
     }
+
+    /// `/M` 签署时间解析为 PDF 日期（7.9.4）；缺失或格式非法返回 `None`。
+    pub fn date_parsed(&self) -> Option<crate::core::types::PdfDate> {
+        self.date
+            .as_ref()
+            .and_then(crate::core::reader::metadata::parse_pdf_date)
+    }
 }
 
 /// 变换方法（Table 252 与 12.8.4）。

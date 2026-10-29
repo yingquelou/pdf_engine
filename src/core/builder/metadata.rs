@@ -4,7 +4,9 @@
 //! - [`FileIdentifier`]：trailer `/ID` 文件标识符（永久 ID + 更新 ID），
 //!   含基于内容的确定性生成算法（供 E7 增量更新复用）。
 
-use crate::core::types::{Array, Dict, Value};
+use crate::core::reader::metadata::TrappedState;
+use crate::core::types::{Array, Dict, PdfDate, PdfVersion, Value};
+use crate::core::writer::WriteError;
 
 /// 写端文档信息字典（14.3.3 Table 317）。
 ///
@@ -20,6 +22,7 @@ pub struct DocumentInfo {
     producer: Option<String>,
     creation_date: Option<String>,
     mod_date: Option<String>,
+    trapped: Option<TrappedState>,
 }
 
 impl DocumentInfo {
@@ -76,6 +79,24 @@ impl DocumentInfo {
         self
     }
 
+    /// 以类型化 PDF 日期设置 `/CreationDate`（按 7.9.4 规范形式写出）。
+    pub fn creation_date_pdf(mut self, value: PdfDate) -> Self {
+        self.creation_date = Some(value.to_pdf_string());
+        self
+    }
+
+    /// 以类型化 PDF 日期设置 `/ModDate`。
+    pub fn mod_date_pdf(mut self, value: PdfDate) -> Self {
+        self.mod_date = Some(value.to_pdf_string());
+        self
+    }
+
+    /// 设置 `/Trapped`（PDF 1.3，Table 317；以名字写出）。
+    pub fn trapped(mut self, value: TrappedState) -> Self {
+        self.trapped = Some(value);
+        self
+    }
+
     /// 是否所有字段均为空（空字典不写出）。
     pub fn is_empty(&self) -> bool {
         self.title.is_none()
@@ -86,10 +107,21 @@ impl DocumentInfo {
             && self.producer.is_none()
             && self.creation_date.is_none()
             && self.mod_date.is_none()
+            && self.trapped.is_none()
     }
 
     /// 构造 `/Info` 字典；只写非空字段。
-    pub(crate) fn to_dict(&self) -> Dict {
+    ///
+    /// `/Trapped` 自 PDF 1.3 引入（Table 317），目标版本更低时
+    /// 返回 `UnsupportedVersion`。
+    pub(crate) fn to_dict(&self, version: PdfVersion) -> Result<Dict, WriteError> {
+        if self.trapped.is_some() && version < PdfVersion::V1_3 {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "/Info /Trapped requires PDF {}, got {}",
+                PdfVersion::V1_3.as_str(),
+                version.as_str()
+            )));
+        }
         use crate::core::builder::types::text_string_value;
         let mut dict = Dict::new();
         for (key, value) in [
@@ -106,7 +138,10 @@ impl DocumentInfo {
                 dict = dict.insert(key, text_string_value(text));
             }
         }
-        dict
+        if let Some(trapped) = self.trapped {
+            dict = dict.insert("Trapped", Value::Name(trapped.name().into()));
+        }
+        Ok(dict)
     }
 }
 
@@ -187,18 +222,55 @@ mod tests {
     #[test]
     fn document_info_writes_only_nonempty_fields() {
         let info = DocumentInfo::new().title("T").author("A");
-        let dict = info.to_dict();
+        let dict = info.to_dict(PdfVersion::V1_7).expect("1.7 accepts /Info");
         assert!(dict.get("Title").is_some());
         assert!(dict.get("Author").is_some());
         assert!(dict.get("Subject").is_none());
+        assert!(dict.get("Trapped").is_none());
         assert!(!info.is_empty());
         assert!(DocumentInfo::new().is_empty());
     }
 
     #[test]
+    fn document_info_writes_typed_dates_and_trapped() {
+        let created = PdfDate::parse("D:20261029120000+08'00'").expect("date");
+        let modified = PdfDate::parse("D:20261030093015Z").expect("date");
+        let info = DocumentInfo::new()
+            .creation_date_pdf(created)
+            .mod_date_pdf(modified)
+            .trapped(TrappedState::Unknown);
+        let dict = info
+            .to_dict(PdfVersion::V1_7)
+            .expect("1.7 accepts /Trapped");
+        let text = crate::core::builder::types::text_string_value;
+        assert_eq!(
+            dict.get("CreationDate"),
+            Some(&text("D:20261029120000+08'00'"))
+        );
+        assert_eq!(dict.get("ModDate"), Some(&text("D:20261030093015Z")));
+        assert_eq!(dict.get("Trapped"), Some(&Value::Name("Unknown".into())));
+    }
+
+    #[test]
+    fn document_info_trapped_requires_pdf_1_3() {
+        let info = DocumentInfo::new().trapped(TrappedState::Trapped);
+        let error = info
+            .to_dict(PdfVersion::V1_2)
+            .expect_err("1.2 rejects /Trapped");
+        assert!(
+            matches!(error, WriteError::UnsupportedVersion(_)),
+            "{error}"
+        );
+        assert!(
+            info.to_dict(PdfVersion::V1_3).is_ok(),
+            "1.3 accepts /Trapped"
+        );
+    }
+
+    #[test]
     fn document_info_encodes_non_ascii_as_utf16_hex() {
         let info = DocumentInfo::new().title("标题");
-        let dict = info.to_dict();
+        let dict = info.to_dict(PdfVersion::V1_7).expect("1.7 accepts /Info");
         match dict.get("Title") {
             Some(Value::HexString(hex)) => {
                 assert!(hex.starts_with("FEFF"), "should have BOM: {hex}");
