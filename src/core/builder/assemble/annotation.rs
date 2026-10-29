@@ -2,7 +2,7 @@
 //! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`、
 //! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
 //! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
-//! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA`）+
+//! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
@@ -324,7 +324,8 @@ pub(super) fn geometry_feature_gate(
     Ok(())
 }
 
-/// Link 专有条目对应的特性集合（Table 173）：`/H` PDF 1.2、`/PA` PDF 1.3。
+/// Link 专有条目对应的特性集合（Table 173）：`/H` PDF 1.2、`/PA` PDF 1.3、
+/// `/QuadPoints` 与 `/BS` PDF 1.6。
 pub(super) fn link_features(annot: &PdfAnnotation) -> Vec<PdfFeature> {
     let link = annot.link();
     let mut features = Vec::new();
@@ -334,10 +335,22 @@ pub(super) fn link_features(annot: &PdfAnnotation) -> Vec<PdfFeature> {
     if link.pressed_action().is_some() {
         features.push(PdfFeature::LinkAnnotationPressedAction);
     }
+    if annot.kind() == AnnotationKind::Link {
+        if annot.quad_points().is_some() {
+            features.push(PdfFeature::LinkAnnotationQuadPoints);
+        }
+        if annot.border_width().is_some()
+            || annot.border_style().is_some()
+            || !annot.border_dash().is_empty()
+        {
+            features.push(PdfFeature::LinkAnnotationBorderStyle);
+        }
+    }
     features
 }
 
-/// Link 专有条目的版本门禁（Table 173）：`/H` PDF 1.2、`/PA` PDF 1.3。
+/// Link 专有条目的版本门禁（Table 173）：`/H` PDF 1.2、`/PA` PDF 1.3、
+/// `/QuadPoints` 与 `/BS` PDF 1.6。
 pub(super) fn link_feature_gate(
     annot: &PdfAnnotation,
     version: PdfVersion,

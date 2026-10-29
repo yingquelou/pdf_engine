@@ -1,4 +1,4 @@
-//! E2 Link 注解：`/H` `/PA` 专有条目（Table 173）的写出 → 解析往返。
+//! E2 Link 注解：`/H` `/PA` `/QuadPoints` `/BS` 专有条目（Table 173）的写出 → 解析往返。
 
 use super::*;
 
@@ -15,7 +15,7 @@ fn builder_link_annotation_entries_roundtrip_through_parser() {
         AnnotationSubtype, LinkHighlightMode as ReaderLinkHighlightMode,
     };
 
-    let mut builder = PdfBuilder::with_version(pdf_engine::core::types::PdfVersion::V1_4);
+    let mut builder = PdfBuilder::with_version(pdf_engine::core::types::PdfVersion::V1_6);
     let p0 = builder.page(PageSize::A4);
     builder.add_annotation(
         p0,
@@ -29,12 +29,20 @@ fn builder_link_annotation_entries_roundtrip_through_parser() {
         PdfAnnotation::new(AnnotationKind::Link, [72.0, 660.0, 300.0, 680.0])
             .with_link_highlight(BuilderLinkHighlightMode::None),
     );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 620.0, 300.0, 640.0])
+            .with_quad_points(vec![72.0, 640.0, 300.0, 640.0, 72.0, 620.0, 300.0, 620.0])
+            .with_border_width(2.0)
+            .with_border_style(pdf_engine::core::builder::AnnotationBorderStyle::Dashed)
+            .with_border_dash(vec![3.0, 1.0]),
+    );
     let mut buf = Vec::new();
     builder.build(&mut buf).expect("build");
 
     let doc = parse_buf(&buf);
     let annotations = doc.page_annotations(0).expect("annotations");
-    assert_eq!(annotations.len(), 2);
+    assert_eq!(annotations.len(), 3);
 
     let link = &annotations[0];
     assert_eq!(link.subtype, AnnotationSubtype::Link);
@@ -61,4 +69,15 @@ fn builder_link_annotation_entries_roundtrip_through_parser() {
             .expect("absent /PA")
             .is_none()
     );
+
+    let shaped = &annotations[2];
+    assert_eq!(
+        shaped.quad_points.as_deref().map(<[f64]>::len),
+        Some(8),
+        "/QuadPoints"
+    );
+    let border = shaped.border.as_ref().expect("/BS");
+    assert_eq!(border.width, Some(2.0));
+    assert_eq!(border.style.as_deref(), Some("D"));
+    assert_eq!(border.dash, vec![3.0, 1.0]);
 }

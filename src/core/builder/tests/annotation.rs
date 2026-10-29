@@ -30,14 +30,13 @@ fn text_annotation_is_written_as_indirect_object() {
 }
 
 #[test]
-fn link_annotation_writes_uri_action_and_named_destination() {
+fn link_annotation_writes_uri_action() {
     let mut b = PdfBuilder::new();
     let p0 = b.page(PageSize::A4);
     b.add_annotation(
         p0,
         PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 100.0, 20.0])
-            .with_action(Action::Uri("https://qoder.com".into()))
-            .with_destination(AnnotationDestination::Named("chapter-1".into())),
+            .with_action(Action::Uri("https://qoder.com".into())),
     );
     let doc = b.assemble_document().expect("assemble");
     let dict = annot_object(&doc, 3, 0);
@@ -47,7 +46,22 @@ fn link_annotation_writes_uri_action_and_named_destination() {
         .expect("inline /A dict");
     assert_eq!(action.get("S"), Some(&Value::Name("URI".into())));
     assert_text_entry(action, "URI");
+    assert!(dict.get("Dest").is_none(), "/A excludes /Dest");
+}
+
+#[test]
+fn link_annotation_writes_named_destination() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 100.0, 20.0])
+            .with_destination(AnnotationDestination::Named("chapter-1".into())),
+    );
+    let doc = b.assemble_document().expect("assemble");
+    let dict = annot_object(&doc, 3, 0);
     assert_text_entry(&dict, "Dest");
+    assert!(dict.get("A").is_none(), "/Dest excludes /A");
 }
 
 #[test]

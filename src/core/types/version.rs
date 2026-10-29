@@ -161,6 +161,10 @@ pub enum PdfFeature {
     LinkAnnotationHighlighting,
     /// Link 注解按下 URI 动作（`/PA`，Table 173），PDF 1.3 引入。
     LinkAnnotationPressedAction,
+    /// Link 注解四边形激活区域（`/QuadPoints`，Table 173），PDF 1.6 引入。
+    LinkAnnotationQuadPoints,
+    /// Link 注解边框样式（`/BS`，Table 173），PDF 1.6 引入。
+    LinkAnnotationBorderStyle,
 }
 
 impl PdfFeature {
@@ -187,7 +191,9 @@ impl PdfFeature {
             | PdfFeature::AnnotationRectDifferences => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
-            | PdfFeature::PolygonCloudIntent => PdfVersion::V1_6,
+            | PdfFeature::PolygonCloudIntent
+            | PdfFeature::LinkAnnotationQuadPoints
+            | PdfFeature::LinkAnnotationBorderStyle => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption | PdfFeature::PolygonDimensionIntent => {
                 PdfVersion::V1_7
@@ -230,6 +236,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PolygonDimensionIntent => "polygon dimension intent",
             PdfFeature::LinkAnnotationHighlighting => "link annotation highlighting",
             PdfFeature::LinkAnnotationPressedAction => "link annotation pressed action",
+            PdfFeature::LinkAnnotationQuadPoints => "link annotation quad points",
+            PdfFeature::LinkAnnotationBorderStyle => "link annotation border style",
         };
         write!(f, "{name}")
     }

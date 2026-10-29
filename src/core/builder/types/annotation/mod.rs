@@ -343,7 +343,7 @@ impl PdfAnnotation {
         self
     }
 
-    /// 跳转目标 `/Dest`（与 `/A` 可同时存在；Link 注解二者取其一使用）。
+    /// 跳转目标 `/Dest`；与 `/A` 互斥（Table 173 禁止 `/A` 存在时再写 `/Dest`）。
     pub fn with_destination(mut self, destination: AnnotationDestination) -> Self {
         self.destination = Some(destination);
         self
@@ -526,6 +526,20 @@ impl PdfAnnotation {
             if quad.iter().any(|v| !v.is_finite()) {
                 return Err("annotation /QuadPoints entries must be finite".into());
             }
+            // `/QuadPoints` 属文本标记注解（Table 179）与 Link（Table 173）。
+            self.require_kind_in(
+                &[
+                    AnnotationKind::Highlight,
+                    AnnotationKind::Underline,
+                    AnnotationKind::Squiggly,
+                    AnnotationKind::StrikeOut,
+                    AnnotationKind::Link,
+                ],
+                "annotation /QuadPoints",
+            )?;
+        }
+        if self.action.is_some() && self.destination.is_some() {
+            return Err("annotation /Dest is not permitted when /A is present".into());
         }
         if let Some(AnnotationDestination::Named(name)) = &self.destination
             && name.is_empty()

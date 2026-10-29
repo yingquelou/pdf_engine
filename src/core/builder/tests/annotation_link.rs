@@ -1,6 +1,7 @@
 //! Link 注解专有条目写端测试（ISO 32000-1 12.5.6.5，Table 173）：
-//! `/H` 高亮模式与 `/PA` 按下 URI 动作的写出、归属校验、URI 约束与
-//! 逐条目版本门禁。
+//! `/H` 高亮模式、`/PA` 按下 URI 动作、`/QuadPoints` 四边形激活区域与
+//! `/BS` 边框样式的写出、归属校验、URI 约束与逐条目版本门禁，以及
+//! `/A` 与 `/Dest` 互斥。
 
 use super::support::annot_object;
 use super::*;
@@ -146,4 +147,129 @@ fn rejected_link_version_writes_no_bytes() {
         "{error}"
     );
     assert_eq!(out.len(), 0);
+}
+
+/// 带 `/QuadPoints` 与 `/BS` 的 Link 注解（Table 173，两项均 PDF 1.6）。
+fn link_quad_and_border() -> PdfAnnotation {
+    PdfAnnotation::new(AnnotationKind::Link, [72.0, 700.0, 300.0, 720.0])
+        .with_quad_points(vec![72.0, 720.0, 300.0, 720.0, 72.0, 700.0, 300.0, 700.0])
+        .with_border_width(1.5)
+        .with_border_style(AnnotationBorderStyle::Dashed)
+        .with_border_dash(vec![2.0, 1.0])
+}
+
+#[test]
+fn link_annotation_writes_quad_points_and_border_style() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_6);
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(p0, link_quad_and_border());
+    let doc = b.assemble_document().expect("assemble");
+    let dict = annot_object(&doc, 3, 0);
+
+    let quad = dict
+        .get("QuadPoints")
+        .and_then(|v| v.as_array())
+        .expect("/QuadPoints");
+    assert_eq!(quad.0.len(), 8);
+    let bs = dict.get("BS").and_then(|v| v.as_dict()).expect("/BS");
+    assert_eq!(bs.get("W"), Some(&Value::Float(1.5)));
+    assert_eq!(bs.get("S"), Some(&Value::Name("D".into())));
+    let dash = bs.get("D").and_then(|v| v.as_array()).expect("/BS /D");
+    assert_eq!(dash.0.len(), 2);
+
+    let features = doc.features.borrow();
+    for feature in [
+        PdfFeature::LinkAnnotationQuadPoints,
+        PdfFeature::LinkAnnotationBorderStyle,
+    ] {
+        assert!(features.contains(feature), "{feature} must be recorded");
+    }
+}
+
+#[test]
+fn link_quad_points_require_pdf_1_6() {
+    let annot = || {
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 10.0, 10.0])
+            .with_quad_points(vec![0.0, 0.0, 5.0, 0.0, 0.0, 5.0, 5.0, 5.0])
+    };
+    let error = build_one(annot(), PdfVersion::V1_5).expect_err("1.5 rejects Link /QuadPoints");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(message)
+            if message.contains("quad points") && message.contains("1.6")),
+        "{error}"
+    );
+    build_one(annot(), PdfVersion::V1_6).expect("Link /QuadPoints at 1.6");
+}
+
+#[test]
+fn link_border_style_requires_pdf_1_6() {
+    let annot = || {
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 10.0, 10.0])
+            .with_border_width(1.0)
+            .with_border_style(AnnotationBorderStyle::Dashed)
+    };
+    let error = build_one(annot(), PdfVersion::V1_5).expect_err("1.5 rejects Link /BS");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(message)
+            if message.contains("border style") && message.contains("1.6")),
+        "{error}"
+    );
+    build_one(annot(), PdfVersion::V1_6).expect("Link /BS at 1.6");
+}
+
+#[test]
+fn quad_points_are_rejected_on_foreign_subtypes() {
+    // Text/Ink 虽是标记类（Table 169），`/QuadPoints` 仍只属文本标记与 Link。
+    for kind in [
+        AnnotationKind::Square,
+        AnnotationKind::Text,
+        AnnotationKind::Ink,
+    ] {
+        let error = build_one(
+            PdfAnnotation::new(kind, [0.0, 0.0, 10.0, 10.0])
+                .with_quad_points(vec![0.0, 0.0, 5.0, 0.0, 0.0, 5.0, 5.0, 5.0]),
+            PdfVersion::V1_7,
+        )
+        .expect_err("foreign /QuadPoints");
+        let message = error.to_string();
+        assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+        assert!(message.contains("specific to"), "{message}");
+    }
+}
+
+#[test]
+fn action_and_destination_are_mutually_exclusive() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 10.0, 10.0])
+            .with_action(Action::Uri("https://example.com".into()))
+            .with_destination(AnnotationDestination::Named("chapter-1".into())),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("/A with /Dest");
+    let message = error.to_string();
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{message}");
+    assert!(message.contains("not permitted"), "{message}");
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn markup_quad_points_are_not_link_gated() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
+    let p0 = b.page(PageSize::A4);
+    b.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 50.0, 10.0])
+            .with_quad_points(vec![0.0, 0.0, 50.0, 0.0, 0.0, 10.0, 50.0, 10.0]),
+    );
+    let doc = b
+        .assemble_document()
+        .expect("text markup /QuadPoints at 1.3");
+    assert!(
+        !doc.features
+            .borrow()
+            .contains(PdfFeature::LinkAnnotationQuadPoints)
+    );
 }
