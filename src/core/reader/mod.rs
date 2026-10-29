@@ -92,6 +92,7 @@ pub mod signature;
 mod tests;
 pub mod text;
 pub mod viewport;
+pub mod xmp;
 mod xref;
 
 pub use lexer::Lexer;

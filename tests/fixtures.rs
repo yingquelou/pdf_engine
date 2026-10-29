@@ -260,3 +260,44 @@ fn annotated_fixture_reads_text_highlight_and_ink_annotations() {
 fn annotated_fixture_parses_without_error() {
     let _doc = parse_buf(&read_fixture("annotated.pdf")).unwrap();
 }
+
+#[test]
+fn xmp_metadata_fixture_exposes_typed_properties() {
+    use pdf_engine::core::reader::xmp::{XmpListKind, XmpValue};
+
+    let doc = parse_buf(&read_fixture("xmp-metadata.pdf")).unwrap();
+    let xmp = doc
+        .xmp()
+        .expect("parse XMP packet")
+        .expect("/Metadata present");
+    assert_eq!(
+        xmp.namespaces.get("dc").map(String::as_str),
+        Some("http://purl.org/dc/elements/1.1/")
+    );
+    assert_eq!(
+        xmp.text("{http://purl.org/dc/elements/1.1/}source"),
+        Some("Martin Thoma")
+    );
+    assert_eq!(
+        xmp.text("{http://ns.adobe.com/pdfx/1.3/}other"),
+        Some("worlds")
+    );
+    assert_eq!(
+        xmp.text("{http://ns.adobe.com/pdfx/1.3/}Style"),
+        Some("FooBarStyle")
+    );
+    let title = xmp
+        .properties
+        .get("{http://purl.org/dc/elements/1.1/}title")
+        .expect("dc:title");
+    let XmpValue::List { kind, items } = title else {
+        panic!("dc:title must be a list");
+    };
+    assert_eq!(*kind, XmpListKind::Alt);
+    assert_eq!(items[0].lang.as_deref(), Some("x-default"));
+    assert_eq!(items[0].value, "Sample PDF with XMP Metadata");
+    assert_eq!(
+        xmp.text("{http://purl.org/dc/elements/1.1/}creator"),
+        Some("John Doe")
+    );
+}
