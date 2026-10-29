@@ -166,8 +166,24 @@ impl FormField {
     pub const COMBO: u32 = 1 << 17;
     /// bit 19：可编辑组合框。
     pub const EDIT: u32 = 1 << 18;
+    /// bit 20：选项按字母排序（面向写出方）。
+    pub const SORT: u32 = 1 << 19;
+    /// bit 21：文件选择控件（PDF 1.4）。
+    pub const FILE_SELECT: u32 = 1 << 20;
     /// bit 22：多选（选择字段）。
     pub const MULTI_SELECT: u32 = 1 << 21;
+    /// bit 23：不拼写检查（PDF 1.4）。
+    pub const DO_NOT_SPELL_CHECK: u32 = 1 << 22;
+    /// bit 24：不滚动（PDF 1.4）。
+    pub const DO_NOT_SCROLL: u32 = 1 << 23;
+    /// bit 25：按 `/MaxLen` 分格排布（PDF 1.5）。
+    pub const COMB: u32 = 1 << 24;
+    /// bit 26：富文本值（PDF 1.5）。
+    pub const RICH_TEXT: u32 = 1 << 25;
+    /// bit 26：同值单选按钮联动（PDF 1.5，按钮字段专用）。
+    pub const RADIOS_IN_UNISON: u32 = 1 << 25;
+    /// bit 27：选择即提交（PDF 1.5）。
+    pub const COMMIT_ON_SEL_CHANGE: u32 = 1 << 26;
 
     fn node(
         field_type: Option<FormFieldType>,

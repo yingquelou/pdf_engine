@@ -1,5 +1,7 @@
 //! E4 读端表单测试。
 
+mod flags;
+
 use super::*;
 use crate::core::reader::color_space::ColorSpaceModel;
 use crate::core::reader::graphics_state::BlendMode;
@@ -159,44 +161,6 @@ fn acro_form_reads_field_tree_with_inheritance() {
 }
 
 #[test]
-fn widget_node_keeps_appearance_state_and_page_reference() {
-    let widget_dict = widget(arr(vec![
-        Value::Integer(0),
-        Value::Integer(0),
-        Value::Integer(20),
-        Value::Integer(20),
-    ]))
-    .insert("T", text("ack"))
-    .insert("FT", name("Btn"))
-    .insert("Ff", Value::Integer(1 << 16))
-    .insert(
-        "AP",
-        Value::Dict(Dict::new().insert("N", Value::Ref(30, 0))),
-    )
-    .insert("AS", name("On"))
-    .insert("P", Value::Ref(3, 0));
-    let doc = doc_with_acro_form(Value::Dict(
-        Dict::new().insert("Fields", arr(vec![Value::Dict(widget_dict)])),
-    ));
-    let form = doc.acro_form().expect("parse").expect("present");
-    let field = &form.fields[0];
-    assert!(field.is_widget);
-    assert_eq!(field.field_type, Some(FieldType::Button));
-    assert_eq!(field.appearance_state.as_deref(), Some("On"));
-    assert_eq!(field.page, Some((3, 0)));
-    assert_eq!(field.flags.bits(), 1 << 16);
-    assert!(field.flags.pushbutton());
-    assert_eq!(
-        field
-            .appearance
-            .as_ref()
-            .and_then(Value::as_dict)
-            .and_then(|dict| dict.get("N")),
-        Some(&Value::Ref(30, 0))
-    );
-}
-
-#[test]
 fn widget_normal_appearance_states_are_extracted() {
     let states = Dict::new()
         .insert("Off", Value::Ref(30, 0))
@@ -246,41 +210,6 @@ fn widget_normal_appearance_states_are_extracted() {
     ));
     let form = doc.acro_form().expect("parse").expect("present");
     assert!(form.fields[0].appearance_normal_states.is_empty());
-}
-
-#[test]
-fn choice_button_and_signature_types() {
-    let doc = doc_with_acro_form(Value::Dict(Dict::new().insert(
-        "Fields",
-        arr(vec![
-            Value::Dict(
-                Dict::new()
-                    .insert("FT", name("Btn"))
-                    .insert("Ff", Value::Integer((1 << 15) | (1 << 16))),
-            ),
-            Value::Dict(
-                Dict::new()
-                    .insert("FT", name("Ch"))
-                    .insert("Opt", arr(vec![text("A"), text("B")]))
-                    .insert("V", name("B"))
-                    .insert("Ff", Value::Integer((1 << 17) | (1 << 21))),
-            ),
-            Value::Dict(Dict::new().insert("FT", name("Sig"))),
-        ]),
-    )));
-    let form = doc.acro_form().expect("parse").expect("present");
-    assert_eq!(form.fields[0].field_type, Some(FieldType::Button));
-    assert!(form.fields[0].flags.radio());
-    assert!(form.fields[0].flags.pushbutton());
-    assert_eq!(form.fields[1].field_type, Some(FieldType::Choice));
-    assert_eq!(
-        form.fields[1].options.as_ref().map(|options| options.len()),
-        Some(2)
-    );
-    assert_eq!(form.fields[1].value, Some(name("B")));
-    assert!(form.fields[1].flags.combo());
-    assert!(form.fields[1].flags.multi_select());
-    assert_eq!(form.fields[2].field_type, Some(FieldType::Signature));
 }
 
 #[test]

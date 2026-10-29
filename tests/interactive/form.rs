@@ -464,3 +464,38 @@ fn builder_acro_form_default_nonfont_resources_roundtrip_through_parser() {
 
     assert_eq!(dr.proc_set, ["PDF", "Text"]);
 }
+
+/// 写端 `FILE_SELECT`/`DO_NOT_SCROLL`/`COMB`/`RICH_TEXT` 标志经 `/Ff`
+/// 写出后应被读端按 Table 228 解码（12.7.4.3）。
+#[test]
+fn builder_text_field_flags_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{AcroForm, FormField, PageSize, PdfBuilder};
+    use pdf_engine::core::reader::form::FieldType;
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::text("path", [72.0, 700.0, 300.0, 720.0]).with_flags(
+            FormField::FILE_SELECT
+                | FormField::DO_NOT_SCROLL
+                | FormField::COMB
+                | FormField::RICH_TEXT,
+        ),
+    );
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let form = doc.acro_form().expect("parse form").expect("form present");
+    let field = &form.fields[0];
+    assert_eq!(field.field_type, Some(FieldType::Text));
+    assert!(field.flags.file_select());
+    assert!(field.flags.do_not_scroll());
+    assert!(field.flags.comb());
+    assert!(field.flags.rich_text());
+    assert!(!field.flags.multiline());
+    assert!(!field.flags.multi_select());
+}
