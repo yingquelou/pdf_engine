@@ -41,6 +41,7 @@ mod entries;
 mod kind;
 mod link;
 mod measure;
+mod redact;
 pub mod subtype;
 
 use entries::{
@@ -290,9 +291,11 @@ pub struct Annotation {
     pub caption_position: Option<CaptionPosition>,
     /// 题注相对 `/LLO` 位置的偏移 `/CO`（PDF 1.7，缺省 `[0 0]`）。
     pub caption_offset: Option<[f64; 2]>,
-    /// FreeText 注解默认外观串 `/DA`（Table 174 必填；有 `/AP` 时外观流优先）。
+    /// FreeText 默认外观串 `/DA`（Table 174 必填；有 `/AP` 时外观流优先），
+    /// Redact 叠文字符串 `/DA`（Table 192）同用此字段。
     pub default_appearance: Option<String>,
-    /// FreeText 对齐方式 `/Q`（0 左、1 居中、2 右；PDF 1.4，缺省 0）。
+    /// 文本对齐方式 `/Q`（0 左、1 居中、2 右；FreeText PDF 1.4、
+    /// Redact Table 192 共用此键，缺省 0）。
     pub quadding: Option<u8>,
     /// FreeText 富文本默认样式串 `/DS`（PDF 1.5）。
     pub default_style: Option<String>,
@@ -317,6 +320,13 @@ pub struct Annotation {
     /// Link 按下 URI 动作 `/PA` 原始值（PDF 1.3）；类型化解析见
     /// [`Document::annotation_pressed_action`]。
     pub pressed_action: Option<Value>,
+    /// Redact 涂消后叠加文本 `/OverlayText`（Table 192，PDF 1.7）。
+    pub overlay_text: Option<String>,
+    /// Redact `/Repeat`：叠加文本是否平铺填满涂消区（缺省 false）。
+    pub repeat_overlay_text: Option<bool>,
+    /// Redact 叠加外观 `/RO` 原值（Form XObject 流或引用）；
+    /// 声明它时 `/IC` `/OverlayText` `/DA` `/Q` 按 Table 192 被忽略。
+    pub overlay_appearance: Option<Value>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -499,6 +509,7 @@ fn parse_annotation(
         None => AnnotationFlags::default(),
     };
     let entries = subtype::parse_subtype_entries(dict)?;
+    let redact = redact::parse_redact_entries(dict)?;
 
     Ok(Annotation {
         page_index,
@@ -552,6 +563,9 @@ fn parse_annotation(
         polygon_intent: entries.polygon_intent,
         link_highlight: entries.link.highlight,
         pressed_action: entries.link.pressed_action,
+        overlay_text: redact.overlay_text,
+        repeat_overlay_text: redact.repeat_overlay_text,
+        overlay_appearance: redact.overlay_appearance,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

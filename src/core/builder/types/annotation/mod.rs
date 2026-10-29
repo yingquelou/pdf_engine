@@ -9,7 +9,8 @@
 //! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`（Text/Caret/
 //! Ink/Line）、`free_text`（FreeText，Table 174）、`geometry`
 //! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）
-//! 与 `link`（Link，Table 173 的 `/H` `/PA`）；`measure` 覆盖 12.9 的
+//! 、`link`（Link，Table 173 的 `/H` `/PA`）与 `redact`（Redact，Table 192
+//! 的 `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`）；`measure` 覆盖 12.9 的
 //! `/Measure` 测量字典（Table 261–263）。
 
 mod border;
@@ -18,6 +19,7 @@ mod geometry;
 mod kind;
 mod link;
 mod measure;
+mod redact;
 mod subtype;
 
 pub use border::BorderArray;
@@ -29,6 +31,7 @@ pub use kind::AnnotationKind;
 use link::LinkEntries;
 pub use link::LinkHighlightMode;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
+use redact::RedactEntries;
 use subtype::LineEntries;
 pub(crate) use subtype::validate_name_value;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
@@ -103,6 +106,7 @@ pub struct PdfAnnotation {
     free_text: FreeTextEntries,
     geometry: GeometryEntries,
     link: LinkEntries,
+    redact: RedactEntries,
     measure: Option<Measure>,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
@@ -150,6 +154,7 @@ impl PdfAnnotation {
             free_text: FreeTextEntries::default(),
             geometry: GeometryEntries::default(),
             link: LinkEntries::default(),
+            redact: RedactEntries::default(),
             measure: None,
             action: None,
             destination: None,
@@ -496,7 +501,8 @@ impl PdfAnnotation {
             if quad.iter().any(|v| !v.is_finite()) {
                 return Err("annotation /QuadPoints entries must be finite".into());
             }
-            // `/QuadPoints` 属文本标记注解（Table 179）与 Link（Table 173）。
+            // `/QuadPoints` 属文本标记注解（Table 179）、Link（Table 173）
+            // 与 Redact（Table 192）。
             self.require_kind_in(
                 &[
                     AnnotationKind::Highlight,
@@ -504,6 +510,7 @@ impl PdfAnnotation {
                     AnnotationKind::Squiggly,
                     AnnotationKind::StrikeOut,
                     AnnotationKind::Link,
+                    AnnotationKind::Redact,
                 ],
                 "annotation /QuadPoints",
             )?;

@@ -239,9 +239,10 @@ impl PdfBuilder {
                 used_forms.insert(soft_mask.group);
             }
         }
-        // 注解 `/AP` 外观流引用同一 Form XObject 池（12.5.5）：`/N` 单一流、
-        // `/N` 状态子字典各状态、`/D` 与 `/R` 都计入；句柄越界在此拒绝，
-        // 引用到的表单与页面绘制表单一样分配对象号。
+        // 注解 `/AP` 外观流与 Redact `/RO` 叠加外观引用同一 Form XObject 池
+        // （12.5.5、Table 192）：`/N` 单一流、`/N` 状态子字典各状态、`/D`、
+        // `/R` 与 `/RO` 都计入；句柄越界在此拒绝，引用到的表单与页面绘制
+        // 表单一样分配对象号。
         for (handle, entry) in self.annotations.iter().enumerate() {
             let mut handles: Vec<usize> = [
                 entry.annot.appearance_normal(),
@@ -262,6 +263,15 @@ impl PdfBuilder {
                 if form >= self.forms.len() {
                     return Err(WriteError::InvalidObject(format!(
                         "annotation handle {handle}: /AP references unknown form handle {form}"
+                    )));
+                }
+                used_forms.insert(form);
+            }
+            // `/RO` 的越界句柄单独报错，与 `/AP` 的消息区分。
+            if let Some(form) = entry.annot.redact().overlay_form() {
+                if form >= self.forms.len() {
+                    return Err(WriteError::InvalidObject(format!(
+                        "annotation handle {handle}: /RO references unknown form handle {form}"
                     )));
                 }
                 used_forms.insert(form);

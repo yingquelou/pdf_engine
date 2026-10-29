@@ -17,6 +17,7 @@
 //! - `annotation_link`：Link 注解 `/H` `/PA` 条目（Table 173）与版本门禁；
 //! - `annotation_subtype_table`：写端子类型集与读端 Table 169 的一致性与子类型版本门禁；
 //! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出、配对冲突与必填校验（12.5.2）；
+//! - `annotation_redact`：Redact 注解条目（Table 192）的取值契约与 PDF 1.7 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
@@ -45,6 +46,7 @@ mod annotation_line;
 mod annotation_link;
 mod annotation_measure;
 mod annotation_popup;
+mod annotation_redact;
 mod annotation_subtype_table;
 mod choice_indices;
 mod cid;

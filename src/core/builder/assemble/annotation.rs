@@ -3,7 +3,8 @@
 //! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
 //! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
 //! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`、
-//! Popup `/Parent` `/Open`、Line/Polygon/PolyLine `/Measure`）+
+//! Popup `/Parent` `/Open`、Redact `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`
+//! （Table 192）、Line/Polygon/PolyLine `/Measure`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 //! `/Popup` 与 `/Parent` 只需声明一侧，另一侧由 `annotation_popup::pair_popups`
 //! 补出（12.5.2、Table 163、Table 183）。
@@ -182,6 +183,27 @@ pub(super) fn annotation_dict(
     }
     if let Some(action) = link.pressed_action() {
         dict = dict.insert("PA", Value::Dict(action.to_dict()));
+    }
+    let redact = annot.redact();
+    if let Some(text) = redact.overlay_text() {
+        dict = dict.insert("OverlayText", text_string_value(text));
+    }
+    if let Some(appearance) = redact.appearance_string() {
+        dict = dict.insert("DA", text_string_value(appearance));
+    }
+    if let Some(quadding) = redact.quadding() {
+        dict = dict.insert("Q", Value::Integer(i64::from(quadding)));
+    }
+    if let Some(repeat) = redact.repeat() {
+        dict = dict.insert("Repeat", Value::Bool(repeat));
+    }
+    if let Some(form) = redact.overlay_form() {
+        let num = form_nums.get(form).ok_or_else(|| {
+            WriteError::InvalidObject(format!(
+                "annotation handle {handle}: /RO references unknown form handle {form}"
+            ))
+        })?;
+        dict = dict.insert("RO", Value::Ref(*num, 0));
     }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用

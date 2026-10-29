@@ -430,6 +430,7 @@ impl PdfAnnotation {
         self.validate_free_text_entries()?;
         self.validate_geometry_entries()?;
         self.validate_measure_entries()?;
+        self.validate_redact_entries()?;
         // 文本标记注解的 `/QuadPoints` 是 Table 179 必填条目，空数组视同缺失。
         if matches!(
             self.kind,
