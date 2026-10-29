@@ -29,6 +29,7 @@
 
 mod acro_form;
 mod annotation;
+mod annotation_contract;
 mod annotation_free_text;
 mod annotation_geometry;
 mod annotation_line;

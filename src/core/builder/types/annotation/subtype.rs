@@ -434,6 +434,29 @@ impl PdfAnnotation {
         self.validate_free_text_entries()?;
         self.validate_geometry_entries()?;
         self.validate_measure_entries()?;
+        // 文本标记注解的 `/QuadPoints` 是 Table 179 必填条目，空数组视同缺失。
+        if matches!(
+            self.kind,
+            AnnotationKind::Highlight
+                | AnnotationKind::Underline
+                | AnnotationKind::Squiggly
+                | AnnotationKind::StrikeOut
+        ) && self.quad_points.as_ref().is_none_or(|quad| quad.is_empty())
+        {
+            return Err(format!(
+                "{} annotation requires /QuadPoints (Table 179)",
+                self.kind.name()
+            ));
+        }
+        // 12.5.6.14：popup 注解不得带外观流或关联动作。
+        if self.kind == AnnotationKind::Popup {
+            if self.has_appearance() {
+                return Err("Popup annotation shall not have an appearance stream (/AP)".into());
+            }
+            if self.action.is_some() {
+                return Err("Popup annotation shall not have associated actions (/A)".into());
+            }
+        }
         Ok(())
     }
 }

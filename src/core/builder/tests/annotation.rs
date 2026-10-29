@@ -258,7 +258,8 @@ fn squiggly_requires_pdf_1_4() {
     let p0 = b.page(PageSize::A4);
     b.add_annotation(
         p0,
-        PdfAnnotation::new(AnnotationKind::Squiggly, [0.0, 0.0, 50.0, 10.0]),
+        PdfAnnotation::new(AnnotationKind::Squiggly, [0.0, 0.0, 50.0, 10.0])
+            .with_quad_points(vec![0.0, 0.0, 50.0, 0.0, 0.0, 10.0, 50.0, 10.0]),
     );
     let mut out = Vec::new();
     let error = b.build(&mut out).expect_err("1.3 must reject Squiggly");
@@ -275,7 +276,8 @@ fn markup_requires_pdf_1_3() {
     let p0 = b.page(PageSize::A4);
     b.add_annotation(
         p0,
-        PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 50.0, 10.0]),
+        PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 50.0, 10.0])
+            .with_quad_points(vec![0.0, 0.0, 50.0, 0.0, 0.0, 10.0, 50.0, 10.0]),
     );
     let mut out = Vec::new();
     let error = b
@@ -487,7 +489,9 @@ fn ink_annotation_writes_ink_list_paths() {
 #[test]
 fn subtype_entries_are_rejected_on_other_subtypes() {
     let cases = vec![
-        PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 10.0, 10.0]).with_state("Marked"),
+        PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 10.0, 10.0])
+            .with_quad_points(vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 10.0])
+            .with_state("Marked"),
         PdfAnnotation::new(AnnotationKind::Square, [0.0, 0.0, 10.0, 10.0]).with_icon_name("Note"),
         PdfAnnotation::new(AnnotationKind::Link, [0.0, 0.0, 10.0, 10.0]).with_open(true),
         PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_symbol("Cross"),

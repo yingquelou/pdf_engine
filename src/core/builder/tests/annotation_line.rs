@@ -105,6 +105,7 @@ fn line_entries_are_rejected_on_other_subtypes() {
         PdfAnnotation::new(AnnotationKind::Square, [0.0, 0.0, 10.0, 10.0])
             .with_line_endpoints([0.0, 0.0, 5.0, 5.0]),
         PdfAnnotation::new(AnnotationKind::Highlight, [0.0, 0.0, 10.0, 10.0])
+            .with_quad_points(vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 10.0])
             .with_line_endings(LineEndStyle::None, LineEndStyle::None),
         PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]).with_caption(true),
         PdfAnnotation::new(AnnotationKind::Ink, [0.0, 0.0, 10.0, 10.0]).with_leader_length(4.0),
