@@ -574,3 +574,41 @@ fn builder_radio_group_options_roundtrip_through_parser() {
     assert_eq!(states(&group.kids[0]), vec!["0", "Off"]);
     assert_eq!(states(&group.kids[1]), vec!["1", "Off"]);
 }
+
+/// 写入 → 重新解析：多选选择字段的 `/TI` 与 `/I`（Table 231）应类型化回读。
+#[test]
+fn builder_choice_indices_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{AcroForm, FormField, FormOption, PageSize, PdfBuilder};
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_4);
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::choice("size", [72.0, 500.0, 200.0, 520.0])
+            .with_option(FormOption::new("S").with_display("Small"))
+            .with_option(FormOption::new("M"))
+            .with_option(FormOption::new("L"))
+            .with_flags(FormField::MULTI_SELECT)
+            .with_top_index(1)
+            .with_alternate_indices([0, 2]),
+    );
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let form = doc.acro_form().expect("parse form").expect("form present");
+    let field = &form.fields[0];
+    assert_eq!(field.top_index, Some(1));
+    assert_eq!(field.alternate_indices, Some(vec![0, 2]));
+    let options = field.options.as_ref().expect("/Opt");
+    assert_eq!(
+        options
+            .iter()
+            .map(|option| (option.export(), option.display()))
+            .collect::<Vec<_>>(),
+        vec![("S", Some("Small")), ("M", None), ("L", None)]
+    );
+}

@@ -43,6 +43,7 @@ mod annotation_line;
 mod annotation_link;
 mod annotation_measure;
 mod annotation_subtype_table;
+mod choice_indices;
 mod cid;
 mod cid_cmap_multibyte;
 mod color_space;

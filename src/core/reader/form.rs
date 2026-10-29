@@ -153,6 +153,10 @@ pub struct Field {
     /// `/Opt` 选项数组：选择字段按 Table 231 类型化，按钮字段为
     /// Widget 开状态名称（Table 227，仅按钮字段可继承）。
     pub options: Option<Vec<FormOption>>,
+    /// 选择字段 `/TI` 首可见选项索引（Table 231，缺省即 `None`）。
+    pub top_index: Option<i64>,
+    /// 选择字段 `/I` 多选索引数组（Table 231，PDF 1.4），严格升序。
+    pub alternate_indices: Option<Vec<i64>>,
     /// 该节点自身是否为 Widget 注解（`/Subtype /Widget`）。
     pub is_widget: bool,
     /// Widget `/Rect`。
@@ -170,7 +174,7 @@ pub struct Field {
     pub actions: Option<FieldActions>,
     /// 子字段/子 Widget。
     pub kids: Vec<Field>,
-    /// 完整字段字典，未建模条目（`/DS`、`/RV`、`/I` 等）经此访问。
+    /// 完整字段字典，未建模条目（`/DS`、`/RV` 等）经此访问。
     pub dict: Dict,
 }
 
@@ -338,6 +342,20 @@ impl FieldReader<'_> {
             None if matches!(field_type, Some(FieldType::Button)) => inherited.options.clone(),
             None => None,
         };
+        // `/TI`、`/I` 只描述本字段自己的 `/Opt`（Table 231 未标记可继承）。
+        let option_count = options.as_ref().map_or(0, Vec::len);
+        let top_index = match dict.get("TI") {
+            Some(value) => Some(options::parse_top_index(value, option_count)?),
+            None => None,
+        };
+        let alternate_indices = match dict.get("I") {
+            Some(value) => Some(options::parse_alternate_indices(
+                self.document,
+                value,
+                option_count,
+            )?),
+            None => None,
+        };
 
         let is_widget = matches!(dict.get("Subtype").and_then(Value::as_name), Some("Widget"));
         let rect = if is_widget {
@@ -405,6 +423,8 @@ impl FieldReader<'_> {
             quadding,
             max_len,
             options,
+            top_index,
+            alternate_indices,
             is_widget,
             rect,
             appearance,

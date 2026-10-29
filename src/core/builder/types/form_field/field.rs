@@ -1,20 +1,7 @@
-//! 交互表单写端（ISO 32000-1 12.7.2–12.7.4）。
-//!
-//! [`AcroForm`] 持有表单级选项（`/NeedAppearances`、`/DA`、`/DR` 默认
-//! 字体资源）与按页绑定的
-//! 字段树；[`FormField`] 以链式构造声明字段条目（`/T`、`/FT`、`/Ff`、
-//! `/V`/`/DV`、`/DA`、`/Q`、`/MaxLen`、`/Opt`、`/TU`）与子字段。
-//!
-//! 带 [`FormField::new`] 矩形（`/Rect`）的终端节点是 Widget 注解，写端
-//! 输出字段与 Widget 合并字典并登记进页面 `/Annots`；无矩形的节点是
-//! 纯字段容器（`/Kids`）。`/AP` 外观流句柄指向
-//! [`PdfBuilder::form_xobject`](super::super::PdfBuilder::form_xobject) 池。
-//! 经 [`PdfBuilder::set_acro_form`](super::super::PdfBuilder::set_acro_form)
-//! 注册后，由 assemble 写成目录 `/AcroForm` 与独立字段对象。
+//! 字段树节点：`/FT`、`/Ff`、`/V`、`/Opt`、`/AP`、`/AA` 等条目的链式构造器。
 
-use super::{Action, ColorSpace, Font, GraphicsState};
+use crate::core::builder::types::Action;
 
-/// 字段类型（`/FT`，Table 220）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormFieldType {
     /// 文本字段（`/Tx`）。
@@ -135,6 +122,8 @@ pub struct FormField {
     quadding: Option<u8>,
     max_len: Option<u32>,
     options: Vec<FormOption>,
+    top_index: Option<u32>,
+    alternate_indices: Vec<u32>,
     tooltip: Option<String>,
     rect: Option<[f64; 4]>,
     annotation_flags: u32,
@@ -204,6 +193,8 @@ impl FormField {
             quadding: None,
             max_len: None,
             options: Vec::new(),
+            top_index: None,
+            alternate_indices: Vec::new(),
             tooltip: None,
             rect,
             annotation_flags: 0,
@@ -342,6 +333,21 @@ impl FormField {
         self
     }
 
+    /// 可滚动列表框首个可见选项的 `/Opt` 下标（`/TI`，Table 231，缺省 0）；
+    /// 仅选择字段可用，下标须落在本节点 `/Opt` 之内。
+    pub fn with_top_index(mut self, top_index: u32) -> Self {
+        self.top_index = Some(top_index);
+        self
+    }
+
+    /// 多选选择字段当前选中项的 `/Opt` 下标数组（`/I`，Table 231，PDF 1.4）：
+    /// 须严格升序、不重复并要求 [`FormField::MULTI_SELECT`] 标志；与 `/V`
+    /// 冲突时阅读器以 `/V` 为准。
+    pub fn with_alternate_indices(mut self, indices: impl IntoIterator<Item = u32>) -> Self {
+        self.alternate_indices.extend(indices);
+        self
+    }
+
     /// 工具提示 `/TU`。
     pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
@@ -446,6 +452,14 @@ impl FormField {
         &self.options
     }
 
+    pub(crate) fn top_index(&self) -> Option<u32> {
+        self.top_index
+    }
+
+    pub(crate) fn alternate_indices(&self) -> &[u32] {
+        &self.alternate_indices
+    }
+
     pub(crate) fn tooltip(&self) -> Option<&str> {
         self.tooltip.as_deref()
     }
@@ -488,116 +502,5 @@ impl FormField {
 
     pub(crate) fn kids(&self) -> &[FormField] {
         &self.kids
-    }
-}
-
-/// AcroForm 写端配置：表单级条目与按页绑定的字段树。
-#[derive(Debug, Clone, Default)]
-pub struct AcroForm {
-    need_appearances: bool,
-    default_appearance: Option<String>,
-    default_fonts: Vec<(String, Font)>,
-    default_ext_gstates: Vec<(String, GraphicsState)>,
-    default_color_spaces: Vec<(String, ColorSpace)>,
-    proc_set: Vec<String>,
-    calculation_order: Option<Vec<String>>,
-    fields: Vec<(usize, FormField)>,
-}
-
-impl AcroForm {
-    /// 新建空表单配置。
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// `/NeedAppearances`：要求阅读器为字段生成外观流。
-    pub fn with_need_appearances(mut self, need_appearances: bool) -> Self {
-        self.need_appearances = need_appearances;
-        self
-    }
-
-    /// 文档级默认外观字符串 `/DA`。
-    pub fn with_default_appearance(mut self, appearance: impl Into<String>) -> Self {
-        self.default_appearance = Some(appearance.into());
-        self
-    }
-
-    /// `/DR /Font` 默认资源：把外观字符串引用的资源名（如 `Helv`）绑定
-    /// 到字体；同一字体与页面已用字体去重共享对象，重名报错。
-    pub fn with_default_font(mut self, name: impl Into<String>, font: Font) -> Self {
-        self.default_fonts.push((name.into(), font));
-        self
-    }
-
-    /// `/DR /ExtGState` 默认图形状态资源：外观流用 `/name gs` 引用。
-    /// 只接受不依赖外部对象（字体、软蒙版、函数或半色调）的自包含状态。
-    pub fn with_default_ext_gstate(
-        mut self,
-        name: impl Into<String>,
-        state: GraphicsState,
-    ) -> Self {
-        self.default_ext_gstates.push((name.into(), state));
-        self
-    }
-
-    /// `/DR /ColorSpace` 默认颜色空间资源（Table 34），外观流用
-    /// `/name cs` 引用。
-    pub fn with_default_color_space(mut self, name: impl Into<String>, space: ColorSpace) -> Self {
-        self.default_color_spaces.push((name.into(), space));
-        self
-    }
-
-    /// `/DR /ProcSet` 过程集名称数组（Table 34）：常用 `/PDF`、`/Text`、
-    /// `/ImageB`、`/ImageC`、`/ImageI`；名称须合法且不重复。
-    pub fn with_proc_set(mut self, names: Vec<String>) -> Self {
-        self.proc_set = names;
-        self
-    }
-
-    /// 追加一个顶层字段树；`page` 为该树内未显式指定页号的 Widget 的
-    /// 绑定页（0 基）。
-    pub fn add_field(&mut self, page: usize, field: FormField) -> &mut Self {
-        self.fields.push((page, field));
-        self
-    }
-
-    /// 计算顺序 `/CO`（Table 218，PDF 1.3）：按全限定名列出带 `/C`
-    /// 计算动作的字段，定义重算顺序；缺省时按字段树前序自动生成。
-    /// 显式名录必须恰好覆盖全部计算字段且不得重复。
-    pub fn with_calculation_order(mut self, names: Vec<String>) -> Self {
-        self.calculation_order = Some(names);
-        self
-    }
-
-    pub(crate) fn need_appearances(&self) -> bool {
-        self.need_appearances
-    }
-
-    pub(crate) fn default_appearance(&self) -> Option<&str> {
-        self.default_appearance.as_deref()
-    }
-
-    pub(crate) fn default_fonts(&self) -> &[(String, Font)] {
-        &self.default_fonts
-    }
-
-    pub(crate) fn default_ext_gstates(&self) -> &[(String, GraphicsState)] {
-        &self.default_ext_gstates
-    }
-
-    pub(crate) fn default_color_spaces(&self) -> &[(String, ColorSpace)] {
-        &self.default_color_spaces
-    }
-
-    pub(crate) fn proc_set(&self) -> &[String] {
-        &self.proc_set
-    }
-
-    pub(crate) fn calculation_order(&self) -> Option<&[String]> {
-        self.calculation_order.as_deref()
-    }
-
-    pub(crate) fn fields(&self) -> &[(usize, FormField)] {
-        &self.fields
     }
 }

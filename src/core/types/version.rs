@@ -175,6 +175,8 @@ pub enum PdfFeature {
     FormFieldAdditionalActions,
     /// 复选框与单选按钮字段的 `/Opt` 导出值数组（Table 227），PDF 1.4 引入。
     FormButtonOptions,
+    /// 选择字段的多选索引数组 `/I`（Table 231），PDF 1.4 引入。
+    FormChoiceIndices,
     /// AcroForm 计算顺序（`/CO`，Table 218），PDF 1.3 引入。
     FormCalculationOrder,
     /// 表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5.2–12.7.5.4），
@@ -209,7 +211,8 @@ impl PdfFeature {
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
-            | PdfFeature::FormButtonOptions => PdfVersion::V1_4,
+            | PdfFeature::FormButtonOptions
+            | PdfFeature::FormChoiceIndices => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -271,6 +274,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AnnotationBorderDash => "annotation border dash array",
             PdfFeature::FormFieldAdditionalActions => "form field additional actions",
             PdfFeature::FormButtonOptions => "button form field options",
+            PdfFeature::FormChoiceIndices => "choice field alternate indices",
             PdfFeature::FormCalculationOrder => "form calculation order",
             PdfFeature::FormDataActions => "form data actions",
             PdfFeature::FormActionFieldNames => "form action field names",

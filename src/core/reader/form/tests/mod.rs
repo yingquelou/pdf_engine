@@ -1,5 +1,6 @@
 //! E4 读端表单测试。
 
+mod choice;
 mod flags;
 mod options;
 
