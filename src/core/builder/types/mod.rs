@@ -42,8 +42,8 @@ mod type3;
 pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 pub use annotation::{
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, BorderEffect, BorderEffectStyle,
-    CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle, LineIntent, PdfAnnotation,
-    PolygonIntent,
+    CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle, LineIntent, LinkHighlightMode,
+    PdfAnnotation, PolygonIntent,
 };
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;

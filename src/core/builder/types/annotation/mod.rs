@@ -7,17 +7,21 @@
 //! 经 [`PdfBuilder::add_annotation`](super::super::PdfBuilder::add_annotation)
 //! 绑定到页面后，由 assemble 写为独立间接对象并登记进页面 `/Annots`。
 //! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`（Text/Caret/
-//! Ink/Line）、`free_text`（FreeText，Table 174）与 `geometry`
-//! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）。
+//! Ink/Line）、`free_text`（FreeText，Table 174）、`geometry`
+//! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）
+//! 与 `link`（Link，Table 173 的 `/H` `/PA`）。
 
 mod free_text;
 mod geometry;
+mod link;
 mod subtype;
 
 use free_text::FreeTextEntries;
 pub use free_text::{BorderEffect, BorderEffectStyle, CalloutLine, FreeTextIntent};
 use geometry::GeometryEntries;
 pub use geometry::PolygonIntent;
+use link::LinkEntries;
+pub use link::LinkHighlightMode;
 use subtype::LineEntries;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
@@ -196,6 +200,7 @@ pub struct PdfAnnotation {
     line: LineEntries,
     free_text: FreeTextEntries,
     geometry: GeometryEntries,
+    link: LinkEntries,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -237,6 +242,7 @@ impl PdfAnnotation {
             line: LineEntries::default(),
             free_text: FreeTextEntries::default(),
             geometry: GeometryEntries::default(),
+            link: LinkEntries::default(),
             action: None,
             destination: None,
             popup: None,

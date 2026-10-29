@@ -421,6 +421,7 @@ impl PdfAnnotation {
                 return Err("annotation /InkList entries must be finite".into());
             }
         }
+        self.validate_link_entries()?;
         self.validate_free_text_entries()?;
         self.validate_geometry_entries()?;
         Ok(())

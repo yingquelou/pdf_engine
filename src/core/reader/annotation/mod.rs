@@ -16,7 +16,9 @@
 //!   FreeText `/DA`、`/Q`、`/DS`、`/CL`、`/IT`、`/BE`、`/RD`、`/LE`
 //!   （Table 174 + Table 167，`/RC` 属标记类通用条目）；
 //!   Square/Circle `/BE`、`/RD`（Table 177，与 FreeText 共用键）；
-//!   Polygon/PolyLine `/Vertices`、`/LE`、`/BE`、`/IT`（Table 178）。
+//!   Polygon/PolyLine `/Vertices`、`/LE`、`/BE`、`/IT`（Table 178）；
+//!   Link `/H` 高亮模式与 `/PA` 按下 URI 动作（Table 173，`/PA` 经
+//!   `Document::annotation_pressed_action` 解析为 12.6 动作模型）。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
 //!   Line `/Measure`、Polygon `/Measure` 等）。
 //!
@@ -25,6 +27,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::core::reader::action::{Action, ActionError};
 use crate::core::reader::navigation::{NavigationError, OutlineDestination};
 use crate::core::types::{Dict, Document, Value};
 
@@ -33,6 +36,7 @@ mod tests;
 
 mod entries;
 mod kind;
+mod link;
 pub mod subtype;
 
 use entries::{
@@ -40,6 +44,7 @@ use entries::{
     parse_text_string,
 };
 pub use kind::{AnnotationSubtype, Row, TABLE_169};
+pub use link::LinkHighlightMode;
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
     LineIntent, PolygonIntent,
@@ -83,6 +88,15 @@ impl From<NavigationError> for AnnotationError {
             NavigationError::Malformed(message) => Self::Malformed(message),
             NavigationError::PageNotFound => Self::PageNotFound,
             NavigationError::LimitExceeded(what) => Self::LimitExceeded(what),
+        }
+    }
+}
+
+impl From<ActionError> for AnnotationError {
+    fn from(error: ActionError) -> Self {
+        match error {
+            ActionError::Malformed(message) => Self::Malformed(message),
+            ActionError::PageNotFound => Self::PageNotFound,
         }
     }
 }
@@ -292,6 +306,11 @@ pub struct Annotation {
     pub vertices: Option<Vec<f64>>,
     /// Polygon/PolyLine 意图 `/IT`（PDF 1.6 云状、1.7 标注）。
     pub polygon_intent: Option<PolygonIntent>,
+    /// Link 高亮模式 `/H`（Table 173，PDF 1.2，缺省 `Invert`）。
+    pub link_highlight: Option<LinkHighlightMode>,
+    /// Link 按下 URI 动作 `/PA` 原始值（PDF 1.3）；类型化解析见
+    /// [`Document::annotation_pressed_action`]。
+    pub pressed_action: Option<Value>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -364,6 +383,17 @@ impl Document {
             self, value, &pages,
         )?;
         Ok(Some(target))
+    }
+
+    /// 解析 Link 注解 `/PA` 按下动作（Table 173，PDF 1.3）。
+    ///
+    /// `/PA` 是 Web Capture 把 URI 动作改写为跳转动作时保留的原 URI 数据；
+    /// 无 `/PA` 返回 `None`，动作字典不可解析时返回类型化错误。
+    pub fn annotation_pressed_action(&self, annotation: &Annotation) -> Result<Option<Action>> {
+        let Some(value) = annotation.pressed_action.as_ref() else {
+            return Ok(None);
+        };
+        Ok(Some(self.action(value)?))
     }
 
     /// 按 0 基页号遍历页面树，返回页面字典（含直接嵌入页）。
@@ -509,6 +539,8 @@ fn parse_annotation(
         callout_ending: entries.callout_ending,
         vertices: entries.vertices,
         polygon_intent: entries.polygon_intent,
+        link_highlight: entries.link.highlight,
+        pressed_action: entries.link.pressed_action,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

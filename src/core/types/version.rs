@@ -157,6 +157,10 @@ pub enum PdfFeature {
     /// Polygon/PolyLine 标注意图（`/IT /PolygonDimension`、`/PolyLineDimension`，
     /// Table 178），PDF 1.7 引入。
     PolygonDimensionIntent,
+    /// Link 注解高亮模式（`/H`，Table 173），PDF 1.2 引入。
+    LinkAnnotationHighlighting,
+    /// Link 注解按下 URI 动作（`/PA`，Table 173），PDF 1.3 引入。
+    LinkAnnotationPressedAction,
 }
 
 impl PdfFeature {
@@ -164,13 +168,14 @@ impl PdfFeature {
     pub fn min_version(self) -> PdfVersion {
         match self {
             PdfFeature::EncryptionRC4 => PdfVersion::V1_1,
-            PdfFeature::TilingPattern => PdfVersion::V1_2,
+            PdfFeature::TilingPattern | PdfFeature::LinkAnnotationHighlighting => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
             | PdfFeature::MarkupAnnotations
             | PdfFeature::DigitalSignatures
-            | PdfFeature::AnnotationMarkupState => PdfVersion::V1_3,
+            | PdfFeature::AnnotationMarkupState
+            | PdfFeature::LinkAnnotationPressedAction => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode | PdfFeature::Transparency | PdfFeature::ImageIntent => {
                 PdfVersion::V1_4
             }
@@ -223,6 +228,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AnnotationRectDifferences => "annotation rect differences",
             PdfFeature::PolygonCloudIntent => "polygon cloud intent",
             PdfFeature::PolygonDimensionIntent => "polygon dimension intent",
+            PdfFeature::LinkAnnotationHighlighting => "link annotation highlighting",
+            PdfFeature::LinkAnnotationPressedAction => "link annotation pressed action",
         };
         write!(f, "{name}")
     }

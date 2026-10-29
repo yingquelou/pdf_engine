@@ -387,6 +387,8 @@ impl PdfBuilder {
             annotation::free_text_feature_gate(&entry.annot, self.version)?;
             // 几何类专有条目按 Table 177/178 的版本门起分组门禁。
             annotation::geometry_feature_gate(&entry.annot, self.version)?;
+            // Link 专有条目按 Table 173 的版本门起分组门禁。
+            annotation::link_feature_gate(&entry.annot, self.version)?;
             page_annotation_handles[entry.page].push(handle);
             annotation_nums[handle] = num;
             num += 1;
@@ -479,6 +481,9 @@ impl PdfBuilder {
                     .insert(PdfFeature::FreeTextCallout);
             }
             for feature in annotation::geometry_features(&entry.annot) {
+                doc.features.borrow_mut().insert(feature);
+            }
+            for feature in annotation::link_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);
             }
         }

@@ -2,7 +2,7 @@
 //! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`、
 //! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
 //! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`、
-//! Polygon/PolyLine `/Vertices` `/IT`）+
+//! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA`）+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
@@ -164,6 +164,13 @@ pub(super) fn annotation_dict(
     if let Some(intent) = geometry.intent() {
         dict = dict.insert("IT", Value::Name(intent.name().into()));
     }
+    let link = annot.link();
+    if let Some(highlight) = link.highlight() {
+        dict = dict.insert("H", Value::Name(highlight.name().into()));
+    }
+    if let Some(action) = link.pressed_action() {
+        dict = dict.insert("PA", Value::Dict(action.to_dict()));
+    }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
         // `to_dict` 的直接构造。
@@ -306,6 +313,36 @@ pub(super) fn geometry_feature_gate(
     version: PdfVersion,
 ) -> Result<(), WriteError> {
     for feature in geometry_features(annot) {
+        if !version.supports(feature) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{feature} require PDF {}, got {}",
+                feature.min_version().as_str(),
+                version.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Link 专有条目对应的特性集合（Table 173）：`/H` PDF 1.2、`/PA` PDF 1.3。
+pub(super) fn link_features(annot: &PdfAnnotation) -> Vec<PdfFeature> {
+    let link = annot.link();
+    let mut features = Vec::new();
+    if link.highlight().is_some() {
+        features.push(PdfFeature::LinkAnnotationHighlighting);
+    }
+    if link.pressed_action().is_some() {
+        features.push(PdfFeature::LinkAnnotationPressedAction);
+    }
+    features
+}
+
+/// Link 专有条目的版本门禁（Table 173）：`/H` PDF 1.2、`/PA` PDF 1.3。
+pub(super) fn link_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    for feature in link_features(annot) {
         if !version.supports(feature) {
             return Err(WriteError::UnsupportedVersion(format!(
                 "{feature} require PDF {}, got {}",

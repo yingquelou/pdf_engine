@@ -14,6 +14,7 @@
 //!   `/BE`、`/RD`、`/LE`（`/RC` 属通用条目，`/BS` 属 12.5.4 边框）
 //! - Square/Circle（Table 177）：`/BE`、`/RD`（`/IC` 属通用条目）
 //! - Polygon/PolyLine（Table 178）：`/Vertices`、`/LE`、`/BE`、`/IT`
+//! - Link（Table 173）：`/H` 高亮模式、`/PA` 按下 URI 动作（解析在 [`super::link`]）
 //!
 //! `/LE` 有两种形态：Line/Polygon/PolyLine 是 1–2 个名字的数组，
 //! FreeText 是单个名字。解析不校验声明的 `/Subtype`，因此数组形态
@@ -32,6 +33,7 @@
 use super::{
     Result,
     entries::{number, parse_number_array, parse_optional_bool, parse_optional_number},
+    link::{LinkEntries, parse_link_entries},
     malformed,
 };
 use crate::core::types::{Dict, Value};
@@ -315,6 +317,7 @@ pub(super) struct SubtypeEntries {
     pub(super) callout_ending: Option<LineEndStyle>,
     pub(super) vertices: Option<Vec<f64>>,
     pub(super) polygon_intent: Option<PolygonIntent>,
+    pub(super) link: LinkEntries,
 }
 
 /// 解析注解字典中的子类型专有条目。
@@ -351,6 +354,7 @@ pub(super) fn parse_subtype_entries(dict: &Dict) -> Result<SubtypeEntries> {
         callout_ending: parse_bare_line_ending(dict)?,
         vertices: parse_vertices(dict)?,
         polygon_intent,
+        link: parse_link_entries(dict)?,
     })
 }
 
