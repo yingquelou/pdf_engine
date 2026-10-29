@@ -473,8 +473,8 @@ impl PdfBuilder {
     /// [`PdfAnnotation::with_filespec`]（FileAttachment 注解 `/FS`）引用。
     /// 名称为空/含路径分隔符/重复或名称树键非法返回
     /// [`WriteError::InvalidObject`]；嵌入文件要求目标版本 ≥1.3，`/Desc`
-    /// 与非 ASCII 展示名（`/UF`）要求 ≥1.4，不满足返回
-    /// [`WriteError::UnsupportedVersion`]，均零字节输出。
+    /// 要求 ≥1.6，非 ASCII 展示名（`/UF`）要求 ≥1.7（ISO 32000-1 Table 44），
+    /// 不满足返回 [`WriteError::UnsupportedVersion`]，均零字节输出。
     pub fn embed_file(&mut self, file: EmbeddedFile) -> usize {
         let handle = self.embedded.len();
         self.embedded.push(file);

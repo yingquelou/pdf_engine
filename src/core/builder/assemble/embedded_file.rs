@@ -50,11 +50,17 @@ pub(super) fn validate_registration(
             )));
         }
         seen.push(file.name());
-        let uses_1_4 = !file.name_is_ascii() || file.description().is_some();
-        if uses_1_4 && version < PdfVersion::V1_4 {
+        if file.description().is_some() && version < PdfVersion::V1_6 {
             return Err(WriteError::UnsupportedVersion(format!(
-                "unicode file names (/UF) and descriptions (/Desc) require PDF {}, got {}",
-                PdfVersion::V1_4.as_str(),
+                "file specification descriptions (/Desc) require PDF {}, got {}",
+                PdfVersion::V1_6.as_str(),
+                version.as_str()
+            )));
+        }
+        if !file.name_is_ascii() && version < PdfVersion::V1_7 {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "unicode file names (/UF) require PDF {}, got {}",
+                PdfVersion::V1_7.as_str(),
                 version.as_str()
             )));
         }
@@ -99,7 +105,7 @@ pub(super) fn write_objects(
         if let Some(short) = file.short_name() {
             filespec = filespec.insert("F", text_string_value(short));
         }
-        if version >= PdfVersion::V1_4 {
+        if version >= PdfVersion::V1_7 {
             filespec = filespec.insert("UF", text_string_value(file.name()));
         }
         if let Some(description) = file.description() {
@@ -109,7 +115,7 @@ pub(super) fn write_objects(
         if file.short_name().is_some() {
             carriers = carriers.insert("F", Value::Ref(slot.stream_num, 0));
         }
-        if version >= PdfVersion::V1_4 {
+        if version >= PdfVersion::V1_7 {
             carriers = carriers.insert("UF", Value::Ref(slot.stream_num, 0));
         }
         filespec = filespec.insert("EF", Value::Dict(carriers));

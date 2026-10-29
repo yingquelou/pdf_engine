@@ -226,7 +226,7 @@ fn embedded_files_are_version_gated() {
     assert!(error.to_string().contains("embedded files"), "{error}");
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
 
-    // 1.3 拒绝 `/Desc`。
+    // 1.3 拒绝 `/Desc`（PDF 1.6 引入）。
     let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
     b.page(PageSize::A4);
     b.embed_file(EmbeddedFile::new("a.txt", b"x".to_vec()).with_description("note"));
@@ -239,6 +239,23 @@ fn embedded_files_are_version_gated() {
     assert!(error.to_string().contains("/Desc"), "{error}");
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
 
+    // 1.5 仍拒绝 `/Desc`。
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_5);
+    b.page(PageSize::A4);
+    b.embed_file(EmbeddedFile::new("a.txt", b"x".to_vec()).with_description("note"));
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("PDF 1.5 must reject /Desc");
+    assert!(error.to_string().contains("/Desc"), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+
+    // 1.6 接受 `/Desc`，但不写 `/UF`。
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_6);
+    b.page(PageSize::A4);
+    b.embed_file(EmbeddedFile::new("a.txt", b"x".to_vec()).with_description("note"));
+    let s = render(&mut b);
+    assert!(s.contains("/Desc "), "1.6 写出 /Desc: {s}");
+    assert!(!s.contains("/UF "), "1.6 不写 /UF: {s}");
+
     // 1.3 拒绝非 ASCII 展示名（即便显式给出 `/F` 短名）。
     let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
     b.page(PageSize::A4);
@@ -250,6 +267,17 @@ fn embedded_files_are_version_gated() {
     assert!(error.to_string().contains("/UF"), "{error}");
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
 
+    // 1.6 仍拒绝非 ASCII 展示名（`/UF` 为 PDF 1.7）。
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_6);
+    b.page(PageSize::A4);
+    b.embed_file(EmbeddedFile::new("报告.pdf", b"x".to_vec()).with_short_name("report.pdf"));
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("PDF 1.6 must reject /UF names");
+    assert!(error.to_string().contains("/UF"), "{error}");
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+
     // 1.3 接受纯 ASCII 名：写出 `/F`，不写 `/UF`。
     let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
     b.page(PageSize::A4);
@@ -258,8 +286,8 @@ fn embedded_files_are_version_gated() {
     assert!(s.contains("/Type /Filespec"), "{s}");
     assert!(!s.contains("/UF "), "1.3 不写 /UF: {s}");
 
-    // 1.4 写出 `/UF`，MIME 名中的 `/` 以 `#2F` 转义。
-    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    // 1.7 写出 `/UF`，MIME 名中的 `/` 以 `#2F` 转义。
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
     b.page(PageSize::A4);
     b.embed_file(
         EmbeddedFile::new("报告.pdf", b"x".to_vec())
@@ -267,7 +295,7 @@ fn embedded_files_are_version_gated() {
             .with_subtype("application/pdf"),
     );
     let s = render(&mut b);
-    assert!(s.contains("/UF "), "1.4 写出 /UF: {s}");
+    assert!(s.contains("/UF "), "1.7 写出 /UF: {s}");
     assert!(s.contains("/F "), "{s}");
     assert!(
         s.contains("/Subtype /application#2Fpdf"),

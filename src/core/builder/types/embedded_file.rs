@@ -1,8 +1,8 @@
 //! 嵌入文件（7.11.3–7.11.4）构建态：文件规格条目 + 嵌入文件流字节。
 //!
 //! 一次 [`EmbeddedFile`] 注册在 `build` 时展开为一对间接对象：文件规格
-//! 字典（Table 42，`/F` `/UF` `/Desc` `/EF`）与嵌入文件流（Table 40，
-//! `/Subtype` MIME 名 + `/Params` 文件参数，Table 39），并登记进目录
+//! 字典（Table 44，`/F` `/UF` `/Desc` `/EF`）与嵌入文件流（Table 45，
+//! `/Subtype` MIME 名 + `/Params` 文件参数），并登记进目录
 //! `/Names /EmbeddedFiles` 名称树；句柄可供 FileAttachment 注解的 `/FS`
 //! 引用（12.5.6.14）。
 
@@ -21,7 +21,7 @@ pub struct EmbeddedFile {
 }
 
 impl EmbeddedFile {
-    /// 新建嵌入文件；`name` 为展示名（写出为 `/UF`，ASCII 时兼作 `/F`），
+    /// 新建嵌入文件；`name` 为展示名（≥1.7 写出为 `/UF`，ASCII 时兼作 `/F`），
     /// `data` 为文件原始字节。
     pub fn new(name: impl Into<String>, data: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -41,7 +41,7 @@ impl EmbeddedFile {
         self
     }
 
-    /// `/Desc` 说明文本串（PDF 1.4）。
+    /// `/Desc` 说明文本串（PDF 1.6）。
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -91,7 +91,7 @@ impl EmbeddedFile {
         &self.data
     }
 
-    /// 是否只有 ASCII 展示名（可省 `/UF`，1.3 兼容）。
+    /// 是否只有 ASCII 展示名（`/UF` 仅 ≥1.7 写出，低版本可省）。
     pub(crate) fn name_is_ascii(&self) -> bool {
         self.name.is_ascii()
     }

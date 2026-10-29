@@ -73,9 +73,9 @@ pub struct Filespec {
     pub file_system: Option<String>,
     /// `/F` 7 位 ASCII 文件名。
     pub short_name: Option<String>,
-    /// `/UF` Unicode 文件名（PDF 1.4+）。
+    /// `/UF` Unicode 文件名（PDF 1.7）。
     pub unicode_name: Option<String>,
-    /// `/Desc` 说明文本串（PDF 1.4+）。
+    /// `/Desc` 说明文本串（PDF 1.6）。
     pub description: Option<String>,
     /// `/DOS` 平台文件名字节串（规范已弃用，仅读取）。
     pub dos_name: Option<Vec<u8>>,
