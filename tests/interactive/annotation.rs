@@ -418,6 +418,10 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         if *kind == AnnotationKind::Line {
             annot = annot.with_line_endpoints(rect);
         }
+        if *kind == AnnotationKind::FreeText {
+            // `/DA` 是 Table 174 的必填条目。
+            annot = annot.with_default_appearance("/Helv 12 Tf 0 g");
+        }
         if *kind == AnnotationKind::FileAttachment {
             annot = annot.with_filespec(filespec);
         }
@@ -444,4 +448,93 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         );
         assert_eq!(annotation.subtype.is_markup(), row.2, "{}", kind.name());
     }
+}
+
+/// E2：FreeText 注解的 Table 174 专有条目写出后，读端从页面 `/Annots`
+/// 重新解析出同一组值（`/DA` `/Q` `/RC` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`）。
+#[test]
+fn builder_free_text_annotation_entries_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AnnotationKind, BorderEffect, CalloutLine, FreeTextIntent, LineEndStyle, PageSize,
+        PdfAnnotation, PdfBuilder,
+    };
+    use pdf_engine::core::reader::annotation::{
+        BorderEffect as ReaderBorderEffect, BorderEffectStyle as ReaderBorderEffectStyle,
+        CalloutLine as ReaderCalloutLine, FreeTextIntent as ReaderFreeTextIntent,
+        LineEndStyle as ReaderLineEndStyle,
+    };
+    use pdf_engine::core::types::{PdfTextString, Value};
+
+    fn decode_text(value: &Value) -> String {
+        match value {
+            Value::String(text) => text.clone(),
+            Value::HexString(hex) => {
+                let bytes: Vec<u8> = (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+                    .collect();
+                PdfTextString::decode(&bytes).unwrap().into_string()
+            }
+            other => panic!("expected text string, got {other:?}"),
+        }
+    }
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::FreeText, [72.0, 640.0, 300.0, 700.0])
+            .with_default_appearance("/F1 12 Tf 0 g")
+            .with_rich_content("<body>note</body>")
+            .with_quadding(2)
+            .with_default_style("font: ArialMT 12pt;")
+            .with_callout_line(CalloutLine::Knee([20.0, 100.0, 60.5, 140.0, 120.0, 180.0]))
+            .with_free_text_intent(FreeTextIntent::FreeTextCallout)
+            .with_border_effect(BorderEffect::cloudy(1.5))
+            .with_text_rectangle([0.0, 2.5, 0.0, 2.5])
+            .with_callout_ending(LineEndStyle::ClosedArrow),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    assert_eq!(annotations.len(), 1);
+    let annotation = &annotations[0];
+    assert_eq!(
+        annotation.default_appearance.as_deref(),
+        Some("/F1 12 Tf 0 g")
+    );
+    assert_eq!(annotation.quadding, Some(2));
+    let rich = annotation.rich_contents.as_ref().expect("/RC");
+    assert_eq!(decode_text(rich), "<body>note</body>");
+    assert_eq!(
+        annotation.default_style.as_deref(),
+        Some("font: ArialMT 12pt;")
+    );
+    assert_eq!(
+        annotation.callout_line,
+        Some(ReaderCalloutLine::Knee([
+            20.0, 100.0, 60.5, 140.0, 120.0, 180.0
+        ]))
+    );
+    assert_eq!(
+        annotation.free_text_intent,
+        Some(ReaderFreeTextIntent::FreeTextCallout)
+    );
+    assert_eq!(
+        annotation.border_effect,
+        Some(ReaderBorderEffect {
+            style: ReaderBorderEffectStyle::Cloudy,
+            intensity: Some(1.5),
+        })
+    );
+    assert_eq!(annotation.text_rectangle, Some([0.0, 2.5, 0.0, 2.5]));
+    assert_eq!(
+        annotation.callout_ending,
+        Some(ReaderLineEndStyle::ClosedArrow)
+    );
+    assert!(
+        annotation.line_endings.is_none(),
+        "单名字 /LE 不写进 Line 的双端点数组"
+    );
 }

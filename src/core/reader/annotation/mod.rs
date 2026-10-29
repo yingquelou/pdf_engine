@@ -12,9 +12,11 @@
 //! - 子类型专有条目类型化（12.5.6，解析在 [`subtype`]）：Text `/Name`、`/Open`、
 //!   `/State`、`/StateModel`；Caret `/Symbol`；Ink `/InkList` 路径；
 //!   Line `/L`、`/LE`、`/LL`、`/LLE`、`/Cap`、`/IT`、`/LLO`、`/CP`、`/CO`
-//!   （Table 175/176，端点样式与意图、题注位置类型化为枚举）。
+//!   （Table 175/176，端点样式与意图、题注位置类型化为枚举）；
+//!   FreeText `/DA`、`/Q`、`/DS`、`/CL`、`/IT`、`/BE`、`/RD`、`/LE`
+//!   （Table 174 + Table 167，`/RC` 属标记类通用条目）。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
-//!   Polygon `/Vertices`、FreeText `/DA` 等）。
+//!   Polygon `/Vertices`、Line `/Measure` 等）。
 //!
 //! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`。
 
@@ -36,7 +38,10 @@ use entries::{
     parse_text_string,
 };
 pub use kind::{AnnotationSubtype, Row, TABLE_169};
-pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
+pub use subtype::{
+    BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
+    LineIntent,
+};
 
 /// 页面树遍历最大深度。
 const MAX_PAGE_DEPTH: usize = 64;
@@ -262,6 +267,22 @@ pub struct Annotation {
     pub caption_position: Option<CaptionPosition>,
     /// 题注相对 `/LLO` 位置的偏移 `/CO`（PDF 1.7，缺省 `[0 0]`）。
     pub caption_offset: Option<[f64; 2]>,
+    /// FreeText 注解默认外观串 `/DA`（Table 174 必填；有 `/AP` 时外观流优先）。
+    pub default_appearance: Option<String>,
+    /// FreeText 对齐方式 `/Q`（0 左、1 居中、2 右；PDF 1.4，缺省 0）。
+    pub quadding: Option<u8>,
+    /// FreeText 富文本默认样式串 `/DS`（PDF 1.5）。
+    pub default_style: Option<String>,
+    /// FreeText 引线 `/CL`（PDF 1.6，四或六个数值；仅意图为标注框时有意义）。
+    pub callout_line: Option<CalloutLine>,
+    /// FreeText 意图 `/IT`（PDF 1.6，缺省 `FreeText`）。
+    pub free_text_intent: Option<FreeTextIntent>,
+    /// 边框效果字典 `/BE`（PDF 1.6 起 FreeText 可用，Table 167）。
+    pub border_effect: Option<BorderEffect>,
+    /// FreeText 内部文本矩形与 `/Rect` 的四边差值 `/RD`（PDF 1.6，均 ≥0）。
+    pub text_rectangle: Option<[f64; 4]>,
+    /// FreeText 引线端点样式 `/LE`（单个名字，PDF 1.6，需 `/CL`）。
+    pub callout_ending: Option<LineEndStyle>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -469,6 +490,14 @@ fn parse_annotation(
         leader_line_offset: entries.leader_line_offset,
         caption_position: entries.caption_position,
         caption_offset: entries.caption_offset,
+        default_appearance: entries.default_appearance,
+        quadding: entries.quadding,
+        default_style: entries.default_style,
+        callout_line: entries.callout_line,
+        free_text_intent: entries.free_text_intent,
+        border_effect: entries.border_effect,
+        text_rectangle: entries.text_rectangle,
+        callout_ending: entries.callout_ending,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

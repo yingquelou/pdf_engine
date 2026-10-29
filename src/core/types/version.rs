@@ -141,6 +141,13 @@ pub enum PdfFeature {
     LineAnnotationLeader,
     /// Line 注解题注设置（`/LLO`、`/CP`、`/CO`，Table 175），PDF 1.7 引入。
     LineAnnotationCaption,
+    /// FreeText 对齐方式条目（`/Q`，Table 174），PDF 1.4 引入。
+    FreeTextQuadding,
+    /// FreeText 富文本条目（`/RC`、`/DS`，Table 174），PDF 1.5 引入。
+    FreeTextRichContent,
+    /// FreeText 标注框条目（`/CL`、`/IT`、`/BE`、`/RD`、`/LE`，Table 174），
+    /// PDF 1.6 引入。
+    FreeTextCallout,
 }
 
 impl PdfFeature {
@@ -165,6 +172,9 @@ impl PdfFeature {
             PdfFeature::SoftMaskMatte | PdfFeature::LineAnnotationLeader => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption => PdfVersion::V1_7,
+            PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
+            PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
+            PdfFeature::FreeTextCallout => PdfVersion::V1_6,
         }
     }
 }
@@ -191,6 +201,9 @@ impl fmt::Display for PdfFeature {
             PdfFeature::LineAnnotationArrowEndings => "line annotation arrow endings",
             PdfFeature::LineAnnotationLeader => "line annotation leader settings",
             PdfFeature::LineAnnotationCaption => "line annotation caption settings",
+            PdfFeature::FreeTextQuadding => "free text quadding",
+            PdfFeature::FreeTextRichContent => "free text rich content",
+            PdfFeature::FreeTextCallout => "free text callout",
         };
         write!(f, "{name}")
     }

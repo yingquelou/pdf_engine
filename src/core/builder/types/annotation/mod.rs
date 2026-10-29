@@ -6,10 +6,14 @@
 //! `/Popup` 句柄引用。
 //! 经 [`PdfBuilder::add_annotation`](super::super::PdfBuilder::add_annotation)
 //! 绑定到页面后，由 assemble 写为独立间接对象并登记进页面 `/Annots`。
-//! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`。
+//! 子类型专有条目（12.5.6）的构造方法与构建期校验在 `subtype`（Text/Caret/
+//! Ink/Line）与 `free_text`（FreeText，Table 174）。
 
+mod free_text;
 mod subtype;
 
+use free_text::FreeTextEntries;
+pub use free_text::{BorderEffect, BorderEffectStyle, CalloutLine, FreeTextIntent};
 use subtype::LineEntries;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 
@@ -186,6 +190,7 @@ pub struct PdfAnnotation {
     symbol: Option<String>,
     ink_paths: Vec<Vec<f64>>,
     line: LineEntries,
+    free_text: FreeTextEntries,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -225,6 +230,7 @@ impl PdfAnnotation {
             symbol: None,
             ink_paths: Vec::new(),
             line: LineEntries::default(),
+            free_text: FreeTextEntries::default(),
             action: None,
             destination: None,
             popup: None,

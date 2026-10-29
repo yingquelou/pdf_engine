@@ -1,7 +1,8 @@
 //! 注解字典写出（12.5.1–12.5.6）：通用条目 + 子类型专有条目（Text `/Name`
 //! `/Open` `/State` `/StateModel`、Caret `/Symbol`、Ink `/InkList`、
-//! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`）+
-//! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及 Line 条目的版本门禁。
+//! Line `/L` `/LE` `/LL` `/LLE` `/Cap` `/IT` `/LLO` `/CP` `/CO`、
+//! FreeText `/DA` `/RC` `/Q` `/DS` `/CL` `/IT` `/BE` `/RD` `/LE`）+
+//! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及 Line 与 FreeText 条目的版本门禁。
 
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
@@ -120,6 +121,38 @@ pub(super) fn annotation_dict(
     }
     if let Some(offset) = line.caption_offset() {
         dict = dict.insert("CO", real_array(&offset));
+    }
+    let free_text = annot.free_text();
+    if let Some(default_appearance) = free_text.default_appearance() {
+        dict = dict.insert("DA", text_string_value(default_appearance));
+    }
+    if let Some(rich_content) = free_text.rich_content() {
+        dict = dict.insert("RC", text_string_value(rich_content));
+    }
+    if let Some(quadding) = free_text.quadding() {
+        dict = dict.insert("Q", Value::Integer(i64::from(quadding)));
+    }
+    if let Some(default_style) = free_text.default_style() {
+        dict = dict.insert("DS", text_string_value(default_style));
+    }
+    if let Some(callout_line) = free_text.callout_line() {
+        dict = dict.insert("CL", real_array(callout_line.values()));
+    }
+    if let Some(intent) = free_text.intent() {
+        dict = dict.insert("IT", Value::Name(intent.name().into()));
+    }
+    if let Some(effect) = free_text.border_effect() {
+        let mut border_effect = Dict::new().insert("S", Value::Name(effect.style.name().into()));
+        if let Some(intensity) = effect.intensity {
+            border_effect = border_effect.insert("I", Value::Float(intensity));
+        }
+        dict = dict.insert("BE", Value::Dict(border_effect));
+    }
+    if let Some(text_rectangle) = free_text.text_rectangle() {
+        dict = dict.insert("RD", real_array(&text_rectangle));
+    }
+    if let Some(style) = free_text.callout_ending() {
+        dict = dict.insert("LE", Value::Name(style.name().into()));
     }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
@@ -264,6 +297,34 @@ pub(super) fn line_feature_gate(
                     version.as_str()
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+/// FreeText 专有条目的版本门禁（Table 174）。
+///
+/// `/Q` PDF 1.4；`/RC` `/DS` PDF 1.5；`/CL` `/IT` `/BE` `/RD` `/LE` PDF 1.6。
+/// `/DA` 随 FreeText 子类型自 PDF 1.3 起可用，不单独门禁。
+pub(super) fn free_text_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    let free_text = annot.free_text();
+    for (declared, feature) in [
+        (free_text.has_quadding(), PdfFeature::FreeTextQuadding),
+        (
+            free_text.has_rich_content(),
+            PdfFeature::FreeTextRichContent,
+        ),
+        (free_text.has_callout_entries(), PdfFeature::FreeTextCallout),
+    ] {
+        if declared && !version.supports(feature) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{feature} require PDF {}, got {}",
+                feature.min_version().as_str(),
+                version.as_str()
+            )));
         }
     }
     Ok(())

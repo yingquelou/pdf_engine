@@ -383,6 +383,8 @@ impl PdfBuilder {
             }
             // Line 专有条目按 Table 175/176 的版本门起分组门禁。
             annotation::line_feature_gate(&entry.annot, self.version)?;
+            // FreeText 专有条目按 Table 174 的版本门起分组门禁。
+            annotation::free_text_feature_gate(&entry.annot, self.version)?;
             page_annotation_handles[entry.page].push(handle);
             annotation_nums[handle] = num;
             num += 1;
@@ -457,6 +459,22 @@ impl PdfBuilder {
                 doc.features
                     .borrow_mut()
                     .insert(PdfFeature::LineAnnotationCaption);
+            }
+            let free_text = entry.annot.free_text();
+            if free_text.has_quadding() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::FreeTextQuadding);
+            }
+            if free_text.has_rich_content() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::FreeTextRichContent);
+            }
+            if free_text.has_callout_entries() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::FreeTextCallout);
             }
         }
 
