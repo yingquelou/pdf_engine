@@ -1,9 +1,9 @@
-//! 文档级导航读取：名称树、显式/命名目标、大纲、页面标签、命名页面
-//! 与文章线。
+//! 文档级导航读取：名称树、显式/命名目标、大纲、页面标签、命名页面、
+//! 文章线与便携集合。
 //!
-//! 覆盖 ISO 32000-1 7.7.4（名称字典）、12.3（Destinations、Outline）、
-//! 12.4.2（Page Labels）、12.4.3（Articles）与 12.7.6（命名页面）。
-//! 动作（12.6）由 E3 建模，大纲条目的 `/A` 在此原样保留。
+//! 覆盖 ISO 32000-1 7.7.4（名称字典）、12.3（Destinations、Outline、
+//! Collections）、12.4.2（Page Labels）、12.4.3（Articles）与 12.7.6
+//! （命名页面）。动作（12.6）由 E3 建模，大纲条目的 `/A` 在此原样保留。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -11,6 +11,7 @@ use std::fmt;
 use crate::core::types::{Dict, Document, Value};
 
 mod articles;
+mod collection;
 pub mod destination;
 mod name_tree;
 mod outline;
@@ -21,6 +22,9 @@ mod tests;
 
 pub(crate) use articles::MAX_ARTICLE_BEADS;
 pub use articles::{ArticleBead, ArticleThread};
+pub use collection::{
+    Collection, CollectionField, CollectionFieldType, CollectionSort, CollectionView,
+};
 pub use destination::Destination;
 pub use outline::{Outline, OutlineDestination, OutlineItem};
 pub use page_labels::{PageLabelRange, PageLabelStyle, PageLabels};

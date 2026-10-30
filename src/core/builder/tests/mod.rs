@@ -25,6 +25,7 @@
 //! - `page_presentation`：页面 `/Dur` 与 `/Trans`（12.4.4 Table 30）的写出、PDF 1.1 门禁与 1.5 样式条目门禁；
 //! - `thumbnail`：页面缩略图 `/Thumb`（12.3.4 Table 30）的图像引用、去重与颜色空间契约；
 //! - `articles`：文章线（12.4.3 Table 160/161）的线程/bead 对象、`/B` 与 PDF 1.1 门禁；
+//! - `collection`：便携集合（12.3.5 Table 155–158）的模式、`/D` `/View` `/Sort` 与 PDF 1.7 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
@@ -63,6 +64,7 @@ mod articles;
 mod choice_indices;
 mod cid;
 mod cid_cmap_multibyte;
+mod collection;
 mod color_space;
 mod compression;
 mod embedded_file;

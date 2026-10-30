@@ -13,7 +13,9 @@
 use crate::core::reader::navigation::{
     Destination, OutlineDestination, PageLabelRange, PageLabelStyle,
 };
-use crate::core::types::{Array, Dict, Document, Object, PdfTextString, PdfVersion, Value};
+use crate::core::types::{
+    Array, Dict, Document, Object, PdfFeature, PdfTextString, PdfVersion, Value,
+};
 use crate::core::writer::WriteError;
 
 use super::PdfBuilder;
@@ -21,9 +23,13 @@ use super::types::Action;
 use super::types::text_string_value;
 
 mod articles;
+mod collection;
 mod validate;
 
 pub use articles::{ArticleBead, ArticleThread};
+pub use collection::{
+    Collection, CollectionField, CollectionFieldType, CollectionSort, CollectionView,
+};
 
 /// 写端大纲条目（ISO 32000-1 12.3.4）。
 ///
@@ -58,6 +64,7 @@ pub(crate) struct NavigationState {
     outline: Vec<OutlineEntry>,
     actions: Vec<Action>,
     article_threads: Vec<ArticleThread>,
+    collection: Option<Collection>,
 }
 
 impl NavigationState {
@@ -141,6 +148,16 @@ impl PdfBuilder {
         self
     }
 
+    /// 设置便携集合（12.3.5），写入目录 `/Collection`。
+    ///
+    /// 字段键须为合法且唯一的 PDF 名字、`/N` 非空、排序字段必须已在
+    /// 模式中声明，否则构建返回 [`WriteError::InvalidObject`]；目标版本
+    /// 低于 1.7 返回 [`WriteError::UnsupportedVersion`]。
+    pub fn collection(&mut self, collection: Collection) -> &mut Self {
+        self.navigation.collection = Some(collection);
+        self
+    }
+
     /// 注册一个动作字典（12.6），返回句柄供大纲条目或注解引用。
     ///
     /// 动作字典作为间接对象写出；大纲条目的 `/A` 条目要求 PDF 1.2+。
@@ -184,6 +201,11 @@ pub(super) fn apply(
             PdfVersion::V1_1,
             "article threads",
         ),
+        (
+            navigation.collection.is_some(),
+            PdfVersion::V1_7,
+            "collections",
+        ),
     ];
     for (present, minimum, feature) in required {
         if present && version < minimum {
@@ -202,6 +224,9 @@ pub(super) fn apply(
     validate::named_pages(&navigation.named_pages, page_count)?;
     validate::outline(&navigation.outline, page_count)?;
     articles::validate(&navigation.article_threads, page_count)?;
+    if let Some(collection) = &navigation.collection {
+        collection::validate(collection)?;
+    }
 
     let (catalog_num, catalog_generation, mut catalog) = catalog_dict(doc)?;
     let page_refs = page_refs(doc, &catalog)?;
@@ -273,6 +298,14 @@ pub(super) fn apply(
         let threads =
             articles::write_threads(doc, version, &page_refs, &navigation.article_threads)?;
         catalog = catalog.insert("Threads", Value::Array(threads));
+    }
+
+    if let Some(collection) = &navigation.collection {
+        catalog = catalog.insert(
+            "Collection",
+            Value::Dict(collection::collection_dict(collection)),
+        );
+        doc.features.borrow_mut().insert(PdfFeature::Collection);
     }
 
     doc.set_object(Object::new(

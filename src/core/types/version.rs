@@ -200,6 +200,8 @@ pub enum PdfFeature {
     /// 文章线（目录 `/Threads`、线程与 bead 字典，12.4.3 Table 160/161），
     /// PDF 1.1 引入。
     ArticleThreads,
+    /// 便携集合（目录 `/Collection`，12.3.5 Table 155–158），PDF 1.7 引入。
+    Collection,
 }
 
 impl PdfFeature {
@@ -247,7 +249,8 @@ impl PdfFeature {
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
             | PdfFeature::AnnotationMeasure
-            | PdfFeature::SubmitFormUrlType => PdfVersion::V1_7,
+            | PdfFeature::SubmitFormUrlType
+            | PdfFeature::Collection => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -303,6 +306,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PageViewports => "page viewport dictionaries",
             PdfFeature::PagePresentation => "page presentation entries",
             PdfFeature::ArticleThreads => "article threads",
+            PdfFeature::Collection => "collections",
         };
         write!(f, "{name}")
     }

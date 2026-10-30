@@ -52,6 +52,7 @@ impl FeatureProfile {
 /// - 图像字典的 `/Alternates` → AlternateImages（1.3）
 /// - `/OCProperties` 键存在 → OptionalContent
 /// - `/Threads` 键存在（目录）→ ArticleThreads
+/// - `/Collection` 键存在（目录）→ Collection
 /// - `/Encrypt` 键存在 → EncryptionRC4
 pub(crate) fn scan_dict_features(features: &mut FeatureProfile, d: &Dict) {
     inspect_dict_features(features, d);
@@ -126,6 +127,10 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 文章线（PDF 1.1）：目录 /Threads
     if d.0.contains_key("Threads") {
         features.insert(PdfFeature::ArticleThreads);
+    }
+    // 便携集合（PDF 1.7）：目录 /Collection
+    if d.0.contains_key("Collection") {
+        features.insert(PdfFeature::Collection);
     }
     // 加密：trailer /Encrypt（标准安全处理器自 PDF 1.1 引入）
     if d.0.contains_key("Encrypt") {
