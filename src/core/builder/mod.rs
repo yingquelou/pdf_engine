@@ -32,7 +32,7 @@ mod text_codes;
 mod types;
 
 pub use metadata::{DocumentInfo, FileIdentifier};
-pub use navigation::OutlineEntry;
+pub use navigation::{ArticleBead, ArticleThread, OutlineEntry};
 
 pub(crate) use types::GraphicsStateFunctions;
 pub(crate) use types::OpenTypeFlavor;

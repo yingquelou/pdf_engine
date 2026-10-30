@@ -197,6 +197,9 @@ pub enum PdfFeature {
     PageViewports,
     /// 页面演示条目（页面 `/Dur` 与 `/Trans`，12.4.4 Table 30），PDF 1.1 引入。
     PagePresentation,
+    /// 文章线（目录 `/Threads`、线程与 bead 字典，12.4.3 Table 160/161），
+    /// PDF 1.1 引入。
+    ArticleThreads,
 }
 
 impl PdfFeature {
@@ -205,7 +208,8 @@ impl PdfFeature {
         match self {
             PdfFeature::EncryptionRC4
             | PdfFeature::AnnotationBorderDash
-            | PdfFeature::PagePresentation => PdfVersion::V1_1,
+            | PdfFeature::PagePresentation
+            | PdfFeature::ArticleThreads => PdfVersion::V1_1,
             PdfFeature::TilingPattern
             | PdfFeature::LinkAnnotationHighlighting
             | PdfFeature::HideAction
@@ -298,6 +302,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",
             PdfFeature::PagePresentation => "page presentation entries",
+            PdfFeature::ArticleThreads => "article threads",
         };
         write!(f, "{name}")
     }

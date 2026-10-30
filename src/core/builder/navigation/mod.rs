@@ -20,7 +20,10 @@ use super::PdfBuilder;
 use super::types::Action;
 use super::types::text_string_value;
 
+mod articles;
 mod validate;
+
+pub use articles::{ArticleBead, ArticleThread};
 
 /// 写端大纲条目（ISO 32000-1 12.3.4）。
 ///
@@ -54,6 +57,7 @@ pub(crate) struct NavigationState {
     named_pages: Vec<(String, usize)>,
     outline: Vec<OutlineEntry>,
     actions: Vec<Action>,
+    article_threads: Vec<ArticleThread>,
 }
 
 impl NavigationState {
@@ -126,6 +130,17 @@ impl PdfBuilder {
         self
     }
 
+    /// 追加一条文章线（12.4.3），按注册顺序写入目录 `/Threads`。
+    ///
+    /// 线程与 bead 作为间接对象写出，bead 链首尾闭合，所在页面追加
+    /// `/B` 数组。bead 至少一个、页索引须在范围内、矩形须为有限数，
+    /// 否则构建返回 [`WriteError::InvalidObject`]；目标版本低于 1.1
+    /// 返回 [`WriteError::UnsupportedVersion`]。
+    pub fn add_article_thread(&mut self, thread: ArticleThread) -> &mut Self {
+        self.navigation.article_threads.push(thread);
+        self
+    }
+
     /// 注册一个动作字典（12.6），返回句柄供大纲条目或注解引用。
     ///
     /// 动作字典作为间接对象写出；大纲条目的 `/A` 条目要求 PDF 1.2+。
@@ -164,6 +179,11 @@ pub(super) fn apply(
         ),
         (!navigation.outline.is_empty(), PdfVersion::V1_1, "outlines"),
         (has_actions, PdfVersion::V1_2, "outline actions (/A)"),
+        (
+            !navigation.article_threads.is_empty(),
+            PdfVersion::V1_1,
+            "article threads",
+        ),
     ];
     for (present, minimum, feature) in required {
         if present && version < minimum {
@@ -181,6 +201,7 @@ pub(super) fn apply(
     validate::named_destinations(&navigation.named_destinations, page_count)?;
     validate::named_pages(&navigation.named_pages, page_count)?;
     validate::outline(&navigation.outline, page_count)?;
+    articles::validate(&navigation.article_threads, page_count)?;
 
     let (catalog_num, catalog_generation, mut catalog) = catalog_dict(doc)?;
     let page_refs = page_refs(doc, &catalog)?;
@@ -246,6 +267,12 @@ pub(super) fn apply(
         };
         let root = write_outline(doc, &navigation.outline, &context, &mut next_num)?;
         catalog = catalog.insert("Outlines", Value::Ref(root, 0));
+    }
+
+    if !navigation.article_threads.is_empty() {
+        let threads =
+            articles::write_threads(doc, version, &page_refs, &navigation.article_threads)?;
+        catalog = catalog.insert("Threads", Value::Array(threads));
     }
 
     doc.set_object(Object::new(
