@@ -45,6 +45,7 @@
 
 mod acro_form;
 mod acro_form_resources;
+mod action_gotoe;
 mod action_ocg;
 mod action_thread;
 mod action_transition;

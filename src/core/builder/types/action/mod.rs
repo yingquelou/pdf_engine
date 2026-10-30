@@ -2,13 +2,15 @@
 //!
 //! 覆盖六种常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Hide
 //! 动作（隐藏/显示注解）、Set-OCG-State 动作（切换可选内容组状态）、
-//! Transition 动作（全屏演示过渡特效）、Thread 动作（跳转到文章线 bead）
-//! 与三种表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
+//! Transition 动作（全屏演示过渡特效）、Thread 动作（跳转到文章线 bead）、
+//! Embedded Go-To 动作（嵌套嵌入文档间跳转）与三种表单动作
+//! （SubmitForm、ResetForm、ImportData）。动作字典经
 //! [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
 //!
 //! 按族拆分：`targets` 收文件规格/远程目标/预定义动作名，`hide` 收 Hide
 //! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列，`thread` 收
-//! Thread 动作的线程/bead 索引契约。
+//! Thread 动作的线程/bead 索引契约，`gotoe` 收 Embedded Go-To 的目标
+//! 字典路径链。
 
 use super::text_string_value;
 use super::transition::Transition;
@@ -16,6 +18,7 @@ use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
+mod gotoe;
 mod hide;
 mod ocg;
 mod targets;
@@ -24,6 +27,9 @@ mod thread;
 #[cfg(test)]
 mod tests;
 
+pub use gotoe::{
+    GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation,
+};
 pub use hide::{HideAction, HideTarget};
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
 pub use targets::{ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
@@ -43,6 +49,8 @@ pub enum Action {
         /// 远程目标。
         destination: ActionRemoteDestination,
     },
+    /// 在嵌套嵌入文档之间跳转（12.6.4.4 Table 201，PDF 1.6）。
+    GoToE(GoToEAction),
     /// 查看器预定义动作。
     Named(ActionNamedAction),
     /// 解析 URI。
@@ -95,6 +103,7 @@ impl Action {
         match self {
             Self::GoTo(_) => "GoTo",
             Self::GoToR { .. } => "GoToR",
+            Self::GoToE(_) => "GoToE",
             Self::Named(_) => "Named",
             Self::Uri(_) => "URI",
             Self::Launch { .. } => "Launch",
@@ -126,6 +135,11 @@ impl Action {
                 dict = dict
                     .insert("F", file.to_value())
                     .insert("D", destination.to_value());
+            }
+            Self::GoToE(action) => {
+                for (key, value) in action.to_dict().0 {
+                    dict = dict.insert(key, value);
+                }
             }
             Self::Named(action) => {
                 dict = dict.insert("N", Value::Name(action.name().into()));

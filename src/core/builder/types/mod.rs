@@ -43,7 +43,8 @@ mod type3;
 mod viewport;
 
 pub use action::{
-    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, HideAction, HideTarget,
+    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, GoToEAction, GoToETarget,
+    GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation, HideAction, HideTarget,
     OcgStateOperation, OcgStateSequence, SetOcgStateAction, ThreadAction,
 };
 pub(crate) use annotation::validate_name_value;

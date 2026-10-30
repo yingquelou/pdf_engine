@@ -183,3 +183,26 @@ fn thread_action_writes_indices() {
     assert_eq!(dict.get("D"), Some(&Value::Integer(0)));
     assert!(dict.get("B").is_none(), "缺省 /B 不物化");
 }
+
+#[test]
+fn go_to_e_action_writes_target_dictionary() {
+    let action = Action::GoToE(
+        GoToEAction::new(ActionRemoteDestination::Page(2)).with_target(
+            GoToETarget::child_attachment(
+                GoToETargetPage::Named("Chapter start".into()),
+                GoToETargetAnnotation::Index(1),
+            ),
+        ),
+    );
+    let dict = action.to_dict(&[], &[]).unwrap();
+    assert_eq!(dict.get("S"), Some(&Value::Name("GoToE".into())));
+    assert_eq!(dict.get("D"), Some(&Value::Integer(2)));
+    assert!(dict.get("F").is_none(), "缺省 /F 不物化");
+    assert!(dict.get("NewWindow").is_none(), "缺省 /NewWindow 不物化");
+    let target = dict.get("T").and_then(Value::as_dict).expect("/T");
+    assert_eq!(target.get("R"), Some(&Value::Name("C".into())));
+    assert!(matches!(target.get("P"), Some(Value::HexString(_))));
+    assert_eq!(target.get("A"), Some(&Value::Integer(1)));
+    assert!(target.get("N").is_none());
+    assert!(target.get("T").is_none());
+}

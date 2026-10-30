@@ -81,6 +81,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         }
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
         Action::Hide(_) => vec![PdfFeature::HideAction],
+        Action::GoToE(_) => vec![PdfFeature::EmbeddedGoToAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
         Action::Transition(_) => vec![PdfFeature::TransitionAction],
         Action::Thread(_) => vec![PdfFeature::ThreadAction],
@@ -96,6 +97,7 @@ fn validate_action(
 ) -> Result<(), WriteError> {
     match action {
         Action::Hide(hide) => hide.validate(annotation_count)?,
+        Action::GoToE(action) => action.validate()?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,
         Action::Transition(transition) => transition.validate()?,
         Action::Thread(thread) => thread.validate(thread_beads)?,

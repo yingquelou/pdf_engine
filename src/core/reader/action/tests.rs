@@ -366,11 +366,11 @@ fn malformed_form_actions_are_typed_errors() {
 #[test]
 fn unknown_action_subtype_is_preserved() {
     let doc = document_with_pages(1);
-    let action = Value::Dict(action_dict("GoToE"));
+    let action = Value::Dict(action_dict("Hologram"));
     assert_eq!(
         doc.action(&action).unwrap(),
         Action::Unknown {
-            subtype: "GoToE".into()
+            subtype: "Hologram".into()
         }
     );
 }
@@ -802,4 +802,5 @@ fn malformed_transition_actions_are_typed_errors() {
     }
 }
 
+mod gotoe;
 mod thread;

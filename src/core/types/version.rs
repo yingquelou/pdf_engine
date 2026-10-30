@@ -177,6 +177,9 @@ pub enum PdfFeature {
     TransitionAction,
     /// Thread 动作（跳转到文章线上的 bead，12.6.4.6 Table 205），PDF 1.1 引入。
     ThreadAction,
+    /// Embedded Go-To 动作（在嵌套嵌入文档之间跳转，12.6.4.4 Table 201），
+    /// PDF 1.6 引入。
+    EmbeddedGoToAction,
     /// 旧式注解边框数组的虚线项（`/Border` 第四项，Table 164），PDF 1.1 引入。
     AnnotationBorderDash,
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
@@ -247,7 +250,8 @@ impl PdfFeature {
             | PdfFeature::PolygonCloudIntent
             | PdfFeature::LinkAnnotationQuadPoints
             | PdfFeature::LinkAnnotationBorderStyle
-            | PdfFeature::PageViewports => PdfVersion::V1_6,
+            | PdfFeature::PageViewports
+            | PdfFeature::EmbeddedGoToAction => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -305,6 +309,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::SetOcgState => "Set-OCG-State action",
             PdfFeature::TransitionAction => "transition action",
             PdfFeature::ThreadAction => "thread action",
+            PdfFeature::EmbeddedGoToAction => "embedded go-to action",
             PdfFeature::FormActionFieldNames => "form action field names",
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",

@@ -1,6 +1,6 @@
 //! 动作字典读取（ISO 32000-1 12.6 / 12.7.5）。
 //!
-//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript、Hide、
+//! 覆盖常用动作：GoTo、GoToR、GoToE、Named、URI、Launch、JavaScript、Hide、
 //! SetOCGState、Transition，以及表单动作 SubmitForm、ResetForm、ImportData；
 //! 未知子类型保留名称。动作值可为间接引用，`/D` 的显式目标经页面树映射为
 //! 0 基页号。
@@ -15,9 +15,13 @@ use crate::core::reader::navigation::{
 use crate::core::reader::transition::{Transition, parse_transition};
 use crate::core::types::{Document, Value};
 
+mod gotoe;
 mod ocg;
 mod thread;
 
+pub use gotoe::{
+    GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation,
+};
 use ocg::parse_set_ocg_state;
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
 pub use thread::{BeadTarget, ThreadAction, ThreadTarget};
@@ -32,6 +36,8 @@ pub enum Action {
         file: FileSpec,
         destination: RemoteDestination,
     },
+    /// 在两个（可嵌套嵌入的）文档之间跳转（12.6.4.4 Table 201）。
+    GoToE(GoToEAction),
     /// 查看器预定义动作（下一页等）。
     Named(NamedAction),
     /// 解析 URI。
@@ -220,6 +226,9 @@ impl Document {
                 )?;
                 Ok(Action::GoToR { file, destination })
             }
+            "GoToE" => Ok(Action::GoToE(gotoe::parse_embedded_go_to_action(
+                self, dict,
+            )?)),
             "Named" => {
                 let name = dict
                     .get("N")
