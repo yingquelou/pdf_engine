@@ -95,6 +95,7 @@ pub mod sound;
 #[cfg(test)]
 mod tests;
 pub mod text;
+pub mod three_d;
 pub mod thumbnail;
 pub mod transition;
 pub mod viewport;

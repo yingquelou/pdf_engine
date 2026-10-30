@@ -6,7 +6,8 @@
 //! `mk` 覆盖外观特性字典 `/MK`（Table 189）与图标适配字典 `/IF`（Table 247），
 //! `measure` 覆盖 12.9 的 measure 字典（Table 261–263），
 //! `watermark` 覆盖 Watermark 的固定打印字典 `/FixedPrint`（Table 190/191），
-//! `dates` 覆盖 `/M` `/CreationDate` 的 PDF 日期解析（7.9.4）。
+//! `dates` 覆盖 `/M` `/CreationDate` 的 PDF 日期解析（7.9.4），
+//! `three_d` 覆盖 3D 注解与 13.6 的 3D 流/视图/投影/背景字典（Table 298–306）。
 
 mod dates;
 mod entries;
@@ -19,4 +20,5 @@ mod redact;
 mod sound;
 mod subtype;
 mod support;
+mod three_d;
 mod watermark;

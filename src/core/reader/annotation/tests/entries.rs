@@ -1,7 +1,7 @@
 //! 通用条目读取、页面树遍历与错误契约。
 
 use crate::core::reader::annotation::*;
-use crate::core::types::{Array, Dict, Object, Value};
+use crate::core::types::{Array, Dict, Object, StreamData, Value};
 
 use super::support::*;
 
@@ -384,6 +384,18 @@ fn table_169_rows_map_to_names_versions_and_markup_flags() {
                                 .insert("F", Value::String("clip.mov".into())),
                         ),
                     ),
+                ),
+            );
+        }
+        // 3D 注解的 `/3DD`（Table 298）必填，需最小 3D 流字典。
+        if name == "3D" {
+            dict = dict.insert(
+                "3DD",
+                Value::Stream(
+                    Dict::new()
+                        .insert("Type", Value::Name("3D".into()))
+                        .insert("Subtype", Value::Name("U3D".into())),
+                    StreamData::Owned(Vec::new()),
                 ),
             );
         }

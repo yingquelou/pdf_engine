@@ -25,6 +25,9 @@
 //! - Measure 字典（12.9，Table 261–263）：Line 与 Polygon/PolyLine 的
 //!   `/Measure` 类型化为 [`Measure`]（直角坐标条目 + 数字格式数组），
 //!   解析在 [`measure`]。
+//! - 3D（13.6，Table 298–306）：`/3DD`（3D 流或 3D 引用字典）、`/3DV`
+//!   视图选择、`/3DA` 激活字典、`/3DI` 交互标志与 `/3DB` 视图框类型化于
+//!   [`crate::core::reader::three_d`]；视图、投影与背景字典随之解析。
 //! - 外观特性字典 `/MK`（Table 189，含图标适配字典 `/IF`，Table 247）类型化为
 //!   [`AppearanceCharacteristics`]，解析在 [`mk`]。
 //! - Watermark 注解的固定打印字典 `/FixedPrint`（Table 190/191）类型化为
@@ -42,6 +45,9 @@ use crate::core::reader::action::{Action, ActionError};
 use crate::core::reader::movie::{Movie, MoviePlayback};
 use crate::core::reader::navigation::{NavigationError, OutlineDestination};
 use crate::core::reader::sound::Sound;
+use crate::core::reader::three_d::{
+    ThreeDActivation, ThreeDArtwork, ThreeDError, ThreeDViewSelection,
+};
 use crate::core::types::{Dict, Document, Value};
 
 #[cfg(test)]
@@ -287,6 +293,16 @@ pub struct Annotation {
     pub movie: Option<Movie>,
     /// Movie 注解的播放设置 `/A`（布尔或电影激活字典，Table 186）。
     pub movie_playback: Option<MoviePlayback>,
+    /// 3D 注解的 artwork `/3DD`（3D 流或 3D 引用字典，Table 298）。
+    pub three_d: Option<ThreeDArtwork>,
+    /// 3D 注解的初始视图 `/3DV`（Table 298）。
+    pub three_d_view: Option<ThreeDViewSelection>,
+    /// 3D 注解的激活字典 `/3DA`（Table 299）。
+    pub three_d_activation: Option<ThreeDActivation>,
+    /// 3D 注解的交互标志 `/3DI`（缺省 true 由呈现端应用）。
+    pub three_d_interactive: Option<bool>,
+    /// 3D 注解的视图框 `/3DB`（缺省由 `/Rect` 计算）。
+    pub three_d_view_box: Option<[f64; 4]>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -487,6 +503,12 @@ fn parse_annotation(
     let fixed_print = watermark::parse_fixed_print(document, dict)?;
     let sound = sound::parse_sound_entries(dict, &subtype)?;
     let movie = movie::parse_movie_entries(document, dict, &subtype)?;
+    let three_d = crate::core::reader::three_d::parse_three_d_entries(document, dict, &subtype)
+        .map_err(|error| match error {
+            ThreeDError::Malformed(message) => malformed(format!("3D annotation: {message}")),
+            ThreeDError::LimitExceeded(what) => AnnotationError::LimitExceeded(what),
+        })?;
+    let three_d = three_d.unwrap_or_default();
 
     Ok(Annotation {
         page_index,
@@ -548,6 +570,11 @@ fn parse_annotation(
         fixed_print,
         movie: movie.movie,
         movie_playback: movie.playback,
+        three_d: three_d.artwork,
+        three_d_view: three_d.view,
+        three_d_activation: three_d.activation,
+        three_d_interactive: three_d.interactive,
+        three_d_view_box: three_d.view_box,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {
