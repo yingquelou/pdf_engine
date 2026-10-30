@@ -207,6 +207,8 @@ pub enum PdfFeature {
     ArticleThreads,
     /// 便携集合（目录 `/Collection`，12.3.5 Table 155–158），PDF 1.7 引入。
     Collection,
+    /// 集合项字典（文件规格 `/CI`，7.11.6 Table 48/49），PDF 1.7 引入。
+    CollectionItem,
 }
 
 impl PdfFeature {
@@ -257,7 +259,8 @@ impl PdfFeature {
             | PdfFeature::PolygonDimensionIntent
             | PdfFeature::AnnotationMeasure
             | PdfFeature::SubmitFormUrlType
-            | PdfFeature::Collection => PdfVersion::V1_7,
+            | PdfFeature::Collection
+            | PdfFeature::CollectionItem => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -316,6 +319,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PagePresentation => "page presentation entries",
             PdfFeature::ArticleThreads => "article threads",
             PdfFeature::Collection => "collections",
+            PdfFeature::CollectionItem => "collection items",
         };
         write!(f, "{name}")
     }

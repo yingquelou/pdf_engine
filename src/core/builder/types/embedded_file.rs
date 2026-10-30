@@ -5,8 +5,16 @@
 //! `/Subtype` MIME 名 + `/Params` 文件参数），并登记进目录
 //! `/Names /EmbeddedFiles` 名称树；句柄可供 FileAttachment 注解的 `/FS`
 //! 引用（12.5.6.14）。
+//!
+//! [`CollectionItem`]（7.11.6 Table 48/49）经 `/CI` 写出为第三个间接
+//! 对象（Table 44 要求间接引用），用于便携集合的条目数据。
+
+use std::collections::BTreeMap;
 
 use md5::{Digest, Md5};
+
+use super::{text_string_value, validate_name_value};
+use crate::core::types::{Dict, Value};
 
 /// 嵌入文件：名称、说明、MIME 子类型与文件字节。
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +26,7 @@ pub struct EmbeddedFile {
     creation_date: Option<String>,
     modification_date: Option<String>,
     data: Vec<u8>,
+    collection_item: Option<CollectionItem>,
 }
 
 impl EmbeddedFile {
@@ -32,6 +41,7 @@ impl EmbeddedFile {
             creation_date: None,
             modification_date: None,
             data: data.into(),
+            collection_item: None,
         }
     }
 
@@ -66,6 +76,12 @@ impl EmbeddedFile {
         self
     }
 
+    /// 文件规格 `/CI` 集合项字典（PDF 1.7，7.11.6）；写出为间接对象。
+    pub fn with_collection_item(mut self, item: CollectionItem) -> Self {
+        self.collection_item = Some(item);
+        self
+    }
+
     /// 展示名（名称树键与 `/UF`）。
     pub fn name(&self) -> &str {
         &self.name
@@ -89,6 +105,10 @@ impl EmbeddedFile {
 
     pub(crate) fn data(&self) -> &[u8] {
         &self.data
+    }
+
+    pub(crate) fn collection_item(&self) -> Option<&CollectionItem> {
+        self.collection_item.as_ref()
     }
 
     /// 是否只有 ASCII 展示名（`/UF` 仅 ≥1.7 写出，低版本可省）。
@@ -154,6 +174,156 @@ impl EmbeddedFile {
                 return Err(format!("embedded file /Params {key} must not be empty"));
             }
         }
+        if let Some(item) = &self.collection_item {
+            item.validate()?;
+        }
         Ok(())
+    }
+}
+
+/// 集合项字典（7.11.6 Table 48）：集合字段键 → 数据值。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CollectionItem {
+    values: BTreeMap<String, CollectionItemValue>,
+}
+
+impl CollectionItem {
+    /// 空集合项（只写 `/Type /CollectionItem`）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 文本串条目（`S`/`D` 字段）。
+    pub fn with_text(mut self, key: impl Into<String>, text: impl Into<String>) -> Self {
+        self.values
+            .insert(key.into(), CollectionItemValue::Text(text.into()));
+        self
+    }
+
+    /// 数值条目（`N` 字段）；整数值写成整数对象。
+    pub fn with_number(mut self, key: impl Into<String>, number: f64) -> Self {
+        self.values
+            .insert(key.into(), CollectionItemValue::Number(number));
+        self
+    }
+
+    /// 集合子项字典条目（Table 49）。
+    pub fn with_subitem(mut self, key: impl Into<String>, subitem: CollectionSubitem) -> Self {
+        self.values
+            .insert(key.into(), CollectionItemValue::Subitem(subitem));
+        self
+    }
+
+    /// 键须为合法 PDF 名字，数值须有限。
+    fn validate(&self) -> Result<(), String> {
+        for (key, value) in &self.values {
+            validate_name_value(key, "collection item key")?;
+            match value {
+                CollectionItemValue::Number(number) if !number.is_finite() => {
+                    return Err(format!("collection item {key:?} number must be finite"));
+                }
+                CollectionItemValue::Subitem(subitem) => subitem.validate()?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn to_dict(&self) -> Dict {
+        let mut dict = Dict::new().insert("Type", Value::Name("CollectionItem".into()));
+        for (key, value) in &self.values {
+            let value = match value {
+                CollectionItemValue::Text(text) => text_string_value(text),
+                CollectionItemValue::Number(number) => number_value(*number),
+                CollectionItemValue::Subitem(subitem) => Value::Dict(subitem.to_dict()),
+            };
+            dict = dict.insert(key.as_str(), value);
+        }
+        dict
+    }
+}
+
+/// 集合项条目值（Table 48）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CollectionItemValue {
+    /// PDF 文本串（日期字段同样写文本串）。
+    Text(String),
+    /// PDF 数值。
+    Number(f64),
+    /// 集合子项字典（Table 49）。
+    Subitem(CollectionSubitem),
+}
+
+/// 集合子项字典（7.11.6 Table 49）：数据 `/D` 与呈现前缀 `/P`。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CollectionSubitem {
+    datum: Option<CollectionSubitemValue>,
+    prefix: Option<String>,
+}
+
+impl CollectionSubitem {
+    /// 空子项（只写 `/Type /CollectionSubitem`）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `/D` 文本串数据。
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.datum = Some(CollectionSubitemValue::Text(text.into()));
+        self
+    }
+
+    /// `/D` 数值数据。
+    pub fn with_number(mut self, number: f64) -> Self {
+        self.datum = Some(CollectionSubitemValue::Number(number));
+        self
+    }
+
+    /// `/P` 呈现前缀文本串。
+    pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if let Some(CollectionSubitemValue::Number(number)) = &self.datum
+            && !number.is_finite()
+        {
+            return Err("collection subitem /D number must be finite".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn to_dict(&self) -> Dict {
+        let mut dict = Dict::new().insert("Type", Value::Name("CollectionSubitem".into()));
+        if let Some(datum) = &self.datum {
+            let datum = match datum {
+                CollectionSubitemValue::Text(text) => text_string_value(text),
+                CollectionSubitemValue::Number(number) => number_value(*number),
+            };
+            dict = dict.insert("D", datum);
+        }
+        if let Some(prefix) = &self.prefix {
+            dict = dict.insert("P", text_string_value(prefix));
+        }
+        dict
+    }
+}
+
+/// 集合子项数据（Table 49 `/D`）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CollectionSubitemValue {
+    /// PDF 文本串（日期字段同样写文本串）。
+    Text(String),
+    /// PDF 数值。
+    Number(f64),
+}
+
+/// 整数写整数对象、其余写实数对象；调用前已校验有限。
+fn number_value(number: f64) -> Value {
+    if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
+        Value::Integer(number as i64)
+    } else {
+        Value::Float(number)
     }
 }

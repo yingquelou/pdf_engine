@@ -3,7 +3,8 @@
 //! - 目录 `/Names /EmbeddedFiles` 名称树（复用 E1 的名称字典语义）→
 //!   [`Document::embedded_files`]，键按 PDF 文本串解码。
 //! - 文件规格字典（Table 44）：`/FS`、`/F`、`/UF`、`/Desc`、平台条目
-//!   `/DOS`/`/Mac`/`/Unix`、`/ID`、`/V`、`/EF`、`/RF`。
+//!   `/DOS`/`/Mac`/`/Unix`、`/ID`、`/V`、`/EF`、`/RF`、`/CI`（7.11.6
+//!   集合项，须为间接引用）。
 //! - `/EF` 的三种载体（直接流、嵌套文件规格、双元素数组）统一展平为
 //!   [`Filespec::embedded`]，数组按声明顺序保留低版本与 Unicode 名版本。
 //! - `/RF` 关联文件数组（7.11.4.2）按载体键展开为
@@ -21,6 +22,12 @@ use md5::{Digest, Md5};
 use crate::core::reader::content::text_value;
 use crate::core::reader::navigation::{NavigationError, resolve};
 use crate::core::types::{Dict, Document, Value};
+
+mod collection_item;
+
+pub use collection_item::{
+    CollectionItem, CollectionItemValue, CollectionSubitem, CollectionSubitemValue,
+};
 
 /// 文件规格与 `/EF` 载体的最大嵌套深度。
 const MAX_FILESPEC_DEPTH: usize = 8;
@@ -92,7 +99,9 @@ pub struct Filespec {
     /// `/RF` 关联文件数组（PDF 1.3）：载体键（`F`/`UF`/`DOS`/`Mac`/`Unix`）
     /// → 名字与嵌入文件流对。
     pub related_files: BTreeMap<String, Vec<RelatedFile>>,
-    /// 完整文件规格字典，未建模条目（`/CI` 等）经此访问。
+    /// `/CI` 集合项字典（PDF 1.7，7.11.6）。
+    pub collection_item: Option<CollectionItem>,
+    /// 完整文件规格字典，未建模条目经此访问。
     pub dict: Dict,
 }
 
@@ -300,6 +309,10 @@ impl Document {
                 "embedded file stream count",
             ));
         }
+        let collection_item = match dict.get("CI") {
+            None => None,
+            Some(value) => Some(collection_item::parse_collection_item(self, value)?),
+        };
         Ok(Filespec {
             reference,
             file_system,
@@ -313,6 +326,7 @@ impl Document {
             volatile,
             embedded,
             related_files,
+            collection_item,
             dict: dict.clone(),
         })
     }

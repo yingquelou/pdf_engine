@@ -57,7 +57,9 @@ pub use annotation::{
 };
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
-pub use embedded_file::EmbeddedFile;
+pub use embedded_file::{
+    CollectionItem, CollectionItemValue, CollectionSubitem, CollectionSubitemValue, EmbeddedFile,
+};
 pub use encoding::FontEncoding;
 pub use font::{Font, FontWidths};
 pub use form::{FormResources, FormXObject, GroupXObject};

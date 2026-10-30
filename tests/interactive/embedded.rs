@@ -90,3 +90,61 @@ fn builder_embedded_files_roundtrip_through_parser() {
         b"%PDF-1.4 fake report bytes".to_vec()
     );
 }
+
+/// 写入 → 重新解析：文件规格 `/CI` 集合项（Table 44/48/49，PDF 1.7）
+/// 经 `Document::embedded_files` 还原为类型化文本/数值/子项。
+#[test]
+fn builder_collection_item_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        Collection, CollectionField, CollectionFieldType, CollectionItem, CollectionSubitem,
+        EmbeddedFile, PageSize, PdfBuilder,
+    };
+    use pdf_engine::core::reader::embedded::{CollectionItemValue, CollectionSubitemValue};
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    builder.page(PageSize::A4);
+    builder.collection(Collection::new().with_schema(vec![
+        CollectionField::new("title", CollectionFieldType::Text, "Title"),
+        CollectionField::new("copies", CollectionFieldType::Number, "Copies"),
+        CollectionField::new("issued", CollectionFieldType::Date, "Issued"),
+    ]));
+    builder.embed_file(
+        EmbeddedFile::new("report.pdf", b"report".to_vec()).with_collection_item(
+            CollectionItem::new()
+                .with_text("title", "Annual Report")
+                .with_number("copies", 2.0)
+                .with_subitem(
+                    "issued",
+                    CollectionSubitem::new()
+                        .with_text("D:20261030120000Z")
+                        .with_prefix("Issued: "),
+                ),
+        ),
+    );
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build collection item");
+    let doc = parse_buf(&buf);
+
+    let files = doc.embedded_files().expect("embedded files");
+    let filespec = files.get("report.pdf").expect("filespec");
+    assert!(filespec.reference.is_some(), "文件规格应为间接对象");
+    let item = filespec.collection_item.as_ref().expect("/CI");
+    assert_eq!(
+        item.values.get("title"),
+        Some(&CollectionItemValue::Text("Annual Report".into()))
+    );
+    assert_eq!(
+        item.values.get("copies"),
+        Some(&CollectionItemValue::Number(2.0))
+    );
+    let issued = match item.values.get("issued").expect("issued") {
+        CollectionItemValue::Subitem(subitem) => subitem,
+        other => panic!("expected subitem, got {other:?}"),
+    };
+    assert_eq!(
+        issued.datum,
+        Some(CollectionSubitemValue::Text("D:20261030120000Z".into()))
+    );
+    assert_eq!(issued.prefix.as_deref(), Some("Issued: "));
+}

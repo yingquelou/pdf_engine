@@ -68,6 +68,7 @@ mod choice_indices;
 mod cid;
 mod cid_cmap_multibyte;
 mod collection;
+mod collection_item;
 mod color_space;
 mod compression;
 mod embedded_file;

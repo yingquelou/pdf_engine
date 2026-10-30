@@ -1,5 +1,6 @@
-//! E6 读端嵌入文件测试（7.11.2–7.11.4）。
+//! E6 读端嵌入文件测试（7.11.2–7.11.4、7.11.6）。
 
+mod collection_item;
 mod related;
 
 use super::*;
@@ -526,7 +527,7 @@ fn platform_names_and_unmodelled_entries_are_preserved() {
             ("DOS", Value::String("TEXTUR~1.PNG".into())),
             ("Mac", Value::String("Texture.png".into())),
             ("Unix", Value::String("texture.png".into())),
-            ("CI", Value::Dict(Dict::new())),
+            ("XCustom", Value::String("kept".into())),
         ]),
     )]));
     doc.set_object(embedded_stream(80, Dict::new(), &payload));
@@ -547,7 +548,7 @@ fn platform_names_and_unmodelled_entries_are_preserved() {
         filespec.unix_name.as_deref(),
         Some(b"texture.png".as_slice())
     );
-    // 未建模条目（`/CI` 集合项字典）经完整字典访问。
-    assert!(filespec.dict.get("CI").is_some());
+    // 未建模条目经完整字典访问。
+    assert!(filespec.dict.get("XCustom").is_some());
     assert_eq!(filespec.primary().expect("stream").data, payload);
 }

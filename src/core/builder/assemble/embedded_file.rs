@@ -7,20 +7,22 @@
 //!
 //! 版本门禁（assemble 最前校验，零字节契约）：嵌入文件自 PDF 1.3 起；
 //! 非 ASCII 展示名（`/UF`）与 `/Desc` 要求 1.4。1.4 及以上同时写出
-//! `/F` 与 `/UF`。
+//! `/F` 与 `/UF`。文件规格 `/CI` 集合项要求 PDF 1.7，且按 Table 44
+//! 写成独立间接对象。
 
 use std::fmt::Write as _;
 
 use crate::core::builder::navigation::name_tree;
 use crate::core::builder::types::EmbeddedFile;
 use crate::core::builder::types::text_string_value;
-use crate::core::types::{Dict, Document, Object, PdfVersion, StreamData, Value};
+use crate::core::types::{Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Value};
 use crate::core::writer::WriteError;
 
-/// 单个注册项的对象号：文件规格在前、嵌入流在后。
+/// 单个注册项的对象号：文件规格在前、嵌入流在后；有 `/CI` 时再占一个。
 pub(super) struct EmbeddedSlot {
     pub(super) filespec_num: i64,
     pub(super) stream_num: i64,
+    pub(super) collection_item_num: Option<i64>,
 }
 
 /// 注册校验：逐项合法性、展示名重复与版本门禁。在分配任何对象号之前
@@ -64,20 +66,32 @@ pub(super) fn validate_registration(
                 version.as_str()
             )));
         }
+        if file.collection_item().is_some() && version < PdfVersion::V1_7 {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "collection items (/CI) require PDF {}, got {}",
+                PdfVersion::V1_7.as_str(),
+                version.as_str()
+            )));
+        }
     }
     Ok(())
 }
 
-/// 为每个注册项分配（文件规格，嵌入流）两个对象号。
+/// 为每个注册项分配（文件规格，嵌入流）两个对象号；`/CI` 另占一个。
 pub(super) fn allocate(files: &[EmbeddedFile], next: &mut i64) -> Vec<EmbeddedSlot> {
     files
         .iter()
-        .map(|_| {
+        .map(|file| {
             let slot = EmbeddedSlot {
                 filespec_num: *next,
                 stream_num: *next + 1,
+                collection_item_num: file.collection_item().is_some().then(|| *next + 2),
             };
-            *next += 2;
+            *next += if slot.collection_item_num.is_some() {
+                3
+            } else {
+                2
+            };
             slot
         })
         .collect()
@@ -110,6 +124,14 @@ pub(super) fn write_objects(
         }
         if let Some(description) = file.description() {
             filespec = filespec.insert("Desc", text_string_value(description));
+        }
+        if let Some(item) = file.collection_item() {
+            let ci_num = slot
+                .collection_item_num
+                .expect("collection item object number is allocated");
+            filespec = filespec.insert("CI", Value::Ref(ci_num, 0));
+            doc.set_object(Object::new(ci_num, 0, Value::Dict(item.to_dict())));
+            doc.features.borrow_mut().insert(PdfFeature::CollectionItem);
         }
         let mut carriers = Dict::new();
         if file.short_name().is_some() {
