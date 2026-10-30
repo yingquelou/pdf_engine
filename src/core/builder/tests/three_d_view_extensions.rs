@@ -2,7 +2,7 @@
 //! `/NA` `/NR` 的版本门禁与 `/NA` → `/NR` 依赖校验。来源覆盖 artwork
 //! `/VA`、内联 `/DV`、注解内联 `/3DV` 与 GoTo3DView 内联 `/V`。
 
-use super::support::annot_object;
+use super::support::{annot_object, assert_text_entry};
 use super::*;
 use crate::core::types::{Array, Dict, Document, PdfFeature, Value};
 
@@ -21,16 +21,14 @@ fn three_d_annotation(handle: usize) -> PdfAnnotation {
     PdfAnnotation::new(AnnotationKind::ThreeD, [72.0, 600.0, 200.0, 680.0]).with_three_d(handle)
 }
 
-/// `/RM` 渲染模式字典（原样透传，不校验内容）。
-fn render_mode() -> Value {
-    Value::Dict(Dict::new().insert("Type", Value::Name("3DRenderMode".into())))
+/// `/RM` 渲染模式字典（`Solid`，其余条目缺省）。
+fn render_mode() -> ThreeDRenderMode {
+    ThreeDRenderMode::new(ThreeDRenderModeType::Solid)
 }
 
-/// `/NA` 节点字典数组（原样透传，不校验内容）。
-fn nodes() -> Value {
-    Value::Array(Array(vec![Value::Dict(
-        Dict::new().insert("Type", Value::Name("3DNode".into())),
-    )]))
+/// `/NA` 节点字典数组。
+fn nodes() -> Vec<ThreeDNode> {
+    vec![ThreeDNode::new("Wheel")]
 }
 
 /// 取条目中的间接引用对象号；缺失或非引用即 panic。
@@ -97,7 +95,7 @@ fn three_d_view_pdf17_entries_require_pdf_1_7() {
     let annot = annot_object(&doc, 3, 0);
     let stream_num = referenced_num(annot.get("3DD"));
     let view = first_view(&doc, stream_num);
-    assert_eq!(view.get("RM"), Some(&render_mode()));
+    assert_eq!(view.get("RM"), Some(&Value::Dict(render_mode().to_dict())));
     assert!(
         doc.features
             .borrow()
@@ -107,11 +105,14 @@ fn three_d_view_pdf17_entries_require_pdf_1_7() {
     // 内联 `/DV` 的 `/LS`：1.6 同样拒绝（扫描含 `/DV` 路径）。
     let mut b = PdfBuilder::with_version(PdfVersion::V1_6);
     let p0 = b.page(PageSize::A4);
-    let artwork = b.add_three_d_artwork(ThreeDArtwork::new(vec![1, 2, 3, 4]).with_default_view(
-        ThreeDViewSelection::Inline(Box::new(
-            camera_view("Default").with_lighting(Value::Dict(Dict::new())),
+    let artwork = b.add_three_d_artwork(
+        ThreeDArtwork::new(vec![1, 2, 3, 4]).with_default_view(ThreeDViewSelection::Inline(
+            Box::new(
+                camera_view("Default")
+                    .with_lighting(ThreeDLightingScheme::new(ThreeDLightingSchemeType::Artwork)),
+            ),
         )),
-    ));
+    );
     b.add_annotation(p0, three_d_annotation(artwork));
     let mut out = Vec::new();
     let error = b
@@ -165,7 +166,11 @@ fn three_d_view_nodes_require_restore_nodes() {
     let annot = annot_object(&doc, 3, 0);
     let stream_num = referenced_num(annot.get("3DD"));
     let view = first_view(&doc, stream_num);
-    assert_eq!(view.get("NA"), Some(&nodes()));
+    let na = view.get("NA").and_then(Value::as_array).expect("/NA array");
+    assert_eq!(na.0.len(), 1);
+    let node = na.0[0].as_dict().expect("/NA[0] dictionary");
+    assert_eq!(node.get("Type"), Some(&Value::Name("3DNode".into())));
+    assert_text_entry(node, "N");
     assert_eq!(view.get("NR"), Some(&Value::Bool(true)));
 }
 
@@ -178,7 +183,7 @@ fn annotation_inline_view_pdf17_entries_require_pdf_1_7() {
     b.add_annotation(
         p0,
         three_d_annotation(artwork).with_three_d_view(ThreeDViewSelection::Inline(Box::new(
-            camera_view("Inline").with_cross_sections(Value::Array(Array(Vec::new()))),
+            camera_view("Inline").with_cross_sections(Vec::new()),
         ))),
     );
     let mut out = Vec::new();
@@ -198,7 +203,7 @@ fn annotation_inline_view_pdf17_entries_require_pdf_1_7() {
     b.add_annotation(
         p0,
         three_d_annotation(artwork).with_three_d_view(ThreeDViewSelection::Inline(Box::new(
-            camera_view("Inline").with_cross_sections(Value::Array(Array(Vec::new()))),
+            camera_view("Inline").with_cross_sections(Vec::new()),
         ))),
     );
     let doc = b.assemble_document().expect("assemble inline /3DV /SA");

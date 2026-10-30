@@ -3,6 +3,8 @@
 use crate::core::types::{Array, Dict, Value};
 
 use super::super::ThreeDError;
+use super::super::lighting::{ThreeDLightingScheme, ThreeDLightingSchemeType};
+use super::super::render_mode::{ThreeDRenderMode, ThreeDRenderModeType};
 use super::super::view::{ThreeDMatrixSource, parse_view};
 use super::{document, view};
 
@@ -125,8 +127,22 @@ fn view_ignores_irrelevant_matrix_entries_and_preserves_metadata() {
             .insert("U3DPath", Value::Integer(7))
             .insert("CO", Value::Float(3.5))
             .insert("O", Value::Ref(40, 0))
-            .insert("RM", Value::Name("Wireframe".into()))
-            .insert("LS", Value::Name("Artwork".into()))
+            .insert(
+                "RM",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("3DRenderMode".into()))
+                        .insert("Subtype", Value::Name("Wireframe".into())),
+                ),
+            )
+            .insert(
+                "LS",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("3DLightingScheme".into()))
+                        .insert("Subtype", Value::Name("Artwork".into())),
+                ),
+            )
             .insert("SA", Value::Array(Array(Vec::new())))
             .insert("NA", Value::Array(Array(Vec::new())))
             .insert("NR", Value::Bool(true)),
@@ -138,10 +154,24 @@ fn view_ignores_irrelevant_matrix_entries_and_preserves_metadata() {
     assert_eq!(parsed.u3d_path, None);
     assert_eq!(parsed.center_of_orbit, Some(3.5));
     assert_eq!(parsed.overlay, Some(Value::Ref(40, 0)));
-    assert_eq!(parsed.render_mode, Some(Value::Name("Wireframe".into())));
-    assert_eq!(parsed.lighting, Some(Value::Name("Artwork".into())));
-    assert_eq!(parsed.cross_sections, Some(Value::Array(Array(Vec::new()))));
-    assert_eq!(parsed.nodes, Some(Value::Array(Array(Vec::new()))));
+    assert_eq!(
+        parsed.render_mode,
+        Some(ThreeDRenderMode {
+            subtype: ThreeDRenderModeType::Wireframe,
+            auxiliary_color: None,
+            face_color: None,
+            opacity: None,
+            crease_value: None,
+        })
+    );
+    assert_eq!(
+        parsed.lighting,
+        Some(ThreeDLightingScheme {
+            subtype: ThreeDLightingSchemeType::Artwork,
+        })
+    );
+    assert_eq!(parsed.cross_sections, Some(Vec::new()));
+    assert_eq!(parsed.nodes, Some(Vec::new()));
     assert_eq!(parsed.restore_nodes, Some(true));
     assert_eq!(parsed.internal_name, Some(Value::String("inner".into())));
 

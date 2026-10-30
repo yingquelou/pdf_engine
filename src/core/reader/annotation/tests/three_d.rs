@@ -263,7 +263,14 @@ fn stream_views_projection_background_and_overlay_are_typed() {
                 .insert("P", Value::Dict(projection))
                 .insert("BG", Value::Dict(background))
                 .insert("O", Value::Ref(90, 0))
-                .insert("RM", Value::Name("Solid".into()))
+                .insert(
+                    "RM",
+                    Value::Dict(
+                        Dict::new()
+                            .insert("Type", Value::Name("3DRenderMode".into()))
+                            .insert("Subtype", Value::Name("Solid".into())),
+                    ),
+                )
                 .insert("NR", Value::Bool(true)),
         )])),
     );
@@ -280,7 +287,16 @@ fn stream_views_projection_background_and_overlay_are_typed() {
     assert_eq!(background.color, Some(numbers(&[1.0, 0.0, 0.0])));
     assert_eq!(background.entire_annotation, Some(true));
     assert_eq!(view.overlay, Some(Value::Ref(90, 0)));
-    assert_eq!(view.render_mode, Some(Value::Name("Solid".into())));
+    assert_eq!(
+        view.render_mode,
+        Some(ThreeDRenderMode {
+            subtype: ThreeDRenderModeType::Solid,
+            auxiliary_color: None,
+            face_color: None,
+            opacity: None,
+            crease_value: None,
+        })
+    );
     assert_eq!(view.restore_nodes, Some(true));
 }
 

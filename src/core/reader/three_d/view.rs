@@ -2,8 +2,9 @@
 //!
 //! `/XN` 必填文本串，`/IN` 可选；`/MS` 决定相机矩阵来源：`M` 要求
 //! `/C2W` 恰为 12 个有限数，`U3D` 要求 `/U3DPath`（文本串或最多 64 段的
-//! 文本串数组）。`/P` `/BG` 类型化为投影/背景字典；`/O` 与 PDF 1.7 的
-//! `/RM` `/LS` `/SA` `/NA` 保留原值，`/NR` 解析为可选布尔。
+//! 文本串数组）。`/P` `/BG` 类型化为投影/背景字典；PDF 1.7 的 `/RM` `/LS`
+//! `/SA` `/NA` 也类型化为渲染模式、光照方案、截面与节点模型，`/NR` 解析为
+//! 可选布尔。
 //!
 //! 视图选择（注解 `/3DV` 与流 `/DV`）支持内联视图字典、`/VA` 整数下标、
 //! 匹配 `/IN` 的文本串，以及名字 `F`/`L`；其他名字落 `Other`。
@@ -11,10 +12,15 @@
 use crate::core::types::{Array, Dict, Document, Value};
 
 use super::background::{ThreeDBackground, parse_background};
+use super::cross_section::{ThreeDCrossSection, parse_cross_section};
+use super::lighting::{ThreeDLightingScheme, parse_lighting_scheme};
+use super::node::{ThreeDNode, parse_node};
 use super::projection::{ThreeDProjection, parse_projection};
+use super::render_mode::{ThreeDRenderMode, parse_render_mode};
 use super::{
-    MAX_PATH_SEGMENTS, ThreeDError, array_value, check_type, malformed, number_value,
-    optional_bool, optional_name, optional_number, resolve_value, text_value, text_value_is_empty,
+    MAX_CROSS_SECTIONS, MAX_NODES, MAX_PATH_SEGMENTS, ThreeDError, array_value, check_type,
+    malformed, number_value, optional_bool, optional_name, optional_number, resolve_value,
+    text_value, text_value_is_empty,
 };
 
 /// 相机到世界变换矩阵的来源（`/MS`）。
@@ -49,14 +55,14 @@ pub struct ThreeDView {
     pub overlay: Option<Value>,
     /// `/BG` 背景字典；`None` 表示全缺省背景。
     pub background: Option<ThreeDBackground>,
-    /// `/RM` 渲染模式字典（PDF 1.7，原值保留）。
-    pub render_mode: Option<Value>,
-    /// `/LS` 光照方案字典（PDF 1.7，原值保留）。
-    pub lighting: Option<Value>,
-    /// `/SA` 截面字典数组（PDF 1.7，原值保留）。
-    pub cross_sections: Option<Value>,
-    /// `/NA` 节点字典数组（PDF 1.7，原值保留）。
-    pub nodes: Option<Value>,
+    /// `/RM` 渲染模式字典（PDF 1.7）。
+    pub render_mode: Option<ThreeDRenderMode>,
+    /// `/LS` 光照方案字典（PDF 1.7）。
+    pub lighting: Option<ThreeDLightingScheme>,
+    /// `/SA` 截面字典数组（PDF 1.7）；空数组合法。
+    pub cross_sections: Option<Vec<ThreeDCrossSection>>,
+    /// `/NA` 节点字典数组（PDF 1.7）；空数组合法。
+    pub nodes: Option<Vec<ThreeDNode>>,
     /// `/NR` 应用 `/NA` 前是否恢复节点原状（PDF 1.7，缺省 false）。
     pub restore_nodes: Option<bool>,
 }
@@ -147,6 +153,46 @@ pub(super) fn parse_view(
         }
     };
     let restore_nodes = optional_bool(document, dict, "NR", context)?;
+    let render_mode = match dict.get("RM") {
+        None => None,
+        Some(value) => {
+            let resolved = resolve_value(document, value)?;
+            let Value::Dict(render_mode) = resolved else {
+                return Err(malformed(format!("{context} /RM is not a dictionary")));
+            };
+            Some(parse_render_mode(
+                document,
+                &render_mode,
+                &format!("{context} /RM"),
+            )?)
+        }
+    };
+    let lighting = match dict.get("LS") {
+        None => None,
+        Some(value) => {
+            let resolved = resolve_value(document, value)?;
+            let Value::Dict(lighting) = resolved else {
+                return Err(malformed(format!("{context} /LS is not a dictionary")));
+            };
+            Some(parse_lighting_scheme(
+                document,
+                &lighting,
+                &format!("{context} /LS"),
+            )?)
+        }
+    };
+    let cross_sections = match dict.get("SA") {
+        None => None,
+        Some(value) => Some(parse_cross_sections(
+            document,
+            value,
+            &format!("{context} /SA"),
+        )?),
+    };
+    let nodes = match dict.get("NA") {
+        None => None,
+        Some(value) => Some(parse_nodes(document, value, &format!("{context} /NA"))?),
+    };
 
     Ok(ThreeDView {
         external_name,
@@ -158,12 +204,58 @@ pub(super) fn parse_view(
         projection,
         overlay: dict.get("O").cloned(),
         background,
-        render_mode: dict.get("RM").cloned(),
-        lighting: dict.get("LS").cloned(),
-        cross_sections: dict.get("SA").cloned(),
-        nodes: dict.get("NA").cloned(),
+        render_mode,
+        lighting,
+        cross_sections,
+        nodes,
         restore_nodes,
     })
+}
+
+/// `/SA`：截面字典数组；空数组合法，非字典条目报错。
+fn parse_cross_sections(
+    document: &Document,
+    value: &Value,
+    context: &str,
+) -> Result<Vec<ThreeDCrossSection>, ThreeDError> {
+    let array = array_value(document, value, context)?;
+    if array.len() > MAX_CROSS_SECTIONS {
+        return Err(ThreeDError::LimitExceeded("3D view /SA"));
+    }
+    let mut out = Vec::with_capacity(array.len());
+    for (index, item) in array.iter().enumerate() {
+        let resolved = resolve_value(document, item)?;
+        let Value::Dict(dict) = resolved else {
+            return Err(malformed(format!("{context}[{index}] is not a dictionary")));
+        };
+        out.push(parse_cross_section(
+            document,
+            &dict,
+            &format!("{context}[{index}]"),
+        )?);
+    }
+    Ok(out)
+}
+
+/// `/NA`：节点字典数组；空数组合法，非字典条目报错。
+fn parse_nodes(
+    document: &Document,
+    value: &Value,
+    context: &str,
+) -> Result<Vec<ThreeDNode>, ThreeDError> {
+    let array = array_value(document, value, context)?;
+    if array.len() > MAX_NODES {
+        return Err(ThreeDError::LimitExceeded("3D view /NA"));
+    }
+    let mut out = Vec::with_capacity(array.len());
+    for (index, item) in array.iter().enumerate() {
+        let resolved = resolve_value(document, item)?;
+        let Value::Dict(dict) = resolved else {
+            return Err(malformed(format!("{context}[{index}] is not a dictionary")));
+        };
+        out.push(parse_node(document, &dict, &format!("{context}[{index}]"))?);
+    }
+    Ok(out)
 }
 
 /// 解析视图选择；`view_count` 为 `Some(n)` 时表示流 `/VA` 存在且有 n 项。

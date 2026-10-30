@@ -2,13 +2,17 @@
 //!
 //! `/XN` 必填；`/MS` 缺失表示沿用 artwork 内的视图，`M` 要求恰好 12 个
 //! 有限数的 `/C2W`，`U3D` 要求非空 `/U3DPath`。`/CO` 缺省 0、`/P` `/BG`
-//! 缺省字典均不物化；`/RM` `/LS` `/SA` `/NA` `/NR` 原样透传，但都是
-//! PDF 1.7 条目（13.6.4.1 Table 304），低版本目标在 assemble 阶段拒绝；
-//! `/NA` 仅在 `/NR` 存在时有意义，缺失 `/NR` 时校验失败。`/O` 是 Form
-//! XObject 流，写成已注册表单的间接引用（仅当 `/MS` 与 `/P` 都存在时
-//! 有意义，Table 304、13.6.6）。
+//! 缺省字典均不物化；`/RM` `/LS` `/SA` `/NA` 按 Table 307–312 类型化为
+//! 渲染模式、光照方案、截面与节点，`/NR` 为布尔，但都是 PDF 1.7 条目
+//! （13.6.4.1 Table 304），低版本目标在 assemble 阶段拒绝；`/NA` 仅在
+//! `/NR` 存在时有意义，缺失 `/NR` 时校验失败。`/O` 是 Form XObject 流，
+//! 写成已注册表单的间接引用（仅当 `/MS` 与 `/P` 都存在时有意义，Table 304、
+//! 13.6.6）。
 
-use super::{ThreeDBackground, ThreeDMatrixSource, ThreeDProjection};
+use super::{
+    ThreeDBackground, ThreeDCrossSection, ThreeDLightingScheme, ThreeDMatrixSource, ThreeDNode,
+    ThreeDProjection, ThreeDRenderMode,
+};
 use crate::core::builder::types::text_string_value;
 use crate::core::types::{Array, Dict, Value};
 
@@ -23,10 +27,10 @@ pub struct ThreeDView {
     center_of_orbit: Option<f64>,
     projection: Option<ThreeDProjection>,
     background: Option<ThreeDBackground>,
-    render_mode: Option<Value>,
-    lighting: Option<Value>,
-    cross_sections: Option<Value>,
-    nodes: Option<Value>,
+    render_mode: Option<ThreeDRenderMode>,
+    lighting: Option<ThreeDLightingScheme>,
+    cross_sections: Option<Vec<ThreeDCrossSection>>,
+    nodes: Option<Vec<ThreeDNode>>,
     restore_nodes: Option<bool>,
     overlay: Option<usize>,
 }
@@ -94,26 +98,26 @@ impl ThreeDView {
         self
     }
 
-    /// 渲染模式字典 `/RM`（PDF 1.7，原样透传）。
-    pub fn with_render_mode(mut self, render_mode: Value) -> Self {
+    /// 渲染模式字典 `/RM`（PDF 1.7，Table 307/308）。
+    pub fn with_render_mode(mut self, render_mode: ThreeDRenderMode) -> Self {
         self.render_mode = Some(render_mode);
         self
     }
 
-    /// 光照方案字典 `/LS`（PDF 1.7，原样透传）。
-    pub fn with_lighting(mut self, lighting: Value) -> Self {
+    /// 光照方案字典 `/LS`（PDF 1.7，Table 309/310）。
+    pub fn with_lighting(mut self, lighting: ThreeDLightingScheme) -> Self {
         self.lighting = Some(lighting);
         self
     }
 
-    /// 截面字典数组 `/SA`（PDF 1.7，原样透传）。
-    pub fn with_cross_sections(mut self, cross_sections: Value) -> Self {
+    /// 截面字典数组 `/SA`（PDF 1.7，Table 311）；空数组合法。
+    pub fn with_cross_sections(mut self, cross_sections: Vec<ThreeDCrossSection>) -> Self {
         self.cross_sections = Some(cross_sections);
         self
     }
 
-    /// 节点字典数组 `/NA`（PDF 1.7，原样透传）。
-    pub fn with_nodes(mut self, nodes: Value) -> Self {
+    /// 节点字典数组 `/NA`（PDF 1.7，Table 312）；空数组合法。
+    pub fn with_nodes(mut self, nodes: Vec<ThreeDNode>) -> Self {
         self.nodes = Some(nodes);
         self
     }
@@ -217,6 +221,29 @@ impl ThreeDView {
         if self.overlay.is_some() && (self.matrix_source.is_none() || self.projection.is_none()) {
             return Err("3D view /O requires both /MS and /P (Table 304, 13.6.6)".into());
         }
+        if let Some(render_mode) = &self.render_mode {
+            render_mode
+                .validate()
+                .map_err(|message| format!("3D view /RM: {message}"))?;
+        }
+        if let Some(lighting) = &self.lighting {
+            lighting
+                .validate()
+                .map_err(|message| format!("3D view /LS: {message}"))?;
+        }
+        if let Some(cross_sections) = &self.cross_sections {
+            for (index, cross_section) in cross_sections.iter().enumerate() {
+                cross_section
+                    .validate()
+                    .map_err(|message| format!("3D view /SA[{index}]: {message}"))?;
+            }
+        }
+        if let Some(nodes) = &self.nodes {
+            for (index, node) in nodes.iter().enumerate() {
+                node.validate()
+                    .map_err(|message| format!("3D view /NA[{index}]: {message}"))?;
+            }
+        }
         if self.nodes.is_some() && self.restore_nodes.is_none() {
             return Err("3D view /NA is meaningful only if /NR is present (Table 304)".into());
         }
@@ -272,15 +299,25 @@ impl ThreeDView {
         if let Some(background) = &self.background {
             dict = dict.insert("BG", Value::Dict(background.to_dict()));
         }
-        for (key, value) in [
-            ("RM", &self.render_mode),
-            ("LS", &self.lighting),
-            ("SA", &self.cross_sections),
-            ("NA", &self.nodes),
-        ] {
-            if let Some(value) = value {
-                dict = dict.insert(key, value.clone());
-            }
+        if let Some(render_mode) = &self.render_mode {
+            dict = dict.insert("RM", Value::Dict(render_mode.to_dict()));
+        }
+        if let Some(lighting) = &self.lighting {
+            dict = dict.insert("LS", Value::Dict(lighting.to_dict()));
+        }
+        if let Some(cross_sections) = &self.cross_sections {
+            let values = cross_sections
+                .iter()
+                .map(|cross_section| Value::Dict(cross_section.to_dict()))
+                .collect();
+            dict = dict.insert("SA", Value::Array(Array(values)));
+        }
+        if let Some(nodes) = &self.nodes {
+            let values = nodes
+                .iter()
+                .map(|node| Value::Dict(node.to_dict()))
+                .collect();
+            dict = dict.insert("NA", Value::Array(Array(values)));
         }
         if let Some(restore) = self.restore_nodes {
             dict = dict.insert("NR", Value::Bool(restore));

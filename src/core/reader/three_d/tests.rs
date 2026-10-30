@@ -1,4 +1,5 @@
-//! 3D 读端低层测试：激活、流、视图、投影与背景字典（13.6 Table 299–306）。
+//! 3D 读端低层测试：激活、流、视图、投影、背景与视图负载字典
+//! （13.6 Table 299–312）。
 
 use crate::core::types::{Array, Dict, Document, Value};
 
@@ -12,6 +13,7 @@ use super::stream::ThreeDStreamFormat;
 use super::view::ThreeDViewSelection;
 use super::*;
 
+mod payloads;
 mod views;
 
 fn document() -> Document {

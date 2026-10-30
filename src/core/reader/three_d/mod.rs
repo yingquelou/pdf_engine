@@ -3,8 +3,9 @@
 //! 覆盖 3D 注解专有条目（Table 298）、3D 激活字典（Table 299）、3D 流字典
 //! （Table 300）、动画样式字典（Table 301/302）、3D 引用字典（Table 303）、
 //! 3D 视图字典（Table 304）、投影字典（Table 305）与背景字典（Table 306）。
-//! 本切片只做语法层类型化：U3D 字节不解码，`/RM` `/LS` `/SA` `/NA` 等
-//! PDF 1.7 渲染条目保留原值。
+//! PDF 1.7 的视图负载条目也按表类型化：渲染模式（Table 307/308）、光照方案
+//! （Table 309/310）、截面（Table 311）与节点（Table 312）。本切片只做语法层
+//! 类型化：U3D 字节不解码。
 //!
 //! 入口 [`parse_three_d_entries`] 由注解读端调用：`/Subtype` 为 `3D` 或
 //! 字典中出现任一 `/3D*` 键时解析，非 3D 子类型带 `/3DD` 也照常解析
@@ -23,7 +24,12 @@ use crate::core::types::{Array, Dict, Document, Value};
 mod activation;
 mod animation;
 mod background;
+mod color;
+mod cross_section;
+mod lighting;
+mod node;
 mod projection;
+mod render_mode;
 mod stream;
 #[cfg(test)]
 mod tests;
@@ -34,10 +40,15 @@ pub use activation::{
 };
 pub use animation::{ThreeDAnimationStyle, ThreeDAnimationStyleType};
 pub use background::{ThreeDBackground, ThreeDBackgroundType};
+pub use color::ThreeDColor;
+pub use cross_section::ThreeDCrossSection;
+pub use lighting::{ThreeDLightingScheme, ThreeDLightingSchemeType};
+pub use node::ThreeDNode;
 pub use projection::{
     ThreeDClipping, ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale,
     ThreeDProjectionType,
 };
+pub use render_mode::{ThreeDFaceColor, ThreeDRenderMode, ThreeDRenderModeType};
 pub use stream::{ThreeDStream, ThreeDStreamFormat};
 pub use view::{ThreeDMatrixSource, ThreeDView, ThreeDViewSelection};
 
@@ -45,6 +56,10 @@ pub use view::{ThreeDMatrixSource, ThreeDView, ThreeDViewSelection};
 const MAX_VIEWS: usize = 1024;
 /// `/U3DPath` 文本串数组上限（防护不可信文件）。
 const MAX_PATH_SEGMENTS: usize = 64;
+/// 视图 `/SA` 截面数组上限（防护不可信文件）。
+const MAX_CROSS_SECTIONS: usize = 1024;
+/// 视图 `/NA` 节点数组上限（防护不可信文件）。
+const MAX_NODES: usize = 1024;
 
 /// 3D 对象解析错误。
 #[derive(Debug, Clone, PartialEq, Eq)]

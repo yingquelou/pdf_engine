@@ -316,46 +316,47 @@ fn builder_three_d_view_overlay_roundtrips_through_parser() {
     );
 }
 
-/// 3D 视图 PDF 1.7 条目（13.6.4.1 Table 304）：`/RM` `/LS` `/SA` `/NA`
-/// `/NR` 写出 → 解析 → 回读，原值保留且特征画像含 3D 视图扩展。
+/// 3D 视图 PDF 1.7 条目（13.6.4 Table 304/307–312）：`/RM` `/LS` `/SA`
+/// `/NA` `/NR` 写出 → 解析 → 回读，负载字典按类型读回且特征画像含 3D 视图
+/// 扩展。
 #[test]
 fn builder_three_d_view_pdf17_entries_roundtrip_through_parser() {
     use pdf_engine::core::builder::{
-        AnnotationKind, PageSize, PdfAnnotation, PdfBuilder, ThreeDArtwork, ThreeDMatrixSource,
-        ThreeDView,
+        AnnotationKind, PageSize, PdfAnnotation, PdfBuilder, ThreeDArtwork, ThreeDColor,
+        ThreeDCrossSection, ThreeDFaceColor, ThreeDLightingScheme, ThreeDLightingSchemeType,
+        ThreeDMatrixSource, ThreeDNode, ThreeDRenderMode, ThreeDRenderModeType, ThreeDView,
     };
     use pdf_engine::core::types::PdfFeature;
 
     const CAMERA: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 30.0];
-    let render_mode = Dict::new()
-        .insert("Type", Value::Name("3DRenderMode".into()))
-        .insert("Subtype", Value::Name("Solid".into()));
-    let lighting = Dict::new()
-        .insert("Type", Value::Name("3DLightingScheme".into()))
-        .insert("Subtype", Value::Name("Headlamp".into()));
-    let cross_section = Dict::new()
-        .insert("Type", Value::Name("3DCrossSection".into()))
-        .insert(
-            "Center",
-            Value::Array(Array(vec![
-                Value::Integer(1),
-                Value::Integer(2),
-                Value::Integer(3),
-            ])),
-        );
-    let node = Dict::new()
-        .insert("Type", Value::Name("3DNode".into()))
-        .insert("AP", Value::Name("true".into()));
-    let cross_sections = Value::Array(Array(vec![Value::Dict(cross_section.clone())]));
-    let nodes = Value::Array(Array(vec![Value::Dict(node.clone())]));
-
     let view = ThreeDView::new("Front")
         .with_matrix_source(ThreeDMatrixSource::M)
         .with_camera_to_world(CAMERA)
-        .with_render_mode(Value::Dict(render_mode.clone()))
-        .with_lighting(Value::Dict(lighting.clone()))
-        .with_cross_sections(cross_sections.clone())
-        .with_nodes(nodes.clone())
+        .with_render_mode(
+            ThreeDRenderMode::new(ThreeDRenderModeType::Illustration)
+                .with_auxiliary_color(ThreeDColor::rgb([0.1, 0.2, 0.3]))
+                .with_face_color(ThreeDFaceColor::Background)
+                .with_opacity(0.7)
+                .with_crease_value(30.0),
+        )
+        .with_lighting(ThreeDLightingScheme::new(
+            ThreeDLightingSchemeType::Headlamp,
+        ))
+        .with_cross_sections(vec![
+            ThreeDCrossSection::new()
+                .with_center([1.0, 2.0, 3.0])
+                .with_orientation([None, Some(-30.0), Some(30.0)])
+                .with_plane_opacity(0.25)
+                .with_plane_color(ThreeDColor::rgb([0.5, 0.5, 0.5]))
+                .with_intersection_visible(true)
+                .with_intersection_color(ThreeDColor::rgb([0.0, 1.0, 0.0])),
+        ])
+        .with_nodes(vec![
+            ThreeDNode::new("Wheel")
+                .with_opacity(0.5)
+                .with_visible(false)
+                .with_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0]),
+        ])
         .with_restore_nodes(true);
 
     let mut builder = PdfBuilder::new();
@@ -378,10 +379,52 @@ fn builder_three_d_view_pdf17_entries_roundtrip_through_parser() {
     let parsed = annotations[0].three_d.as_ref().expect("/3DD");
     assert_eq!(parsed.stream.views.len(), 1);
     let parsed_view = &parsed.stream.views[0];
-    assert_eq!(parsed_view.render_mode, Some(Value::Dict(render_mode)));
-    assert_eq!(parsed_view.lighting, Some(Value::Dict(lighting)));
-    assert_eq!(parsed_view.cross_sections, Some(cross_sections));
-    assert_eq!(parsed_view.nodes, Some(nodes));
+
+    let render_mode = parsed_view.render_mode.as_ref().expect("/RM");
+    assert_eq!(render_mode.subtype, ThreeDRenderModeType::Illustration);
+    assert_eq!(render_mode.opacity, Some(0.7));
+    assert_eq!(render_mode.crease_value, Some(30.0));
+    assert_eq!(
+        render_mode.auxiliary_color,
+        Some(ThreeDColor::rgb([0.1, 0.2, 0.3]))
+    );
+    assert_eq!(render_mode.face_color, Some(ThreeDFaceColor::Background));
+    assert_eq!(
+        parsed_view
+            .lighting
+            .as_ref()
+            .map(|lighting| &lighting.subtype),
+        Some(&ThreeDLightingSchemeType::Headlamp)
+    );
+
+    let cross_sections = parsed_view.cross_sections.as_ref().expect("/SA");
+    assert_eq!(cross_sections.len(), 1);
+    assert_eq!(cross_sections[0].center, Some([1.0, 2.0, 3.0]));
+    assert_eq!(
+        cross_sections[0].orientation,
+        Some([None, Some(-30.0), Some(30.0)])
+    );
+    assert_eq!(cross_sections[0].plane_opacity, Some(0.25));
+    assert_eq!(
+        cross_sections[0].plane_color,
+        Some(ThreeDColor::rgb([0.5, 0.5, 0.5]))
+    );
+    assert_eq!(cross_sections[0].intersection_visible, Some(true));
+    assert_eq!(
+        cross_sections[0].intersection_color,
+        Some(ThreeDColor::rgb([0.0, 1.0, 0.0]))
+    );
+
+    let nodes = parsed_view.nodes.as_ref().expect("/NA");
+    assert_eq!(nodes.len(), 1);
+    // 写端统一以 UTF-16BE/PDFDocEncoding 十六进制串写出文本。
+    assert_eq!(nodes[0].name, Value::HexString("576865656C".into()));
+    assert_eq!(nodes[0].opacity, Some(0.5));
+    assert_eq!(nodes[0].visible, Some(false));
+    assert_eq!(
+        nodes[0].matrix,
+        Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0])
+    );
     assert_eq!(parsed_view.restore_nodes, Some(true));
     assert!(
         doc.features
