@@ -432,6 +432,7 @@ impl PdfAnnotation {
         self.validate_measure_entries()?;
         self.validate_redact_entries()?;
         self.validate_appearance_characteristics()?;
+        self.validate_fixed_print()?;
         // 文本标记注解的 `/QuadPoints` 是 Table 179 必填条目，空数组视同缺失。
         if matches!(
             self.kind,
@@ -453,6 +454,17 @@ impl PdfAnnotation {
             }
             if self.action.is_some() {
                 return Err("Popup annotation shall not have associated actions (/A)".into());
+            }
+        }
+        // 12.5.6.22：watermark 注解无弹出窗口与其他交互元素。
+        if self.kind == AnnotationKind::Watermark {
+            if self.popup.is_some() {
+                return Err("Watermark annotation shall not have a pop-up window (/Popup)".into());
+            }
+            if self.action.is_some() || self.destination.is_some() {
+                return Err(
+                    "Watermark annotation shall not have interactive elements (/A or /Dest)".into(),
+                );
             }
         }
         Ok(())

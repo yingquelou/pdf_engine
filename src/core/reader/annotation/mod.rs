@@ -24,10 +24,13 @@
 //!   解析在 [`measure`]。
 //! - 外观特性字典 `/MK`（Table 189，含图标适配字典 `/IF`，Table 247）类型化为
 //!   [`AppearanceCharacteristics`]，解析在 [`mk`]。
+//! - Watermark 注解的固定打印字典 `/FixedPrint`（Table 190/191）类型化为
+//!   [`FixedPrint`]，解析在 [`watermark`]。
 //! - 未建模条目保留在 [`Annotation::dict`] 中（FileSpec、Widget 字段链、
 //!   Line `/DS` 等）。
 //!
-//! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`。
+//! 通用条目解析在 `entries`，子类型专有条目解析在 `subtype`，
+//! `/F` 标志位在 [`flags`]。
 
 use std::collections::HashSet;
 use std::fmt;
@@ -40,17 +43,20 @@ use crate::core::types::{Dict, Document, Value};
 mod tests;
 
 mod entries;
+mod flags;
 mod kind;
 mod link;
 mod measure;
 mod mk;
 mod redact;
 pub mod subtype;
+mod watermark;
 
 use entries::{
     parse_appearance, parse_border, parse_number_array, parse_opacity, parse_rect,
     parse_text_string,
 };
+pub use flags::AnnotationFlags;
 pub use kind::{AnnotationSubtype, Row, TABLE_169};
 pub use link::LinkHighlightMode;
 pub(crate) use measure::parse_measure_value;
@@ -60,6 +66,7 @@ pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
     LineIntent, PolygonIntent,
 };
+pub use watermark::FixedPrint;
 
 /// 页面树遍历最大深度。
 const MAX_PAGE_DEPTH: usize = 64;
@@ -116,75 +123,6 @@ type Result<T> = std::result::Result<T, AnnotationError>;
 
 fn malformed(message: impl Into<String>) -> AnnotationError {
     AnnotationError::Malformed(message.into())
-}
-
-/// 注解标志位（12.5.2 Table 165）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct AnnotationFlags(u32);
-
-impl AnnotationFlags {
-    pub const INVISIBLE: u32 = 1 << 0;
-    pub const HIDDEN: u32 = 1 << 1;
-    pub const PRINT: u32 = 1 << 2;
-    pub const NO_ZOOM: u32 = 1 << 3;
-    pub const NO_ROTATE: u32 = 1 << 4;
-    pub const NO_VIEW: u32 = 1 << 5;
-    pub const READ_ONLY: u32 = 1 << 6;
-    pub const LOCKED: u32 = 1 << 7;
-    pub const TOGGLE_NO_VIEW: u32 = 1 << 8;
-    pub const LOCKED_CONTENTS: u32 = 1 << 9;
-
-    pub fn from_bits(bits: u32) -> Self {
-        Self(bits)
-    }
-
-    pub fn bits(self) -> u32 {
-        self.0
-    }
-
-    fn has(self, bit: u32) -> bool {
-        self.0 & bit != 0
-    }
-
-    pub fn invisible(self) -> bool {
-        self.has(Self::INVISIBLE)
-    }
-
-    pub fn hidden(self) -> bool {
-        self.has(Self::HIDDEN)
-    }
-
-    pub fn print(self) -> bool {
-        self.has(Self::PRINT)
-    }
-
-    pub fn no_zoom(self) -> bool {
-        self.has(Self::NO_ZOOM)
-    }
-
-    pub fn no_rotate(self) -> bool {
-        self.has(Self::NO_ROTATE)
-    }
-
-    pub fn no_view(self) -> bool {
-        self.has(Self::NO_VIEW)
-    }
-
-    pub fn read_only(self) -> bool {
-        self.has(Self::READ_ONLY)
-    }
-
-    pub fn locked(self) -> bool {
-        self.has(Self::LOCKED)
-    }
-
-    pub fn toggle_no_view(self) -> bool {
-        self.has(Self::TOGGLE_NO_VIEW)
-    }
-
-    pub fn locked_contents(self) -> bool {
-        self.has(Self::LOCKED_CONTENTS)
-    }
 }
 
 /// 外观流字典 `/AP`（12.5.5）：正常/按下/悬停三种状态。
@@ -333,6 +271,8 @@ pub struct Annotation {
     pub overlay_appearance: Option<Value>,
     /// 外观特性字典 `/MK`（Table 189；规范只声明给 Widget 与 Screen 注解）。
     pub appearance_characteristics: Option<AppearanceCharacteristics>,
+    /// Watermark 注解的固定打印字典 `/FixedPrint`（Table 190/191，PDF 1.6）。
+    pub fixed_print: Option<FixedPrint>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -517,6 +457,7 @@ fn parse_annotation(
     let entries = subtype::parse_subtype_entries(dict)?;
     let redact = redact::parse_redact_entries(dict)?;
     let mk = mk::parse_appearance_characteristics(document, dict)?;
+    let fixed_print = watermark::parse_fixed_print(document, dict)?;
 
     Ok(Annotation {
         page_index,
@@ -574,6 +515,7 @@ fn parse_annotation(
         repeat_overlay_text: redact.repeat_overlay_text,
         overlay_appearance: redact.overlay_appearance,
         appearance_characteristics: mk,
+        fixed_print,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

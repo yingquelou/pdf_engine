@@ -50,6 +50,7 @@ mod annotation_mk;
 mod annotation_popup;
 mod annotation_redact;
 mod annotation_subtype_table;
+mod annotation_watermark;
 mod choice_indices;
 mod cid;
 mod cid_cmap_multibyte;

@@ -2,7 +2,7 @@
 //!
 //! 引入版本与标记类归属一律取自读端
 //! [`AnnotationSubtype`]（Table 169 唯一权威表），本枚举只提供写端子集。
-//! `Sound`/`Movie`/`PrinterMark`/`TrapNet`/`Watermark`/`3D` 暂不建模：Widget 由 AcroForm 写端
+//! `Sound`/`Movie`/`PrinterMark`/`TrapNet`/`3D` 暂不建模：Widget 由 AcroForm 写端
 //! 的 [`FormField`](super::super::FormField) 合并字段与 Widget 字典写出（E4），
 //! 其余按需增补。
 
@@ -50,6 +50,8 @@ pub enum AnnotationKind {
     Redact,
     /// 屏幕（`/Screen`，PDF 1.5；外观特性字典 `/MK` 的注解级宿主）。
     Screen,
+    /// 水印（`/Watermark`，PDF 1.6；固定打印字典 `/FixedPrint` 的宿主）。
+    Watermark,
 }
 
 impl AnnotationKind {
@@ -75,6 +77,7 @@ impl AnnotationKind {
             Self::Stamp => AnnotationSubtype::Stamp,
             Self::Redact => AnnotationSubtype::Redact,
             Self::Screen => AnnotationSubtype::Screen,
+            Self::Watermark => AnnotationSubtype::Watermark,
         }
     }
 
@@ -100,6 +103,7 @@ impl AnnotationKind {
             Self::Stamp => "Stamp",
             Self::Redact => "Redact",
             Self::Screen => "Screen",
+            Self::Watermark => "Watermark",
         }
     }
 

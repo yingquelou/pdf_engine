@@ -6,7 +6,8 @@
 //!
 //! 按特性分文件：`navigation`、`annotation`、`annotation_appearance`、
 //! `annotation_geometry`、`annotation_link`、`annotation_measure`、`annotation_mk`、
-//! `annotation_popup`、`annotation_redact`、`annotation_subtype_table`、`form`、
+//! `annotation_popup`、`annotation_redact`、`annotation_subtype_table`、
+//! `annotation_watermark`、`form`、
 //! `embedded`、`metadata`、`incremental`、`signature`；根模块只保留主题文档、
 //! 子模块声明与共享导入（子模块经 `use super::*;` 取用）。
 
@@ -22,6 +23,7 @@ mod annotation_mk;
 mod annotation_popup;
 mod annotation_redact;
 mod annotation_subtype_table;
+mod annotation_watermark;
 mod embedded;
 mod form;
 mod incremental;

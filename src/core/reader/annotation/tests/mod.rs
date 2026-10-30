@@ -5,6 +5,7 @@
 //! `redact` 覆盖 Redact 的 Table 192 条目，
 //! `mk` 覆盖外观特性字典 `/MK`（Table 189）与图标适配字典 `/IF`（Table 247），
 //! `measure` 覆盖 12.9 的 measure 字典（Table 261–263），
+//! `watermark` 覆盖 Watermark 的固定打印字典 `/FixedPrint`（Table 190/191），
 //! `dates` 覆盖 `/M` `/CreationDate` 的 PDF 日期解析（7.9.4）。
 
 mod dates;
@@ -16,3 +17,4 @@ mod mk;
 mod redact;
 mod subtype;
 mod support;
+mod watermark;

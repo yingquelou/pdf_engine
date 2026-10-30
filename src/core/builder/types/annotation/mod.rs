@@ -12,7 +12,8 @@
 //! 、`link`（Link，Table 173 的 `/H` `/PA`）与 `redact`（Redact，Table 192
 //! 的 `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`）；`measure` 覆盖 12.9 的
 //! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
-//! 与图标适配字典 `/IF`（Table 247），子类型归属守卫集中在 `guard`。
+//! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
+//! 字典 `/FixedPrint`（Table 190/191），子类型归属守卫集中在 `guard`。
 
 mod border;
 mod free_text;
@@ -24,6 +25,7 @@ mod measure;
 mod mk;
 mod redact;
 mod subtype;
+mod watermark;
 
 pub use border::BorderArray;
 use free_text::FreeTextEntries;
@@ -39,6 +41,7 @@ use redact::RedactEntries;
 use subtype::LineEntries;
 pub(crate) use subtype::validate_name_value;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
+pub use watermark::FixedPrint;
 
 use super::Action;
 use crate::core::reader::navigation::Destination;
@@ -112,6 +115,7 @@ pub struct PdfAnnotation {
     link: LinkEntries,
     redact: RedactEntries,
     characteristics: Option<AppearanceCharacteristics>,
+    fixed_print: Option<FixedPrint>,
     measure: Option<Measure>,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
@@ -161,6 +165,7 @@ impl PdfAnnotation {
             link: LinkEntries::default(),
             redact: RedactEntries::default(),
             characteristics: None,
+            fixed_print: None,
             measure: None,
             action: None,
             destination: None,

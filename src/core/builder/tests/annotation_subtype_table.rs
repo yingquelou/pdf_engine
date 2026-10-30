@@ -6,8 +6,8 @@ use super::*;
 use crate::core::reader::annotation::{AnnotationSubtype, TABLE_169};
 use crate::core::types::PdfFeature;
 
-/// 写端支持的 Table 169 子集（19 种）。
-const WRITER_KINDS: [AnnotationKind; 19] = [
+/// 写端支持的 Table 169 子集（20 种）。
+const WRITER_KINDS: [AnnotationKind; 20] = [
     AnnotationKind::Text,
     AnnotationKind::Link,
     AnnotationKind::FreeText,
@@ -27,6 +27,7 @@ const WRITER_KINDS: [AnnotationKind; 19] = [
     AnnotationKind::Stamp,
     AnnotationKind::Redact,
     AnnotationKind::Screen,
+    AnnotationKind::Watermark,
 ];
 
 /// 把单个注解挂到单页文档并按 `version` 写出。

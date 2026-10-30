@@ -211,6 +211,20 @@ pub(super) fn annotation_dict(
         let mk = appearance_characteristics_dict(characteristics, handle, form_nums)?;
         dict = dict.insert("MK", Value::Dict(mk));
     }
+    // `/FixedPrint` 写成直接字典（Table 191）；缺省条目不物化。
+    if let Some(fixed_print) = annot.fixed_print() {
+        let mut fixed = Dict::new().insert("Type", Value::Name("FixedPrint".into()));
+        if let Some(matrix) = fixed_print.matrix() {
+            fixed = fixed.insert("Matrix", real_array(&matrix));
+        }
+        if let Some(horizontal) = fixed_print.horizontal() {
+            fixed = fixed.insert("H", Value::Float(horizontal));
+        }
+        if let Some(vertical) = fixed_print.vertical() {
+            fixed = fixed.insert("V", Value::Float(vertical));
+        }
+        dict = dict.insert("FixedPrint", Value::Dict(fixed));
+    }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
         // `to_dict` 的直接构造。
