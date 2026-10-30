@@ -3,18 +3,19 @@
 //! `/P` 字典分 `/MH` 必须满足与 `/BE` 尽力满足两组播放设置（Table 280），
 //! `/D` 媒体时长再嵌 `/T` 时间跨度（Table 281 与 13.2.6.3 Table 289）。
 //! 缺省值不物化：条目缺失保持 `None`，空字典解析为全 `None` 的设置。
-//! `/PL` media players（13.2.7）仍保留原始值，留待后续切片。
+//! `/PL` media players（13.2.7 Table 290–293）类型化于 `players` 子模块。
 
 use crate::core::reader::navigation::resolve;
 use crate::core::types::{Document, Value};
 
-use super::{MAX_DEPTH, RenditionError, check_type, malformed};
+use super::players::parse_media_players;
+use super::{MAX_DEPTH, MediaPlayers, RenditionError, check_type, malformed};
 
 /// media play parameters 字典（Table 279）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaPlayParameters {
-    /// `/PL` media players 字典（13.2.7，保留原值）。
-    pub players: Option<Value>,
+    /// `/PL` media players 字典（Table 290）。
+    pub players: Option<MediaPlayers>,
     /// `/MH` 必须满足的播放设置（Table 280）。
     pub must_honour: Option<MediaPlaySettings>,
     /// `/BE` 尽力满足的播放设置（Table 280）。
@@ -117,8 +118,12 @@ pub(super) fn parse_play_parameters(
     check_type(dict, "MediaPlayParams", "media play parameters")?;
     let must_honour = parse_play_settings(document, dict.get("MH"), "MH", depth + 1)?;
     let best_effort = parse_play_settings(document, dict.get("BE"), "BE", depth + 1)?;
+    let players = match dict.get("PL") {
+        None => None,
+        Some(value) => Some(parse_media_players(document, value, depth + 1)?),
+    };
     Ok(MediaPlayParameters {
-        players: dict.get("PL").cloned(),
+        players,
         must_honour,
         best_effort,
     })

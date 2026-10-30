@@ -6,7 +6,8 @@
 //! Form XObject 的间接引用，也可写成 URL 文件规格；clip section
 //! （`/S /MCS`，Table 277）目前仅有读端能力。播放参数 `/P`
 //! （Table 279–281）与屏幕参数 `/SP`（Table 282–284）在 `play`/`screen`
-//! 子模块建模；`/P` 的 `/PL` media players（13.2.7）留待后续切片。
+//! 子模块建模，两处 `/PL` media players（13.2.7 Table 290–293）在
+//! `players` 子模块建模。
 //!
 //! 嵌入文件与 Form XObject 句柄由 [`MediaClipData::to_dict`] 按对象号
 //! 表解析；句柄上界在 `action_requirements` 于任何对象写出前拒绝。
@@ -16,9 +17,11 @@ use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
 mod play;
+mod players;
 mod screen;
 
 pub use play::{MediaDuration, MediaFit, MediaPlayParameters, MediaPlaySettings, MediaTimespan};
+pub use players::{MediaPlayerInfo, MediaPlayers, SoftwareIdentifier};
 pub use screen::{MediaFloatingWindow, MediaScreenParameters, MediaScreenSettings, MediaWindow};
 
 /// media clip data 的 `/D` 媒体数据来源（Table 274）。
@@ -87,6 +90,7 @@ pub struct MediaClipData {
     source: MediaClipSource,
     content_type: Option<String>,
     permissions: Option<MediaPermissions>,
+    players: Option<MediaPlayers>,
     base_url: Option<String>,
 }
 
@@ -98,6 +102,7 @@ impl MediaClipData {
             source,
             content_type: None,
             permissions: None,
+            players: None,
             base_url: None,
         }
     }
@@ -117,6 +122,12 @@ impl MediaClipData {
     /// `/P` media permissions 字典（Table 275）。
     pub fn with_permissions(mut self, permissions: MediaPermissions) -> Self {
         self.permissions = Some(permissions);
+        self
+    }
+
+    /// `/PL` media players 字典（Table 290）。
+    pub fn with_players(mut self, players: MediaPlayers) -> Self {
+        self.players = Some(players);
         self
     }
 
@@ -179,6 +190,9 @@ impl MediaClipData {
                 "media clip data /MH /BU must be non-empty printable ASCII".into(),
             ));
         }
+        if let Some(players) = &self.players {
+            players.validate()?;
+        }
         Ok(())
     }
 
@@ -230,6 +244,9 @@ impl MediaClipData {
         if let Some(permissions) = &self.permissions {
             dict = dict.insert("P", Value::Dict(permissions.to_dict()));
         }
+        if let Some(players) = &self.players {
+            dict = dict.insert("PL", Value::Dict(players.to_dict()));
+        }
         if let Some(base_url) = &self.base_url {
             let handler = Dict::new().insert("BU", text_string_value(base_url));
             dict = dict.insert("MH", Value::Dict(handler));
@@ -248,8 +265,7 @@ pub struct MediaRendition {
 }
 
 impl MediaRendition {
-    /// 以 media clip 对象构造；`/C` 必写（`/P` 的 `/PL` media players
-    /// 未建模，无法据此省略该条目）。
+    /// 以 media clip 对象构造；`/C` 必写。
     pub fn new(clip: MediaClipData) -> Self {
         Self {
             name: None,

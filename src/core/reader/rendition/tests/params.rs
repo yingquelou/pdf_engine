@@ -50,7 +50,10 @@ fn parses_media_play_parameters_and_durations() {
                 ),
             ),
     )));
-    assert!(play.players.is_some());
+    let players = play.players.expect("/PL");
+    assert!(players.must_use.is_empty(), "空 /PL 字典解析为空播放器集合");
+    assert!(players.any.is_empty());
+    assert!(players.not_used.is_empty());
     let must = play.must_honour.expect("MH");
     assert_eq!(must.volume, Some(80));
     assert_eq!(must.controller, Some(true));

@@ -4,8 +4,8 @@
 //! rendition（`/S /SR`）；媒体 rendition 的 `/C` 指向 media clip 对象
 //! （Table 273–278），后者分 media clip data（`/S /MCD`）与 media clip
 //! section（`/S /MCS`）。播放参数 `/P`（Table 279–281）与屏幕参数 `/SP`
-//! （Table 282–284）类型化于 `play`/`screen` 子模块；`/P` 的 `/PL`
-//! media players（13.2.7）仍保留原始值。
+//! （Table 282–284）类型化于 `play`/`screen` 子模块；两处 `/PL` media
+//! players（13.2.7 Table 290–293）类型化于 `players` 子模块。
 //!
 //! 递归结构（选择器嵌套、clip section 链）限深 32 并做间接引用环检测，
 //! 避免恶意输入造成无限递归。
@@ -17,12 +17,14 @@ use crate::core::reader::navigation::{NavigationError, resolve};
 use crate::core::types::{Dict, Document, Value};
 
 mod play;
+mod players;
 mod screen;
 
 pub use play::{
     MediaDuration, MediaDurationKind, MediaFit, MediaPlayParameters, MediaPlaySettings,
     MediaTimespan,
 };
+pub use players::{MediaPlayerInfo, MediaPlayers, SoftwareIdentifier};
 pub use screen::{MediaFloatingWindow, MediaScreenParameters, MediaScreenSettings, MediaWindow};
 
 /// 递归嵌套上限。
@@ -103,8 +105,8 @@ pub struct MediaClipData {
     pub permissions: Option<MediaPermissions>,
     /// `/Alt` 备用文本说明（14.9.2.4，保留原值）。
     pub alt: Option<Value>,
-    /// `/PL` media players 字典（13.2.7.2，保留原值）。
-    pub players: Option<Value>,
+    /// `/PL` media players 字典（Table 290）。
+    pub players: Option<MediaPlayers>,
     /// `/MH` 必须满足的处理器条目（Table 276）。
     pub mh: Option<MediaClipHandler>,
     /// `/BE` 尽力满足的处理器条目（Table 276）。
@@ -405,6 +407,10 @@ fn parse_media_clip_inner(
                 None => None,
                 Some(value) => Some(parse_media_permissions(document, value)?),
             };
+            let players = match dict.get("PL") {
+                None => None,
+                Some(value) => Some(players::parse_media_players(document, value, depth + 1)?),
+            };
             let mh = match dict.get("MH") {
                 None => None,
                 Some(value) => Some(parse_clip_handler(document, value, "MH")?),
@@ -419,7 +425,7 @@ fn parse_media_clip_inner(
                 content_type,
                 permissions,
                 alt: dict.get("Alt").cloned(),
-                players: dict.get("PL").cloned(),
+                players,
                 mh,
                 be,
             }))

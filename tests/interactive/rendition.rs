@@ -289,3 +289,107 @@ fn builder_rendition_play_and_screen_parameters_roundtrip() {
         Some(["clip".to_owned(), "intro".to_owned()].as_slice())
     );
 }
+
+/// 媒体播放器 `/PL`（13.2.7 Table 290–293）在 clip data 与 play parameters
+/// 两处经写端嵌套字典写出后由读取端还原为同一类型化模型。
+#[test]
+fn builder_rendition_media_players_roundtrip() {
+    use pdf_engine::core::builder::{
+        Action, AnnotationKind, MediaClipData, MediaClipSource, MediaPlayParameters,
+        MediaPlayerInfo, MediaPlayers, MediaRendition, PageSize, PdfAnnotation, PdfBuilder,
+        Rendition, RenditionAction, SoftwareIdentifier,
+    };
+    use pdf_engine::core::reader::action::Action as ReadAction;
+    use pdf_engine::core::reader::rendition::{MediaClip, Rendition as ReadRendition};
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_5);
+    let p0 = builder.page(PageSize::A4);
+    let screen = builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Screen, [72.0, 500.0, 392.0, 740.0]),
+    );
+    let clip_players = MediaPlayers::new()
+        .with_must_use(vec![
+            MediaPlayerInfo::new(
+                SoftwareIdentifier::new("vnd.adobe.swname:ADBE_Acrobat")
+                    .with_lower(vec![2, 0])
+                    .with_lower_inclusive(false)
+                    .with_upper(vec![3, 1])
+                    .with_upper_inclusive(false)
+                    .with_operating_systems(vec![b"WIN".to_vec(), b"MAC".to_vec()]),
+            ),
+            MediaPlayerInfo::new(SoftwareIdentifier::new("quicktime")),
+        ])
+        .with_not_used(vec![MediaPlayerInfo::new(SoftwareIdentifier::new(
+            "vlc://player",
+        ))]);
+    let play_players = MediaPlayers::new().with_any(vec![MediaPlayerInfo::new(
+        SoftwareIdentifier::new("vnd.adobe.swname:ADBE_Reader").with_upper(vec![8]),
+    )]);
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 460.0, 240.0, 480.0]).with_action(
+            Action::Rendition(RenditionAction::play(
+                screen,
+                Rendition::Media(Box::new(
+                    MediaRendition::new(
+                        MediaClipData::new(MediaClipSource::Url(
+                            "https://example.com/clip.mp4".into(),
+                        ))
+                        .with_players(clip_players),
+                    )
+                    .with_play(MediaPlayParameters::new().with_players(play_players)),
+                )),
+            )),
+        ),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build media players");
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    let action = doc
+        .action(annotations[1].action.as_ref().expect("/A"))
+        .expect("typed action");
+    let ReadAction::Rendition(action) = action else {
+        panic!("expected a rendition action, got {action:?}");
+    };
+    let ReadRendition::Media(media) = action.rendition.expect("/R") else {
+        panic!("expected a media rendition");
+    };
+    let Some(MediaClip::Data(clip)) = media.clip else {
+        panic!("expected media clip data");
+    };
+
+    let players = clip.players.expect("/C /PL");
+    assert!(players.any.is_empty());
+    assert_eq!(players.must_use.len(), 2);
+    let detailed = &players.must_use[0];
+    assert_eq!(detailed.software.uri, "vnd.adobe.swname:ADBE_Acrobat");
+    assert_eq!(detailed.software.lower, Some(vec![2, 0]));
+    assert_eq!(detailed.software.lower_inclusive, Some(false));
+    assert_eq!(detailed.software.upper, Some(vec![3, 1]));
+    assert_eq!(detailed.software.upper_inclusive, Some(false));
+    assert_eq!(
+        detailed.software.operating_systems,
+        Some(vec![b"WIN".to_vec(), b"MAC".to_vec()])
+    );
+    let minimal = &players.must_use[1];
+    assert_eq!(minimal.software.uri, "quicktime");
+    assert_eq!(minimal.software.lower, None, "缺省 /L 不物化");
+    assert_eq!(minimal.software.upper, None);
+    assert_eq!(minimal.software.operating_systems, None);
+    assert_eq!(players.not_used.len(), 1);
+    assert_eq!(players.not_used[0].software.uri, "vlc://player");
+
+    let play_players = media.play.expect("/P").players.expect("/P /PL");
+    assert!(play_players.must_use.is_empty());
+    assert!(play_players.not_used.is_empty());
+    assert_eq!(play_players.any.len(), 1);
+    assert_eq!(
+        play_players.any[0].software.uri,
+        "vnd.adobe.swname:ADBE_Reader"
+    );
+    assert_eq!(play_players.any[0].software.upper, Some(vec![8]));
+}

@@ -96,9 +96,9 @@ pub use program::FontProgram;
 pub(crate) use program::OpenTypeFlavor;
 pub use rendition::{
     MediaClipData, MediaClipSource, MediaDuration, MediaFit, MediaFloatingWindow, MediaPermissions,
-    MediaPlayParameters, MediaPlaySettings, MediaRendition, MediaScreenParameters,
-    MediaScreenSettings, MediaTimespan, MediaWindow, Rendition, SelectorRendition,
-    TemporaryFilePermission,
+    MediaPlayParameters, MediaPlaySettings, MediaPlayerInfo, MediaPlayers, MediaRendition,
+    MediaScreenParameters, MediaScreenSettings, MediaTimespan, MediaWindow, Rendition,
+    SelectorRendition, SoftwareIdentifier, TemporaryFilePermission,
 };
 pub(crate) use shading::mesh_component_ranges;
 pub use shading::{

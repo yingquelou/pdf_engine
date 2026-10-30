@@ -58,7 +58,7 @@ fn rendition_writes_play_and_screen_parameters() {
         play.get("Type"),
         Some(&Value::Name("MediaPlayParams".into()))
     );
-    assert!(play.get("PL").is_none(), "/PL 未模型化");
+    assert!(play.get("PL").is_none(), "未声明播放器时不写 /PL");
     let mh = play.get("MH").and_then(Value::as_dict).expect("/MH");
     assert_eq!(mh.get("V"), Some(&Value::Integer(75)));
     assert_eq!(mh.get("C"), Some(&Value::Bool(true)));

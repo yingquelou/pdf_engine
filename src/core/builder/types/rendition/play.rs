@@ -1,11 +1,13 @@
 //! 媒体播放参数写端（13.2.5 Table 279–281）。
 //!
 //! 只写出显式声明的条目，Table 280 的缺省值不物化；`/PL` media players
-//! （13.2.7）留待后续切片。校验由 [`MediaRendition::validate`] 在对象号
-//! 分配前触发，非法取值返回 `InvalidObject` 并保持零字节输出。
+//! （13.2.7 Table 290–293）在 `players` 子模块建模。校验由
+//! [`MediaRendition::validate`] 在对象号分配前触发，非法取值返回
+//! `InvalidObject` 并保持零字节输出。
 //!
 //! [`MediaRendition::validate`]: super::MediaRendition::validate
 
+use super::MediaPlayers;
 use crate::core::types::{Dict, Value};
 use crate::core::writer::WriteError;
 
@@ -45,14 +47,21 @@ impl MediaFit {
 /// media play parameters 字典（Table 279）。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MediaPlayParameters {
+    players: Option<MediaPlayers>,
     must_honour: Option<MediaPlaySettings>,
     best_effort: Option<MediaPlaySettings>,
 }
 
 impl MediaPlayParameters {
-    /// 空播放参数；`/MH` `/BE` 均可省略。
+    /// 空播放参数；`/PL` `/MH` `/BE` 均可省略。
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// `/PL` media players 字典（Table 290）。
+    pub fn with_players(mut self, players: MediaPlayers) -> Self {
+        self.players = Some(players);
+        self
     }
 
     /// `/MH` 必须满足的播放设置（Table 280）。
@@ -68,6 +77,9 @@ impl MediaPlayParameters {
     }
 
     pub(crate) fn validate(&self) -> Result<(), WriteError> {
+        if let Some(players) = &self.players {
+            players.validate()?;
+        }
         if let Some(settings) = &self.must_honour {
             settings.validate("MH")?;
         }
@@ -79,6 +91,9 @@ impl MediaPlayParameters {
 
     pub(crate) fn to_dict(&self) -> Dict {
         let mut dict = Dict::new().insert("Type", Value::Name("MediaPlayParams".into()));
+        if let Some(players) = &self.players {
+            dict = dict.insert("PL", Value::Dict(players.to_dict()));
+        }
         if let Some(settings) = &self.must_honour {
             dict = dict.insert("MH", Value::Dict(settings.to_dict()));
         }

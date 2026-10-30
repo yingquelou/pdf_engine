@@ -5,6 +5,7 @@ use crate::core::types::{Array, Dict, Object, Value};
 use super::*;
 
 mod params;
+mod players;
 
 fn name(value: &str) -> Value {
     Value::Name(value.to_owned())
@@ -152,7 +153,10 @@ fn parses_media_rendition_and_clip_data() {
         data.mh.expect("MH").base_url.as_deref(),
         Some("https://cdn")
     );
-    assert!(data.players.is_some());
+    let players = data.players.expect("/PL");
+    assert!(players.must_use.is_empty(), "空 /PL 字典解析为空播放器集合");
+    assert!(players.any.is_empty());
+    assert!(players.not_used.is_empty());
 }
 
 #[test]
@@ -251,6 +255,7 @@ fn media_rendition_defaults_keep_optional_entries_absent() {
     };
     assert!(data.content_type.is_none());
     assert!(data.permissions.is_none());
+    assert!(data.players.is_none());
     assert!(data.mh.is_none());
     assert!(data.be.is_none());
 }

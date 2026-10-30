@@ -7,6 +7,7 @@ use super::*;
 use crate::core::types::PdfFeature;
 
 mod params;
+mod players;
 mod support;
 
 use self::support::{action_dict, link_with, screen};
