@@ -95,6 +95,30 @@ impl PdfBuilder {
         // 3D artwork（13.6 Table 300）：视图/默认视图与 PDF 1.6 门禁同样在
         // 任何对象写出前完成。
         three_d::validate_registration(&self.three_d_artworks, self.version)?;
+        // 3D 视图的 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1
+        // Table 304）：覆盖 artwork `/VA` 与内联 `/DV`、注解内联 `/3DV`
+        // 及 GoTo3DView 内联 `/V` 四处来源；版本门禁同样在任何对象写出前
+        // 完成，特性稍后写入特征画像。
+        let actions = self.used_actions();
+        let three_d_views =
+            self.three_d_artworks
+                .iter()
+                .flat_map(|artwork| artwork.all_views())
+                .chain(self.annotations.iter().filter_map(
+                    |entry| match entry.annot.three_d_view() {
+                        Some(ThreeDViewSelection::Inline(view)) => Some(&**view),
+                        _ => None,
+                    },
+                ))
+                .chain(actions.iter().filter_map(|action| match action {
+                    Action::GoTo3DView(action) => match action.selection() {
+                        GoTo3DViewSelection::Inline(view) => Some(&**view),
+                        _ => None,
+                    },
+                    _ => None,
+                }));
+        let three_d_view_extensions =
+            three_d::validate_view_extensions(three_d_views, self.version)?;
         // 集合（12.3.5）与集合项（7.11.6）：`/D` 名称树与 `/CI` ↔ `/Schema`
         // 交叉校验同样在任何对象写出前完成。
         embedded_file::validate_collection_references(
@@ -767,6 +791,13 @@ impl PdfBuilder {
         // 表单数据动作与字段名条目（12.7.5.2–12.7.5.4），写入特征画像。
         for feature in &action_features {
             doc.features.borrow_mut().insert(*feature);
+        }
+        // 3D 视图的 PDF 1.7 条目（13.6.4.1 Table 304），存在时写入特征
+        // 画像供版本推导。
+        if three_d_view_extensions {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::ThreeDViewExtensions);
         }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &acro_form {

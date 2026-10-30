@@ -8,7 +8,7 @@
 //! 流，由 3D 流字典 `/OnInstantiate` 引用。3D 特性自 PDF 1.6 引入，版本
 //! 门禁与取值校验都在任何对象写出前完成（零字节输出契约）。
 
-use crate::core::builder::types::{PdfAnnotation, ThreeDArtwork};
+use crate::core::builder::types::{PdfAnnotation, ThreeDArtwork, ThreeDView};
 use crate::core::types::{Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Value};
 use crate::core::writer::WriteError;
 
@@ -38,8 +38,28 @@ pub(super) fn validate_registration(
     Ok(())
 }
 
+/// 扫描全部视图的 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，
+/// 13.6.4.1 Table 304）并做版本门禁，返回是否存在此类条目。
+///
+/// 调用方须覆盖 artwork `/VA`、内联 `/DV`、注解内联 `/3DV` 与
+/// GoTo3DView 内联 `/V` 四个来源，并在分配任何对象号之前调用。
+/// 目标版本低于 1.7 且存在条目时返回 [`WriteError::UnsupportedVersion`]。
+pub(super) fn validate_view_extensions<'a>(
+    views: impl Iterator<Item = &'a ThreeDView>,
+    version: PdfVersion,
+) -> Result<bool, WriteError> {
+    let mut uses = false;
+    for view in views {
+        uses |= view.uses_pdf17_entries();
+    }
+    if uses && !version.supports(PdfFeature::ThreeDViewExtensions) {
+        return Err(unsupported(PdfFeature::ThreeDViewExtensions, version));
+    }
+    Ok(uses)
+}
+
 /// 版本门禁错误消息。
-fn unsupported(feature: PdfFeature, version: PdfVersion) -> WriteError {
+pub(super) fn unsupported(feature: PdfFeature, version: PdfVersion) -> WriteError {
     WriteError::UnsupportedVersion(format!(
         "{} require PDF {}, got {}",
         feature,

@@ -46,6 +46,8 @@ impl FeatureProfile {
 /// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
 /// - `/Subtype /Movie`、`/S /Movie` → MovieObjects（1.2）
 /// - `/Type /Rendition`、`/Type /MediaClip`、`/S /Rendition` → Renditions（1.5）
+/// - 3D 视图字典（`/Type /3DView` 或 `/XN`）的 `/RM` `/LS` `/SA` `/NA`
+///   `/NR` 任一键 → ThreeDViewExtensions（1.7）
 /// - `/Filter` 中的 JPXDecode → JPXDecode，JBIG2Decode → JBIG2Decode
 /// - `/ShadingType` 或 `/PatternType 2` → Shading
 /// - `/PatternType 1` → TilingPattern
@@ -111,6 +113,17 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         || d.get("S").and_then(|v| v.as_name()) == Some("Rendition")
     {
         features.insert(PdfFeature::Renditions);
+    }
+    // 3D 视图的 PDF 1.7 条目（13.6.4.1 Table 304）：视图字典以
+    // `/Type /3DView`（写端总是写出）或必填 `/XN` 文本串标识，出现
+    // `/RM` `/LS` `/SA` `/NA` `/NR` 任一键即命中。`/SA` 亦出现在图形
+    // 状态字典中，故必须先确认视图字典标识，避免误判。
+    if (d.get("Type").and_then(|v| v.as_name()) == Some("3DView") || d.0.contains_key("XN"))
+        && ["RM", "LS", "SA", "NA", "NR"]
+            .iter()
+            .any(|key| d.0.contains_key(*key))
+    {
+        features.insert(PdfFeature::ThreeDViewExtensions);
     }
     // 图像过滤器（JPX/JBIG2，其余通用过滤器不记）
     if let Some(f) = image_filter_feature(d) {

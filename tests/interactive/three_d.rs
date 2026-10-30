@@ -316,6 +316,81 @@ fn builder_three_d_view_overlay_roundtrips_through_parser() {
     );
 }
 
+/// 3D 视图 PDF 1.7 条目（13.6.4.1 Table 304）：`/RM` `/LS` `/SA` `/NA`
+/// `/NR` 写出 → 解析 → 回读，原值保留且特征画像含 3D 视图扩展。
+#[test]
+fn builder_three_d_view_pdf17_entries_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        AnnotationKind, PageSize, PdfAnnotation, PdfBuilder, ThreeDArtwork, ThreeDMatrixSource,
+        ThreeDView,
+    };
+    use pdf_engine::core::types::PdfFeature;
+
+    const CAMERA: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 30.0];
+    let render_mode = Dict::new()
+        .insert("Type", Value::Name("3DRenderMode".into()))
+        .insert("Subtype", Value::Name("Solid".into()));
+    let lighting = Dict::new()
+        .insert("Type", Value::Name("3DLightingScheme".into()))
+        .insert("Subtype", Value::Name("Headlamp".into()));
+    let cross_section = Dict::new()
+        .insert("Type", Value::Name("3DCrossSection".into()))
+        .insert(
+            "Center",
+            Value::Array(Array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ])),
+        );
+    let node = Dict::new()
+        .insert("Type", Value::Name("3DNode".into()))
+        .insert("AP", Value::Name("true".into()));
+    let cross_sections = Value::Array(Array(vec![Value::Dict(cross_section.clone())]));
+    let nodes = Value::Array(Array(vec![Value::Dict(node.clone())]));
+
+    let view = ThreeDView::new("Front")
+        .with_matrix_source(ThreeDMatrixSource::M)
+        .with_camera_to_world(CAMERA)
+        .with_render_mode(Value::Dict(render_mode.clone()))
+        .with_lighting(Value::Dict(lighting.clone()))
+        .with_cross_sections(cross_sections.clone())
+        .with_nodes(nodes.clone())
+        .with_restore_nodes(true);
+
+    let mut builder = PdfBuilder::new();
+    let p0 = builder.page(PageSize::A4);
+    let artwork = builder
+        .add_three_d_artwork(ThreeDArtwork::new(vec![0x55, 0x33, 0x44, 0x00]).with_view(view));
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::ThreeD, [72.0, 600.0, 200.0, 680.0])
+            .with_three_d(artwork),
+    );
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build 3D view PDF 1.7 entries");
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    assert_eq!(annotations.len(), 1);
+    let parsed = annotations[0].three_d.as_ref().expect("/3DD");
+    assert_eq!(parsed.stream.views.len(), 1);
+    let parsed_view = &parsed.stream.views[0];
+    assert_eq!(parsed_view.render_mode, Some(Value::Dict(render_mode)));
+    assert_eq!(parsed_view.lighting, Some(Value::Dict(lighting)));
+    assert_eq!(parsed_view.cross_sections, Some(cross_sections));
+    assert_eq!(parsed_view.nodes, Some(nodes));
+    assert_eq!(parsed_view.restore_nodes, Some(true));
+    assert!(
+        doc.features
+            .borrow()
+            .contains(PdfFeature::ThreeDViewExtensions),
+        "parsed 3D view feature profile should include PDF 1.7 entries"
+    );
+}
+
 /// `/AN` 动画样式字典（13.6.3.2 Table 301/302）写出 → 解析 → 回读：
 /// 显式条目按类型读回，未声明动画样式的 artwork 解析为 `None`。
 #[test]

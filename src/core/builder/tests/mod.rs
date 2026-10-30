@@ -32,6 +32,7 @@
 //! - `templates`：命名模板页（12.7.6 Table 31）的 `/Names /Templates` 名称树、`/Type /Template` 对象与 PDF 1.3 门禁；
 //! - `alternate_presentation`：备用演示（13.5 Table 297）的幻灯片对象、`/Names /AlternatePresentations` 名称树、嵌入文件引用与 PDF 1.4 门禁；
 //! - `three_d`：3D artwork 流（13.6 Table 300）与 3D 注解（Table 298）的流对象分配、视图选择、激活条目与 PDF 1.6 门禁；
+//! - `three_d_view_extensions`：3D 视图 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1 Table 304）的版本门禁与 `/NA` → `/NR` 依赖；
 //! - `action_goto3d`：Go-To-3D-View 动作 `/TA` `/V`（12.6.4.15 Table 216）的写出、目标注解/`/VA` 相对校验与 PDF 1.6 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
@@ -107,6 +108,7 @@ mod sound;
 mod support;
 mod templates;
 mod three_d;
+mod three_d_view_extensions;
 mod thumbnail;
 mod to_unicode;
 mod type3;

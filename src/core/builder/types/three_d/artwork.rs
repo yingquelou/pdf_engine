@@ -110,6 +110,15 @@ impl ThreeDArtwork {
         &self.views
     }
 
+    /// 全部可能写出的视图：`/VA` 各视图与内联 `/DV` 视图（若存在）。
+    pub(crate) fn all_views(&self) -> impl Iterator<Item = &ThreeDView> {
+        let inline_default = match &self.default_view {
+            Some(ThreeDViewSelection::Inline(view)) => Some(view.as_ref()),
+            _ => None,
+        };
+        self.views.iter().chain(inline_default)
+    }
+
     /// 是否需要写出 3D 引用字典（Table 303）。
     pub(crate) fn wants_reference_dictionary(&self) -> bool {
         self.reference

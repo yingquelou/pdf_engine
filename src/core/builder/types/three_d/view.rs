@@ -2,7 +2,9 @@
 //!
 //! `/XN` 必填；`/MS` 缺失表示沿用 artwork 内的视图，`M` 要求恰好 12 个
 //! 有限数的 `/C2W`，`U3D` 要求非空 `/U3DPath`。`/CO` 缺省 0、`/P` `/BG`
-//! 缺省字典均不物化；`/RM` `/LS` `/SA` `/NA` 原样透传；`/O` 是 Form
+//! 缺省字典均不物化；`/RM` `/LS` `/SA` `/NA` `/NR` 原样透传，但都是
+//! PDF 1.7 条目（13.6.4.1 Table 304），低版本目标在 assemble 阶段拒绝；
+//! `/NA` 仅在 `/NR` 存在时有意义，缺失 `/NR` 时校验失败。`/O` 是 Form
 //! XObject 流，写成已注册表单的间接引用（仅当 `/MS` 与 `/P` 都存在时
 //! 有意义，Table 304、13.6.6）。
 
@@ -146,6 +148,16 @@ impl ThreeDView {
         self.overlay
     }
 
+    /// 是否使用任一 PDF 1.7 视图条目（`/RM` `/LS` `/SA` `/NA` `/NR`，
+    /// 13.6.4.1 Table 304）；assemble 阶段据此做版本门禁。
+    pub(crate) fn uses_pdf17_entries(&self) -> bool {
+        self.render_mode.is_some()
+            || self.lighting.is_some()
+            || self.cross_sections.is_some()
+            || self.nodes.is_some()
+            || self.restore_nodes.is_some()
+    }
+
     /// 校验 Table 304 的必填项、矩阵来源依赖与数值范围。
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.external_name.is_empty() {
@@ -204,6 +216,9 @@ impl ThreeDView {
         }
         if self.overlay.is_some() && (self.matrix_source.is_none() || self.projection.is_none()) {
             return Err("3D view /O requires both /MS and /P (Table 304, 13.6.6)".into());
+        }
+        if self.nodes.is_some() && self.restore_nodes.is_none() {
+            return Err("3D view /NA is meaningful only if /NR is present (Table 304)".into());
         }
         Ok(())
     }
