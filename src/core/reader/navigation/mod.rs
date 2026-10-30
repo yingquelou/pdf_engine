@@ -16,6 +16,7 @@ mod articles;
 mod collection;
 pub mod destination;
 mod name_tree;
+pub(crate) use name_tree::name_tree_entries;
 mod outline;
 mod page_labels;
 mod page_tree;

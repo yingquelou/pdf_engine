@@ -1,5 +1,7 @@
-//! 3D 读端低层测试：激活、流、视图、投影、背景与视图负载字典
-//! （13.6 Table 299–312）。
+//! 3D 读端低层测试：激活、流、资源名称树、视图、投影、背景与视图负载
+//! 字典（13.6 Table 299–312）。
+
+use std::collections::BTreeMap;
 
 use crate::core::types::{Array, Dict, Document, Value};
 
@@ -14,6 +16,7 @@ use super::view::ThreeDViewSelection;
 use super::*;
 
 mod payloads;
+mod resources;
 mod views;
 
 fn document() -> Document {
@@ -359,7 +362,10 @@ fn stream_reads_views_and_default_view_selection() {
                 ])),
             )
             .insert("DV", Value::Integer(1))
-            .insert("Resources", Value::Dict(Dict::new()))
+            .insert(
+                "Resources",
+                Value::Dict(Dict::new().insert("Names", Value::Array(Array::new()))),
+            )
             .insert("OnInstantiate", Value::Name("Script".into()))
             .insert(
                 "AN",
@@ -383,7 +389,7 @@ fn stream_reads_views_and_default_view_selection() {
         parsed.stream.default_view,
         Some(ThreeDViewSelection::Index(1))
     );
-    assert_eq!(parsed.stream.resources, Some(Value::Dict(Dict::new())));
+    assert_eq!(parsed.stream.resources, Some(BTreeMap::new()));
     assert_eq!(
         parsed.stream.on_instantiate,
         Some(Value::Name("Script".into()))

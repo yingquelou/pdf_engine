@@ -1,8 +1,8 @@
 //! 3D 流字典（Table 300）的构建态。
 //!
 //! 每个 artwork 写成独立间接流对象：`/Type /3D`、必填 `/Subtype`，以及
-//! 非缺省的 `/VA` 视图数组、`/DV` 默认视图与 `/Resources`。U3D 字节原样
-//! 写入，不附加过滤器。`/OnInstantiate` 是 JavaScript 流，经
+//! 非缺省的 `/VA` 视图数组、`/DV` 默认视图与 `/Resources` 名称树。U3D 字节
+//! 原样写入，不附加过滤器。`/OnInstantiate` 是 JavaScript 流，经
 //! [`ThreeDArtwork::with_on_instantiate`] 声明后写成独立间接流对象并由流
 //! 字典引用；`/AN` 动画样式字典（PDF 1.7，Table 301/302）经
 //! [`ThreeDArtwork::with_animation_style`] 声明后内联写出。
@@ -13,9 +13,10 @@
 
 use super::super::validate_name_value;
 use super::{ThreeDAnimationStyle, ThreeDView, ThreeDViewSelection};
+use crate::core::builder::types::text_string_value;
 use crate::core::reader::three_d::ThreeDStreamFormat;
 use crate::core::types::{Array, Dict, StreamData, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// 3D artwork（Table 300）的构建态（尚未分配对象号）。
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +25,7 @@ pub struct ThreeDArtwork {
     format: ThreeDStreamFormat,
     views: Vec<ThreeDView>,
     default_view: Option<ThreeDViewSelection>,
-    resources: Option<Dict>,
+    resources: Option<BTreeMap<String, Value>>,
     reference: bool,
     on_instantiate: Option<Vec<u8>>,
     animation: Option<ThreeDAnimationStyle>,
@@ -69,8 +70,10 @@ impl ThreeDArtwork {
         self
     }
 
-    /// 资源名称树 `/Resources`（原样写出）。
-    pub fn with_resources(mut self, resources: Dict) -> Self {
+    /// 资源名称树 `/Resources`：名称 → 直接对象（不得含间接引用或流）。
+    ///
+    /// 名称按文本串编码为 `/Names` 数组的键，条目按键排序写出。
+    pub fn with_resources(mut self, resources: BTreeMap<String, Value>) -> Self {
         self.resources = Some(resources);
         self
     }
@@ -172,6 +175,15 @@ impl ThreeDArtwork {
                 .validate()
                 .map_err(|message| format!("3D stream /AN: {message}"))?;
         }
+        if let Some(resources) = &self.resources {
+            for (name, value) in resources {
+                if contains_indirect(value) {
+                    return Err(format!(
+                        "3D stream /Resources value for name {name:?} must not contain indirect references or streams"
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -200,7 +212,14 @@ impl ThreeDArtwork {
             dict = dict.insert("DV", value);
         }
         if let Some(resources) = &self.resources {
-            dict = dict.insert("Resources", Value::Dict(resources.clone()));
+            let mut names = Array::new();
+            for (name, value) in resources {
+                names = names.push(text_string_value(name)).push(value.clone());
+            }
+            dict = dict.insert(
+                "Resources",
+                Value::Dict(Dict::new().insert("Names", Value::Array(names))),
+            );
         }
         if let Some(number) = on_instantiate {
             dict = dict.insert("OnInstantiate", Value::Ref(number, 0));
@@ -210,5 +229,15 @@ impl ThreeDArtwork {
         }
         dict = dict.insert("Length", Value::Integer(self.data.len() as i64));
         Value::Stream(dict, StreamData::Owned(self.data.clone()))
+    }
+}
+
+/// 名称树值必须是直接对象：间接引用或流出现在任何嵌套层级都非法。
+fn contains_indirect(value: &Value) -> bool {
+    match value {
+        Value::Ref(..) | Value::Stream(..) => true,
+        Value::Array(array) => array.0.iter().any(contains_indirect),
+        Value::Dict(dict) => dict.0.values().any(contains_indirect),
+        _ => false,
     }
 }

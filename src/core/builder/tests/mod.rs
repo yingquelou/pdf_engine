@@ -35,6 +35,7 @@
 //! - `three_d`：3D artwork 流（13.6 Table 300）与 3D 注解（Table 298）的流对象分配、视图选择、激活条目与 PDF 1.6 门禁；
 //! - `three_d_view_extensions`：3D 视图 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1 Table 304）的版本门禁与 `/NA` → `/NR` 依赖；
 //! - `three_d_payloads`：3D 视图负载字典（渲染模式/光照方案/截面/节点，Table 307–312）的类型化序列化、缺省省略与嵌套校验；
+//! - `three_d_resources`：3D 流 `/Resources` 名称树（13.6.3.1 Table 300）的文本串键、排序写出与直接对象校验；
 //! - `action_goto3d`：Go-To-3D-View 动作 `/TA` `/V`（12.6.4.15 Table 216）的写出、目标注解/`/VA` 相对校验与 PDF 1.6 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
@@ -112,6 +113,7 @@ mod support;
 mod templates;
 mod three_d;
 mod three_d_payloads;
+mod three_d_resources;
 mod three_d_view_extensions;
 mod thumbnail;
 mod to_unicode;

@@ -30,6 +30,7 @@ mod lighting;
 mod node;
 mod projection;
 mod render_mode;
+mod resources;
 mod stream;
 #[cfg(test)]
 mod tests;

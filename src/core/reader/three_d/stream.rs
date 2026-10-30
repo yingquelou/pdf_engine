@@ -3,13 +3,17 @@
 //! `/Subtype` 必填，唯一合法值为 `U3D`；未知格式保留为
 //! [`ThreeDStreamFormat::Other`]（规范要求消费者宽容）。`/VA` 为 3D 视图
 //! 字典数组（上限 1024），`/DV` 的解析与 `/VA` 存在时的缺省下标 0 见
-//! [`ThreeDStream::default_view`]。`/Resources` `/OnInstantiate` 保留原值，
-//! 不类型化名称树与 JavaScript 流；`/AN` 动画样式字典（PDF 1.7，
-//! Table 301/302）解析为 [`ThreeDAnimationStyle`]。
+//! [`ThreeDStream::default_view`]。`/Resources` 名称树（Table 300）的键按
+//! 文本串解码后排序返回；`/OnInstantiate` 保留原值，不类型化 JavaScript
+//! 流；`/AN` 动画样式字典（PDF 1.7，Table 301/302）解析为
+//! [`ThreeDAnimationStyle`]。
+
+use std::collections::BTreeMap;
 
 use crate::core::types::{Dict, Document, Value};
 
 use super::animation::{ThreeDAnimationStyle, parse_animation_style};
+use super::resources::parse_resources;
 use super::view::{ThreeDView, ThreeDViewSelection, parse_view, parse_view_selection};
 use super::{MAX_VIEWS, ThreeDError, array_value, check_type, malformed, resolve_value};
 
@@ -32,8 +36,8 @@ pub struct ThreeDStream {
     /// `/DV` 默认视图；`/VA` 存在且非空而 `/DV` 缺失时为 `Index(0)`，
     /// 否则 `None` 表示默认视图由 3D 数据内部指定。
     pub default_view: Option<ThreeDViewSelection>,
-    /// `/Resources` 名称树（原值保留）。
-    pub resources: Option<crate::core::types::Value>,
+    /// `/Resources` 名称树：解码后的名称 → 原始对象（间接引用不解引用）。
+    pub resources: Option<BTreeMap<String, Value>>,
     /// `/OnInstantiate` 实例化时执行的 JavaScript 流（原值保留）。
     pub on_instantiate: Option<crate::core::types::Value>,
     /// `/AN` 动画样式字典（PDF 1.7，Table 301/302）；缺省不物化。
@@ -108,6 +112,8 @@ pub(super) fn parse_stream(
         None => None,
     };
 
+    let resources = parse_resources(document, dict.get("Resources"), "3D stream /Resources")?;
+
     let animation = match dict.get("AN") {
         None => None,
         Some(value) => {
@@ -125,7 +131,7 @@ pub(super) fn parse_stream(
             format,
             views,
             default_view,
-            resources: dict.get("Resources").cloned(),
+            resources,
             on_instantiate: dict.get("OnInstantiate").cloned(),
             animation,
         },
