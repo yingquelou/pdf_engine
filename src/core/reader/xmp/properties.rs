@@ -110,6 +110,18 @@ fn property_value(
     budget: &mut PropertyBudget,
     depth: usize,
 ) -> Result<XmpValue, XmpError> {
+    value_of(node, budget, depth, false)
+}
+
+/// 属性值折叠；`node_element` 为 `true` 表示当前节点是集合条目（`rdf:li`
+/// 或外部 RDF 的普通节点元素），此时带属性或子元素的节点折叠为资源，
+/// 而不再退化为空文本。
+fn value_of(
+    node: &XmlNode,
+    budget: &mut PropertyBudget,
+    depth: usize,
+    node_element: bool,
+) -> Result<XmpValue, XmpError> {
     if depth > MAX_DEPTH {
         return Err(XmpError::LimitExceeded("XMP element depth"));
     }
@@ -127,12 +139,13 @@ fn property_value(
             "rdf:datatype cannot be combined with rdf:parseType",
         )),
         (Some(parse_type), None) => match parse_type {
-            // 只有 Resource 与 Literal 有结构化表示；Collection 等其他
+            // 只有 Resource、Literal 与 Collection 有结构化表示；其他
             // RDF/XML 取值没有对应的 XMP 值形态，按损坏处理。
             "Resource" => resource_value(node, budget, depth),
             "Literal" => Ok(XmpValue::Literal(node.inner.clone())),
+            "Collection" => collection_value(node, budget, depth),
             other => Err(malformed(format!(
-                "unsupported rdf:parseType {other:?} (only Resource and Literal are supported)"
+                "unsupported rdf:parseType {other:?} (only Resource, Literal and Collection are supported)"
             ))),
         },
         (None, Some(datatype)) => {
@@ -165,9 +178,46 @@ fn property_value(
                     return Ok(XmpValue::List { kind, items });
                 }
             }
+            if node_element {
+                if !node.text.trim().is_empty() && !node.children.is_empty() {
+                    return Err(malformed(
+                        "collection item must not mix text with child elements",
+                    ));
+                }
+                let has_property_attr = node.attrs.iter().any(|attr| !is_rdf_syntax_attr(attr));
+                if !node.children.is_empty() || has_property_attr {
+                    return resource_value(node, budget, depth);
+                }
+            }
             Ok(XmpValue::Text(node.text.trim().to_string()))
         }
     }
+}
+
+/// `rdf:parseType="Collection"`：条目逐个按属性值规则折叠。
+fn collection_value(
+    node: &XmlNode,
+    budget: &mut PropertyBudget,
+    depth: usize,
+) -> Result<XmpValue, XmpError> {
+    if !node.text.trim().is_empty() {
+        return Err(malformed(
+            "rdf:parseType=\"Collection\" must not contain text content",
+        ));
+    }
+    let mut items = Vec::with_capacity(node.children.len());
+    for child in &node.children {
+        items.push(collection_item_value(child, budget, depth + 1)?);
+    }
+    Ok(XmpValue::Collection(items))
+}
+
+fn collection_item_value(
+    node: &XmlNode,
+    budget: &mut PropertyBudget,
+    depth: usize,
+) -> Result<XmpValue, XmpError> {
+    value_of(node, budget, depth, true)
 }
 
 /// `xml:lang` 沿元素继承：属性元素上的语言标记补足类型化值缺失的语言。

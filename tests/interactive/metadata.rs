@@ -271,3 +271,55 @@ fn builder_xmp_references_and_literals_roundtrip() {
     assert_eq!(xmp.text(&clark(EX, "link")), None);
     assert_eq!(xmp.text(&clark(EX, "markup")), None);
 }
+
+/// `rdf:parseType="Collection"` 集合写出后经 `Document::xmp()` 还原为
+/// 相同的条目序列（14.3.2）。
+#[test]
+fn builder_xmp_collection_roundtrips_through_reader() {
+    use pdf_engine::core::builder::{PageSize, PdfBuilder, XmpPacket, XmpValue};
+    use pdf_engine::core::reader::xmp::XmpValue as ReaderValue;
+    use pdf_engine::core::types::PdfVersion;
+    use std::collections::BTreeMap;
+
+    const EX: &str = "urn:example:collection";
+
+    fn clark(namespace: &str, local: &str) -> String {
+        format!("{{{namespace}}}{local}")
+    }
+
+    let mut packet = XmpPacket::new();
+    packet.set(
+        clark(EX, "items"),
+        XmpValue::Collection(vec![
+            XmpValue::Text("plain".into()),
+            XmpValue::Resource(BTreeMap::from([(
+                clark(EX, "name"),
+                XmpValue::Text("Ada".into()),
+            )])),
+            XmpValue::Reference("urn:example:ref".into()),
+            XmpValue::Collection(vec![XmpValue::Text("nested".into())]),
+        ]),
+    );
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    builder.page(PageSize::A4);
+    builder.set_xmp_packet(packet);
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let xmp = doc.xmp().expect("parse XMP").expect("/Metadata stream");
+    assert_eq!(
+        xmp.properties.get(&clark(EX, "items")),
+        Some(&ReaderValue::Collection(vec![
+            ReaderValue::Text("plain".into()),
+            ReaderValue::Resource(BTreeMap::from([(
+                clark(EX, "name"),
+                ReaderValue::Text("Ada".into()),
+            )])),
+            ReaderValue::Reference("urn:example:ref".into()),
+            ReaderValue::Collection(vec![ReaderValue::Text("nested".into())]),
+        ]))
+    );
+    assert_eq!(xmp.text(&clark(EX, "items")), None);
+}

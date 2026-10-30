@@ -133,6 +133,9 @@ fn reader_value(value: &XmpValue) -> ReaderValue {
                 })
                 .collect(),
         },
+        XmpValue::Collection(items) => {
+            ReaderValue::Collection(items.iter().map(reader_value).collect())
+        }
         XmpValue::Resource(map) => ReaderValue::Resource(
             map.iter()
                 .map(|(key, value)| (key.clone(), reader_value(value)))
@@ -540,3 +543,5 @@ fn references_and_literals_roundtrip_through_reader() {
         assert_eq!(parsed.text(&clark(EX_NS, local)), None);
     }
 }
+
+mod collection;

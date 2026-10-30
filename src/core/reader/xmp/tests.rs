@@ -343,9 +343,6 @@ fn xmp_text_accessor_remains_compatible() {
 fn malformed_parse_type_and_typed_structures_are_rejected() {
     let cases = [
         format!(
-            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Collection"><ex:q/></ex:p></rdf:Description></rdf:RDF>"#
-        ),
-        format!(
             r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p><rdf:Description rdf:datatype="urn:ex:T"><ex:q>1</ex:q></rdf:Description></ex:p></rdf:Description></rdf:RDF>"#
         ),
         format!(
@@ -555,15 +552,17 @@ fn malformed_reference_and_literal_values_are_rejected() {
         );
     }
 
-    // Collection 仍按损坏处理，错误消息指明只支持 Resource/Literal。
-    let collection = format!(
-        r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Collection"><ex:q/></ex:p></rdf:Description></rdf:RDF>"#
+    // 未知 parseType 仍按损坏处理，错误消息指明支持的全部取值。
+    let unsupported = format!(
+        r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Other"><ex:q/></ex:p></rdf:Description></rdf:RDF>"#
     );
-    match XmpMetadata::parse(&collection) {
+    match XmpMetadata::parse(&unsupported) {
         Err(XmpError::Malformed(message)) => assert!(
-            message.contains("only Resource and Literal are supported"),
+            message.contains("only Resource, Literal and Collection are supported"),
             "{message}"
         ),
-        other => panic!("Collection must be rejected, got {other:?}"),
+        other => panic!("unsupported parseType must be rejected, got {other:?}"),
     }
 }
+
+mod collection;

@@ -2,10 +2,10 @@
 //!
 //! 本模块只依赖写端自身模型，不引用读端类型；序列化产出读端
 //! [`crate::core::reader::xmp::XmpMetadata::parse`] 可解析的形状。
-//! 支持六种值：文本、`rdf:Alt`/`rdf:Seq`/`rdf:Bag` 列表、
+//! 支持七种值：文本、`rdf:Alt`/`rdf:Seq`/`rdf:Bag` 列表、
 //! `rdf:parseType="Resource"` 嵌套资源、`rdf:value` + `rdf:datatype` +
-//! `xml:lang` 类型化值、`rdf:resource` 引用与 `rdf:parseType="Literal"`
-//! 原始标记。
+//! `xml:lang` 类型化值、`rdf:resource` 引用、`rdf:parseType="Literal"`
+//! 原始标记与 `rdf:parseType="Collection"` 集合。
 //!
 //! 序列化契约：
 //! - 键使用 Clark 记法 `{命名空间}本地名`；命名空间非空，本地名须为
@@ -69,6 +69,10 @@ pub enum XmpValue {
         /// `rdf:li` 条目。
         items: Vec<XmpListItem>,
     },
+    /// `rdf:parseType="Collection"` 集合：序列化为
+    /// `<ns:prop rdf:parseType="Collection"><rdf:li>…</rdf:li>…</ns:prop>`，
+    /// 每个条目复用属性元素的七种形态；空集合写成自闭合元素。
+    Collection(Vec<XmpValue>),
     /// `rdf:parseType="Resource"` 嵌套资源；键为 Clark 记法。
     Resource(BTreeMap<String, XmpValue>),
     /// 类型化值：`rdf:value` 主值、可选 `rdf:datatype` URI 与

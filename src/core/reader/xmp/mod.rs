@@ -18,8 +18,12 @@
 //!   上（视为 [`XmpError::Malformed`]，避免引用被读成空资源）；
 //! - `rdf:parseType="Literal"` → [`XmpValue::Literal`]：逐字保留元素的原始
 //!   内部标记（前缀、属性与实体不规范化）；
-//! - `rdf:parseType="Collection"` 及其他取值、缺 `rdf:value` 的类型化结构
-//!   视为 [`XmpError::Malformed`]（只支持 Resource/Literal）。
+//! - `rdf:parseType="Collection"` → [`XmpValue::Collection`]：每个条目按
+//!   属性值规则折叠（`rdf:Description` → 资源/类型化值，`rdf:resource`
+//!   引用，列表容器 → 列表，`rdf:parseType` → 资源/字面量/嵌套集合，
+//!   裸文本元素 → 文本）；空集合为 `vec![]`；
+//! - 其他 `rdf:parseType` 取值、缺 `rdf:value` 的类型化结构视为
+//!   [`XmpError::Malformed`]（只支持 Resource、Literal 与 Collection）。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -79,7 +83,7 @@ pub struct XmpListItem {
     pub value: String,
 }
 
-/// XMP 属性值：简单文本、列表、嵌套资源、类型化值、引用或字面量标记。
+/// XMP 属性值：简单文本、列表、集合、嵌套资源、类型化值、引用或字面量标记。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XmpValue {
     /// 简单文本；未知的嵌套结构仍退化为该节点的文本。
@@ -89,6 +93,11 @@ pub enum XmpValue {
         kind: XmpListKind,
         items: Vec<XmpListItem>,
     },
+    /// `rdf:parseType="Collection"` 集合：每个条目按属性值规则折叠
+    /// （`rdf:Description` → 资源/类型化值，`rdf:resource` → 引用，
+    /// 列表容器 → 列表，`rdf:parseType` → 资源/字面量/嵌套集合，
+    /// 裸文本元素 → 文本）；空集合为 `vec![]`。
+    Collection(Vec<XmpValue>),
     /// 嵌套资源：来自 `rdf:parseType="Resource"` 或作为属性值的
     /// `rdf:Description` 节点元素；键为 Clark 记法。带额外限定属性
     /// （`rdf:value` 之外）的类型化结构也保留为资源，以免丢数据。
@@ -146,14 +155,16 @@ impl XmpMetadata {
 
     /// 取文本属性；列表属性返回首项，缺失返回 `None`。
     ///
-    /// 结构化值（[`XmpValue::Resource`]/[`XmpValue::Typed`]）与引用/
-    /// 字面量标记（[`XmpValue::Reference`]/[`XmpValue::Literal`]）没有
-    /// 单一文本表示，返回 `None`；调用方需直接检查 [`Self::properties`]。
+    /// 结构化值（[`XmpValue::Resource`]/[`XmpValue::Typed`]/
+    /// [`XmpValue::Collection`]）与引用/字面量标记
+    /// （[`XmpValue::Reference`]/[`XmpValue::Literal`]）没有单一文本表示，
+    /// 返回 `None`；调用方需直接检查 [`Self::properties`]。
     pub fn text(&self, key: &str) -> Option<&str> {
         match self.properties.get(key)? {
             XmpValue::Text(value) => Some(value),
             XmpValue::List { items, .. } => items.first().map(|item| item.value.as_str()),
             XmpValue::Resource(_)
+            | XmpValue::Collection(_)
             | XmpValue::Typed { .. }
             | XmpValue::Reference(_)
             | XmpValue::Literal(_) => None,

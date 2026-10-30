@@ -131,6 +131,12 @@ fn collect_namespaces(value: &XmpValue, out: &mut BTreeSet<String>) -> Result<()
             }
             Ok(())
         }
+        XmpValue::Collection(items) => {
+            for item in items {
+                collect_namespaces(item, out)?;
+            }
+            Ok(())
+        }
         XmpValue::Resource(map) => {
             for (key, child) in map {
                 let (uri, _) = split_key(key)?;
@@ -186,15 +192,25 @@ fn write_property(
         XmpPacketError::InvalidKey(format!("{key:?}: namespace has no assigned prefix"))
     })?;
     let name = format!("{prefix}:{local}");
+    write_element(out, &name, value, prefixes)
+}
+
+/// 写出元素体；`name` 已含前缀（集合条目固定为 `rdf:li`）。
+fn write_element(
+    out: &mut String,
+    name: &str,
+    value: &XmpValue,
+    prefixes: &BTreeMap<String, String>,
+) -> Result<(), XmpPacketError> {
     out.push('<');
-    out.push_str(&name);
+    out.push_str(name);
 
     match value {
         XmpValue::Text(text) => {
             out.push('>');
-            escape_value(out, text, key)?;
+            escape_value(out, text, name)?;
             out.push_str("</");
-            out.push_str(&name);
+            out.push_str(name);
             out.push('>');
         }
         XmpValue::List { kind, items } => {
@@ -212,7 +228,7 @@ fn write_property(
                         write_language(out, lang)?;
                     }
                     out.push('>');
-                    escape_value(out, &item.value, key)?;
+                    escape_value(out, &item.value, name)?;
                     out.push_str("</rdf:li>");
                 }
                 out.push_str("</rdf:");
@@ -220,8 +236,22 @@ fn write_property(
                 out.push('>');
             }
             out.push_str("</");
-            out.push_str(&name);
+            out.push_str(name);
             out.push('>');
+        }
+        XmpValue::Collection(items) => {
+            out.push_str(" rdf:parseType=\"Collection\"");
+            if items.is_empty() {
+                out.push_str("/>");
+            } else {
+                out.push('>');
+                for item in items {
+                    write_element(out, "rdf:li", item, prefixes)?;
+                }
+                out.push_str("</");
+                out.push_str(name);
+                out.push('>');
+            }
         }
         XmpValue::Resource(map) => {
             out.push_str(" rdf:parseType=\"Resource\"");
@@ -233,7 +263,7 @@ fn write_property(
                     write_property(out, child_key, child, prefixes)?;
                 }
                 out.push_str("</");
-                out.push_str(&name);
+                out.push_str(name);
                 out.push('>');
             }
         }
@@ -242,7 +272,7 @@ fn write_property(
             datatype,
             language,
         } => {
-            let text = check_typed_value(value, key)?;
+            let text = check_typed_value(value, name)?;
             if let Some(uri) = datatype {
                 validate_datatype(uri)?;
             }
@@ -252,21 +282,21 @@ fn write_property(
             }
             out.push('>');
             out.push_str("<rdf:value>");
-            escape_value(out, text, key)?;
+            escape_value(out, text, name)?;
             out.push_str("</rdf:value>");
             if let Some(uri) = datatype {
                 out.push_str("<rdf:datatype>");
-                escape_value(out, uri, key)?;
+                escape_value(out, uri, name)?;
                 out.push_str("</rdf:datatype>");
             }
             out.push_str("</");
-            out.push_str(&name);
+            out.push_str(name);
             out.push('>');
         }
         XmpValue::Reference(uri) => {
             validate_reference(uri)?;
             out.push_str(" rdf:resource=\"");
-            escape_value(out, uri, key)?;
+            escape_value(out, uri, name)?;
             out.push_str("\"/>");
         }
         XmpValue::Literal(xml) => {
@@ -274,7 +304,7 @@ fn write_property(
             out.push_str(" rdf:parseType=\"Literal\">");
             out.push_str(xml);
             out.push_str("</");
-            out.push_str(&name);
+            out.push_str(name);
             out.push('>');
         }
     }
@@ -305,6 +335,7 @@ fn value_kind(value: &XmpValue) -> &'static str {
     match value {
         XmpValue::Text(_) => "text",
         XmpValue::List { .. } => "list",
+        XmpValue::Collection(_) => "collection",
         XmpValue::Resource(_) => "resource",
         XmpValue::Typed { .. } => "typed value",
         XmpValue::Reference(_) => "reference",
