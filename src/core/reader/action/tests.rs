@@ -803,5 +803,6 @@ fn malformed_transition_actions_are_typed_errors() {
 }
 
 mod gotoe;
+mod movie;
 mod sound;
 mod thread;

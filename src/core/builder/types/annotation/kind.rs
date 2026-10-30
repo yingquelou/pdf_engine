@@ -2,9 +2,10 @@
 //!
 //! 引入版本与标记类归属一律取自读端
 //! [`AnnotationSubtype`]（Table 169 唯一权威表），本枚举只提供写端子集。
-//! `Movie`/`PrinterMark`/`TrapNet`/`3D` 暂不建模：Widget 由 AcroForm 写端
+//! `PrinterMark`/`TrapNet`/`3D` 暂不建模：Widget 由 AcroForm 写端
 //! 的 [`FormField`](super::super::FormField) 合并字段与 Widget 字典写出（E4），
 //! 其余按需增补。Sound（Table 185）的 `/Sound` 与 `/Name` 由 `sound` 子模块
+//! 建模，Movie（Table 186）的 `/Movie` 与 `/A` 播放设置由 `movie` 子模块
 //! 建模。
 
 use crate::core::reader::annotation::AnnotationSubtype;
@@ -47,6 +48,8 @@ pub enum AnnotationKind {
     FileAttachment,
     /// 声音（`/Sound`，PDF 1.2；`/Sound` 声音对象引用，Table 185）。
     Sound,
+    /// 电影（`/Movie`，PDF 1.2；`/Movie` 电影字典与 `/A` 播放设置，Table 186）。
+    Movie,
     /// 图章（`/Stamp`，PDF 1.3）。
     Stamp,
     /// 涂消（`/Redact`，PDF 1.7，标记类）。
@@ -78,6 +81,7 @@ impl AnnotationKind {
             Self::Popup => AnnotationSubtype::Popup,
             Self::FileAttachment => AnnotationSubtype::FileAttachment,
             Self::Sound => AnnotationSubtype::Sound,
+            Self::Movie => AnnotationSubtype::Movie,
             Self::Stamp => AnnotationSubtype::Stamp,
             Self::Redact => AnnotationSubtype::Redact,
             Self::Screen => AnnotationSubtype::Screen,
@@ -105,6 +109,7 @@ impl AnnotationKind {
             Self::Popup => "Popup",
             Self::FileAttachment => "FileAttachment",
             Self::Sound => "Sound",
+            Self::Movie => "Movie",
             Self::Stamp => "Stamp",
             Self::Redact => "Redact",
             Self::Screen => "Screen",

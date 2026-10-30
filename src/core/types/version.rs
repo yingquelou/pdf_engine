@@ -218,6 +218,9 @@ pub enum PdfFeature {
     /// 声音对象（声音流字典，13.3 与 Table 294）、Sound 动作（12.6.4.8
     /// Table 208）与 Sound 注解（12.5.6.16 Table 185），PDF 1.2 引入。
     SoundObjects,
+    /// 电影对象（电影字典 13.4 Table 295）、Movie 动作（12.6.4.9
+    /// Table 209）与 Movie 注解（12.5.6.17 Table 186），PDF 1.2 引入。
+    MovieObjects,
 }
 
 impl PdfFeature {
@@ -233,7 +236,8 @@ impl PdfFeature {
             | PdfFeature::LinkAnnotationHighlighting
             | PdfFeature::HideAction
             | PdfFeature::FormDataActions
-            | PdfFeature::SoundObjects => PdfVersion::V1_2,
+            | PdfFeature::SoundObjects
+            | PdfFeature::MovieObjects => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
@@ -335,6 +339,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PageTemplates => "page templates",
             PdfFeature::AlternatePresentations => "alternate presentations",
             PdfFeature::SoundObjects => "sound objects",
+            PdfFeature::MovieObjects => "movie objects",
         };
         write!(f, "{name}")
     }

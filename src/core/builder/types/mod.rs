@@ -36,6 +36,7 @@ mod function;
 mod graphics_state;
 mod halftone;
 mod image;
+mod movie;
 mod optional_content;
 mod pattern;
 mod program;
@@ -50,7 +51,8 @@ pub(crate) use action::ActionRefs;
 pub use action::{
     Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, GoToEAction, GoToETarget,
     GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation, HideAction, HideTarget,
-    OcgStateOperation, OcgStateSequence, SetOcgStateAction, SoundAction, ThreadAction,
+    MovieAction, MovieActionTarget, OcgStateOperation, OcgStateSequence, SetOcgStateAction,
+    SoundAction, ThreadAction,
 };
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{
@@ -83,6 +85,7 @@ pub use image::{
     CalGray, CalRGB, ColorSpace, DeviceN, ICCBased, ImageData, ImageIntent, ImageMask, Indexed,
     Lab, Separation,
 };
+pub use movie::{Movie, MovieActivation, MoviePlayback};
 pub use optional_content::OptionalContentGroup;
 pub(crate) use optional_content::text_string_value;
 pub(crate) use pattern::Pattern;

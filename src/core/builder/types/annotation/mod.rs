@@ -24,6 +24,7 @@ mod kind;
 mod link;
 mod measure;
 mod mk;
+mod movie;
 mod redact;
 mod sound;
 mod subtype;
@@ -46,6 +47,7 @@ pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
 pub use watermark::FixedPrint;
 
 use super::Action;
+use super::movie::{Movie, MoviePlayback};
 use crate::core::reader::navigation::Destination;
 
 /// 注解边框样式（`/BS` 字典 `/S`，Table 162）。
@@ -118,6 +120,8 @@ pub struct PdfAnnotation {
     redact: RedactEntries,
     characteristics: Option<AppearanceCharacteristics>,
     fixed_print: Option<FixedPrint>,
+    movie: Option<Movie>,
+    movie_playback: Option<MoviePlayback>,
     measure: Option<Measure>,
     sound: Option<usize>,
     action: Option<Action>,
@@ -169,6 +173,8 @@ impl PdfAnnotation {
             redact: RedactEntries::default(),
             characteristics: None,
             fixed_print: None,
+            movie: None,
+            movie_playback: None,
             measure: None,
             sound: None,
             action: None,

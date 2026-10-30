@@ -91,6 +91,7 @@ mod graphics_state;
 mod hide_action;
 mod image_entries;
 mod metadata;
+mod movie;
 mod navigation;
 mod optional_content;
 mod page_group;

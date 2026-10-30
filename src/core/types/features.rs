@@ -44,6 +44,7 @@ impl FeatureProfile {
 /// - `/Type /XRef` → XRefStream
 /// - `/Type /ObjStm` → ObjectStream
 /// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
+/// - `/Subtype /Movie`、`/S /Movie` → MovieObjects（1.2）
 /// - `/Filter` 中的 JPXDecode → JPXDecode，JBIG2Decode → JBIG2Decode
 /// - `/ShadingType` 或 `/PatternType 2` → Shading
 /// - `/PatternType 1` → TilingPattern
@@ -92,6 +93,14 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         || (d.get("S").and_then(|v| v.as_name()) == Some("Sound") && d.0.contains_key("Sound"))
     {
         features.insert(PdfFeature::SoundObjects);
+    }
+    // 电影（PDF 1.2）：Movie 注解的 /Subtype /Movie（Table 186）与 Movie
+    // 动作的 /S /Movie（Table 209）。电影字典本身没有 /Type 或
+    // /Subtype 条目（Table 295），只随上述两种引用出现。
+    if d.get("Subtype").and_then(|v| v.as_name()) == Some("Movie")
+        || d.get("S").and_then(|v| v.as_name()) == Some("Movie")
+    {
+        features.insert(PdfFeature::MovieObjects);
     }
     // 图像过滤器（JPX/JBIG2，其余通用过滤器不记）
     if let Some(f) = image_filter_feature(d) {

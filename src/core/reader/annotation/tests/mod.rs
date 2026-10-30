@@ -14,6 +14,7 @@ mod geometry;
 mod link;
 mod measure;
 mod mk;
+mod movie;
 mod redact;
 mod sound;
 mod subtype;

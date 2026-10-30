@@ -30,7 +30,7 @@ use super::{
     Action, CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions,
     GroupXObject, ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
 };
-use crate::core::builder::types::text_string_value;
+use crate::core::builder::types::{AnnotationKind, text_string_value};
 use crate::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value,
 };
@@ -672,6 +672,9 @@ impl PdfBuilder {
             }
             for feature in annotation::link_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);
+            }
+            if entry.annot.kind() == AnnotationKind::Movie {
+                doc.features.borrow_mut().insert(PdfFeature::MovieObjects);
             }
         }
         // 表单数据动作与字段名条目（12.7.5.2–12.7.5.4），写入特征画像。

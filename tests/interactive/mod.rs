@@ -37,6 +37,7 @@ mod embedded;
 mod form;
 mod incremental;
 mod metadata;
+mod movie;
 mod navigation;
 mod outline_action;
 mod page_presentation;

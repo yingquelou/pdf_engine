@@ -371,6 +371,22 @@ fn table_169_rows_map_to_names_versions_and_markup_flags() {
         if name == "Sound" {
             dict = dict.insert("Sound", Value::Ref(99, 0));
         }
+        // Movie 注解的 `/Movie`（Table 186）是必填电影字典，需最小文件规格。
+        if name == "Movie" {
+            dict = dict.insert(
+                "Movie",
+                Value::Dict(
+                    Dict::new().insert(
+                        "F",
+                        Value::Dict(
+                            Dict::new()
+                                .insert("Type", Value::Name("Filespec".into()))
+                                .insert("F", Value::String("clip.mov".into())),
+                        ),
+                    ),
+                ),
+            );
+        }
         let annotation = parse_annotation(&doc(vec![]), 0, None, &dict).expect("subtype");
         assert!(
             !matches!(annotation.subtype, AnnotationSubtype::Unknown(_)),

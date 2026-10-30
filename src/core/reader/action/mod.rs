@@ -16,6 +16,7 @@ use crate::core::reader::transition::{Transition, parse_transition};
 use crate::core::types::{Document, Value};
 
 mod gotoe;
+mod movie;
 mod ocg;
 mod sound;
 mod thread;
@@ -23,6 +24,7 @@ mod thread;
 pub use gotoe::{
     GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation,
 };
+pub use movie::MovieAction;
 use ocg::parse_set_ocg_state;
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
 pub use sound::SoundAction;
@@ -46,6 +48,8 @@ pub enum Action {
     Uri(String),
     /// 播放声音（12.6.4.8 Table 208）。
     Sound(SoundAction),
+    /// 播放电影（12.6.4.9 Table 209）。
+    Movie(MovieAction),
     /// 启动外部文件。
     Launch {
         file: FileSpec,
@@ -265,6 +269,7 @@ impl Document {
                 Ok(Action::Launch { file, new_window })
             }
             "Sound" => Ok(Action::Sound(sound::parse_sound_action(self, dict)?)),
+            "Movie" => Ok(Action::Movie(movie::parse_movie_action(self, dict)?)),
             "JavaScript" => {
                 let script = dict
                     .get("JS")

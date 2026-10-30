@@ -39,6 +39,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::core::reader::action::{Action, ActionError};
+use crate::core::reader::movie::{Movie, MoviePlayback};
 use crate::core::reader::navigation::{NavigationError, OutlineDestination};
 use crate::core::reader::sound::Sound;
 use crate::core::types::{Dict, Document, Value};
@@ -52,6 +53,7 @@ mod kind;
 mod link;
 mod measure;
 mod mk;
+mod movie;
 mod redact;
 mod sound;
 pub mod subtype;
@@ -281,6 +283,10 @@ pub struct Annotation {
     pub appearance_characteristics: Option<AppearanceCharacteristics>,
     /// Watermark 注解的固定打印字典 `/FixedPrint`（Table 190/191，PDF 1.6）。
     pub fixed_print: Option<FixedPrint>,
+    /// Movie 注解的电影字典 `/Movie`（Table 186，PDF 1.2）。
+    pub movie: Option<Movie>,
+    /// Movie 注解的播放设置 `/A`（布尔或电影激活字典，Table 186）。
+    pub movie_playback: Option<MoviePlayback>,
     /// `/A` 动作（语义归 E3，原样保留）。
     pub action: Option<Value>,
     /// `/Dest` 原始值（名称/数组/字典）；类型化解析见 `Document::annotation_destination`。
@@ -480,6 +486,7 @@ fn parse_annotation(
     let mk = mk::parse_appearance_characteristics(document, dict)?;
     let fixed_print = watermark::parse_fixed_print(document, dict)?;
     let sound = sound::parse_sound_entries(dict, &subtype)?;
+    let movie = movie::parse_movie_entries(document, dict, &subtype)?;
 
     Ok(Annotation {
         page_index,
@@ -539,6 +546,8 @@ fn parse_annotation(
         overlay_appearance: redact.overlay_appearance,
         appearance_characteristics: mk,
         fixed_print,
+        movie: movie.movie,
+        movie_playback: movie.playback,
         action: dict.get("A").cloned(),
         destination: dict.get("Dest").cloned(),
         popup: match dict.get("Popup") {

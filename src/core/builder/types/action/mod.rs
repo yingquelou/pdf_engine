@@ -1,7 +1,7 @@
 //! 动作字典写端（ISO 32000-1 12.6 / 12.7.5）。
 //!
 //! 覆盖常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Sound
-//! 动作（播放声音对象）、Hide 动作（隐藏/显示注解）、Set-OCG-State 动作
+//! 动作（播放声音对象）、Movie 动作（播放电影注解）、Hide 动作（隐藏/显示注解）、Set-OCG-State 动作
 //! （切换可选内容组状态）、Transition 动作（全屏演示过渡特效）、Thread
 //! 动作（跳转到文章线 bead）、Embedded Go-To 动作（嵌套嵌入文档间跳转）
 //! 与三种表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
@@ -10,7 +10,8 @@
 //! 按族拆分：`targets` 收文件规格/远程目标/预定义动作名，`hide` 收 Hide
 //! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列，`thread` 收
 //! Thread 动作的线程/bead 索引契约，`gotoe` 收 Embedded Go-To 的目标
-//! 字典路径链，`sound` 收 Sound 动作的声音句柄与播放参数。
+//! 字典路径链，`sound` 收 Sound 动作的声音句柄与播放参数，`movie` 收
+//! Movie 动作的注解目标与电影激活参数。
 
 use super::text_string_value;
 use super::transition::Transition;
@@ -20,6 +21,7 @@ use crate::core::writer::WriteError;
 
 mod gotoe;
 mod hide;
+mod movie;
 mod ocg;
 mod sound;
 mod targets;
@@ -32,6 +34,7 @@ pub use gotoe::{
     GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation,
 };
 pub use hide::{HideAction, HideTarget};
+pub use movie::{MovieAction, MovieActionTarget};
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
 pub use sound::SoundAction;
 pub use targets::{ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
@@ -53,7 +56,7 @@ pub(crate) struct ActionRefs<'a> {
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
 ///
-/// 写端支持十二种动作；未知子类型不建模，由调用方直接构造字典。
+/// 写端支持十六种动作；未知子类型不建模，由调用方直接构造字典。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// 本地跳转；`/D` 为显式目标数组或命名目标。
@@ -73,6 +76,8 @@ pub enum Action {
     Uri(String),
     /// 播放声音（12.6.4.8 Table 208，PDF 1.2）。
     Sound(SoundAction),
+    /// 播放电影（12.6.4.9 Table 209，PDF 1.2）。
+    Movie(MovieAction),
     /// 启动外部文件。
     Launch {
         /// 文件规格。
@@ -125,6 +130,7 @@ impl Action {
             Self::Named(_) => "Named",
             Self::Uri(_) => "URI",
             Self::Sound(_) => "Sound",
+            Self::Movie(_) => "Movie",
             Self::Launch { .. } => "Launch",
             Self::JavaScript(_) => "JavaScript",
             Self::Hide(_) => "Hide",
@@ -164,6 +170,11 @@ impl Action {
             }
             Self::Sound(action) => {
                 for (key, value) in action.to_dict(refs.sound_nums)?.0 {
+                    dict = dict.insert(key, value);
+                }
+            }
+            Self::Movie(action) => {
+                for (key, value) in action.to_dict(refs.annotation_nums)?.0 {
                     dict = dict.insert(key, value);
                 }
             }

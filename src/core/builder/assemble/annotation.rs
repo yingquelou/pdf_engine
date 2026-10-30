@@ -300,6 +300,12 @@ pub(super) fn annotation_dict(
     if let Some(sound) = annotation_sound(annot, handle, refs.sound_nums)? {
         dict = dict.insert("Sound", sound);
     }
+    if let Some(movie) = annot.movie() {
+        dict = dict.insert("Movie", Value::Dict(movie.to_dict()));
+    }
+    if let Some(playback) = annot.movie_playback() {
+        dict = dict.insert("A", playback.to_value());
+    }
     let mut appearance = Dict::new();
     if !annot.appearance_states().is_empty() {
         // `/N` 为状态名 → 外观流引用（Widget 多状态外观，Table 168）。

@@ -55,14 +55,15 @@ pub use types::{
     GoToETargetRelation, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
     HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit, IconScaleWhen, IconScaling,
     ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, LineEndStyle, LineIntent,
-    LinkHighlightMode, Measure, MeshFunction, MeshVertex, NumberFormat, NumberFraction,
-    NumberLabelOrder, OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize,
-    PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation,
-    SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, Sound,
-    SoundAction, SoundEncoding, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
-    ThreadAction, TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
-    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
-    Viewport, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
+    LinkHighlightMode, Measure, MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget,
+    MovieActivation, MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder,
+    OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize, PaintType, PdfAnnotation,
+    PolygonIntent, RadialShading, SampledFunction, Separation, SetOcgStateAction, Shading,
+    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, Sound, SoundAction, SoundEncoding,
+    StitchingFunction, TensorProductPatch, TensorProductPatchShading, ThreadAction, TilingPattern,
+    TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
+    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem,
+    XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};

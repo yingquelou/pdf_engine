@@ -3,7 +3,7 @@
 //! 注解动作（含 Hide 目标与表单动作取值）的校验在对象写出前完成；
 //! 版本门禁按特性表统一判定，并把所需特性交回主流程登记。
 
-use crate::core::builder::{Action, PdfBuilder};
+use crate::core::builder::{Action, AnnotationKind, MovieActionTarget, PdfBuilder};
 use crate::core::types::PdfFeature;
 use crate::core::writer::WriteError;
 
@@ -38,6 +38,18 @@ impl PdfBuilder {
                 self.sounds.len(),
                 &thread_beads,
             )?;
+            // Movie 动作的 `/Annotation` 目标必须是 Movie 注解。
+            if let Action::Movie(movie) = action
+                && let MovieActionTarget::Annotation(handle) = movie.target()
+                && self
+                    .annotations
+                    .get(*handle)
+                    .is_some_and(|entry| entry.annot.kind() != AnnotationKind::Movie)
+            {
+                return Err(WriteError::InvalidObject(format!(
+                    "Movie action /Annotation references annotation handle {handle} which is not a Movie annotation"
+                )));
+            }
             for feature in action_features(action) {
                 if !features.contains(&feature) {
                     features.push(feature);
@@ -82,6 +94,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         }
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
         Action::Sound(_) => vec![PdfFeature::SoundObjects],
+        Action::Movie(_) => vec![PdfFeature::MovieObjects],
         Action::Hide(_) => vec![PdfFeature::HideAction],
         Action::GoToE(_) => vec![PdfFeature::EmbeddedGoToAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
@@ -100,6 +113,7 @@ fn validate_action(
 ) -> Result<(), WriteError> {
     match action {
         Action::Sound(sound) => sound.validate(sound_count)?,
+        Action::Movie(movie) => movie.validate(annotation_count)?,
         Action::Hide(hide) => hide.validate(annotation_count)?,
         Action::GoToE(action) => action.validate()?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,
