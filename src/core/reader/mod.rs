@@ -85,6 +85,7 @@ pub mod navigation;
 mod object;
 pub mod optional_content;
 pub mod output_intent;
+pub mod page_box;
 pub mod page_content;
 pub mod page_presentation;
 mod parser;

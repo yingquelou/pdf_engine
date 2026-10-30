@@ -102,6 +102,13 @@ impl PdfBuilder {
         // 输出意图（14.11.5 Table 365）：Table 365 条目契约与 PDF 1.4 门禁
         // 同样在任何对象写出前完成。
         output_intent::validate_registration(&self.output_intents, self.version)?;
+        // 页面边界（14.11.2 Table 30）与框颜色信息（Table 360/361）：矩形
+        // 取值、框样式条目契约与 PDF 1.3/1.4 门禁同样在任何对象写出前完成。
+        for (index, page) in self.pages.iter().enumerate() {
+            if let Some(boundaries) = &page.boundaries {
+                boundaries.validate(self.version, &format!("page {index}"))?;
+            }
+        }
         // 3D 视图的 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1
         // Table 304）：覆盖 artwork `/VA` 与内联 `/DV`、注解内联 `/3DV`
         // 及 GoTo3DView 内联 `/V` 四处来源；版本门禁同样在任何对象写出前
@@ -986,12 +993,19 @@ impl PdfBuilder {
         let mut color_space_values: Vec<Option<Value>> = vec![None; color_spaces.len()];
         for (i, p) in self.pages.iter_mut().enumerate() {
             let (page_num, content_num) = page_slots[i];
-            let (w, h) = p.size.dimensions();
-            let mediabox = Array::new()
-                .push(Value::Integer(0))
-                .push(Value::Integer(0))
-                .push(Value::Float(w))
-                .push(Value::Float(h));
+            // 页面边界（14.11.2）：显式设置时以其 `/MediaBox` 取代页尺寸；
+            // 未设置时保持 `page(PageSize)` 的既有行为。
+            let mediabox = match &p.boundaries {
+                Some(boundaries) => boundaries.media_array(),
+                None => {
+                    let (w, h) = p.size.dimensions();
+                    Array::new()
+                        .push(Value::Integer(0))
+                        .push(Value::Integer(0))
+                        .push(Value::Float(w))
+                        .push(Value::Float(h))
+                }
+            };
 
             // 资源：Font 子字典（/F1 -> ref, ..., /CF1 -> ref, ...）、XObject 子字典（/Im1 -> ref, ...）
             let mut font_dict = Dict::new();
@@ -1078,6 +1092,13 @@ impl PdfBuilder {
                 .insert("MediaBox", Value::Array(mediabox))
                 .insert("Contents", Value::Ref(content_num, 0))
                 .insert("Resources", Value::Dict(resources));
+            if let Some(boundaries) = &p.boundaries {
+                page_dict = boundaries.extend_page_dict(page_dict);
+                let mut features = doc.features.borrow_mut();
+                for feature in boundaries.features() {
+                    features.insert(feature);
+                }
+            }
             if let Some(group) = &p.group {
                 group.validate().map_err(|message| {
                     WriteError::InvalidObject(format!("page group: {message}"))

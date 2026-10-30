@@ -239,6 +239,11 @@ pub enum PdfFeature {
     ThreeDMarkup,
     /// 目录 `/OutputIntents` 输出意图数组（14.11.5 Table 365），PDF 1.4 引入。
     OutputIntents,
+    /// 页面处理框（`/BleedBox` `/TrimBox` `/ArtBox`，14.11.2 Table 30），
+    /// PDF 1.3 引入。
+    PageBoundaries,
+    /// 页面 `/BoxColorInfo` 框颜色信息（14.11.2 Table 360/361），PDF 1.4 引入。
+    PageBoxColorInfo,
 }
 
 impl PdfFeature {
@@ -266,14 +271,16 @@ impl PdfFeature {
             | PdfFeature::FormFieldAdditionalActions
             | PdfFeature::FormCalculationOrder
             | PdfFeature::FormActionFieldNames
-            | PdfFeature::PageTemplates => PdfVersion::V1_3,
+            | PdfFeature::PageTemplates
+            | PdfFeature::PageBoundaries => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
             | PdfFeature::FormButtonOptions
             | PdfFeature::FormChoiceIndices
             | PdfFeature::AlternatePresentations
-            | PdfFeature::OutputIntents => PdfVersion::V1_4,
+            | PdfFeature::OutputIntents
+            | PdfFeature::PageBoxColorInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -372,6 +379,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::GoTo3DViewAction => "go-to-3D-view actions",
             PdfFeature::ThreeDMarkup => "3D markup annotations",
             PdfFeature::OutputIntents => "output intents",
+            PdfFeature::PageBoundaries => "page boundaries",
+            PdfFeature::PageBoxColorInfo => "page box color info",
         };
         write!(f, "{name}")
     }

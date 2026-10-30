@@ -61,11 +61,11 @@ pub use types::{
     MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan, MediaWindow,
     MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget, MovieActivation,
     MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder, OcgStateOperation,
-    OcgStateSequence, OptionalContentGroup, OutputIntent, OutputIntentProfile, PageSize, PaintType,
-    PdfAnnotation, PolygonIntent, RadialShading, Rendition, RenditionAction, RenditionOperation,
-    SampledFunction, SelectorRendition, Separation, SetOcgStateAction, Shading, ShadingOptions,
-    ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction,
-    SoundEncoding, StitchingFunction, TemporaryFilePermission, TensorProductPatch,
+    OcgStateSequence, OptionalContentGroup, OutputIntent, OutputIntentProfile, PageBoundaries,
+    PageSize, PaintType, PdfAnnotation, PolygonIntent, RadialShading, Rendition, RenditionAction,
+    RenditionOperation, SampledFunction, SelectorRendition, Separation, SetOcgStateAction, Shading,
+    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound,
+    SoundAction, SoundEncoding, StitchingFunction, TemporaryFilePermission, TensorProductPatch,
     TensorProductPatchShading, ThreadAction, ThreeDActivation, ThreeDActivationPolicy,
     ThreeDAnimationStyle, ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState,
     ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDColor, ThreeDCrossSection,
@@ -118,6 +118,9 @@ struct PageBuild {
     duration: Option<f64>,
     /// 页面缩略图（页面 `/Thumb`，12.3.4 Table 30）。
     thumbnail: Option<ImageData>,
+    /// 页面边界（14.11.2 Table 30）：`/MediaBox` 及可选 Crop/Bleed/Trim/Art
+    /// 框与 `/BoxColorInfo`；`None` 时按 `size` 写 MediaBox。
+    boundaries: Option<PageBoundaries>,
     /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
     invalid_code_length: Option<usize>,
 }
@@ -397,6 +400,7 @@ impl PdfBuilder {
             transition: None,
             duration: None,
             thumbnail: None,
+            boundaries: None,
             invalid_code_length: None,
         });
         idx
@@ -589,6 +593,28 @@ impl PdfBuilder {
     pub fn set_page_thumbnail(&mut self, page: usize, thumbnail: &ImageData) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.thumbnail = Some(thumbnail.clone());
+        }
+        self
+    }
+
+    /// 为指定页设置页面边界（14.11.2 Table 30）。
+    ///
+    /// [`PageBoundaries`] 取代该页的 `/MediaBox`（`page(PageSize)` 声明的
+    /// 尺寸不再使用），并写出显式声明的 `/CropBox` `/BleedBox` `/TrimBox`
+    /// `/ArtBox` 与 `/BoxColorInfo`；缺省框不物化，由读者按 Table 30/361
+    /// 推导。
+    ///
+    /// 取值契约（本库选择：零面积框无实际意义，一并拒绝）与版本门禁在
+    /// [`PdfBuilder::build`] 阶段校验：坐标须有限且宽高为正，`/C` 分量
+    /// 0.0–1.0，`/W` ≥ 0，`/D` 非空非负且不全为零并只与 `/S /D` 同用，
+    /// 扩展 `/S` 名须为合法 PDF 名称；违反者返回
+    /// [`WriteError::InvalidObject`]。`/BleedBox` `/TrimBox` `/ArtBox`
+    /// 需 PDF 1.3，`/BoxColorInfo` 需 PDF 1.4，否则返回
+    /// [`WriteError::UnsupportedVersion`]。两种失败均不写出任何字节。
+    /// 未知页索引被忽略；重复设置以后一次为准。
+    pub fn set_page_boundaries(&mut self, page: usize, boundaries: PageBoundaries) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.boundaries = Some(boundaries);
         }
         self
     }
