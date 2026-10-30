@@ -119,6 +119,7 @@ pub(super) fn apply(
     version: PdfVersion,
     page_count: usize,
     navigation: &NavigationState,
+    annotation_nums: &[i64],
 ) -> Result<(), WriteError> {
     let has_actions = outline_has_actions(&navigation.outline);
     let required = [
@@ -213,13 +214,12 @@ pub(super) fn apply(
             .max()
             .unwrap_or(0)
             + 1;
-        let root = write_outline(
-            doc,
-            &navigation.outline,
-            &page_refs,
-            &navigation.actions,
-            &mut next_num,
-        )?;
+        let context = OutlineContext {
+            page_refs: &page_refs,
+            actions: &navigation.actions,
+            annotation_nums,
+        };
+        let root = write_outline(doc, &navigation.outline, &context, &mut next_num)?;
         catalog = catalog.insert("Outlines", Value::Ref(root, 0));
     }
 
@@ -328,25 +328,24 @@ fn outline_destination_value(
     }
 }
 
+/// 大纲写出期间共享的只读上下文；含 Hide 动作所需的注解对象号映射。
+struct OutlineContext<'a> {
+    page_refs: &'a [(i64, i64)],
+    actions: &'a [Action],
+    annotation_nums: &'a [i64],
+}
+
 fn write_outline(
     doc: &mut Document,
     entries: &[OutlineEntry],
-    page_refs: &[(i64, i64)],
-    actions: &[Action],
+    context: &OutlineContext<'_>,
     next_num: &mut i64,
 ) -> Result<i64, WriteError> {
     let root_num = *next_num;
     *next_num += 1;
     let mut action_refs = Vec::new();
-    let children = write_outline_items(
-        doc,
-        entries,
-        root_num,
-        page_refs,
-        actions,
-        &mut action_refs,
-        next_num,
-    )?;
+    let children =
+        write_outline_items(doc, entries, root_num, context, &mut action_refs, next_num)?;
     let mut dict = Dict::new().insert("Type", Value::Name("Outlines".into()));
     if let Some((first, last)) = children {
         let visible: u64 = entries
@@ -372,11 +371,12 @@ fn write_outline_items(
     doc: &mut Document,
     items: &[OutlineEntry],
     parent_num: i64,
-    page_refs: &[(i64, i64)],
-    actions: &[Action],
+    context: &OutlineContext<'_>,
     action_refs: &mut Vec<i64>,
     next_num: &mut i64,
 ) -> Result<Option<(i64, i64)>, WriteError> {
+    let page_refs = context.page_refs;
+    let actions = context.actions;
     let nums: Vec<i64> = items
         .iter()
         .map(|_| {
@@ -387,15 +387,8 @@ fn write_outline_items(
         .collect();
     for (index, item) in items.iter().enumerate() {
         let num = nums[index];
-        let children = write_outline_items(
-            doc,
-            &item.children,
-            num,
-            page_refs,
-            actions,
-            action_refs,
-            next_num,
-        )?;
+        let children =
+            write_outline_items(doc, &item.children, num, context, action_refs, next_num)?;
         let mut dict = Dict::new()
             .insert("Title", text_string_value(&item.title))
             .insert("Parent", Value::Ref(parent_num, 0));
@@ -407,7 +400,7 @@ fn write_outline_items(
                 if action_refs[action_handle] == 0 {
                     let action_num = *next_num;
                     *next_num += 1;
-                    let action_dict = actions[action_handle].to_dict();
+                    let action_dict = actions[action_handle].to_dict(context.annotation_nums)?;
                     doc.set_object(Object::new(action_num, 0, Value::Dict(action_dict)));
                     action_refs[action_handle] = action_num;
                 }

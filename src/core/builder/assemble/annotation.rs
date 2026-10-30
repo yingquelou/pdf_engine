@@ -184,7 +184,7 @@ pub(super) fn annotation_dict(
         dict = dict.insert("H", Value::Name(highlight.name().into()));
     }
     if let Some(action) = link.pressed_action() {
-        dict = dict.insert("PA", Value::Dict(action.to_dict()));
+        dict = dict.insert("PA", Value::Dict(action.to_dict(annotation_nums)?));
     }
     let redact = annot.redact();
     if let Some(text) = redact.overlay_text() {
@@ -235,7 +235,7 @@ pub(super) fn annotation_dict(
                     .insert("S", Value::Name("GoTo".into()))
                     .insert("D", value)
             }
-            other => other.to_dict(),
+            other => other.to_dict(annotation_nums)?,
         };
         dict = dict.insert("A", Value::Dict(action_dict));
     }

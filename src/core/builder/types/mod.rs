@@ -40,7 +40,9 @@ mod shading;
 mod type3;
 mod viewport;
 
-pub use action::{Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
+pub use action::{
+    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, HideAction, HideTarget,
+};
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,

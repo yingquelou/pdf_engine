@@ -168,6 +168,8 @@ pub enum PdfFeature {
     /// 注解 measure 字典（`/Measure`，Table 261–263；Line 与
     /// Polygon/PolyLine 自 Table 175/178），PDF 1.7 引入。
     AnnotationMeasure,
+    /// Hide 动作（隐藏/显示注解，12.6.4.10 Table 210），PDF 1.2 引入。
+    HideAction,
     /// 旧式注解边框数组的虚线项（`/Border` 第四项，Table 164），PDF 1.1 引入。
     AnnotationBorderDash,
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
@@ -197,6 +199,7 @@ impl PdfFeature {
             PdfFeature::EncryptionRC4 | PdfFeature::AnnotationBorderDash => PdfVersion::V1_1,
             PdfFeature::TilingPattern
             | PdfFeature::LinkAnnotationHighlighting
+            | PdfFeature::HideAction
             | PdfFeature::FormDataActions => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
@@ -277,6 +280,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::FormChoiceIndices => "choice field alternate indices",
             PdfFeature::FormCalculationOrder => "form calculation order",
             PdfFeature::FormDataActions => "form data actions",
+            PdfFeature::HideAction => "hide action",
             PdfFeature::FormActionFieldNames => "form action field names",
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",

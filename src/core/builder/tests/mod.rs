@@ -19,6 +19,7 @@
 //! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出、配对冲突与必填校验（12.5.2）；
 //! - `annotation_redact`：Redact 注解条目（Table 192）的取值契约与 PDF 1.7 门禁；
 //! - `annotation_mk`：外观特性字典 `/MK`（Table 189）与图标适配 `/IF`（Table 247）的取值契约、Screen 归属与 PDF 1.5 门禁；
+//! - `hide_action`：Hide 动作 `/T` 目标解析与 `/H`（Table 210）的写出、校验与 PDF 1.2 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
@@ -69,6 +70,7 @@ mod form_option;
 mod form_resources;
 mod function;
 mod graphics_state;
+mod hide_action;
 mod image_entries;
 mod metadata;
 mod navigation;

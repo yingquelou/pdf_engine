@@ -1,6 +1,6 @@
 //! 动作字典写端校验与版本门禁（12.6 / 12.7.5）。
 //!
-//! 表单动作（SubmitForm/ResetForm/ImportData）的取值校验在对象写出前完成；
+//! 注解动作（含 Hide 目标与表单动作取值）的校验在对象写出前完成；
 //! 版本门禁按特性表统一判定，并把所需特性交回主流程登记。
 
 use crate::core::builder::{Action, PdfBuilder};
@@ -24,7 +24,7 @@ impl PdfBuilder {
         }
         let mut features = Vec::new();
         for action in actions {
-            validate_action(action)?;
+            validate_action(action, self.annotations.len())?;
             for feature in action_features(action) {
                 if !features.contains(&feature) {
                     features.push(feature);
@@ -68,12 +68,14 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
             features
         }
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
+        Action::Hide(_) => vec![PdfFeature::HideAction],
         _ => Vec::new(),
     }
 }
 
-fn validate_action(action: &Action) -> Result<(), WriteError> {
+fn validate_action(action: &Action, annotation_count: usize) -> Result<(), WriteError> {
     match action {
+        Action::Hide(hide) => hide.validate(annotation_count)?,
         Action::SubmitForm {
             url,
             fields,

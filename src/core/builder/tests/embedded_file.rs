@@ -352,7 +352,14 @@ fn embedded_names_tree_merges_with_navigation_entries() {
     let _ = b.embed_file(EmbeddedFile::new("a.txt", b"x".to_vec()));
     b.named_destination("intro", Destination::Fit { page: p0 });
     let mut doc = b.assemble_document().expect("assemble");
-    navigation::apply(&mut doc, b.version, b.pages.len(), &b.navigation).expect("apply");
+    navigation::apply(
+        &mut doc,
+        b.version,
+        b.pages.len(),
+        &b.navigation,
+        &b.annotation_nums,
+    )
+    .expect("apply");
 
     let catalog = object_dict(&doc, 1);
     let names = catalog

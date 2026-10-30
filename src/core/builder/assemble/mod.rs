@@ -864,6 +864,8 @@ impl PdfBuilder {
             )?;
             doc.set_object(Object::new(annotation_nums[handle], 0, Value::Dict(dict)));
         }
+        // 导航层随后写大纲 `/A`；Hide 动作的注解句柄在此解析为对象号。
+        self.annotation_nums = annotation_nums.clone();
 
         // 表单字段/Widget 间接对象：`/P` 指向页面字典，`/Kids`/`/Parent`
         // 已按字段树对象号互引，`/AP` 解析为 Form XObject 流引用。

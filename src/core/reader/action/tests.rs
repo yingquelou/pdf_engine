@@ -449,3 +449,76 @@ fn malformed_actions_are_typed_errors() {
         "未知页面应返回 PageNotFound"
     );
 }
+
+#[test]
+fn parses_hide_action_targets_and_flag() {
+    let doc = document_with_pages(1);
+    let annot_object = 60;
+    insert(
+        &doc,
+        annot_object,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Annot"))
+                .insert("Subtype", name("Text")),
+        ),
+    );
+
+    let single = Value::Dict(action_dict("Hide").insert("T", Value::String("group.note".into())));
+    assert_eq!(
+        doc.action(&single).unwrap(),
+        Action::Hide(HideAction {
+            targets: vec![HideTarget::FieldName("group.note".into())],
+            hide: None,
+        })
+    );
+
+    let array = Value::Dict(
+        action_dict("Hide")
+            .insert(
+                "T",
+                arr(vec![
+                    Value::Ref(annot_object, 0),
+                    Value::String("group.note".into()),
+                ]),
+            )
+            .insert("H", Value::Bool(false)),
+    );
+    assert_eq!(
+        doc.action(&array).unwrap(),
+        Action::Hide(HideAction {
+            targets: vec![
+                HideTarget::Annotation {
+                    number: annot_object,
+                    generation: 0,
+                },
+                HideTarget::FieldName("group.note".into()),
+            ],
+            hide: Some(false),
+        })
+    );
+}
+
+#[test]
+fn malformed_hide_actions_are_typed_errors() {
+    let doc = document_with_pages(1);
+    insert(&doc, 61, name("not-an-annotation"));
+
+    let cases = [
+        Value::Dict(action_dict("Hide")),
+        Value::Dict(action_dict("Hide").insert("T", arr(Vec::new()))),
+        Value::Dict(action_dict("Hide").insert("T", Value::Integer(7))),
+        Value::Dict(action_dict("Hide").insert("T", Value::Ref(61, 0))),
+        Value::Dict(
+            action_dict("Hide")
+                .insert("T", Value::String("field".into()))
+                .insert("H", Value::Integer(1)),
+        ),
+    ];
+    for case in cases {
+        assert!(
+            matches!(doc.action(&case), Err(ActionError::Malformed(_))),
+            "{case:?}"
+        );
+    }
+}

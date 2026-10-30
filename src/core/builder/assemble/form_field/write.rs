@@ -125,7 +125,7 @@ pub(crate) fn field_dict(
     if !field.actions().is_empty() {
         let mut additional = Dict::new();
         for (event, action) in field.actions() {
-            additional = additional.insert(event.name(), Value::Dict(action.to_dict()));
+            additional = additional.insert(event.name(), Value::Dict(action.to_dict(&[])?));
         }
         dict = dict.insert("AA", Value::Dict(additional));
     }

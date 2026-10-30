@@ -1,8 +1,8 @@
 //! 动作字典读取（ISO 32000-1 12.6 / 12.7.5）。
 //!
-//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript，以及表单动作
-//! SubmitForm、ResetForm、ImportData；未知子类型保留名称。动作值可为间接
-//! 引用，`/D` 的显式目标经页面树映射为 0 基页号。
+//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript、Hide，以及
+//! 表单动作 SubmitForm、ResetForm、ImportData；未知子类型保留名称。动作值
+//! 可为间接引用，`/D` 的显式目标经页面树映射为 0 基页号。
 
 use std::fmt;
 
@@ -34,6 +34,8 @@ pub enum Action {
     },
     /// JavaScript 脚本（文本串或流解码后的 UTF-8）。
     JavaScript(String),
+    /// 隐藏或显示注解（12.6.4.10 Table 210）。
+    Hide(HideAction),
     /// 提交表单数据（12.7.5.2 Table 236）。
     SubmitForm(SubmitFormAction),
     /// 重置表单字段（12.7.5.3 Table 238）。
@@ -81,6 +83,29 @@ pub struct ResetFormAction {
     pub fields: Vec<ActionField>,
     /// `/Flags`（Table 239），缺省 0。
     pub flags: u32,
+}
+
+/// Hide 动作（12.6.4.10 Table 210）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct HideAction {
+    /// `/T` 目标；注解字典间接引用或字段全限定名文本串。
+    pub targets: Vec<HideTarget>,
+    /// `/H`；缺省 `true`（隐藏），`false` 为显示。
+    pub hide: Option<bool>,
+}
+
+/// Hide 动作的目标（Table 210 `/T`）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum HideTarget {
+    /// 注解字典的间接引用。
+    Annotation {
+        /// 对象号。
+        number: i64,
+        /// 生成号。
+        generation: i64,
+    },
+    /// 交互表单字段的全限定名（12.7.3.2）。
+    FieldName(String),
 }
 
 /// 文件规格（7.11.2）：优先取 `/UF`，其次 `/F` 与平台相关路径。
@@ -229,6 +254,21 @@ impl Document {
                 })?;
                 Ok(Action::JavaScript(script))
             }
+            "Hide" => {
+                let targets = parse_hide_targets(
+                    self,
+                    dict.get("T")
+                        .ok_or_else(|| malformed("Hide action is missing /T"))?,
+                )?;
+                let hide = match dict.get("H") {
+                    None => None,
+                    Some(value) => match resolve(self, value)? {
+                        Value::Bool(flag) => Some(flag),
+                        _ => return Err(malformed("Hide action /H is not a boolean")),
+                    },
+                };
+                Ok(Action::Hide(HideAction { targets, hide }))
+            }
             "SubmitForm" => {
                 let file = parse_file_spec(
                     self,
@@ -349,6 +389,46 @@ fn parse_action_fields(
         }
     }
     Ok(fields)
+}
+
+/// 解析 Hide 动作的 `/T`：单个目标或目标数组（Table 210）。
+fn parse_hide_targets(document: &Document, value: &Value) -> Result<Vec<HideTarget>, ActionError> {
+    let value = resolve(document, value)?;
+    match &value {
+        Value::Array(array) => {
+            if array.0.is_empty() {
+                return Err(malformed("Hide action /T array is empty"));
+            }
+            array
+                .0
+                .iter()
+                .map(|item| parse_hide_target(document, item))
+                .collect()
+        }
+        _ => Ok(vec![parse_hide_target(document, &value)?]),
+    }
+}
+
+fn parse_hide_target(document: &Document, value: &Value) -> Result<HideTarget, ActionError> {
+    match value {
+        Value::Ref(number, generation) => {
+            if !matches!(resolve(document, value)?, Value::Dict(_)) {
+                return Err(malformed(
+                    "Hide action /T reference does not resolve to an annotation dictionary",
+                ));
+            }
+            Ok(HideTarget::Annotation {
+                number: *number,
+                generation: *generation,
+            })
+        }
+        Value::String(_) | Value::HexString(_) => text_value(value)
+            .map(HideTarget::FieldName)
+            .ok_or_else(|| malformed("Hide action /T field name is malformed")),
+        _ => Err(malformed(
+            "Hide action /T entry is neither an annotation reference nor a text string",
+        )),
+    }
 }
 
 fn parse_action_flags(

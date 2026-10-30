@@ -48,11 +48,11 @@ pub use types::{
     FixedPrint, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths, FormField,
     FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading, FreeTextIntent,
     Function, FunctionShading, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
-    HalftoneDictionary, ICCBased, IconFit, IconScaleWhen, IconScaling, ImageData, ImageIntent,
-    ImageMask, Indexed, Lab, LatticeMeshShading, LineEndStyle, LineIntent, LinkHighlightMode,
-    Measure, MeshFunction, MeshVertex, NumberFormat, NumberFraction, NumberLabelOrder,
-    OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent, RadialShading,
-    SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
+    HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit, IconScaleWhen, IconScaling,
+    ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, LineEndStyle, LineIntent,
+    LinkHighlightMode, Measure, MeshFunction, MeshVertex, NumberFormat, NumberFraction,
+    NumberLabelOrder, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent,
+    RadialShading, SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
     SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
     TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
 };
@@ -153,6 +153,9 @@ pub struct PdfBuilder {
     color_spaces: Vec<ColorSpace>,
     /// 文档级注解池；`PdfBuilder::add_annotation` 返回其索引。
     annotations: Vec<AnnotationEntry>,
+    /// 最近一次 assemble 分配的注解对象号（下标即注解句柄）；供大纲
+    /// `/A` 解析 Hide 动作的注解目标。
+    annotation_nums: Vec<i64>,
     /// 文档级嵌入文件池；`PdfBuilder::embed_file` 返回其索引。
     embedded: Vec<EmbeddedFile>,
     /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
@@ -188,6 +191,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             annotations: Vec::new(),
+            annotation_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -210,6 +214,7 @@ impl PdfBuilder {
             patterns: Vec::new(),
             color_spaces: Vec::new(),
             annotations: Vec::new(),
+            annotation_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -611,7 +616,13 @@ impl PdfBuilder {
             )));
         }
         let mut doc = self.assemble_document()?;
-        navigation::apply(&mut doc, self.version, self.pages.len(), &self.navigation)?;
+        navigation::apply(
+            &mut doc,
+            self.version,
+            self.pages.len(),
+            &self.navigation,
+            &self.annotation_nums,
+        )?;
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {
             writer = writer.with_compression(compression);
