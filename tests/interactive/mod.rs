@@ -41,6 +41,7 @@ mod metadata;
 mod movie;
 mod navigation;
 mod outline_action;
+mod output_intent;
 mod page_presentation;
 mod page_thumbnail;
 mod rendition;

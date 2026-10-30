@@ -61,14 +61,14 @@ pub use types::{
     MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan, MediaWindow,
     MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget, MovieActivation,
     MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder, OcgStateOperation,
-    OcgStateSequence, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent,
-    RadialShading, Rendition, RenditionAction, RenditionOperation, SampledFunction,
-    SelectorRendition, Separation, SetOcgStateAction, Shading, ShadingOptions, ShadingPattern,
-    SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction, SoundEncoding,
-    StitchingFunction, TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading,
-    ThreadAction, ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle,
-    ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState, ThreeDBackground,
-    ThreeDBackgroundType, ThreeDClipping, ThreeDColor, ThreeDCrossSection,
+    OcgStateSequence, OptionalContentGroup, OutputIntent, OutputIntentProfile, PageSize, PaintType,
+    PdfAnnotation, PolygonIntent, RadialShading, Rendition, RenditionAction, RenditionOperation,
+    SampledFunction, SelectorRendition, Separation, SetOcgStateAction, Shading, ShadingOptions,
+    ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction,
+    SoundEncoding, StitchingFunction, TemporaryFilePermission, TensorProductPatch,
+    TensorProductPatchShading, ThreadAction, ThreeDActivation, ThreeDActivationPolicy,
+    ThreeDAnimationStyle, ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState,
+    ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDColor, ThreeDCrossSection,
     ThreeDDeactivationPolicy, ThreeDFaceColor, ThreeDLightingScheme, ThreeDLightingSchemeType,
     ThreeDMatrixSource, ThreeDNode, ThreeDProjection, ThreeDProjectionBinding,
     ThreeDProjectionScale, ThreeDProjectionType, ThreeDRenderMode, ThreeDRenderModeType,
@@ -170,6 +170,8 @@ pub struct PdfBuilder {
     forms: Vec<FormXObject>,
     /// 文档级可选内容组池；`PdfBuilder::optional_content_group` 返回其索引。
     optional_content_groups: Vec<OptionalContentGroup>,
+    /// 目录 `/OutputIntents` 输出意图数组（14.11.5 Table 365）。
+    output_intents: Vec<OutputIntent>,
     /// 文档级函数池；`PdfBuilder::function` 返回其索引。
     functions: Vec<Function>,
     /// 文档级渐变池；`PdfBuilder::shading` 返回其索引。
@@ -241,6 +243,7 @@ impl PdfBuilder {
             pages: Vec::new(),
             forms: Vec::new(),
             optional_content_groups: Vec::new(),
+            output_intents: Vec::new(),
             functions: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
@@ -274,6 +277,7 @@ impl PdfBuilder {
             pages: Vec::new(),
             forms: Vec::new(),
             optional_content_groups: Vec::new(),
+            output_intents: Vec::new(),
             functions: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
@@ -357,6 +361,19 @@ impl PdfBuilder {
     /// [`WriteError::InvalidObject`]，不静默择一。
     pub fn set_xmp_packet(&mut self, packet: XmpPacket) -> &mut Self {
         self.xmp_packet = Some(packet);
+        self
+    }
+
+    /// 追加一个输出意图（14.11.5 Table 365），按注册顺序写入目录
+    /// `/OutputIntents` 数组（PDF 1.4）。
+    ///
+    /// `/DestOutputProfile` 写成独立 ICC 配置文件流，`/N` 须为 1–4；
+    /// `/OutputConditionIdentifier` 须非空；标识为 `Custom` 时须同时声明
+    /// `/Info` 与 `/DestOutputProfile`（Table 365 的条件性要求）。违反者
+    /// [`build`](Self::build) 返回 [`WriteError::InvalidObject`]；目标版本
+    /// 低于 1.4 返回 [`WriteError::UnsupportedVersion`]，均零字节输出。
+    pub fn add_output_intent(&mut self, intent: OutputIntent) -> &mut Self {
+        self.output_intents.push(intent);
         self
     }
 

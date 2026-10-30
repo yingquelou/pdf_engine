@@ -61,6 +61,7 @@ impl FeatureProfile {
 /// - `/Collection` 键存在（目录）→ Collection
 /// - `/Templates` 键存在（名称字典）→ PageTemplates
 /// - `/AlternatePresentations` 键存在（名称字典）→ AlternatePresentations
+/// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
 /// - `/Encrypt` 键存在 → EncryptionRC4
 pub(crate) fn scan_dict_features(features: &mut FeatureProfile, d: &Dict) {
     inspect_dict_features(features, d);
@@ -194,6 +195,13 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 名称字典即命中。
     if d.0.contains_key("AlternatePresentations") {
         features.insert(PdfFeature::AlternatePresentations);
+    }
+    // 输出意图（PDF 1.4）：目录 /OutputIntents 非空数组（14.11.5 Table
+    // 365）。空数组等价于未声明，不登记特性。
+    if d.get("Type").and_then(|v| v.as_name()) == Some("Catalog")
+        && matches!(d.get("OutputIntents"), Some(Value::Array(array)) if !array.is_empty())
+    {
+        features.insert(PdfFeature::OutputIntents);
     }
     // 加密：trailer /Encrypt（标准安全处理器自 PDF 1.1 引入）
     if d.0.contains_key("Encrypt") {

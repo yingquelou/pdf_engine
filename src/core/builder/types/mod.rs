@@ -17,6 +17,7 @@
 //! - `graphics_state`：图形状态参数（ExtGState）；
 //! - `halftone`：半色调字典（Type 1/2 与包装字典）；
 //! - `optional_content`：可选内容组（OCG）；
+//! - `output_intent`：输出意图（14.11.5 Table 365）；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池；
 //! - `rendition`：多媒体 rendition 与 media clip 对象（13.2）；
@@ -40,6 +41,7 @@ mod halftone;
 mod image;
 mod movie;
 mod optional_content;
+mod output_intent;
 mod pattern;
 mod program;
 mod rendition;
@@ -93,6 +95,7 @@ pub use image::{
 pub use movie::{Movie, MovieActivation, MoviePlayback};
 pub use optional_content::OptionalContentGroup;
 pub(crate) use optional_content::text_string_value;
+pub use output_intent::{OutputIntent, OutputIntentProfile};
 pub(crate) use pattern::Pattern;
 pub use pattern::{PaintType, TilingPattern, TilingType};
 pub use program::FontProgram;

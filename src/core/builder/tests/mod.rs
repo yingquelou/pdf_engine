@@ -103,6 +103,7 @@ mod metadata;
 mod movie;
 mod navigation;
 mod optional_content;
+mod output_intent;
 mod page_group;
 mod page_presentation;
 mod pattern;

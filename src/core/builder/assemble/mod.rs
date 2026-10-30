@@ -13,7 +13,8 @@
 //! - `acro_form`：AcroForm `/DR` 默认资源字典（字体/ExtGState/ColorSpace/ProcSet）；
 //! - `sound`：声音对象流（13.3 Table 294）的分配、写出与注解 `/Sound` 引用；
 //! - `three_d`：3D artwork 流（13.6 Table 300）、引用字典（Table 303）与 `/OnInstantiate` 流的分配、写出与注解 `/3DD` 等条目；
-//! - `rendition`：media clip section 链（13.2.6 Table 277）的对象分配与写出。
+//! - `rendition`：media clip section 链（13.2.6 Table 277）的对象分配与写出；
+//! - `output_intent`：目录 `/OutputIntents` 输出意图（14.11.5 Table 365）的校验、配置文件流分配与写出。
 
 mod acro_form;
 mod action;
@@ -26,6 +27,7 @@ mod cmap;
 mod embedded_file;
 mod fonts;
 mod form_field;
+mod output_intent;
 mod rendition;
 mod shading;
 mod sound;
@@ -97,6 +99,9 @@ impl PdfBuilder {
         // 3D artwork（13.6 Table 300）：视图/默认视图与 PDF 1.6 门禁同样在
         // 任何对象写出前完成。
         three_d::validate_registration(&self.three_d_artworks, self.version)?;
+        // 输出意图（14.11.5 Table 365）：Table 365 条目契约与 PDF 1.4 门禁
+        // 同样在任何对象写出前完成。
+        output_intent::validate_registration(&self.output_intents, self.version)?;
         // 3D 视图的 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1
         // Table 304）：覆盖 artwork `/VA` 与内联 `/DV`、注解内联 `/3DV`
         // 及 GoTo3DView 内联 `/V` 四处来源；版本门禁同样在任何对象写出前
@@ -855,10 +860,20 @@ impl PdfBuilder {
             }
         }
 
+        // 输出意图（14.11.5 Table 365）：每个 `/DestOutputProfile` 分配一个
+        // 独立流对象号，目录 `/OutputIntents` 数组随后挂接。
+        let output_intent_values =
+            output_intent::write_objects(&mut doc, &self.output_intents, &mut num);
+
         // Catalog
         let mut catalog_dict = Dict::new()
             .insert("Type", Value::Name("Catalog".into()))
             .insert("Pages", Value::Ref(pages_num, 0));
+        if !output_intent_values.is_empty() {
+            catalog_dict =
+                catalog_dict.insert("OutputIntents", Value::Array(Array(output_intent_values)));
+            doc.features.borrow_mut().insert(PdfFeature::OutputIntents);
+        }
         if !used_ocgs.is_empty() {
             catalog_dict = catalog_dict.insert(
                 "OCProperties",

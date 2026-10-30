@@ -237,6 +237,8 @@ pub enum PdfFeature {
     /// 3D 标记注解的外部数据字典 `/ExData`（13.6.6 Table 170/313），
     /// PDF 1.7 引入。
     ThreeDMarkup,
+    /// 目录 `/OutputIntents` 输出意图数组（14.11.5 Table 365），PDF 1.4 引入。
+    OutputIntents,
 }
 
 impl PdfFeature {
@@ -270,7 +272,8 @@ impl PdfFeature {
             | PdfFeature::ImageIntent
             | PdfFeature::FormButtonOptions
             | PdfFeature::FormChoiceIndices
-            | PdfFeature::AlternatePresentations => PdfVersion::V1_4,
+            | PdfFeature::AlternatePresentations
+            | PdfFeature::OutputIntents => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -368,6 +371,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::ThreeDViewExtensions => "3D view PDF 1.7 entries",
             PdfFeature::GoTo3DViewAction => "go-to-3D-view actions",
             PdfFeature::ThreeDMarkup => "3D markup annotations",
+            PdfFeature::OutputIntents => "output intents",
         };
         write!(f, "{name}")
     }
