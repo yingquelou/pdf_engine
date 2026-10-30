@@ -92,6 +92,10 @@ struct PageBuild {
     group: Option<GroupXObject>,
     /// 页面视口字典（`/VP` 数组，12.9.2）；按绘制顺序写出。
     viewports: Vec<Viewport>,
+    /// 页面过渡效果（页面 `/Trans`，12.4.4 Table 30/162）。
+    transition: Option<Transition>,
+    /// 页面停留时长（页面 `/Dur`，12.4.4 Table 30，单位秒）。
+    duration: Option<f64>,
     /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
     invalid_code_length: Option<usize>,
 }
@@ -288,6 +292,8 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             group: None,
             viewports: Vec::new(),
+            transition: None,
+            duration: None,
             invalid_code_length: None,
         });
         idx
@@ -437,6 +443,35 @@ impl PdfBuilder {
     pub fn set_page_viewports(&mut self, page: usize, viewports: &[Viewport]) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.viewports = viewports.to_vec();
+        }
+        self
+    }
+
+    /// 为指定页设置页面过渡效果（页面 `/Trans`，12.4.4 Table 30/162，PDF 1.1）。
+    ///
+    /// 过渡字典与 Transition 动作共用 [`Transition`] 模型；取值与样式适用性
+    /// 在 [`PdfBuilder::build`] 阶段校验，非法值返回
+    /// [`WriteError::InvalidObject`]。目标版本低于 1.1，或使用 PDF 1.5 引入的
+    /// 样式（Fly/Push/Cover/Uncover/Fade）与 `/SS` `/B` 条目，返回
+    /// [`WriteError::UnsupportedVersion`] 且不写出任何字节。
+    /// 未知页索引被忽略；重复设置以后一次为准。
+    pub fn set_page_transition(&mut self, page: usize, transition: &Transition) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.transition = Some(transition.clone());
+        }
+        self
+    }
+
+    /// 为指定页设置演示时的停留时长（页面 `/Dur`，12.4.4 Table 30，单位秒）。
+    ///
+    /// 缺省（未设置）表示查看器不自动换页。取值须为非负有限数，在
+    /// [`PdfBuilder::build`] 阶段校验，非法值返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.1 时返回
+    /// [`WriteError::UnsupportedVersion`] 且不写出任何字节。
+    /// 未知页索引被忽略；重复设置以后一次为准。
+    pub fn set_page_duration(&mut self, page: usize, seconds: f64) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.duration = Some(seconds);
         }
         self
     }

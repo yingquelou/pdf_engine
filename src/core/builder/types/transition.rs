@@ -3,7 +3,7 @@
 //! 过渡字典同时服务于页面对象的 `/Trans` 与 Transition 动作的 `/Trans`；
 //! 写端总是写出 `/Type /Trans` 与 `/S`，其余条目仅在显式声明时写出。
 
-use crate::core::types::{Dict, Value};
+use crate::core::types::{Dict, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
 /// 过渡样式（Table 162 `/S`）。
@@ -247,6 +247,25 @@ impl Transition {
             ));
         }
         Ok(())
+    }
+
+    /// 页面 `/Trans` 使用全部条目所需的最低 PDF 版本：PDF 1.5 引入的样式
+    /// （Fly/Push/Cover/Uncover/Fade）与 `/SS` `/B` 需要 1.5，其余为 1.1。
+    pub(crate) fn min_version(&self) -> PdfVersion {
+        let extended = matches!(
+            self.style,
+            TransitionStyle::Fly
+                | TransitionStyle::Push
+                | TransitionStyle::Cover
+                | TransitionStyle::Uncover
+                | TransitionStyle::Fade
+        ) || self.scale.is_some()
+            || self.border.is_some();
+        if extended {
+            PdfVersion::V1_5
+        } else {
+            PdfVersion::V1_1
+        }
     }
 
     pub(crate) fn to_dict(&self) -> Result<Dict, WriteError> {

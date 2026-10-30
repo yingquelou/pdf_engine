@@ -195,13 +195,17 @@ pub enum PdfFeature {
     SubmitFormUrlType,
     /// 页面视口字典（页面 `/VP` 数组，12.9.2 Table 260），PDF 1.6 引入。
     PageViewports,
+    /// 页面演示条目（页面 `/Dur` 与 `/Trans`，12.4.4 Table 30），PDF 1.1 引入。
+    PagePresentation,
 }
 
 impl PdfFeature {
     /// 该特性引入的最低 PDF 版本（按 ISO 32000-1）。
     pub fn min_version(self) -> PdfVersion {
         match self {
-            PdfFeature::EncryptionRC4 | PdfFeature::AnnotationBorderDash => PdfVersion::V1_1,
+            PdfFeature::EncryptionRC4
+            | PdfFeature::AnnotationBorderDash
+            | PdfFeature::PagePresentation => PdfVersion::V1_1,
             PdfFeature::TilingPattern
             | PdfFeature::LinkAnnotationHighlighting
             | PdfFeature::HideAction
@@ -293,6 +297,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::FormActionFieldNames => "form action field names",
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",
+            PdfFeature::PagePresentation => "page presentation entries",
         };
         write!(f, "{name}")
     }

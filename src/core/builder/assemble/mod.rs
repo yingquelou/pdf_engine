@@ -103,6 +103,49 @@ impl PdfBuilder {
             }
         }
 
+        // 页面演示条目（12.4.4 Table 30）：`/Dur` 与 `/Trans` 为 PDF 1.1
+        // 引入，PDF 1.5 样式与 `/SS` `/B` 需要更高版本；校验同样在
+        // 任何对象写出前完成。
+        let has_presentation = self
+            .pages
+            .iter()
+            .any(|page| page.transition.is_some() || page.duration.is_some());
+        if has_presentation {
+            if !self.version.supports(PdfFeature::PagePresentation) {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "{} require PDF {}, got {}",
+                    PdfFeature::PagePresentation,
+                    PdfFeature::PagePresentation.min_version().as_str(),
+                    self.version.as_str()
+                )));
+            }
+            for (index, page) in self.pages.iter().enumerate() {
+                if let Some(seconds) = page.duration
+                    && (!seconds.is_finite() || seconds < 0.0)
+                {
+                    return Err(WriteError::InvalidObject(format!(
+                        "page {index} /Dur must be a non-negative finite number"
+                    )));
+                }
+                if let Some(transition) = &page.transition {
+                    transition.validate().map_err(|error| match error {
+                        WriteError::InvalidObject(message) => {
+                            WriteError::InvalidObject(format!("page {index} transition: {message}"))
+                        }
+                        other => other,
+                    })?;
+                    let required = transition.min_version();
+                    if self.version < required {
+                        return Err(WriteError::UnsupportedVersion(format!(
+                            "page {index} transition entries require PDF {}, got {}",
+                            required.as_str(),
+                            self.version.as_str()
+                        )));
+                    }
+                }
+            }
+        }
+
         // 第一遍：为每页分配 Page 字典号 + 内容流号，并为字体/图片分配号。
         // 但字体/图片对象号要等遍历各页后才能确定连续段，故先扫一遍。
         // 这里采用「按页交织」分配：每页的 Page、Content 紧邻，
@@ -821,6 +864,18 @@ impl PdfBuilder {
                 }
                 page_dict = page_dict.insert("VP", Value::Array(array));
                 doc.features.borrow_mut().insert(PdfFeature::PageViewports);
+            }
+            if let Some(seconds) = p.duration {
+                page_dict = page_dict.insert("Dur", Value::Float(seconds));
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::PagePresentation);
+            }
+            if let Some(transition) = &p.transition {
+                page_dict = page_dict.insert("Trans", Value::Dict(transition.to_dict()?));
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::PagePresentation);
             }
             if !page_annotation_handles[i].is_empty() || !page_widget_nums[i].is_empty() {
                 let mut annots = Array::new();

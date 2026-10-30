@@ -84,6 +84,7 @@ pub mod navigation;
 mod object;
 pub mod optional_content;
 pub mod page_content;
+pub mod page_presentation;
 mod parser;
 mod security;
 pub mod shading;
