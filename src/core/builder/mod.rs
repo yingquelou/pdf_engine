@@ -55,7 +55,7 @@ pub use types::{
     GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation, GraphicsState, GraphicsStateFont,
     GroupXObject, Halftone, HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit,
     IconScaleWhen, IconScaling, ImageData, ImageIntent, ImageMask, Indexed, Lab,
-    LatticeMeshShading, LineEndStyle, LineIntent, LinkHighlightMode, Measure, MediaClip,
+    LatticeMeshShading, LineEndStyle, LineIntent, LinkHighlightMode, Markup3D, Measure, MediaClip,
     MediaClipData, MediaClipSection, MediaClipSource, MediaDuration, MediaFit, MediaFloatingWindow,
     MediaPermissions, MediaPlayParameters, MediaPlaySettings, MediaPlayerInfo, MediaPlayers,
     MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan, MediaWindow,

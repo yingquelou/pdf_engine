@@ -5,7 +5,8 @@
 //! Polygon/PolyLine `/Vertices` `/IT`、Link `/H` `/PA` `/QuadPoints` `/BS`、
 //! Popup `/Parent` `/Open`、Redact `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`
 //! （Table 192）、Screen `/MK`（Table 189，见 `annotation_mk`）、
-//! Line/Polygon/PolyLine `/Measure`）+
+//! Line/Polygon/PolyLine `/Measure`、标记注解 `/ExData` 3D 标记
+//! （Table 170/313，见 `annotation_exdata`））+
 //! `/A` `/Dest` `/Popup` `/FS` 引用解析，以及各子类型条目的版本门禁。
 //! `/Popup` 与 `/Parent` 只需声明一侧，另一侧由 `annotation_popup::pair_popups`
 //! 补出（12.5.2、Table 163、Table 183）。
@@ -23,6 +24,7 @@ use std::cell::Cell;
 
 use super::annotation_mk::appearance_characteristics_dict;
 use super::annotation_popup::PopupPairs;
+use super::hex_bytes;
 use super::real_array;
 use super::sound::annotation_sound;
 use super::three_d::write_annotation_entries;
@@ -262,6 +264,26 @@ pub(super) fn annotation_dict(
         }
         dict = dict.insert("FixedPrint", Value::Dict(fixed));
     }
+    // `/ExData` 3D 标记外部数据字典（13.6.6 Table 313）：/3DA 指向目标
+    // 3D 注解，/3DV 为内联视图字典。/Type 按 Table 313 写 ExData；ISO
+    // 13.6.6 的示例写作 Markup3D，读端两者都接受。
+    if let Some(markup) = annot.ex_data() {
+        let num = refs.annotation_nums.get(markup.annotation()).ok_or_else(|| {
+            WriteError::InvalidObject(format!(
+                "annotation handle {handle}: /ExData /3DA references unknown annotation handle {}",
+                markup.annotation()
+            ))
+        })?;
+        let mut ex_data = Dict::new()
+            .insert("Type", Value::Name("ExData".into()))
+            .insert("Subtype", Value::Name("Markup3D".into()))
+            .insert("3DA", Value::Ref(*num, 0))
+            .insert("3DV", Value::Dict(markup.view().to_dict(refs.form_nums)));
+        if let Some(md5) = markup.md5() {
+            ex_data = ex_data.insert("MD5", Value::HexString(hex_bytes(md5)));
+        }
+        dict = dict.insert("ExData", Value::Dict(ex_data));
+    }
     if let Some(action) = annot.action() {
         // `GoTo` 的 `/D` 页号在这里解析为间接引用；其余动作沿用
         // `to_dict` 的直接构造。
@@ -480,6 +502,22 @@ pub(super) fn measure_feature_gate(
             "{} require PDF {}, got {}",
             PdfFeature::AnnotationMeasure,
             PdfFeature::AnnotationMeasure.min_version().as_str(),
+            version.as_str()
+        )));
+    }
+    Ok(())
+}
+
+/// 注解 `/ExData` 3D 标记外部数据字典（13.6.6 Table 313）自 PDF 1.7 引入。
+pub(super) fn markup_3d_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    if annot.ex_data().is_some() && !version.supports(PdfFeature::ThreeDMarkup) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "{} require PDF {}, got {}",
+            PdfFeature::ThreeDMarkup,
+            PdfFeature::ThreeDMarkup.min_version().as_str(),
             version.as_str()
         )));
     }

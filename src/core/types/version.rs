@@ -234,6 +234,9 @@ pub enum PdfFeature {
     ThreeDViewExtensions,
     /// Go-To-3D-View 动作（12.6.4.15 Table 216），PDF 1.6 引入。
     GoTo3DViewAction,
+    /// 3D 标记注解的外部数据字典 `/ExData`（13.6.6 Table 170/313），
+    /// PDF 1.7 引入。
+    ThreeDMarkup,
 }
 
 impl PdfFeature {
@@ -294,7 +297,8 @@ impl PdfFeature {
             | PdfFeature::Collection
             | PdfFeature::CollectionItem
             | PdfFeature::ThreeDAnimationStyle
-            | PdfFeature::ThreeDViewExtensions => PdfVersion::V1_7,
+            | PdfFeature::ThreeDViewExtensions
+            | PdfFeature::ThreeDMarkup => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -363,6 +367,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::ThreeDAnimationStyle => "3D animation styles",
             PdfFeature::ThreeDViewExtensions => "3D view PDF 1.7 entries",
             PdfFeature::GoTo3DViewAction => "go-to-3D-view actions",
+            PdfFeature::ThreeDMarkup => "3D markup annotations",
         };
         write!(f, "{name}")
     }

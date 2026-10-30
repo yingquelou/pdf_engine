@@ -50,6 +50,7 @@ pub use projection::{
 };
 pub use render_mode::{ThreeDFaceColor, ThreeDRenderMode, ThreeDRenderModeType};
 pub use stream::{ThreeDStream, ThreeDStreamFormat};
+pub(crate) use view::parse_view;
 pub use view::{ThreeDMatrixSource, ThreeDView, ThreeDViewSelection};
 
 /// `/VA` 视图数组上限（防护不可信文件）。

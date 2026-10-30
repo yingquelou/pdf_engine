@@ -45,6 +45,7 @@ impl FeatureProfile {
 /// - `/Type /ObjStm` → ObjectStream
 /// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
 /// - `/Subtype /Movie`、`/S /Movie` → MovieObjects（1.2）
+/// - `/Subtype /Markup3D` → ThreeDMarkup（1.7）
 /// - `/Type /Rendition`、`/Type /MediaClip`、`/S /Rendition` → Renditions（1.5）
 /// - 3D 视图字典（`/Type /3DView` 或 `/XN`）的 `/RM` `/LS` `/SA` `/NA`
 ///   `/NR` 任一键 → ThreeDViewExtensions（1.7）
@@ -104,6 +105,12 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         || d.get("S").and_then(|v| v.as_name()) == Some("Movie")
     {
         features.insert(PdfFeature::MovieObjects);
+    }
+    // 3D 标记（PDF 1.7）：注解 `/ExData` 的外部数据字典以
+    // `/Subtype /Markup3D` 标识（13.6.6 Table 313）。`/Type` 按表为
+    // ExData、ISO 示例写作 Markup3D，写法不唯一，故只按 `/Subtype` 命中。
+    if d.get("Subtype").and_then(|v| v.as_name()) == Some("Markup3D") {
+        features.insert(PdfFeature::ThreeDMarkup);
     }
     // 多媒体（PDF 1.5）：rendition 对象的 /Type /Rendition（Table 266）、
     // media clip 的 /Type /MediaClip（Table 273）与 Rendition 动作的

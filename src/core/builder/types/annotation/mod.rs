@@ -15,9 +15,11 @@
 //! 3D 注解的 `/3DD` `/3DV` `/3DA` `/3DI` `/3DB`（Table 298）；`measure` 覆盖 12.9 的
 //! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
 //! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
-//! 字典 `/FixedPrint`（Table 190/191），子类型归属守卫集中在 `guard`。
+//! 字典 `/FixedPrint`（Table 190/191）；`exdata` 覆盖 3D 标记注解的外部数据
+//! 字典 `/ExData`（13.6.6 Table 313），子类型归属守卫集中在 `guard`。
 
 mod border;
+mod exdata;
 mod free_text;
 mod geometry;
 mod guard;
@@ -33,6 +35,7 @@ mod three_d;
 mod watermark;
 
 pub use border::BorderArray;
+pub use exdata::Markup3D;
 use free_text::FreeTextEntries;
 pub use free_text::{BorderEffect, BorderEffectStyle, CalloutLine, FreeTextIntent};
 use geometry::GeometryEntries;
@@ -126,6 +129,7 @@ pub struct PdfAnnotation {
     movie: Option<Movie>,
     movie_playback: Option<MoviePlayback>,
     measure: Option<Measure>,
+    ex_data: Option<Markup3D>,
     sound: Option<usize>,
     three_d: Option<usize>,
     three_d_view: Option<ThreeDViewSelection>,
@@ -184,6 +188,7 @@ impl PdfAnnotation {
             movie: None,
             movie_playback: None,
             measure: None,
+            ex_data: None,
             sound: None,
             three_d: None,
             three_d_view: None,
@@ -502,6 +507,11 @@ impl PdfAnnotation {
         self.three_d_view_box.as_deref()
     }
 
+    /// `/ExData` 3D 标记注解外部数据字典（13.6.6 Table 313）。
+    pub fn ex_data(&self) -> Option<&Markup3D> {
+        self.ex_data.as_ref()
+    }
+
     /// 是否声明了任意 `/AP` 外观流。
     pub(crate) fn has_appearance(&self) -> bool {
         self.appearance_normal.is_some()
@@ -618,6 +628,16 @@ impl PdfAnnotation {
         }
         if self.kind == AnnotationKind::FileAttachment && self.filespec.is_none() {
             return Err("FileAttachment annotation requires /FS (embedded file handle)".into());
+        }
+        // `/ExData` 列在标记类注解的附加条目（Table 170）；目标 3D 注解的
+        // 归属与范围由 assemble 阶段跨注解校验。
+        if let Some(markup) = &self.ex_data {
+            if !self.kind.is_markup() {
+                return Err(
+                    "annotation /ExData is only permitted on markup annotations (Table 170)".into(),
+                );
+            }
+            markup.validate()?;
         }
         self.validate_subtype_entries()?;
         Ok(())

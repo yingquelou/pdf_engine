@@ -85,7 +85,10 @@ pub enum ThreeDViewSelection {
 }
 
 /// 解析已解引用的 3D 视图字典。
-pub(super) fn parse_view(
+///
+/// 该入口同时服务于 3D 流 `/3DV` 与注解 `/ExData` 的 `/3DV`（13.6.6），
+/// 因此对 crate 内可见。
+pub(crate) fn parse_view(
     document: &Document,
     dict: &Dict,
     context: &str,

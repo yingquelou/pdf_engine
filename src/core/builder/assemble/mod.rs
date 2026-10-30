@@ -6,6 +6,7 @@
 //! - `cid`：CIDFont 后代字典、Type 0 父字体与相关流；
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
 //! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）；
+//! - `annotation_exdata`：`/ExData` 3D 标记（13.6.6 Table 313）的 `/3DA` 跨注解校验；
 //! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出与配对冲突校验；
 //! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出；
@@ -17,6 +18,7 @@
 mod acro_form;
 mod action;
 mod annotation;
+mod annotation_exdata;
 mod annotation_mk;
 mod annotation_popup;
 mod cid;
@@ -110,6 +112,12 @@ impl PdfBuilder {
                         _ => None,
                     },
                 ))
+                // `/ExData` 的 `/3DV`（13.6.6 Table 313）同样是完整视图字典。
+                .chain(
+                    self.annotations
+                        .iter()
+                        .filter_map(|entry| entry.annot.ex_data().map(|markup| markup.view())),
+                )
                 .chain(actions.iter().filter_map(|action| match action {
                     Action::GoTo3DView(action) => match action.selection() {
                         GoTo3DViewSelection::Inline(view) => Some(&**view),
@@ -452,6 +460,22 @@ impl PdfBuilder {
             }
             used_forms.insert(form);
         }
+        // `/ExData` 的 `/3DV` 是独立视图字典（13.6.6 Table 313），其 `/O`
+        // 叠加表单同样须分配对象号，避免写出时引用未分配的表单。
+        for (handle, entry) in self.annotations.iter().enumerate() {
+            let Some(markup) = entry.annot.ex_data() else {
+                continue;
+            };
+            let Some(form) = markup.view().overlay() else {
+                continue;
+            };
+            if form >= self.forms.len() {
+                return Err(WriteError::InvalidObject(format!(
+                    "annotation handle {handle}: /ExData /3DV /O references unknown form handle {form}"
+                )));
+            }
+            used_forms.insert(form);
+        }
         // Go-To-3D-View 动作（Table 216）的内联 `/V` 视图同样可带 `/O`。
         for action in self.used_actions() {
             let Action::GoTo3DView(action) = action else {
@@ -598,7 +622,15 @@ impl PdfBuilder {
 
         // 注解：注册的每条注解都写成独立间接对象并按句柄分配对象号
         // （`/Popup` 互引需要预先建表）；页绑定、字典参数与子类型版本
-        // 在此校验。
+        // 在此校验。`/ExData` 的 `/3DA` 目标须为另一条 3D 注解，跨注解
+        // 校验同样在任何对象号分配前完成。
+        annotation_exdata::validate_markup_3d(
+            &self
+                .annotations
+                .iter()
+                .map(|entry| &entry.annot)
+                .collect::<Vec<_>>(),
+        )?;
         let mut annotation_nums = vec![0i64; self.annotations.len()];
         let mut page_annotation_handles: Vec<Vec<usize>> = vec![Vec::new(); self.pages.len()];
         for (handle, entry) in self.annotations.iter().enumerate() {
@@ -648,6 +680,8 @@ impl PdfBuilder {
             annotation::geometry_feature_gate(&entry.annot, self.version)?;
             // `/Measure` 测量字典（12.9）PDF 1.7 门禁。
             annotation::measure_feature_gate(&entry.annot, self.version)?;
+            // `/ExData` 3D 标记（13.6.6）PDF 1.7 门禁。
+            annotation::markup_3d_feature_gate(&entry.annot, self.version)?;
             // Link 专有条目按 Table 173 的版本门起分组门禁。
             annotation::link_feature_gate(&entry.annot, self.version)?;
             page_annotation_handles[entry.page].push(handle);
@@ -780,6 +814,10 @@ impl PdfBuilder {
                 doc.features
                     .borrow_mut()
                     .insert(PdfFeature::AnnotationMeasure);
+            }
+            // `/ExData` 3D 标记（13.6.6 Table 313）自 PDF 1.7 引入。
+            if entry.annot.ex_data().is_some() {
+                doc.features.borrow_mut().insert(PdfFeature::ThreeDMarkup);
             }
             for feature in annotation::link_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);
