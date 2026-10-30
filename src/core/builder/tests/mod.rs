@@ -22,6 +22,7 @@
 //! - `hide_action`：Hide 动作 `/T` 目标解析与 `/H`（Table 210）的写出、校验与 PDF 1.2 门禁；
 //! - `action_ocg`：Set-OCG-State 动作 `/State`（Table 213）的组对象分配、写出与 PDF 1.5 门禁；
 //! - `action_transition`：Transition 动作 `/Trans`（Table 215）的过渡字典写出、条目校验与 PDF 1.5 门禁；
+//! - `action_thread`：Thread 动作 `/D` `/B` 索引（Table 205）的写出、越界校验与 PDF 1.1 门禁；
 //! - `page_presentation`：页面 `/Dur` 与 `/Trans`（12.4.4 Table 30）的写出、PDF 1.1 门禁与 1.5 样式条目门禁；
 //! - `thumbnail`：页面缩略图 `/Thumb`（12.3.4 Table 30）的图像引用、去重与颜色空间契约；
 //! - `articles`：文章线（12.4.3 Table 160/161）的线程/bead 对象、`/B` 与 PDF 1.1 门禁；
@@ -45,6 +46,7 @@
 mod acro_form;
 mod acro_form_resources;
 mod action_ocg;
+mod action_thread;
 mod action_transition;
 mod annotation;
 mod annotation_appearance;

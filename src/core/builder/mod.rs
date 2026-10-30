@@ -57,9 +57,9 @@ pub use types::{
     NumberLabelOrder, OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize,
     PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation,
     SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
-    StitchingFunction, TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType,
-    Transition, TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle,
-    Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
+    StitchingFunction, TensorProductPatch, TensorProductPatchShading, ThreadAction, TilingPattern,
+    TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
+    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};

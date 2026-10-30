@@ -801,3 +801,5 @@ fn malformed_transition_actions_are_typed_errors() {
         );
     }
 }
+
+mod thread;

@@ -44,7 +44,7 @@ mod viewport;
 
 pub use action::{
     Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, HideAction, HideTarget,
-    OcgStateOperation, OcgStateSequence, SetOcgStateAction,
+    OcgStateOperation, OcgStateSequence, SetOcgStateAction, ThreadAction,
 };
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{

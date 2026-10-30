@@ -29,11 +29,13 @@ impl PdfBuilder {
     /// [`WriteError::UnsupportedVersion`]；两者都在任何对象写出前发生。
     pub(super) fn action_requirements(&self) -> Result<Vec<PdfFeature>, WriteError> {
         let mut features = Vec::new();
+        let thread_beads = self.navigation.article_thread_bead_counts();
         for action in self.used_actions() {
             validate_action(
                 action,
                 self.annotations.len(),
                 self.optional_content_groups.len(),
+                &thread_beads,
             )?;
             for feature in action_features(action) {
                 if !features.contains(&feature) {
@@ -81,6 +83,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         Action::Hide(_) => vec![PdfFeature::HideAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
         Action::Transition(_) => vec![PdfFeature::TransitionAction],
+        Action::Thread(_) => vec![PdfFeature::ThreadAction],
         _ => Vec::new(),
     }
 }
@@ -89,11 +92,13 @@ fn validate_action(
     action: &Action,
     annotation_count: usize,
     ocg_count: usize,
+    thread_beads: &[usize],
 ) -> Result<(), WriteError> {
     match action {
         Action::Hide(hide) => hide.validate(annotation_count)?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,
         Action::Transition(transition) => transition.validate()?,
+        Action::Thread(thread) => thread.validate(thread_beads)?,
         Action::SubmitForm {
             url,
             fields,

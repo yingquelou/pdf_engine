@@ -175,6 +175,8 @@ pub enum PdfFeature {
     SetOcgState,
     /// Transition 动作（全屏演示过渡特效，12.6.4.14 Table 215），PDF 1.5 引入。
     TransitionAction,
+    /// Thread 动作（跳转到文章线上的 bead，12.6.4.6 Table 205），PDF 1.1 引入。
+    ThreadAction,
     /// 旧式注解边框数组的虚线项（`/Border` 第四项，Table 164），PDF 1.1 引入。
     AnnotationBorderDash,
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
@@ -211,7 +213,8 @@ impl PdfFeature {
             PdfFeature::EncryptionRC4
             | PdfFeature::AnnotationBorderDash
             | PdfFeature::PagePresentation
-            | PdfFeature::ArticleThreads => PdfVersion::V1_1,
+            | PdfFeature::ArticleThreads
+            | PdfFeature::ThreadAction => PdfVersion::V1_1,
             PdfFeature::TilingPattern
             | PdfFeature::LinkAnnotationHighlighting
             | PdfFeature::HideAction
@@ -301,6 +304,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::HideAction => "hide action",
             PdfFeature::SetOcgState => "Set-OCG-State action",
             PdfFeature::TransitionAction => "transition action",
+            PdfFeature::ThreadAction => "thread action",
             PdfFeature::FormActionFieldNames => "form action field names",
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",

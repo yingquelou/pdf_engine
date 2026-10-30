@@ -16,9 +16,11 @@ use crate::core::reader::transition::{Transition, parse_transition};
 use crate::core::types::{Document, Value};
 
 mod ocg;
+mod thread;
 
 use ocg::parse_set_ocg_state;
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
+pub use thread::{BeadTarget, ThreadAction, ThreadTarget};
 
 /// 动作字典（12.6.2 Table 197）。
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +49,8 @@ pub enum Action {
     SetOCGState(SetOcgStateAction),
     /// 过渡动作（12.6.4.14 Table 215）。
     Transition(Transition),
+    /// 跳转到文章线上的指定 bead（12.6.4.6 Table 205）。
+    Thread(ThreadAction),
     /// 提交表单数据（12.7.5.2 Table 236）。
     SubmitForm(SubmitFormAction),
     /// 重置表单字段（12.7.5.3 Table 238）。
@@ -311,6 +315,7 @@ impl Document {
                 .map_err(|error| malformed(format!("Transition action: {error}")))?;
                 Ok(Action::Transition(transition))
             }
+            "Thread" => Ok(Action::Thread(thread::parse_thread_action(self, dict)?)),
             "SubmitForm" => {
                 let file = parse_file_spec(
                     self,

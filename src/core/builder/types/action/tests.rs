@@ -169,3 +169,17 @@ fn set_ocg_state_action_rejects_invalid_groups() {
         Err(WriteError::InvalidObject(_))
     ));
 }
+
+#[test]
+fn thread_action_writes_indices() {
+    let action = Action::Thread(ThreadAction::new(2).with_bead(1));
+    let dict = action.to_dict(&[], &[]).unwrap();
+    assert_eq!(dict.get("S"), Some(&Value::Name("Thread".into())));
+    assert_eq!(dict.get("D"), Some(&Value::Integer(2)));
+    assert_eq!(dict.get("B"), Some(&Value::Integer(1)));
+
+    let no_bead = Action::Thread(ThreadAction::new(0));
+    let dict = no_bead.to_dict(&[], &[]).unwrap();
+    assert_eq!(dict.get("D"), Some(&Value::Integer(0)));
+    assert!(dict.get("B").is_none(), "缺省 /B 不物化");
+}

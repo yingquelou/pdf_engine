@@ -68,6 +68,14 @@ pub(crate) struct NavigationState {
 }
 
 impl NavigationState {
+    /// 各文章线的 bead 数，按注册顺序；供 Thread 动作索引校验。
+    pub(super) fn article_thread_bead_counts(&self) -> Vec<usize> {
+        self.article_threads
+            .iter()
+            .map(|thread| thread.beads.len())
+            .collect()
+    }
+
     /// 大纲条目实际引用到的动作（含子项，按文档顺序）。
     pub(super) fn outline_actions(&self) -> Vec<&Action> {
         fn collect<'a>(
