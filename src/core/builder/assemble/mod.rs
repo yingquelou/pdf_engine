@@ -31,10 +31,11 @@ mod three_d;
 mod type3;
 
 use super::{
-    Action, CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions,
-    GroupXObject, ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
+    Action, CidFont, ColorSpace, Font, Function, GoTo3DViewSelection, GraphicsState,
+    GraphicsStateFunctions, GroupXObject, ImageData, ImageMask, OptionalContentGroup, Pattern,
+    PdfBuilder, same_font,
 };
-use crate::core::builder::types::{AnnotationKind, text_string_value};
+use crate::core::builder::types::{AnnotationKind, ThreeDViewSelection, text_string_value};
 use crate::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value,
 };
@@ -398,6 +399,52 @@ impl PdfBuilder {
                 }
                 used_forms.insert(form);
             }
+        }
+        // 3D 视图 `/O` 叠加外观（Table 304、13.6.6）与注解 `/AP` 共用
+        // Form XObject 池：`/VA` 各视图、3D 流内联 `/DV` 与注解内联
+        // `/3DV` 的叠加表单都须分配对象号（即使未被页面绘制）；越界句柄
+        // 在此拒绝。
+        for (handle, artwork) in self.three_d_artworks.iter().enumerate() {
+            for form in artwork.overlay_handles() {
+                if form >= self.forms.len() {
+                    return Err(WriteError::InvalidObject(format!(
+                        "3D artwork handle {handle}: view /O references unknown form handle {form}"
+                    )));
+                }
+                used_forms.insert(form);
+            }
+        }
+        for (handle, entry) in self.annotations.iter().enumerate() {
+            let Some(ThreeDViewSelection::Inline(view)) = entry.annot.three_d_view() else {
+                continue;
+            };
+            let Some(form) = view.overlay() else {
+                continue;
+            };
+            if form >= self.forms.len() {
+                return Err(WriteError::InvalidObject(format!(
+                    "annotation handle {handle}: /3DV /O references unknown form handle {form}"
+                )));
+            }
+            used_forms.insert(form);
+        }
+        // Go-To-3D-View 动作（Table 216）的内联 `/V` 视图同样可带 `/O`。
+        for action in self.used_actions() {
+            let Action::GoTo3DView(action) = action else {
+                continue;
+            };
+            let GoTo3DViewSelection::Inline(view) = action.selection() else {
+                continue;
+            };
+            let Some(form) = view.overlay() else {
+                continue;
+            };
+            if form >= self.forms.len() {
+                return Err(WriteError::InvalidObject(format!(
+                    "GoTo3DView action /V /O references unknown form handle {form}"
+                )));
+            }
+            used_forms.insert(form);
         }
         let mut form_nums = vec![0i64; self.forms.len()];
         for &handle in &used_forms {
@@ -1056,8 +1103,9 @@ impl PdfBuilder {
         sound::write_objects(&mut doc, &self.sounds, &sound_nums);
 
         // 3D artwork 流、`/OnInstantiate` JavaScript 流与引用字典
-        // （13.6 Table 300/303）：对象号已在上方分配。
-        three_d::write_objects(&mut doc, &self.three_d_artworks, &three_d_slots);
+        // （13.6 Table 300/303）：对象号已在上方分配；`form_nums` 供视图
+        // `/O` 引用叠加外观。
+        three_d::write_objects(&mut doc, &self.three_d_artworks, &three_d_slots, &form_nums);
 
         // media clip section 目标对象（13.2.6 Table 277）：`/D` 逐级引用；
         // 对象号已在注解与大纲写出前分配。

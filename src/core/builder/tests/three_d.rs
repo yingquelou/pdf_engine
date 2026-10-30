@@ -4,6 +4,7 @@
 
 use super::support::annot_object;
 use super::*;
+use crate::core::content::ContentStream;
 use crate::core::types::{Array, Dict, Document, PdfFeature, StreamData, Value};
 
 fn camera() -> [f64; 12] {
@@ -40,6 +41,41 @@ fn valid_artwork() -> ThreeDArtwork {
 
 fn three_d_annotation(handle: usize) -> PdfAnnotation {
     PdfAnnotation::new(AnnotationKind::ThreeD, [72.0, 600.0, 200.0, 680.0]).with_three_d(handle)
+}
+
+fn overlay_projection() -> ThreeDProjection {
+    ThreeDProjection::new(ThreeDProjectionType::Perspective)
+        .with_near(0.1)
+        .with_field_of_view(60.0)
+}
+
+/// 带 `/MS /M`、`/C2W`、透视 `/P` 与 `/O` 的视图（`/O` 的合法前提）。
+fn overlay_view(form: usize) -> ThreeDView {
+    ThreeDView::new("Front")
+        .with_matrix_source(ThreeDMatrixSource::M)
+        .with_camera_to_world(camera())
+        .with_projection(overlay_projection())
+        .with_overlay(form)
+}
+
+/// 取 3D 流对象 `/VA[0]` 的视图字典。
+fn first_view(doc: &Document, stream_num: i64) -> Dict {
+    let object = doc
+        .get_object(stream_num)
+        .expect("3D stream object")
+        .expect("3D stream exists");
+    let Value::Stream(dict, _) = &object.value else {
+        panic!(
+            "expected 3D stream at object {stream_num}, got {:?}",
+            object.value
+        );
+    };
+    dict.get("VA")
+        .and_then(Value::as_array)
+        .and_then(|views| views.0.first())
+        .and_then(Value::as_dict)
+        .cloned()
+        .expect("/VA[0] view dictionary")
 }
 
 /// 流字典、视图、激活、交互与视图框全部写出，特性画像含 3D 注解。
@@ -263,4 +299,110 @@ fn invalid_three_d_values_are_rejected() {
         );
         assert_eq!(out.len(), 0, "rejected build must not emit bytes");
     }
+}
+
+/// 视图 `/O`（Table 304、13.6.6）写成 Form XObject 间接引用：注册但未
+/// 页面绘制的表单同样分配对象号；未声明 `/O` 时条目不物化。
+#[test]
+fn three_d_view_overlay_writes_form_reference() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    let mut content = ContentStream::new();
+    content.set_fill_gray(0.5).rect(0.0, 0.0, 10.0, 10.0).fill();
+    let form_handle = b.form_xobject(&FormXObject::new([0.0, 0.0, 10.0, 10.0], content));
+    let with_overlay = b.add_three_d_artwork(
+        ThreeDArtwork::new(vec![1, 2, 3, 4]).with_view(overlay_view(form_handle)),
+    );
+    let without_overlay = b.add_three_d_artwork(valid_artwork());
+    b.add_annotation(p0, three_d_annotation(with_overlay));
+    b.add_annotation(p0, three_d_annotation(without_overlay));
+
+    let doc = b.assemble_document().expect("assemble 3D view /O");
+    let stream_num = referenced_num(annot_object(&doc, 3, 0).get("3DD"));
+    let view = first_view(&doc, stream_num);
+    let form_num = referenced_num(view.get("O"));
+    let form = doc
+        .get_object(form_num)
+        .expect("form object")
+        .expect("form exists");
+    match &form.value {
+        Value::Stream(form_dict, _) => {
+            assert_eq!(
+                form_dict.get("Subtype"),
+                Some(&Value::Name("Form".into())),
+                "/O 指向的应是 Form XObject"
+            );
+        }
+        other => panic!("/O references a non-stream object: {other:?}"),
+    }
+
+    let plain_stream = referenced_num(annot_object(&doc, 3, 1).get("3DD"));
+    assert_eq!(
+        first_view(&doc, plain_stream).get("O"),
+        None,
+        "未声明叠加外观时不应写 /O"
+    );
+}
+
+/// `/O` 仅在 `/MS` 与 `/P` 同时存在时有意义（Table 304、13.6.6）；
+/// 缺任一项在写出前拒绝且零字节。
+#[test]
+fn three_d_view_overlay_requires_matrix_and_projection() {
+    let missing_projection = ThreeDView::new("Front")
+        .with_matrix_source(ThreeDMatrixSource::M)
+        .with_camera_to_world(camera())
+        .with_overlay(0);
+    let missing_matrix = ThreeDView::new("Front")
+        .with_projection(overlay_projection())
+        .with_overlay(0);
+    for view in [missing_projection, missing_matrix] {
+        let mut b = PdfBuilder::new();
+        let p0 = b.page(PageSize::A4);
+        b.form_xobject(&FormXObject::new(
+            [0.0, 0.0, 10.0, 10.0],
+            ContentStream::new(),
+        ));
+        let artwork = b.add_three_d_artwork(ThreeDArtwork::new(vec![1]).with_view(view));
+        b.add_annotation(p0, three_d_annotation(artwork));
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("view /O contract");
+        assert!(
+            matches!(error, WriteError::InvalidObject(_)),
+            "expected InvalidObject, got {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("3D view /O requires both /MS and /P"),
+            "unexpected message: {error}"
+        );
+        assert_eq!(out.len(), 0, "rejected build must not emit bytes");
+    }
+}
+
+/// `/O` 句柄必须指向已注册的 Form XObject；越界在写出前拒绝且零字节。
+#[test]
+fn three_d_view_overlay_rejects_unknown_form_handle() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    b.form_xobject(&FormXObject::new(
+        [0.0, 0.0, 10.0, 10.0],
+        ContentStream::new(),
+    ));
+    let artwork = b.add_three_d_artwork(ThreeDArtwork::new(vec![1]).with_view(overlay_view(9)));
+    b.add_annotation(p0, three_d_annotation(artwork));
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("unknown overlay form handle");
+    assert!(
+        matches!(error, WriteError::InvalidObject(_)),
+        "expected InvalidObject, got {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("3D artwork handle 0: view /O references unknown form handle 9"),
+        "unexpected message: {error}"
+    );
+    assert_eq!(out.len(), 0, "rejected build must not emit bytes");
 }

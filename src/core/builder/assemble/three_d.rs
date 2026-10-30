@@ -80,18 +80,19 @@ pub(super) fn allocate(artworks: &[ThreeDArtwork], next: &mut i64) -> ThreeDObje
 }
 
 /// 写出 3D 流、`/OnInstantiate` JavaScript 流与 3D 引用字典，并登记
-/// [`PdfFeature::ThreeDAnnotations`]。
+/// [`PdfFeature::ThreeDAnnotations`]；`form_nums` 供视图 `/O` 引用叠加外观。
 pub(super) fn write_objects(
     doc: &mut Document,
     artworks: &[ThreeDArtwork],
     slots: &ThreeDObjectSlots,
+    form_nums: &[i64],
 ) {
     for (index, artwork) in artworks.iter().enumerate() {
         let stream_num = slots.stream_nums[index];
         doc.set_object(Object::new(
             stream_num,
             0,
-            artwork.to_stream_value(slots.on_instantiate_nums[index]),
+            artwork.to_stream_value(slots.on_instantiate_nums[index], form_nums),
         ));
         doc.features
             .borrow_mut()
@@ -122,13 +123,15 @@ pub(super) fn write_objects(
     }
 }
 
-/// 把 3D 注解的 `/3DD` `/3DV` `/3DA` `/3DI` `/3DB` 写入注解字典。
+/// 把 3D 注解的 `/3DD` `/3DV` `/3DA` `/3DI` `/3DB` 写入注解字典；
+/// `form_nums` 供内联 `/3DV` 的 `/O` 解析叠加外观。
 pub(super) fn write_annotation_entries(
     annotation: &PdfAnnotation,
     handle: usize,
     artwork_nums: &[i64],
     artworks: &[ThreeDArtwork],
     dict: &mut Dict,
+    form_nums: &[i64],
 ) -> Result<(), WriteError> {
     let Some(artwork_handle) = annotation.three_d() else {
         return Ok(());
@@ -146,7 +149,7 @@ pub(super) fn write_annotation_entries(
     dict.0.insert("3DD".into(), Value::Ref(*number, 0));
     if let Some(view) = annotation.three_d_view() {
         let value = view
-            .to_value(artwork.views(), "annotation /3DV")
+            .to_value(artwork.views(), "annotation /3DV", form_nums)
             .map_err(|message| {
                 WriteError::InvalidObject(format!("annotation handle {handle}: {message}"))
             })?;

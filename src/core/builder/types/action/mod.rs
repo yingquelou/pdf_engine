@@ -285,7 +285,7 @@ impl Action {
                 dict = dict.insert("Trans", Value::Dict(transition.to_dict()?));
             }
             Self::GoTo3DView(action) => {
-                for (key, value) in action.to_dict(refs.annotation_nums)?.0 {
+                for (key, value) in action.to_dict(refs.annotation_nums, refs.form_nums)?.0 {
                     dict = dict.insert(key, value);
                 }
             }

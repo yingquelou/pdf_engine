@@ -321,6 +321,7 @@ pub(super) fn annotation_dict(
         refs.three_d_nums,
         refs.three_d_artworks,
         &mut dict,
+        refs.form_nums,
     )?;
     if let Some(movie) = annot.movie() {
         dict = dict.insert("Movie", Value::Dict(movie.to_dict()));

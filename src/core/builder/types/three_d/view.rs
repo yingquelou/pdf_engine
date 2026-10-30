@@ -3,7 +3,8 @@
 //! `/XN` 必填；`/MS` 缺失表示沿用 artwork 内的视图，`M` 要求恰好 12 个
 //! 有限数的 `/C2W`，`U3D` 要求非空 `/U3DPath`。`/CO` 缺省 0、`/P` `/BG`
 //! 缺省字典均不物化；`/RM` `/LS` `/SA` `/NA` 原样透传；`/O` 是 Form
-//! XObject 流（须独立间接对象），本切片不支持。
+//! XObject 流，写成已注册表单的间接引用（仅当 `/MS` 与 `/P` 都存在时
+//! 有意义，Table 304、13.6.6）。
 
 use super::{ThreeDBackground, ThreeDMatrixSource, ThreeDProjection};
 use crate::core::builder::types::text_string_value;
@@ -25,6 +26,7 @@ pub struct ThreeDView {
     cross_sections: Option<Value>,
     nodes: Option<Value>,
     restore_nodes: Option<bool>,
+    overlay: Option<usize>,
 }
 
 impl ThreeDView {
@@ -44,6 +46,7 @@ impl ThreeDView {
             cross_sections: None,
             nodes: None,
             restore_nodes: None,
+            overlay: None,
         }
     }
 
@@ -119,6 +122,15 @@ impl ThreeDView {
         self
     }
 
+    /// 2D 叠加外观 `/O`（Table 304、13.6.6）：Form XObject 池句柄。
+    ///
+    /// 仅当 `/MS` 与 `/P` 都存在时有意义；表单在 `build` 时写成独立
+    /// 间接对象，即使未被页面绘制也分配对象号。
+    pub fn with_overlay(mut self, form: usize) -> Self {
+        self.overlay = Some(form);
+        self
+    }
+
     /// 内部名（按名选择 `/3DV` 时与读端一致地比较）。
     pub(crate) fn internal_name(&self) -> Option<&str> {
         self.internal_name.as_deref()
@@ -127,6 +139,11 @@ impl ThreeDView {
     /// 外部名 `/XN`（视图数组内的重名校验）。
     pub(crate) fn external_name(&self) -> &str {
         &self.external_name
+    }
+
+    /// 叠加外观 `/O` 的 Form XObject 句柄；assemble 阶段校验与分配。
+    pub(crate) fn overlay(&self) -> Option<usize> {
+        self.overlay
     }
 
     /// 校验 Table 304 的必填项、矩阵来源依赖与数值范围。
@@ -185,11 +202,15 @@ impl ThreeDView {
                 .validate()
                 .map_err(|message| format!("3D view /BG: {message}"))?;
         }
+        if self.overlay.is_some() && (self.matrix_source.is_none() || self.projection.is_none()) {
+            return Err("3D view /O requires both /MS and /P (Table 304, 13.6.6)".into());
+        }
         Ok(())
     }
 
-    /// 写成视图字典；缺省条目不物化。
-    pub(crate) fn to_dict(&self) -> Dict {
+    /// 写成视图字典；缺省条目不物化。`form_nums` 是 Form XObject 池的
+    /// 对象号表，`/O` 句柄已由 assemble 校验并分配。
+    pub(crate) fn to_dict(&self, form_nums: &[i64]) -> Dict {
         let mut dict = Dict::new()
             .insert("Type", Value::Name("3DView".into()))
             .insert("XN", text_string_value(&self.external_name));
@@ -226,6 +247,12 @@ impl ThreeDView {
         }
         if let Some(projection) = &self.projection {
             dict = dict.insert("P", Value::Dict(projection.to_dict()));
+        }
+        if let Some(form) = self.overlay {
+            let number = form_nums
+                .get(form)
+                .expect("3D view /O form handle is validated and allocated during assembly");
+            dict = dict.insert("O", Value::Ref(*number, 0));
         }
         if let Some(background) = &self.background {
             dict = dict.insert("BG", Value::Dict(background.to_dict()));
@@ -291,11 +318,16 @@ impl ThreeDViewSelection {
         }
     }
 
-    /// 校验并写成 `/3DV` 或 `/DV` 值。
-    pub(crate) fn to_value(&self, views: &[ThreeDView], context: &str) -> Result<Value, String> {
+    /// 校验并写成 `/3DV` 或 `/DV` 值；`form_nums` 供内联视图的 `/O` 解析。
+    pub(crate) fn to_value(
+        &self,
+        views: &[ThreeDView],
+        context: &str,
+        form_nums: &[i64],
+    ) -> Result<Value, String> {
         self.validate(views, context)?;
         Ok(match self {
-            Self::Inline(view) => Value::Dict(view.to_dict()),
+            Self::Inline(view) => Value::Dict(view.to_dict(form_nums)),
             Self::Index(index) => Value::Integer(*index as i64),
             Self::Name(name) => text_string_value(name),
             Self::First => Value::Name("F".into()),

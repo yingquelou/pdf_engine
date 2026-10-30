@@ -214,3 +214,104 @@ fn builder_three_d_annotation_roundtrips_through_parser() {
         "both annotations share the artwork stream object"
     );
 }
+
+/// 3D 视图 `/O` 叠加外观（13.6.6）：注册但未页面绘制的 Form XObject 经
+/// 3D 流 `/VA[0] /O` 与注解内联 `/3DV /O` 引用，解析后指向同一表单且
+/// 字节原样回读。
+#[test]
+fn builder_three_d_view_overlay_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{
+        AnnotationKind, FormXObject, PageSize, PdfAnnotation, PdfBuilder, ThreeDArtwork,
+        ThreeDMatrixSource, ThreeDProjection, ThreeDProjectionType, ThreeDView,
+        ThreeDViewSelection,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::reader::three_d::ThreeDViewSelection as ReadSelection;
+
+    const CAMERA: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 30.0];
+    let mut content = ContentStream::new();
+    content
+        .save_state()
+        .set_fill_gray(0.5)
+        .rect(0.0, 0.0, 100.0, 50.0)
+        .fill()
+        .restore_state();
+    let expected = content.to_bytes();
+
+    let view = ThreeDView::new("Front")
+        .with_matrix_source(ThreeDMatrixSource::M)
+        .with_camera_to_world(CAMERA)
+        .with_projection(
+            ThreeDProjection::new(ThreeDProjectionType::Perspective)
+                .with_near(0.1)
+                .with_field_of_view(60.0),
+        );
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let form = builder.form_xobject(&FormXObject::new([0.0, 0.0, 100.0, 50.0], content));
+    let overlay_view = view.with_overlay(form);
+    let artwork = builder.add_three_d_artwork(
+        ThreeDArtwork::new(vec![0x55, 0x33, 0x44, 0x00]).with_view(overlay_view.clone()),
+    );
+    builder.add_annotation(
+        page,
+        PdfAnnotation::new(AnnotationKind::ThreeD, [72.0, 600.0, 200.0, 680.0])
+            .with_three_d(artwork),
+    );
+    builder.add_annotation(
+        page,
+        PdfAnnotation::new(AnnotationKind::ThreeD, [72.0, 400.0, 200.0, 480.0])
+            .with_three_d(artwork)
+            .with_three_d_view(ThreeDViewSelection::Inline(Box::new(overlay_view))),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build 3D view /O");
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    assert_eq!(annotations.len(), 2);
+
+    let stream = &annotations[0].three_d.as_ref().expect("/3DD").stream;
+    assert_eq!(stream.views.len(), 1);
+    let overlay = stream.views[0].overlay.as_ref().expect("/VA[0] /O");
+    let overlay_num = match overlay {
+        Value::Ref(num, 0) => *num,
+        other => panic!("expected /VA[0] /O indirect reference, got {other:?}"),
+    };
+    let overlay_object = doc
+        .get_object(overlay_num)
+        .expect("overlay object")
+        .expect("overlay form exists");
+    let Value::Stream(form_dict, _) = &overlay_object.value else {
+        panic!(
+            "expected /O Form XObject stream, got {:?}",
+            overlay_object.value
+        );
+    };
+    assert_eq!(form_dict.get("Subtype"), Some(&Value::Name("Form".into())));
+    assert_eq!(
+        doc.stream_bytes(&overlay_object.value)
+            .expect("overlay form bytes"),
+        expected
+    );
+
+    let inline = match annotations[1].three_d_view.as_ref().expect("/3DV") {
+        ReadSelection::Inline(view) => view,
+        other => panic!("expected inline /3DV, got {other:?}"),
+    };
+    let inline_overlay = inline.overlay.as_ref().expect("/3DV /O");
+    let Value::Ref(inline_num, 0) = inline_overlay else {
+        panic!("expected /3DV /O indirect reference, got {inline_overlay:?}");
+    };
+    assert_eq!(*inline_num, overlay_num, "both /O entries share one form");
+    let inline_object = doc
+        .get_object(*inline_num)
+        .expect("inline overlay object")
+        .expect("inline overlay form exists");
+    assert_eq!(
+        doc.stream_bytes(&inline_object.value)
+            .expect("inline overlay form bytes"),
+        expected
+    );
+}

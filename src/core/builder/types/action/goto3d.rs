@@ -46,8 +46,13 @@ impl GoTo3DViewAction {
         Ok(())
     }
 
-    /// 写出 `/TA` 与 `/V`（`/S` 由 [`Action::to_dict`](super::Action::to_dict) 补充）。
-    pub(crate) fn to_dict(&self, annotation_nums: &[i64]) -> Result<Dict, WriteError> {
+    /// 写出 `/TA` 与 `/V`（`/S` 由 [`Action::to_dict`](super::Action::to_dict) 补充）；
+    /// `form_nums` 供内联 `/V` 的 `/O` 解析叠加外观。
+    pub(crate) fn to_dict(
+        &self,
+        annotation_nums: &[i64],
+        form_nums: &[i64],
+    ) -> Result<Dict, WriteError> {
         let num = annotation_nums.get(self.target).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "GoTo3DView action /TA references unknown annotation handle {}",
@@ -56,7 +61,7 @@ impl GoTo3DViewAction {
         })?;
         Ok(Dict::new()
             .insert("TA", Value::Ref(*num, 0))
-            .insert("V", self.view.to_value()))
+            .insert("V", self.view.to_value(form_nums)))
     }
 }
 
@@ -112,9 +117,9 @@ impl GoTo3DViewSelection {
     }
 
     /// 写出 `/V`；不重复范围校验（已由 `validate` 完成）。
-    pub(crate) fn to_value(&self) -> Value {
+    pub(crate) fn to_value(&self, form_nums: &[i64]) -> Value {
         match self {
-            Self::Inline(view) => Value::Dict(view.to_dict()),
+            Self::Inline(view) => Value::Dict(view.to_dict(form_nums)),
             Self::Index(index) => Value::Integer(*index as i64),
             Self::Name(name) => text_string_value(name),
             Self::First => Value::Name("F".into()),

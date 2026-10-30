@@ -104,6 +104,19 @@ impl ThreeDArtwork {
         self.on_instantiate.as_deref()
     }
 
+    /// 视图 `/O` 引用的 Form XObject 句柄：`/VA` 各视图与内联 `/DV`。
+    pub(crate) fn overlay_handles(&self) -> Vec<usize> {
+        let default_overlay = match &self.default_view {
+            Some(ThreeDViewSelection::Inline(view)) => view.overlay(),
+            _ => None,
+        };
+        self.views
+            .iter()
+            .filter_map(ThreeDView::overlay)
+            .chain(default_overlay)
+            .collect()
+    }
+
     /// 校验 `/Subtype`、视图集合与默认视图。
     pub(crate) fn validate(&self) -> Result<(), String> {
         if let ThreeDStreamFormat::Other(name) = &self.format {
@@ -133,8 +146,8 @@ impl ThreeDArtwork {
     }
 
     /// 写成 3D 流对象值；`/OnInstantiate` 为独立流对象号时写成间接引用，
-    /// `/Length` 与数据由 writer 原样输出。
-    pub(crate) fn to_stream_value(&self, on_instantiate: Option<i64>) -> Value {
+    /// `/Length` 与数据由 writer 原样输出。`form_nums` 供视图 `/O` 解析。
+    pub(crate) fn to_stream_value(&self, on_instantiate: Option<i64>, form_nums: &[i64]) -> Value {
         let mut dict = Dict::new().insert("Type", Value::Name("3D".into())).insert(
             "Subtype",
             Value::Name(match &self.format {
@@ -146,13 +159,13 @@ impl ThreeDArtwork {
             let views = self
                 .views
                 .iter()
-                .map(|view| Value::Dict(view.to_dict()))
+                .map(|view| Value::Dict(view.to_dict(form_nums)))
                 .collect();
             dict = dict.insert("VA", Value::Array(Array(views)));
         }
         if let Some(default) = &self.default_view {
             let value = default
-                .to_value(&self.views, "3D stream /DV")
+                .to_value(&self.views, "3D stream /DV", form_nums)
                 .expect("3D artwork is validated before serialization");
             dict = dict.insert("DV", value);
         }
