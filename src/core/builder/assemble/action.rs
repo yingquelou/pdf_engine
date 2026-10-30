@@ -80,6 +80,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
         Action::Hide(_) => vec![PdfFeature::HideAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
+        Action::Transition(_) => vec![PdfFeature::TransitionAction],
         _ => Vec::new(),
     }
 }
@@ -92,6 +93,7 @@ fn validate_action(
     match action {
         Action::Hide(hide) => hide.validate(annotation_count)?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,
+        Action::Transition(transition) => transition.validate()?,
         Action::SubmitForm {
             url,
             fields,

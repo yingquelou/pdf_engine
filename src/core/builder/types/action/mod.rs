@@ -1,14 +1,16 @@
 //! 动作字典写端（ISO 32000-1 12.6 / 12.7.5）。
 //!
 //! 覆盖六种常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Hide
-//! 动作（隐藏/显示注解）、Set-OCG-State 动作（切换可选内容组状态）与三种
-//! 表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
-//! [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
+//! 动作（隐藏/显示注解）、Set-OCG-State 动作（切换可选内容组状态）、
+//! Transition 动作（全屏演示过渡特效）与三种表单动作（SubmitForm、
+//! ResetForm、ImportData）。动作字典经 [`PdfBuilder::action`] 注册为句柄，
+//! 由大纲条目或注解引用写出。
 //!
 //! 按族拆分：`targets` 收文件规格/远程目标/预定义动作名，`hide` 收 Hide
 //! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列。
 
 use super::text_string_value;
+use super::transition::Transition;
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
@@ -26,7 +28,7 @@ pub use targets::{ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
 ///
-/// 写端支持十一种动作；未知子类型不建模，由调用方直接构造字典。
+/// 写端支持十二种动作；未知子类型不建模，由调用方直接构造字典。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// 本地跳转；`/D` 为显式目标数组或命名目标。
@@ -55,6 +57,8 @@ pub enum Action {
     Hide(HideAction),
     /// 设置可选内容组状态（12.6.4.12 Table 213）。
     SetOcgState(SetOcgStateAction),
+    /// 全屏演示过渡特效（12.6.4.14 Table 215，PDF 1.5）。
+    Transition(Transition),
     /// 提交表单数据（12.7.5.2 Table 236）：`/F` 写成 URL 文件规格。
     SubmitForm {
         /// 提交目标 URL；须为可打印 ASCII。
@@ -92,6 +96,7 @@ impl Action {
             Self::JavaScript(_) => "JavaScript",
             Self::Hide(_) => "Hide",
             Self::SetOcgState(_) => "SetOCGState",
+            Self::Transition(_) => "Trans",
             Self::SubmitForm { .. } => "SubmitForm",
             Self::ResetForm { .. } => "ResetForm",
             Self::ImportData { .. } => "ImportData",
@@ -180,6 +185,9 @@ impl Action {
                 if let Some(preserve) = state.preserve_radio_buttons() {
                     dict = dict.insert("PreserveRB", Value::Bool(preserve));
                 }
+            }
+            Self::Transition(transition) => {
+                dict = dict.insert("Trans", Value::Dict(transition.to_dict()?));
             }
             Self::SubmitForm {
                 url,

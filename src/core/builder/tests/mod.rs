@@ -21,6 +21,7 @@
 //! - `annotation_mk`：外观特性字典 `/MK`（Table 189）与图标适配 `/IF`（Table 247）的取值契约、Screen 归属与 PDF 1.5 门禁；
 //! - `hide_action`：Hide 动作 `/T` 目标解析与 `/H`（Table 210）的写出、校验与 PDF 1.2 门禁；
 //! - `action_ocg`：Set-OCG-State 动作 `/State`（Table 213）的组对象分配、写出与 PDF 1.5 门禁；
+//! - `action_transition`：Transition 动作 `/Trans`（Table 215）的过渡字典写出、条目校验与 PDF 1.5 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
@@ -40,6 +41,7 @@
 mod acro_form;
 mod acro_form_resources;
 mod action_ocg;
+mod action_transition;
 mod annotation;
 mod annotation_appearance;
 mod annotation_border;

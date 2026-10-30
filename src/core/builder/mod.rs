@@ -55,6 +55,7 @@ pub use types::{
     PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation,
     SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
     StitchingFunction, TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType,
+    Transition, TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle,
     Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
 };
 

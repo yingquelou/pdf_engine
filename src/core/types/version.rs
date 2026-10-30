@@ -173,6 +173,8 @@ pub enum PdfFeature {
     /// Set-OCG-State 动作（切换可选内容组状态，12.6.4.12 Table 213），
     /// PDF 1.5 引入。
     SetOcgState,
+    /// Transition 动作（全屏演示过渡特效，12.6.4.14 Table 215），PDF 1.5 引入。
+    TransitionAction,
     /// 旧式注解边框数组的虚线项（`/Border` 第四项，Table 164），PDF 1.1 引入。
     AnnotationBorderDash,
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
@@ -225,7 +227,8 @@ impl PdfFeature {
             | PdfFeature::OptionalContent
             | PdfFeature::AnnotationBorderEffect
             | PdfFeature::AnnotationRectDifferences
-            | PdfFeature::SetOcgState => PdfVersion::V1_5,
+            | PdfFeature::SetOcgState
+            | PdfFeature::TransitionAction => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
@@ -286,6 +289,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::FormDataActions => "form data actions",
             PdfFeature::HideAction => "hide action",
             PdfFeature::SetOcgState => "Set-OCG-State action",
+            PdfFeature::TransitionAction => "transition action",
             PdfFeature::FormActionFieldNames => "form action field names",
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",

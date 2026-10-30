@@ -1,7 +1,7 @@
 //! 逻辑层公共数据类型：页面尺寸、字体与编码配置、图片数据。
 //!
 //! 按领域拆分为子模块，并由本模块统一 `pub use`：
-//! - `action`：动作字典（12.6 的 Hide/Set-OCG-State 与 12.7.5 表单动作）；
+//! - `action`：动作字典（12.6 的 Hide/Set-OCG-State/Transition 与 12.7.5 表单动作）；
 //! - `annotation`：注解字典（12.5 通用条目与常用子类型）；
 //! - `descriptor`：字体描述符度量；
 //! - `embedded_file`：嵌入文件与文件规格（7.11）；
@@ -18,7 +18,8 @@
 //! - `halftone`：半色调字典（Type 1/2 与包装字典）；
 //! - `optional_content`：可选内容组（OCG）；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
-//! - `pattern`：平铺图案（Tiling Pattern）与统一图案池。
+//! - `pattern`：平铺图案（Tiling Pattern）与统一图案池；
+//! - `transition`：过渡字典（12.4.4 Table 162 与 Transition 动作 12.6.4.14）。
 
 mod action;
 mod annotation;
@@ -37,6 +38,7 @@ mod optional_content;
 mod pattern;
 mod program;
 mod shading;
+mod transition;
 mod type3;
 mod viewport;
 
@@ -84,6 +86,9 @@ pub use shading::{
     AxialShading, CoonsPatch, CoonsPatchShading, FreeFormMeshShading, FunctionShading,
     LatticeMeshShading, MeshFunction, MeshVertex, RadialShading, Shading, ShadingOptions,
     ShadingPattern, TensorProductPatch, TensorProductPatchShading,
+};
+pub use transition::{
+    Transition, TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle,
 };
 pub use type3::{Type3Font, Type3Glyph};
 pub use viewport::Viewport;
