@@ -55,15 +55,17 @@ pub use types::{
     GoToETargetRelation, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
     HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit, IconScaleWhen, IconScaling,
     ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, LineEndStyle, LineIntent,
-    LinkHighlightMode, Measure, MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget,
-    MovieActivation, MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder,
-    OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize, PaintType, PdfAnnotation,
-    PolygonIntent, RadialShading, SampledFunction, Separation, SetOcgStateAction, Shading,
-    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, Sound, SoundAction, SoundEncoding,
-    StitchingFunction, TensorProductPatch, TensorProductPatchShading, ThreadAction, TilingPattern,
-    TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
-    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem,
-    XmpListKind, XmpPacket, XmpPacketError, XmpValue,
+    LinkHighlightMode, Measure, MediaClipData, MediaClipSource, MediaPermissions, MediaRendition,
+    MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget, MovieActivation,
+    MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder, OcgStateOperation,
+    OcgStateSequence, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent,
+    RadialShading, Rendition, RenditionAction, RenditionOperation, SampledFunction,
+    SelectorRendition, Separation, SetOcgStateAction, Shading, ShadingOptions, ShadingPattern,
+    SoftMask, SoftMaskSubtype, Sound, SoundAction, SoundEncoding, StitchingFunction,
+    TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading, ThreadAction,
+    TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
+    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
+    Viewport, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -179,6 +181,12 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 分配的声音流对象号（下标即声音句柄）；供 Sound
     /// 动作 `/Sound` 与 Sound 注解 `/Sound` 解析。
     sound_nums: Vec<i64>,
+    /// 最近一次 assemble 分配的 Form XObject 对象号（下标即表单句柄）；
+    /// 供大纲 `/A` 中 Rendition 动作的 media clip `/D` 解析。
+    form_nums: Vec<i64>,
+    /// 最近一次 assemble 分配的嵌入文件规格对象号（下标即嵌入文件句柄）；
+    /// 供 Rendition 动作的 media clip `/D` 解析。
+    embedded_nums: Vec<i64>,
     /// 文档级嵌入文件池；`PdfBuilder::embed_file` 返回其索引。
     embedded: Vec<EmbeddedFile>,
     /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
@@ -220,6 +228,8 @@ impl PdfBuilder {
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
+            form_nums: Vec::new(),
+            embedded_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -247,6 +257,8 @@ impl PdfBuilder {
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
+            form_nums: Vec::new(),
+            embedded_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -735,9 +747,13 @@ impl PdfBuilder {
             self.version,
             self.pages.len(),
             &self.navigation,
-            &self.annotation_nums,
-            &self.ocg_nums,
-            &self.sound_nums,
+            types::ActionRefs {
+                annotation_nums: &self.annotation_nums,
+                ocg_nums: &self.ocg_nums,
+                sound_nums: &self.sound_nums,
+                form_nums: &self.form_nums,
+                embedded_nums: &self.embedded_nums,
+            },
         )?;
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {

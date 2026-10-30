@@ -37,6 +37,8 @@ impl PdfBuilder {
                 self.optional_content_groups.len(),
                 self.sounds.len(),
                 &thread_beads,
+                self.forms.len(),
+                self.embedded.len(),
             )?;
             // Movie 动作的 `/Annotation` 目标必须是 Movie 注解。
             if let Action::Movie(movie) = action
@@ -48,6 +50,18 @@ impl PdfBuilder {
             {
                 return Err(WriteError::InvalidObject(format!(
                     "Movie action /Annotation references annotation handle {handle} which is not a Movie annotation"
+                )));
+            }
+            // Rendition 动作的 `/AN` 目标必须是 Screen 注解（Table 214）。
+            if let Action::Rendition(rendition) = action
+                && let Some(handle) = rendition.annotation()
+                && self
+                    .annotations
+                    .get(handle)
+                    .is_some_and(|entry| entry.annot.kind() != AnnotationKind::Screen)
+            {
+                return Err(WriteError::InvalidObject(format!(
+                    "Rendition action /AN references annotation handle {handle} which is not a Screen annotation"
                 )));
             }
             for feature in action_features(action) {
@@ -95,6 +109,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
         Action::Sound(_) => vec![PdfFeature::SoundObjects],
         Action::Movie(_) => vec![PdfFeature::MovieObjects],
+        Action::Rendition(_) => vec![PdfFeature::Renditions],
         Action::Hide(_) => vec![PdfFeature::HideAction],
         Action::GoToE(_) => vec![PdfFeature::EmbeddedGoToAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
@@ -110,10 +125,15 @@ fn validate_action(
     ocg_count: usize,
     sound_count: usize,
     thread_beads: &[usize],
+    form_count: usize,
+    embedded_count: usize,
 ) -> Result<(), WriteError> {
     match action {
         Action::Sound(sound) => sound.validate(sound_count)?,
         Action::Movie(movie) => movie.validate(annotation_count)?,
+        Action::Rendition(rendition) => {
+            rendition.validate(annotation_count, form_count, embedded_count)?
+        }
         Action::Hide(hide) => hide.validate(annotation_count)?,
         Action::GoToE(action) => action.validate()?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,

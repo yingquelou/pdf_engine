@@ -227,9 +227,7 @@ pub(super) fn apply(
     version: PdfVersion,
     page_count: usize,
     navigation: &NavigationState,
-    annotation_nums: &[i64],
-    ocg_nums: &[i64],
-    sound_nums: &[i64],
+    action_refs: ActionRefs<'_>,
 ) -> Result<(), WriteError> {
     let has_actions = outline_has_actions(&navigation.outline);
     let required = [
@@ -386,9 +384,7 @@ pub(super) fn apply(
         let context = OutlineContext {
             page_refs: &page_refs,
             actions: &navigation.actions,
-            annotation_nums,
-            ocg_nums,
-            sound_nums,
+            action_refs,
         };
         let root = write_outline(doc, &navigation.outline, &context, &mut next_num)?;
         catalog = catalog.insert("Outlines", Value::Ref(root, 0));
@@ -513,23 +509,17 @@ fn outline_destination_value(
     }
 }
 
-/// 大纲写出期间共享的只读上下文；含 Hide 与 Set-OCG-State 动作所需的
-/// 注解/可选内容组对象号映射。
+/// 大纲写出期间共享的只读上下文；含 Hide、Set-OCG-State 与 Rendition
+/// 动作所需的注解/可选内容组/表单/嵌入文件对象号映射。
 struct OutlineContext<'a> {
     page_refs: &'a [(i64, i64)],
     actions: &'a [Action],
-    annotation_nums: &'a [i64],
-    ocg_nums: &'a [i64],
-    sound_nums: &'a [i64],
+    action_refs: ActionRefs<'a>,
 }
 
 impl OutlineContext<'_> {
     fn action_refs(&self) -> ActionRefs<'_> {
-        ActionRefs {
-            annotation_nums: self.annotation_nums,
-            ocg_nums: self.ocg_nums,
-            sound_nums: self.sound_nums,
-        }
+        self.action_refs
     }
 }
 

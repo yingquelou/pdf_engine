@@ -18,6 +18,7 @@ use crate::core::types::{Document, Value};
 mod gotoe;
 mod movie;
 mod ocg;
+mod rendition;
 mod sound;
 mod thread;
 
@@ -27,6 +28,7 @@ pub use gotoe::{
 pub use movie::MovieAction;
 use ocg::parse_set_ocg_state;
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
+pub use rendition::{RenditionAction, RenditionOperation};
 pub use sound::SoundAction;
 pub use thread::{BeadTarget, ThreadAction, ThreadTarget};
 
@@ -50,6 +52,11 @@ pub enum Action {
     Sound(SoundAction),
     /// 播放电影（12.6.4.9 Table 209）。
     Movie(MovieAction),
+    /// 控制多媒体 rendition 的播放（12.6.4.13 Table 214，PDF 1.5）。
+    ///
+    /// 载荷装箱以控制 `Action` 枚举大小：`FieldActions` 持有 4 个动作，
+    /// 字段树递归读取时过大的枚举会成倍抬升每层栈帧。
+    Rendition(Box<RenditionAction>),
     /// 启动外部文件。
     Launch {
         file: FileSpec,
@@ -270,6 +277,9 @@ impl Document {
             }
             "Sound" => Ok(Action::Sound(sound::parse_sound_action(self, dict)?)),
             "Movie" => Ok(Action::Movie(movie::parse_movie_action(self, dict)?)),
+            "Rendition" => Ok(Action::Rendition(Box::new(
+                rendition::parse_rendition_action(self, dict)?,
+            ))),
             "JavaScript" => {
                 let script = dict
                     .get("JS")

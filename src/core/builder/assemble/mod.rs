@@ -377,6 +377,21 @@ impl PdfBuilder {
                 used_forms.insert(handle);
             }
         }
+        // Rendition 动作的 media clip `/D` 可引用 Form XObject（13.2.5，
+        // Table 274）；与页面绘制表单一样在写出前分配对象号。
+        for action in self.used_actions() {
+            let Action::Rendition(rendition) = action else {
+                continue;
+            };
+            for form in rendition.form_handles() {
+                if form >= self.forms.len() {
+                    return Err(WriteError::InvalidObject(format!(
+                        "Rendition action media clip /D references unknown form handle {form}"
+                    )));
+                }
+                used_forms.insert(form);
+            }
+        }
         let mut form_nums = vec![0i64; self.forms.len()];
         for &handle in &used_forms {
             form_nums[handle] = num;
@@ -995,6 +1010,8 @@ impl PdfBuilder {
         self.annotation_nums = annotation_nums.clone();
         self.ocg_nums = ocg_nums.clone();
         self.sound_nums = sound_nums.clone();
+        self.form_nums = form_nums.clone();
+        self.embedded_nums = embedded_nums.clone();
 
         // 表单字段/Widget 间接对象：`/P` 指向页面字典，`/Kids`/`/Parent`
         // 已按字段树对象号互引，`/AP` 解析为 Form XObject 流引用。

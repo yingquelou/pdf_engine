@@ -87,6 +87,7 @@ pub mod optional_content;
 pub mod page_content;
 pub mod page_presentation;
 mod parser;
+pub mod rendition;
 mod security;
 pub mod shading;
 pub mod signature;

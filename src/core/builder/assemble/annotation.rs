@@ -45,6 +45,8 @@ impl AnnotationRefs<'_> {
             annotation_nums: self.annotation_nums,
             ocg_nums: self.ocg_nums,
             sound_nums: self.sound_nums,
+            form_nums: self.form_nums,
+            embedded_nums: self.embedded_nums,
         }
     }
 }

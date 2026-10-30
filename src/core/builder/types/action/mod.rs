@@ -1,7 +1,8 @@
 //! 动作字典写端（ISO 32000-1 12.6 / 12.7.5）。
 //!
 //! 覆盖常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Sound
-//! 动作（播放声音对象）、Movie 动作（播放电影注解）、Hide 动作（隐藏/显示注解）、Set-OCG-State 动作
+//! 动作（播放声音对象）、Movie 动作（播放电影注解）、Rendition 动作
+//! （播放多媒体 rendition）、Hide 动作（隐藏/显示注解）、Set-OCG-State 动作
 //! （切换可选内容组状态）、Transition 动作（全屏演示过渡特效）、Thread
 //! 动作（跳转到文章线 bead）、Embedded Go-To 动作（嵌套嵌入文档间跳转）
 //! 与三种表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
@@ -11,7 +12,8 @@
 //! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列，`thread` 收
 //! Thread 动作的线程/bead 索引契约，`gotoe` 收 Embedded Go-To 的目标
 //! 字典路径链，`sound` 收 Sound 动作的声音句柄与播放参数，`movie` 收
-//! Movie 动作的注解目标与电影激活参数。
+//! Movie 动作的注解目标与电影激活参数，`rendition` 收 Rendition 动作的
+//! 操作/脚本依赖与 Screen 注解目标。
 
 use super::text_string_value;
 use super::transition::Transition;
@@ -23,6 +25,7 @@ mod gotoe;
 mod hide;
 mod movie;
 mod ocg;
+mod rendition;
 mod sound;
 mod targets;
 mod thread;
@@ -36,14 +39,17 @@ pub use gotoe::{
 pub use hide::{HideAction, HideTarget};
 pub use movie::{MovieAction, MovieActionTarget};
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
+pub use rendition::{RenditionAction, RenditionOperation};
 pub use sound::SoundAction;
 pub use targets::{ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 pub use thread::ThreadAction;
 
 /// 动作字典写出时的间接对象号映射。
 ///
-/// Hide 的 `/T` 用注解映射，Set-OCG-State 的 `/State` 用可选内容组映射，
-/// Sound 的 `/Sound` 用声音对象映射；未涉及的类别传空切片。
+/// Hide 的 `/T` 与 Rendition 的 `/AN` 用注解映射，Set-OCG-State 的
+/// `/State` 用可选内容组映射，Sound 的 `/Sound` 用声音对象映射，
+/// Rendition 的 media clip `/D` 用嵌入文件与 Form XObject 映射；
+/// 未涉及的类别传空切片。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ActionRefs<'a> {
     /// 注解句柄 → 注解对象号。
@@ -52,6 +58,10 @@ pub(crate) struct ActionRefs<'a> {
     pub(crate) ocg_nums: &'a [i64],
     /// 声音句柄 → 声音流对象号。
     pub(crate) sound_nums: &'a [i64],
+    /// Form XObject 句柄 → 表单流对象号。
+    pub(crate) form_nums: &'a [i64],
+    /// 嵌入文件句柄 → 文件规格对象号。
+    pub(crate) embedded_nums: &'a [i64],
 }
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
@@ -78,6 +88,8 @@ pub enum Action {
     Sound(SoundAction),
     /// 播放电影（12.6.4.9 Table 209，PDF 1.2）。
     Movie(MovieAction),
+    /// 播放多媒体 rendition（12.6.4.13 Table 214，PDF 1.5）。
+    Rendition(RenditionAction),
     /// 启动外部文件。
     Launch {
         /// 文件规格。
@@ -131,6 +143,7 @@ impl Action {
             Self::Uri(_) => "URI",
             Self::Sound(_) => "Sound",
             Self::Movie(_) => "Movie",
+            Self::Rendition(_) => "Rendition",
             Self::Launch { .. } => "Launch",
             Self::JavaScript(_) => "JavaScript",
             Self::Hide(_) => "Hide",
@@ -175,6 +188,11 @@ impl Action {
             }
             Self::Movie(action) => {
                 for (key, value) in action.to_dict(refs.annotation_nums)?.0 {
+                    dict = dict.insert(key, value);
+                }
+            }
+            Self::Rendition(action) => {
+                for (key, value) in action.to_dict(refs)?.0 {
                     dict = dict.insert(key, value);
                 }
             }

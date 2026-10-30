@@ -357,9 +357,13 @@ fn embedded_names_tree_merges_with_navigation_entries() {
         b.version,
         b.pages.len(),
         &b.navigation,
-        &b.annotation_nums,
-        &b.ocg_nums,
-        &b.sound_nums,
+        crate::core::builder::types::ActionRefs {
+            annotation_nums: &b.annotation_nums,
+            ocg_nums: &b.ocg_nums,
+            sound_nums: &b.sound_nums,
+            form_nums: &b.form_nums,
+            embedded_nums: &b.embedded_nums,
+        },
     )
     .expect("apply");
 

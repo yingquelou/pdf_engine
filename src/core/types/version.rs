@@ -221,6 +221,9 @@ pub enum PdfFeature {
     /// 电影对象（电影字典 13.4 Table 295）、Movie 动作（12.6.4.9
     /// Table 209）与 Movie 注解（12.5.6.17 Table 186），PDF 1.2 引入。
     MovieObjects,
+    /// 多媒体 rendition（13.2 Table 266–278）、Rendition 动作（12.6.4.13
+    /// Table 214）与 Screen 注解（12.5.6.18 Table 187），PDF 1.5 引入。
+    Renditions,
 }
 
 impl PdfFeature {
@@ -262,7 +265,8 @@ impl PdfFeature {
             | PdfFeature::AnnotationBorderEffect
             | PdfFeature::AnnotationRectDifferences
             | PdfFeature::SetOcgState
-            | PdfFeature::TransitionAction => PdfVersion::V1_5,
+            | PdfFeature::TransitionAction
+            | PdfFeature::Renditions => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
@@ -340,6 +344,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AlternatePresentations => "alternate presentations",
             PdfFeature::SoundObjects => "sound objects",
             PdfFeature::MovieObjects => "movie objects",
+            PdfFeature::Renditions => "renditions",
         };
         write!(f, "{name}")
     }

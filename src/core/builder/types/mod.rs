@@ -19,6 +19,7 @@
 //! - `optional_content`：可选内容组（OCG）；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池；
+//! - `rendition`：多媒体 rendition 与 media clip 对象（13.2）；
 //! - `sound`：声音对象（13.3 Table 294）；
 //! - `transition`：过渡字典（12.4.4 Table 162 与 Transition 动作 12.6.4.14）；
 //! - `xmp`：类型化 XMP 包（14.3.2）的构造与 RDF/XML 序列化。
@@ -40,6 +41,7 @@ mod movie;
 mod optional_content;
 mod pattern;
 mod program;
+mod rendition;
 mod shading;
 mod sound;
 mod transition;
@@ -51,8 +53,8 @@ pub(crate) use action::ActionRefs;
 pub use action::{
     Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, GoToEAction, GoToETarget,
     GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation, HideAction, HideTarget,
-    MovieAction, MovieActionTarget, OcgStateOperation, OcgStateSequence, SetOcgStateAction,
-    SoundAction, ThreadAction,
+    MovieAction, MovieActionTarget, OcgStateOperation, OcgStateSequence, RenditionAction,
+    RenditionOperation, SetOcgStateAction, SoundAction, ThreadAction,
 };
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{
@@ -92,6 +94,10 @@ pub(crate) use pattern::Pattern;
 pub use pattern::{PaintType, TilingPattern, TilingType};
 pub use program::FontProgram;
 pub(crate) use program::OpenTypeFlavor;
+pub use rendition::{
+    MediaClipData, MediaClipSource, MediaPermissions, MediaRendition, Rendition, SelectorRendition,
+    TemporaryFilePermission,
+};
 pub(crate) use shading::mesh_component_ranges;
 pub use shading::{
     AxialShading, CoonsPatch, CoonsPatchShading, FreeFormMeshShading, FunctionShading,

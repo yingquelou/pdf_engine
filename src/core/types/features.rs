@@ -45,6 +45,7 @@ impl FeatureProfile {
 /// - `/Type /ObjStm` → ObjectStream
 /// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
 /// - `/Subtype /Movie`、`/S /Movie` → MovieObjects（1.2）
+/// - `/Type /Rendition`、`/Type /MediaClip`、`/S /Rendition` → Renditions（1.5）
 /// - `/Filter` 中的 JPXDecode → JPXDecode，JBIG2Decode → JBIG2Decode
 /// - `/ShadingType` 或 `/PatternType 2` → Shading
 /// - `/PatternType 1` → TilingPattern
@@ -101,6 +102,15 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         || d.get("S").and_then(|v| v.as_name()) == Some("Movie")
     {
         features.insert(PdfFeature::MovieObjects);
+    }
+    // 多媒体（PDF 1.5）：rendition 对象的 /Type /Rendition（Table 266）、
+    // media clip 的 /Type /MediaClip（Table 273）与 Rendition 动作的
+    // /S /Rendition（Table 214）。
+    if d.get("Type").and_then(|v| v.as_name()) == Some("Rendition")
+        || d.get("Type").and_then(|v| v.as_name()) == Some("MediaClip")
+        || d.get("S").and_then(|v| v.as_name()) == Some("Rendition")
+    {
+        features.insert(PdfFeature::Renditions);
     }
     // 图像过滤器（JPX/JBIG2，其余通用过滤器不记）
     if let Some(f) = image_filter_feature(d) {
