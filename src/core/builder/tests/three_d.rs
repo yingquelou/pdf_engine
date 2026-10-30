@@ -4,10 +4,27 @@
 
 use super::support::annot_object;
 use super::*;
-use crate::core::types::{Array, PdfFeature, Value};
+use crate::core::types::{Array, Dict, Document, PdfFeature, StreamData, Value};
 
 fn camera() -> [f64; 12] {
     [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 30.0]
+}
+
+/// 取条目中的间接引用对象号；缺失或非引用即 panic。
+fn referenced_num(value: Option<&Value>) -> i64 {
+    match value {
+        Some(Value::Ref(num, 0)) => *num,
+        other => panic!("expected indirect reference, got {other:?}"),
+    }
+}
+
+/// 取间接对象并断言其为字典。
+fn object_dict(doc: &Document, num: i64) -> Dict {
+    let object = doc.get_object(num).expect("object").expect("object exists");
+    match object.value {
+        Value::Dict(dict) => dict,
+        other => panic!("expected dictionary at object {num}, got {other:?}"),
+    }
 }
 
 fn valid_artwork() -> ThreeDArtwork {
@@ -83,6 +100,99 @@ fn three_d_annotation_writes_stream_views_and_activation() {
     ] {
         assert!(pdf.contains(fragment), "missing {fragment}: {pdf}");
     }
+}
+
+/// 引用字典（Table 303）让多个 3D 注解共享同一运行实例；未启用的
+/// artwork 仍由注解直接引用流对象。
+#[test]
+fn three_d_reference_dictionary_shares_artwork_instance() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    let shared = b.add_three_d_artwork(valid_artwork().with_reference_dictionary());
+    let direct = b.add_three_d_artwork(valid_artwork());
+    b.add_annotation(p0, three_d_annotation(shared));
+    b.add_annotation(p0, three_d_annotation(shared));
+    b.add_annotation(p0, three_d_annotation(direct));
+
+    let doc = b
+        .assemble_document()
+        .expect("assemble 3D reference dictionary");
+    let first = annot_object(&doc, 3, 0);
+    let second = annot_object(&doc, 3, 1);
+    let direct_annot = annot_object(&doc, 3, 2);
+
+    let reference_num = referenced_num(first.get("3DD"));
+    assert_eq!(
+        referenced_num(second.get("3DD")),
+        reference_num,
+        "both annotations share one reference dictionary"
+    );
+    let reference = object_dict(&doc, reference_num);
+    assert_eq!(reference.get("Type"), Some(&Value::Name("3DRef".into())));
+    let stream_num = referenced_num(reference.get("3DD"));
+    assert_ne!(
+        stream_num, reference_num,
+        "reference dictionary wraps a distinct stream object"
+    );
+    let stream = doc
+        .get_object(stream_num)
+        .expect("3D stream object")
+        .expect("3D stream exists");
+    let Value::Stream(stream_dict, _) = &stream.value else {
+        panic!("expected 3D stream, got {:?}", stream.value);
+    };
+    assert_eq!(stream_dict.get("Type"), Some(&Value::Name("3D".into())));
+    assert_eq!(stream_dict.get("Subtype"), Some(&Value::Name("U3D".into())));
+
+    let direct_num = referenced_num(direct_annot.get("3DD"));
+    assert_ne!(direct_num, reference_num);
+    let direct_object = doc
+        .get_object(direct_num)
+        .expect("direct 3D object")
+        .expect("direct 3D object exists");
+    assert!(
+        matches!(direct_object.value, Value::Stream(_, _)),
+        "artwork without a reference dictionary stays a direct stream reference"
+    );
+}
+
+/// `/OnInstantiate` JavaScript 写成仅含 `/Length` 的独立间接流，并由
+/// 3D 流字典以间接引用指向。
+#[test]
+fn three_d_on_instantiate_stream_is_written() {
+    const SCRIPT: &[u8] = b"console.println('hello');";
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    let artwork = b.add_three_d_artwork(valid_artwork().with_on_instantiate(SCRIPT.to_vec()));
+    b.add_annotation(p0, three_d_annotation(artwork));
+
+    let doc = b.assemble_document().expect("assemble 3D /OnInstantiate");
+    let dict = annot_object(&doc, 3, 0);
+    let stream_num = referenced_num(dict.get("3DD"));
+    let stream = doc
+        .get_object(stream_num)
+        .expect("3D stream object")
+        .expect("3D stream exists");
+    let Value::Stream(stream_dict, _) = &stream.value else {
+        panic!("expected 3D stream, got {:?}", stream.value);
+    };
+    let script_num = referenced_num(stream_dict.get("OnInstantiate"));
+    assert_ne!(
+        script_num, stream_num,
+        "/OnInstantiate is a separate stream"
+    );
+
+    let script = doc
+        .get_object(script_num)
+        .expect("OnInstantiate object")
+        .expect("OnInstantiate exists");
+    assert_eq!(
+        script.value,
+        Value::Stream(
+            Dict::new().insert("Length", Value::Integer(SCRIPT.len() as i64)),
+            StreamData::Owned(SCRIPT.to_vec()),
+        )
+    );
 }
 
 /// 3D 自 PDF 1.6 引入；1.5 构建返回 UnsupportedVersion 且零字节。

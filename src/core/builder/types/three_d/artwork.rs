@@ -2,8 +2,13 @@
 //!
 //! 每个 artwork 写成独立间接流对象：`/Type /3D`、必填 `/Subtype`，以及
 //! 非缺省的 `/VA` 视图数组、`/DV` 默认视图与 `/Resources`。U3D 字节原样
-//! 写入，不附加过滤器。`/OnInstantiate` 是 JavaScript 流（须独立间接
-//! 对象），本切片不支持，避免写出非法名称值。
+//! 写入，不附加过滤器。`/OnInstantiate` 是 JavaScript 流，经
+//! [`ThreeDArtwork::with_on_instantiate`] 声明后写成独立间接流对象并由流
+//! 字典引用。
+//!
+//! 默认注解 `/3DD` 直接引用 3D 流；启用
+//! [`ThreeDArtwork::with_reference_dictionary`] 后改由 Table 303 引用字典
+//! 承载，多个 3D 注解引用同一字典时共享一个运行实例（13.6.3.3）。
 
 use super::super::validate_name_value;
 use super::{ThreeDView, ThreeDViewSelection};
@@ -19,6 +24,8 @@ pub struct ThreeDArtwork {
     views: Vec<ThreeDView>,
     default_view: Option<ThreeDViewSelection>,
     resources: Option<Dict>,
+    reference: bool,
+    on_instantiate: Option<Vec<u8>>,
 }
 
 impl ThreeDArtwork {
@@ -30,6 +37,8 @@ impl ThreeDArtwork {
             views: Vec::new(),
             default_view: None,
             resources: None,
+            reference: false,
+            on_instantiate: None,
         }
     }
 
@@ -63,9 +72,36 @@ impl ThreeDArtwork {
         self
     }
 
+    /// 以 3D 引用字典（Table 303）包装本 artwork。
+    ///
+    /// 注解 `/3DD` 改指引用字典，引用同一字典的 3D 注解共享一个运行实例；
+    /// 未启用时注解直接引用 3D 流，各自实例化（13.6.3.3）。
+    pub fn with_reference_dictionary(mut self) -> Self {
+        self.reference = true;
+        self
+    }
+
+    /// 实例化时执行的 JavaScript `/OnInstantiate`（Table 300）。
+    ///
+    /// 脚本写成独立间接流对象（仅含 `/Length`），由 3D 流字典引用。
+    pub fn with_on_instantiate(mut self, script: impl Into<Vec<u8>>) -> Self {
+        self.on_instantiate = Some(script.into());
+        self
+    }
+
     /// 视图数组（注解 `/3DV` 的下标与按名选择在此校验）。
     pub(crate) fn views(&self) -> &[ThreeDView] {
         &self.views
+    }
+
+    /// 是否需要写出 3D 引用字典（Table 303）。
+    pub(crate) fn wants_reference_dictionary(&self) -> bool {
+        self.reference
+    }
+
+    /// `/OnInstantiate` JavaScript 源字节。
+    pub(crate) fn on_instantiate(&self) -> Option<&[u8]> {
+        self.on_instantiate.as_deref()
     }
 
     /// 校验 `/Subtype`、视图集合与默认视图。
@@ -96,8 +132,9 @@ impl ThreeDArtwork {
         Ok(())
     }
 
-    /// 写成 3D 流对象值；`/Length` 与数据由 writer 原样输出。
-    pub(crate) fn to_stream_value(&self) -> Value {
+    /// 写成 3D 流对象值；`/OnInstantiate` 为独立流对象号时写成间接引用，
+    /// `/Length` 与数据由 writer 原样输出。
+    pub(crate) fn to_stream_value(&self, on_instantiate: Option<i64>) -> Value {
         let mut dict = Dict::new().insert("Type", Value::Name("3D".into())).insert(
             "Subtype",
             Value::Name(match &self.format {
@@ -121,6 +158,9 @@ impl ThreeDArtwork {
         }
         if let Some(resources) = &self.resources {
             dict = dict.insert("Resources", Value::Dict(resources.clone()));
+        }
+        if let Some(number) = on_instantiate {
+            dict = dict.insert("OnInstantiate", Value::Ref(number, 0));
         }
         dict = dict.insert("Length", Value::Integer(self.data.len() as i64));
         Value::Stream(dict, StreamData::Owned(self.data.clone()))

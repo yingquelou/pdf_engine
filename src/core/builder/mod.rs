@@ -615,9 +615,12 @@ impl PdfBuilder {
     /// 注册一个 3D artwork 流（13.6 Table 300），返回文档级句柄。
     ///
     /// 句柄供 [`PdfAnnotation::with_three_d`]（3D 注解 `/3DD`）引用。
-    /// 每个注册项在 [`PdfBuilder::build`] 时写成独立间接流对象；数据格式、
-    /// 视图与默认视图在构建阶段校验，非法输入返回
-    /// [`WriteError::InvalidObject`]；目标版本低于 1.6 返回
+    /// 每个注册项在 [`PdfBuilder::build`] 时写成独立间接流对象；启用
+    /// [`ThreeDArtwork::with_reference_dictionary`] 时另写 Table 303 引用
+    /// 字典，引用同一字典的多个注解共享运行实例；声明
+    /// [`ThreeDArtwork::with_on_instantiate`] 时脚本写成独立间接流并由
+    /// `/OnInstantiate` 引用。数据格式、视图与默认视图在构建阶段校验，
+    /// 非法输入返回 [`WriteError::InvalidObject`]；目标版本低于 1.6 返回
     /// [`WriteError::UnsupportedVersion`]，均不写出任何字节。
     pub fn add_three_d_artwork(&mut self, artwork: ThreeDArtwork) -> usize {
         let handle = self.three_d_artworks.len();
