@@ -225,3 +225,49 @@ fn builder_typed_xmp_packet_roundtrips_through_reader() {
         })
     );
 }
+
+/// `rdf:resource` 引用与 `rdf:parseType="Literal"` 原始标记写出后，
+/// 经 `Document::xmp()` 逐字还原（14.3.2）。
+#[test]
+fn builder_xmp_references_and_literals_roundtrip() {
+    use pdf_engine::core::builder::{PageSize, PdfBuilder, XmpPacket, XmpValue};
+    use pdf_engine::core::reader::xmp::XmpValue as ReaderValue;
+    use pdf_engine::core::types::PdfVersion;
+
+    const EX: &str = "urn:example:values";
+    let reference = "https://example.com/a?x=1&y=2";
+    let literal = r#"<span xmlns="urn:ex">hi &amp; bye</span>"#;
+
+    fn clark(namespace: &str, local: &str) -> String {
+        format!("{{{namespace}}}{local}")
+    }
+
+    let mut packet = XmpPacket::new();
+    packet
+        .set(clark(EX, "link"), XmpValue::Reference(reference.into()))
+        .set(clark(EX, "markup"), XmpValue::Literal(literal.into()))
+        .set(clark(EX, "empty"), XmpValue::Literal(String::new()));
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    builder.page(PageSize::A4);
+    builder.set_xmp_packet(packet);
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let xmp = doc.xmp().expect("parse XMP").expect("/Metadata stream");
+    assert_eq!(
+        xmp.properties.get(&clark(EX, "link")),
+        Some(&ReaderValue::Reference(reference.into()))
+    );
+    assert_eq!(
+        xmp.properties.get(&clark(EX, "markup")),
+        Some(&ReaderValue::Literal(literal.into()))
+    );
+    assert_eq!(
+        xmp.properties.get(&clark(EX, "empty")),
+        Some(&ReaderValue::Literal(String::new()))
+    );
+    assert_eq!(xmp.text(&clark(EX, "link")), None);
+    assert_eq!(xmp.text(&clark(EX, "markup")), None);
+}

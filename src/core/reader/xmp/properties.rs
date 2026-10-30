@@ -116,6 +116,9 @@ fn property_value(
     if is_description(node) {
         return description_value(node, budget, depth);
     }
+    if let Some(reference) = find_attr(node, RDF_NS, "resource") {
+        return reference_value(node, reference);
+    }
     match (
         find_attr(node, RDF_NS, "parseType"),
         find_attr(node, RDF_NS, "datatype"),
@@ -123,15 +126,15 @@ fn property_value(
         (Some(_), Some(_)) => Err(malformed(
             "rdf:datatype cannot be combined with rdf:parseType",
         )),
-        (Some(parse_type), None) => {
-            // RDF/XML 还有 Literal/Collection 等取值；XMP 不需要，按损坏处理。
-            if parse_type != "Resource" {
-                return Err(malformed(format!(
-                    "unsupported rdf:parseType {parse_type:?} (only Resource is supported)"
-                )));
-            }
-            resource_value(node, budget, depth)
-        }
+        (Some(parse_type), None) => match parse_type {
+            // 只有 Resource 与 Literal 有结构化表示；Collection 等其他
+            // RDF/XML 取值没有对应的 XMP 值形态，按损坏处理。
+            "Resource" => resource_value(node, budget, depth),
+            "Literal" => Ok(XmpValue::Literal(node.inner.clone())),
+            other => Err(malformed(format!(
+                "unsupported rdf:parseType {other:?} (only Resource and Literal are supported)"
+            ))),
+        },
         (None, Some(datatype)) => {
             if !node.children.is_empty() {
                 return Err(malformed(
@@ -183,12 +186,42 @@ fn inherit_language(node: &XmlNode, value: XmpValue) -> XmpValue {
     }
 }
 
+/// 属性元素上的 `rdf:resource`：只允许空元素、无 `rdf:parseType`/
+/// `rdf:datatype` 且无实义文本；URI 已由属性解码完成实体还原。
+fn reference_value(node: &XmlNode, reference: &str) -> Result<XmpValue, XmpError> {
+    if reference.trim().is_empty() {
+        return Err(malformed("rdf:resource must not be empty"));
+    }
+    if find_attr(node, RDF_NS, "parseType").is_some()
+        || find_attr(node, RDF_NS, "datatype").is_some()
+    {
+        return Err(malformed(
+            "rdf:resource cannot be combined with rdf:parseType or rdf:datatype",
+        ));
+    }
+    if !node.children.is_empty() {
+        return Err(malformed(
+            "rdf:resource property element must not have child elements",
+        ));
+    }
+    if !node.text.trim().is_empty() {
+        return Err(malformed(
+            "rdf:resource property element must not have text content",
+        ));
+    }
+    Ok(XmpValue::Reference(reference.to_string()))
+}
+
 /// `rdf:Description` 作为属性值：含 `rdf:value` 时为类型化值，否则为嵌套资源。
 fn description_value(
     node: &XmlNode,
     budget: &mut PropertyBudget,
     depth: usize,
 ) -> Result<XmpValue, XmpError> {
+    if find_attr(node, RDF_NS, "resource").is_some() {
+        // 引用只属于属性元素；静默忽略会把引用读成空资源。
+        return Err(malformed("rdf:resource is not allowed on rdf:Description"));
+    }
     let datatype_attr = find_attr(node, RDF_NS, "datatype");
     let Some(value_child) = node.children.iter().find(|child| is_rdf_value(child)) else {
         if datatype_attr.is_some() || datatype_child_text(node).is_some() {

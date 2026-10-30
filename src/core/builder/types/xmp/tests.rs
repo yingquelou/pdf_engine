@@ -147,6 +147,8 @@ fn reader_value(value: &XmpValue) -> ReaderValue {
             datatype: datatype.clone(),
             language: language.clone(),
         },
+        XmpValue::Reference(uri) => ReaderValue::Reference(uri.clone()),
+        XmpValue::Literal(xml) => ReaderValue::Literal(xml.clone()),
     }
 }
 
@@ -441,4 +443,100 @@ fn typed_values_require_text_primary_value() {
         packet.to_xml(),
         Err(XmpPacketError::UnsupportedValue(_))
     ));
+}
+
+#[test]
+fn references_and_literals_serialize() {
+    let literal = r#"<span xmlns="urn:ex">hi &amp; bye</span>"#;
+    let mut packet = XmpPacket::new();
+    packet
+        .set(
+            clark(EX_NS, "link"),
+            XmpValue::Reference(r#"urn:example:a?x=1&y=2<z>"q"'s'"#.into()),
+        )
+        .set(clark(EX_NS, "markup"), XmpValue::Literal(literal.into()))
+        .set(clark(EX_NS, "empty"), XmpValue::Literal(String::new()));
+
+    let xml = packet.to_xml().expect("serialize references and literals");
+    // 引用按属性值转义五种实体，字面量标记逐字输出。
+    assert!(
+        xml.contains(
+            r#"<ns1:link rdf:resource="urn:example:a?x=1&amp;y=2&lt;z&gt;&quot;q&quot;&apos;s&apos;"/>"#
+        ),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(
+            r#"<ns1:markup rdf:parseType="Literal"><span xmlns="urn:ex">hi &amp; bye</span></ns1:markup>"#
+        ),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"<ns1:empty rdf:parseType="Literal"></ns1:empty>"#),
+        "{xml}"
+    );
+    assert!(xml.contains("hi &amp; bye"), "literal is not re-escaped");
+    assert!(!xml.contains("&amp;amp;"), "{xml}");
+}
+
+#[test]
+fn invalid_reference_and_literal_values_are_rejected() {
+    for uri in [
+        "",
+        "urn:example:a b",
+        "urn:example:a\u{1}",
+        "urn:example:a\u{0}",
+    ] {
+        let mut packet = XmpPacket::new();
+        packet.set(clark(EX_NS, "link"), XmpValue::Reference(uri.into()));
+        assert!(
+            matches!(packet.to_xml(), Err(XmpPacketError::InvalidReference(_))),
+            "reference should be rejected: {uri:?}"
+        );
+    }
+
+    for markup in [
+        "<?xml version=\"1.0\"?>",
+        "<?pi data?>",
+        "<!DOCTYPE x>",
+        "<!doctype x [<!ENTITY e \"v\">]>",
+        "a ]]> b",
+        "bad\u{0}",
+    ] {
+        let mut packet = XmpPacket::new();
+        packet.set(clark(EX_NS, "markup"), XmpValue::Literal(markup.into()));
+        assert!(
+            matches!(packet.to_xml(), Err(XmpPacketError::InvalidLiteral(_))),
+            "literal should be rejected: {markup:?}"
+        );
+    }
+}
+
+#[test]
+fn references_and_literals_roundtrip_through_reader() {
+    let literal = r#"<span xmlns="urn:ex">hi &amp; bye</span>"#;
+    let reference = "https://example.com/a?x=1&y=2";
+    let mut packet = XmpPacket::new();
+    packet
+        .set(clark(EX_NS, "link"), XmpValue::Reference(reference.into()))
+        .set(clark(EX_NS, "markup"), XmpValue::Literal(literal.into()))
+        .set(clark(EX_NS, "empty"), XmpValue::Literal(String::new()));
+
+    let xml = packet.to_xml().expect("serialize");
+    let parsed = XmpMetadata::parse(&xml).expect("parse serialized packet");
+    assert_eq!(
+        parsed.properties.get(&clark(EX_NS, "link")),
+        Some(&ReaderValue::Reference(reference.into()))
+    );
+    assert_eq!(
+        parsed.properties.get(&clark(EX_NS, "markup")),
+        Some(&ReaderValue::Literal(literal.into()))
+    );
+    assert_eq!(
+        parsed.properties.get(&clark(EX_NS, "empty")),
+        Some(&ReaderValue::Literal(String::new()))
+    );
+    for local in ["link", "markup", "empty"] {
+        assert_eq!(parsed.text(&clark(EX_NS, local)), None);
+    }
 }

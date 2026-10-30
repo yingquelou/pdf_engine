@@ -2,9 +2,10 @@
 //!
 //! 本模块只依赖写端自身模型，不引用读端类型；序列化产出读端
 //! [`crate::core::reader::xmp::XmpMetadata::parse`] 可解析的形状。
-//! 支持四种值：文本、`rdf:Alt`/`rdf:Seq`/`rdf:Bag` 列表、
-//! `rdf:parseType="Resource"` 嵌套资源，以及 `rdf:value` +
-//! `rdf:datatype` + `xml:lang` 类型化值。
+//! 支持六种值：文本、`rdf:Alt`/`rdf:Seq`/`rdf:Bag` 列表、
+//! `rdf:parseType="Resource"` 嵌套资源、`rdf:value` + `rdf:datatype` +
+//! `xml:lang` 类型化值、`rdf:resource` 引用与 `rdf:parseType="Literal"`
+//! 原始标记。
 //!
 //! 序列化契约：
 //! - 键使用 Clark 记法 `{命名空间}本地名`；命名空间非空，本地名须为
@@ -15,6 +16,11 @@
 //! - 文本与属性值转义 `& < > " '`，拒绝 XML 1.0 非法字符（允许
 //!   Tab/LF/CR）；
 //! - `rdf:datatype` 须为绝对 URI（`scheme ":"` 前缀，无空白/控制字符）；
+//! - 引用（`rdf:resource`）须为非空 URI，不含空白/控制字符/非法 XML
+//!   字符；序列化按属性值转义；
+//! - 字面量是调用方给出的原始 XML 标记，写端不转义、不改写，并要求
+//!   自包含命名空间；拒绝处理指令（`<?`）、`<!DOCTYPE`（不区分大小写）、
+//!   `]]>` 与非法 XML 字符，空串合法；
 //! - 类型化值的主值只支持文本：读端只能无损还原该子集，其他形态在
 //!   序列化时报错；
 //! - 输出不超过 4 MiB，与读端包大小上限一致。
@@ -75,6 +81,15 @@ pub enum XmpValue {
         /// `xml:lang` 语言标记。
         language: Option<String>,
     },
+    /// `rdf:resource` 引用：写成自闭合属性元素
+    /// `<ns:prop rdf:resource="..."/>`。URI 须非空，不含空白/控制字符/
+    /// 非法 XML 字符；序列化按属性值转义，不做 URI 解析。
+    Reference(String),
+    /// `rdf:parseType="Literal"` 原始内部标记：写成
+    /// `<ns:prop rdf:parseType="Literal">标记</ns:prop>`，标记不转义、
+    /// 不改写。调用方须保证标记是良构 XML 且命名空间自包含（前缀在
+    /// 标记内声明或使用默认命名空间）；空串合法。
+    Literal(String),
 }
 
 /// XMP 包构造错误。
@@ -87,6 +102,11 @@ pub enum XmpPacketError {
     InvalidCharacter(String),
     /// `rdf:datatype` 不是绝对 URI，或含空白/控制字符。
     InvalidDatatype(String),
+    /// 引用不是合法 URI：空串或含空白/控制字符/非法 XML 字符。
+    InvalidReference(String),
+    /// 字面量标记含不允许的结构（处理指令、`<!DOCTYPE`、`]]>`）或
+    /// 非法 XML 字符。
+    InvalidLiteral(String),
     /// 当前读端模型无法无损表达的值（如非文本主值的类型化值）。
     UnsupportedValue(String),
     /// 序列化结果超过 4 MiB 包大小上限。
@@ -101,6 +121,8 @@ impl fmt::Display for XmpPacketError {
                 write!(f, "invalid XML character in XMP packet: {message}")
             }
             Self::InvalidDatatype(message) => write!(f, "invalid XMP datatype: {message}"),
+            Self::InvalidReference(message) => write!(f, "invalid XMP reference: {message}"),
+            Self::InvalidLiteral(message) => write!(f, "invalid XMP literal markup: {message}"),
             Self::UnsupportedValue(message) => write!(f, "unsupported XMP value: {message}"),
             Self::PacketTooLarge(size) => {
                 write!(f, "XMP packet is {size} bytes, exceeding the 4 MiB limit")

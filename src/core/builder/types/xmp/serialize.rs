@@ -153,6 +153,8 @@ fn collect_namespaces(value: &XmpValue, out: &mut BTreeSet<String>) -> Result<()
             }
             Ok(())
         }
+        XmpValue::Reference(uri) => validate_reference(uri),
+        XmpValue::Literal(xml) => validate_literal(xml),
     }
 }
 
@@ -261,6 +263,20 @@ fn write_property(
             out.push_str(&name);
             out.push('>');
         }
+        XmpValue::Reference(uri) => {
+            validate_reference(uri)?;
+            out.push_str(" rdf:resource=\"");
+            escape_value(out, uri, key)?;
+            out.push_str("\"/>");
+        }
+        XmpValue::Literal(xml) => {
+            validate_literal(xml)?;
+            out.push_str(" rdf:parseType=\"Literal\">");
+            out.push_str(xml);
+            out.push_str("</");
+            out.push_str(&name);
+            out.push('>');
+        }
     }
     Ok(())
 }
@@ -291,6 +307,8 @@ fn value_kind(value: &XmpValue) -> &'static str {
         XmpValue::List { .. } => "list",
         XmpValue::Resource(_) => "resource",
         XmpValue::Typed { .. } => "typed value",
+        XmpValue::Reference(_) => "reference",
+        XmpValue::Literal(_) => "literal",
     }
 }
 
@@ -331,6 +349,47 @@ fn validate_datatype(uri: &str) -> Result<(), XmpPacketError> {
         return Err(XmpPacketError::InvalidDatatype(format!(
             "{uri:?} is not an absolute URI without whitespace or control characters"
         )));
+    }
+    Ok(())
+}
+
+/// `rdf:resource` 引用：非空，且不含空白/控制字符/非法 XML 字符。
+/// 与读端点一致，不解析 URI、不强制 scheme。
+fn validate_reference(uri: &str) -> Result<(), XmpPacketError> {
+    if uri.is_empty() || uri.chars().any(|c| c.is_whitespace() || !is_xml_char(c)) {
+        return Err(XmpPacketError::InvalidReference(format!(
+            "{uri:?} must be a non-empty URI without whitespace or invalid XML characters"
+        )));
+    }
+    Ok(())
+}
+
+/// `rdf:parseType="Literal"` 的原始标记：调用方保证良构与命名空间自包含；
+/// 写端只拒绝会破坏文档的结构（处理指令、`<!DOCTYPE`、裸 `]]>`）与非法
+/// XML 字符。空串合法，标记本身不转义、不改写。
+fn validate_literal(xml: &str) -> Result<(), XmpPacketError> {
+    if let Some(c) = xml.chars().find(|c| !is_xml_char(*c)) {
+        return Err(XmpPacketError::InvalidLiteral(format!(
+            "U+{:04X} in literal markup",
+            c as u32
+        )));
+    }
+    // 不区分大小写；两个记号都只含 ASCII，按小写副本查找不影响 Unicode。
+    let lower = xml.to_ascii_lowercase();
+    if lower.contains("<?") {
+        return Err(XmpPacketError::InvalidLiteral(
+            "processing instructions are not allowed in literal markup".into(),
+        ));
+    }
+    if lower.contains("<!doctype") {
+        return Err(XmpPacketError::InvalidLiteral(
+            "DOCTYPE declarations are not allowed in literal markup".into(),
+        ));
+    }
+    if xml.contains("]]>") {
+        return Err(XmpPacketError::InvalidLiteral(
+            "']]>' is not allowed in literal markup".into(),
+        ));
     }
     Ok(())
 }

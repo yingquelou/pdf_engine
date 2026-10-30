@@ -2,9 +2,10 @@
 //!
 //! 支持 `xpacket` 包装、`rdf:Description` 的属性与子元素、
 //! `rdf:Alt`/`rdf:Seq`/`rdf:Bag` 列表、`rdf:parseType="Resource"` 嵌套资源、
-//! 类型化值（`rdf:value` + `rdf:datatype` + `xml:lang`）、预定义/数字字符
-//! 引用与命名空间前缀解析；属性键使用 Clark 记法（`{命名空间}本地名`）。
-//! 解析不处理 DTD 与外部实体，仅做良构性下限检查；写端不在本模块。
+//! 类型化值（`rdf:value` + `rdf:datatype` + `xml:lang`）、`rdf:resource`
+//! 引用、`rdf:parseType="Literal"` 原始标记、预定义/数字字符引用与命名空间
+//! 前缀解析；属性键使用 Clark 记法（`{命名空间}本地名`）。解析不处理 DTD
+//! 与外部实体，仅做良构性下限检查；写端不在本模块。
 //!
 //! 结构化值语义（读端子集，不是完整的 XMP 类型系统）：
 //! - `rdf:parseType="Resource"`，或作为属性值的 `rdf:Description` 节点元素
@@ -12,8 +13,13 @@
 //! - `rdf:datatype` 字面量、`rdf:Description` 内的 `rdf:value`、
 //!   仅含 `rdf:value`（及可选 `rdf:datatype`）的 `parseType="Resource"`
 //!   → [`XmpValue::Typed`]：`datatype` 原样保留 URI 字符串，不做类型转换；
-//! - 其他 `rdf:parseType` 取值（`Literal`/`Collection` 等）以及缺
-//!   `rdf:value` 的类型化结构视为 [`XmpError::Malformed`]。
+//! - 属性元素上的 `rdf:resource` → [`XmpValue::Reference`]：URI 已做 XML
+//!   实体解码，不解释目标；`rdf:resource` 不允许出现在 `rdf:Description`
+//!   上（视为 [`XmpError::Malformed`]，避免引用被读成空资源）；
+//! - `rdf:parseType="Literal"` → [`XmpValue::Literal`]：逐字保留元素的原始
+//!   内部标记（前缀、属性与实体不规范化）；
+//! - `rdf:parseType="Collection"` 及其他取值、缺 `rdf:value` 的类型化结构
+//!   视为 [`XmpError::Malformed`]（只支持 Resource/Literal）。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -73,7 +79,7 @@ pub struct XmpListItem {
     pub value: String,
 }
 
-/// XMP 属性值：简单文本、列表、嵌套资源或类型化值。
+/// XMP 属性值：简单文本、列表、嵌套资源、类型化值、引用或字面量标记。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XmpValue {
     /// 简单文本；未知的嵌套结构仍退化为该节点的文本。
@@ -94,6 +100,12 @@ pub enum XmpValue {
         datatype: Option<String>,
         language: Option<String>,
     },
+    /// `rdf:resource` 引用：属性值已做 XML 实体解码，原样保留 URI 字符串
+    /// （不解释、不解析目标，也允许为空以外的任意文本）。
+    Reference(String),
+    /// `rdf:parseType="Literal"` 的原始内部标记：逐字保留源串中的元素
+    /// 前缀、属性与实体原文，不做规范化；空内容为 `""`。
+    Literal(String),
 }
 
 /// XMP 包（14.3.2）的基本属性视图。
@@ -134,13 +146,17 @@ impl XmpMetadata {
 
     /// 取文本属性；列表属性返回首项，缺失返回 `None`。
     ///
-    /// 结构化值（[`XmpValue::Resource`]/[`XmpValue::Typed`]）没有单一文本
-    /// 表示，返回 `None`；调用方需直接检查 [`Self::properties`]。
+    /// 结构化值（[`XmpValue::Resource`]/[`XmpValue::Typed`]）与引用/
+    /// 字面量标记（[`XmpValue::Reference`]/[`XmpValue::Literal`]）没有
+    /// 单一文本表示，返回 `None`；调用方需直接检查 [`Self::properties`]。
     pub fn text(&self, key: &str) -> Option<&str> {
         match self.properties.get(key)? {
             XmpValue::Text(value) => Some(value),
             XmpValue::List { items, .. } => items.first().map(|item| item.value.as_str()),
-            XmpValue::Resource(_) | XmpValue::Typed { .. } => None,
+            XmpValue::Resource(_)
+            | XmpValue::Typed { .. }
+            | XmpValue::Reference(_)
+            | XmpValue::Literal(_) => None,
         }
     }
 }

@@ -20,6 +20,10 @@ pub(super) struct XmlNode {
     pub(super) xmlns: Vec<(String, String)>,
     pub(super) children: Vec<XmlNode>,
     pub(super) text: String,
+    /// 开始标签 `>` 之后到对应结束标签 `<` 之前的源串原文（自闭合元素为
+    /// 空串）：保留前缀、属性、实体与注释/CDATA/处理指令的原始拼写，供
+    /// `rdf:parseType="Literal"` 逐字返回。
+    pub(super) inner: String,
 }
 
 pub(super) struct XmlParser<'a> {
@@ -184,15 +188,19 @@ impl<'a> XmlParser<'a> {
             xmlns,
             children: Vec::new(),
             text: String::new(),
+            inner: String::new(),
         };
         if self_closing {
             return Ok(node);
         }
-        loop {
+        // 原始内部标记：开始标签消费后的位置到结束标签 `</` 之前。
+        let content_start = self.pos;
+        let content_end = loop {
             if self.rest().is_empty() {
                 return Err(malformed(format!("unclosed element {name}")));
             }
             if self.starts_with("</") {
+                let content_end = self.pos;
                 self.bump(2);
                 let close = self.parse_name()?;
                 self.skip_ws();
@@ -205,7 +213,7 @@ impl<'a> XmlParser<'a> {
                         "mismatched closing tag: expected {name}, got {close}"
                     )));
                 }
-                break;
+                break content_end;
             }
             if self.starts_with("<!--") {
                 let end = self
@@ -239,7 +247,8 @@ impl<'a> XmlParser<'a> {
                 node.text.push_str(&decode_entities(&self.rest()[..end])?);
                 self.bump(end);
             }
-        }
+        };
+        node.inner = self.src[content_start..content_end].to_string();
         Ok(node)
     }
 

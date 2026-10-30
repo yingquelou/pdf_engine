@@ -343,9 +343,6 @@ fn xmp_text_accessor_remains_compatible() {
 fn malformed_parse_type_and_typed_structures_are_rejected() {
     let cases = [
         format!(
-            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Literal">x</ex:p></rdf:Description></rdf:RDF>"#
-        ),
-        format!(
             r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Collection"><ex:q/></ex:p></rdf:Description></rdf:RDF>"#
         ),
         format!(
@@ -460,4 +457,113 @@ fn nested_resource_resolves_namespace_prefixes() {
         Some(&XmpValue::Text("other".into()))
     );
     assert!(inner.get("{urn:ex:inner}other").is_none());
+}
+
+#[test]
+fn xmp_resource_attribute_parses_as_reference() {
+    let packet = format!(
+        concat!(
+            "<rdf:RDF xmlns:rdf=\"{}\" xmlns:ex=\"urn:ex\">",
+            "<rdf:Description rdf:about=\"\">",
+            "<ex:link rdf:resource=\"https://example.com/a?x=1&amp;y=2\"/>",
+            "<ex:spaced rdf:resource=\"urn:example:ref\">\n  </ex:spaced>",
+            "</rdf:Description></rdf:RDF>"
+        ),
+        RDF
+    );
+    let xmp = XmpMetadata::parse(&packet).expect("parse");
+    assert_eq!(
+        xmp.properties.get("{urn:ex}link"),
+        Some(&XmpValue::Reference("https://example.com/a?x=1&y=2".into()))
+    );
+    // 属性值只允许空白文本；实体解码后原样保留 URI。
+    assert_eq!(
+        xmp.properties.get("{urn:ex}spaced"),
+        Some(&XmpValue::Reference("urn:example:ref".into()))
+    );
+    assert_eq!(xmp.text("{urn:ex}link"), None);
+    assert_eq!(xmp.text("{urn:ex}spaced"), None);
+}
+
+#[test]
+fn xmp_literal_preserves_inner_markup() {
+    let inner = "<x:span attr=\"a &amp; b\">hi &amp; <x:b>bold</x:b></x:span><!-- keep -->";
+    let packet = format!(
+        concat!(
+            "<rdf:RDF xmlns:rdf=\"{}\" xmlns:ex=\"urn:ex\" xmlns:x=\"urn:x\">",
+            "<rdf:Description rdf:about=\"\">",
+            "<ex:markup rdf:parseType=\"Literal\">{}</ex:markup>",
+            "<ex:empty rdf:parseType=\"Literal\"></ex:empty>",
+            "<ex:bare rdf:parseType=\"Literal\" />",
+            "</rdf:Description></rdf:RDF>"
+        ),
+        RDF, inner
+    );
+    let xmp = XmpMetadata::parse(&packet).expect("parse");
+    // 前缀、属性、实体与注释都按源串逐字保留，不做规范化。
+    assert_eq!(
+        xmp.properties.get("{urn:ex}markup"),
+        Some(&XmpValue::Literal(inner.into()))
+    );
+    // 空内容与自闭合元素都是空标记。
+    assert_eq!(
+        xmp.properties.get("{urn:ex}empty"),
+        Some(&XmpValue::Literal(String::new()))
+    );
+    assert_eq!(
+        xmp.properties.get("{urn:ex}bare"),
+        Some(&XmpValue::Literal(String::new()))
+    );
+    assert_eq!(xmp.text("{urn:ex}markup"), None);
+}
+
+#[test]
+fn malformed_reference_and_literal_values_are_rejected() {
+    let cases = [
+        // 空 rdf:resource。
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:resource=""/></rdf:Description></rdf:RDF>"#
+        ),
+        // rdf:resource 与 rdf:parseType 并用。
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:resource="urn:ex:r" rdf:parseType="Resource"/></rdf:Description></rdf:RDF>"#
+        ),
+        // rdf:resource 与 rdf:datatype 并用。
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:resource="urn:ex:r" rdf:datatype="urn:ex:T"/></rdf:Description></rdf:RDF>"#
+        ),
+        // rdf:resource 元素带子元素或实义文本。
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:resource="urn:ex:r"><ex:q/></ex:p></rdf:Description></rdf:RDF>"#
+        ),
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:resource="urn:ex:r">text</ex:p></rdf:Description></rdf:RDF>"#
+        ),
+        // 引用只属于属性元素，不允许出现在 rdf:Description 上。
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p><rdf:Description rdf:resource="urn:ex:r"/></ex:p></rdf:Description></rdf:RDF>"#
+        ),
+        // Literal 仍不能与 rdf:datatype 并用。
+        format!(
+            r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Literal" rdf:datatype="urn:ex:T">x</ex:p></rdf:Description></rdf:RDF>"#
+        ),
+    ];
+    for packet in cases {
+        assert!(
+            matches!(XmpMetadata::parse(&packet), Err(XmpError::Malformed(_))),
+            "packet should be rejected: {packet}"
+        );
+    }
+
+    // Collection 仍按损坏处理，错误消息指明只支持 Resource/Literal。
+    let collection = format!(
+        r#"<rdf:RDF xmlns:rdf="{RDF}" xmlns:ex="urn:ex"><rdf:Description><ex:p rdf:parseType="Collection"><ex:q/></ex:p></rdf:Description></rdf:RDF>"#
+    );
+    match XmpMetadata::parse(&collection) {
+        Err(XmpError::Malformed(message)) => assert!(
+            message.contains("only Resource and Literal are supported"),
+            "{message}"
+        ),
+        other => panic!("Collection must be rejected, got {other:?}"),
+    }
 }
