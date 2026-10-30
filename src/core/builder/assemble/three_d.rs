@@ -14,7 +14,7 @@ use crate::core::writer::WriteError;
 
 use super::real_array;
 
-/// 注册校验：PDF 1.6 版本门禁与每个 artwork 的流/视图取值。
+/// 注册校验：PDF 1.6/1.7 版本门禁与每个 artwork 的流/视图/动画样式取值。
 pub(super) fn validate_registration(
     artworks: &[ThreeDArtwork],
     version: PdfVersion,
@@ -23,12 +23,12 @@ pub(super) fn validate_registration(
         return Ok(());
     }
     if !version.supports(PdfFeature::ThreeDAnnotations) {
-        return Err(WriteError::UnsupportedVersion(format!(
-            "{} require PDF {}, got {}",
-            PdfFeature::ThreeDAnnotations,
-            PdfFeature::ThreeDAnnotations.min_version().as_str(),
-            version.as_str()
-        )));
+        return Err(unsupported(PdfFeature::ThreeDAnnotations, version));
+    }
+    if artworks.iter().any(|artwork| artwork.animation().is_some())
+        && !version.supports(PdfFeature::ThreeDAnimationStyle)
+    {
+        return Err(unsupported(PdfFeature::ThreeDAnimationStyle, version));
     }
     for (handle, artwork) in artworks.iter().enumerate() {
         artwork.validate().map_err(|message| {
@@ -36,6 +36,16 @@ pub(super) fn validate_registration(
         })?;
     }
     Ok(())
+}
+
+/// 版本门禁错误消息。
+fn unsupported(feature: PdfFeature, version: PdfVersion) -> WriteError {
+    WriteError::UnsupportedVersion(format!(
+        "{} require PDF {}, got {}",
+        feature,
+        feature.min_version().as_str(),
+        version.as_str()
+    ))
 }
 
 /// 3D 相关对象号（下标即 artwork 句柄）。
@@ -80,7 +90,9 @@ pub(super) fn allocate(artworks: &[ThreeDArtwork], next: &mut i64) -> ThreeDObje
 }
 
 /// 写出 3D 流、`/OnInstantiate` JavaScript 流与 3D 引用字典，并登记
-/// [`PdfFeature::ThreeDAnnotations`]；`form_nums` 供视图 `/O` 引用叠加外观。
+/// [`PdfFeature::ThreeDAnnotations`]（`/AN` 存在时另登记
+/// [`PdfFeature::ThreeDAnimationStyle`]）；`form_nums` 供视图 `/O` 引用
+/// 叠加外观。
 pub(super) fn write_objects(
     doc: &mut Document,
     artworks: &[ThreeDArtwork],
@@ -97,6 +109,11 @@ pub(super) fn write_objects(
         doc.features
             .borrow_mut()
             .insert(PdfFeature::ThreeDAnnotations);
+        if artwork.animation().is_some() {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::ThreeDAnimationStyle);
+        }
         if let (Some(number), Some(script)) =
             (slots.on_instantiate_nums[index], artwork.on_instantiate())
         {

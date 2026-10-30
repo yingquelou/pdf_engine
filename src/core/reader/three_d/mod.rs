@@ -1,10 +1,10 @@
 //! 3D artwork 读取模型（ISO 32000-1 13.6，PDF 1.6）。
 //!
 //! 覆盖 3D 注解专有条目（Table 298）、3D 激活字典（Table 299）、3D 流字典
-//! （Table 300）、3D 引用字典（Table 303）、3D 视图字典（Table 304）、
-//! 投影字典（Table 305）与背景字典（Table 306）。本切片只做语法层类型化：
-//! U3D 字节不解码，`/RM` `/LS` `/SA` `/NA` 等 PDF 1.7 渲染条目保留原值，
-//! 动画样式字典（Table 301/302）不建模。
+//! （Table 300）、动画样式字典（Table 301/302）、3D 引用字典（Table 303）、
+//! 3D 视图字典（Table 304）、投影字典（Table 305）与背景字典（Table 306）。
+//! 本切片只做语法层类型化：U3D 字节不解码，`/RM` `/LS` `/SA` `/NA` 等
+//! PDF 1.7 渲染条目保留原值。
 //!
 //! 入口 [`parse_three_d_entries`] 由注解读端调用：`/Subtype` 为 `3D` 或
 //! 字典中出现任一 `/3D*` 键时解析，非 3D 子类型带 `/3DD` 也照常解析
@@ -21,6 +21,7 @@ use crate::core::reader::navigation::resolve;
 use crate::core::types::{Array, Dict, Document, Value};
 
 mod activation;
+mod animation;
 mod background;
 mod projection;
 mod stream;
@@ -31,6 +32,7 @@ mod view;
 pub use activation::{
     ThreeDActivation, ThreeDActivationPolicy, ThreeDArtworkState, ThreeDDeactivationPolicy,
 };
+pub use animation::{ThreeDAnimationStyle, ThreeDAnimationStyleType};
 pub use background::{ThreeDBackground, ThreeDBackgroundType};
 pub use projection::{
     ThreeDClipping, ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale,

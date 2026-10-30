@@ -3,6 +3,7 @@
 use crate::core::types::{Array, Dict, Document, Value};
 
 use super::activation::{ThreeDActivationPolicy, ThreeDArtworkState, ThreeDDeactivationPolicy};
+use super::animation::{ThreeDAnimationStyle, ThreeDAnimationStyleType};
 use super::background::ThreeDBackgroundType;
 use super::projection::{
     ThreeDClipping, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
@@ -358,7 +359,14 @@ fn stream_reads_views_and_default_view_selection() {
             .insert("DV", Value::Integer(1))
             .insert("Resources", Value::Dict(Dict::new()))
             .insert("OnInstantiate", Value::Name("Script".into()))
-            .insert("AN", Value::Name("Linear".into())),
+            .insert(
+                "AN",
+                Value::Dict(
+                    Dict::new()
+                        .insert("Type", Value::Name("3DAnimationStyle".into()))
+                        .insert("Subtype", Value::Name("Linear".into())),
+                ),
+            ),
         "3D stream",
     )
     .expect("stream");
@@ -378,7 +386,14 @@ fn stream_reads_views_and_default_view_selection() {
         parsed.stream.on_instantiate,
         Some(Value::Name("Script".into()))
     );
-    assert_eq!(parsed.stream.animation, Some(Value::Name("Linear".into())));
+    assert_eq!(
+        parsed.stream.animation,
+        Some(ThreeDAnimationStyle {
+            subtype: Some(ThreeDAnimationStyleType::Linear),
+            play_count: None,
+            time_multiplier: None,
+        })
+    );
 
     let implicit = super::stream::parse_stream(
         &document(),
@@ -457,4 +472,103 @@ fn stream_view_limit_is_enforced() {
         ThreeDError::LimitExceeded("3D stream /VA views"),
         "{error}"
     );
+}
+
+#[test]
+fn animation_style_reads_table301_entries() {
+    let parsed = super::stream::parse_stream(
+        &document(),
+        &stream("U3D").insert(
+            "AN",
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("3DAnimationStyle".into()))
+                    .insert("Subtype", Value::Name("Oscillating".into()))
+                    .insert("PC", Value::Integer(-1))
+                    .insert("TM", Value::Float(2.5)),
+            ),
+        ),
+        "3D stream",
+    )
+    .expect("animation style");
+    let animation = parsed.stream.animation.expect("/AN");
+    assert_eq!(
+        animation.subtype,
+        Some(ThreeDAnimationStyleType::Oscillating)
+    );
+    assert_eq!(animation.play_count, Some(-1), "负数表示无限重复");
+    assert_eq!(animation.time_multiplier, Some(2.5));
+}
+
+#[test]
+fn animation_style_defaults_and_unknown_subtype() {
+    let empty = super::stream::parse_stream(
+        &document(),
+        &stream("U3D").insert("AN", Value::Dict(Dict::new())),
+        "3D stream",
+    )
+    .expect("empty animation style");
+    assert_eq!(
+        empty.stream.animation,
+        Some(ThreeDAnimationStyle::default()),
+        "缺省 None/0/1 不物化"
+    );
+
+    let absent =
+        super::stream::parse_stream(&document(), &stream("U3D"), "3D stream").expect("absent /AN");
+    assert_eq!(absent.stream.animation, None);
+
+    let unknown = super::stream::parse_stream(
+        &document(),
+        &stream("U3D").insert(
+            "AN",
+            Value::Dict(Dict::new().insert("Subtype", Value::Name("Bounce".into()))),
+        ),
+        "3D stream",
+    )
+    .expect("unknown style");
+    assert_eq!(
+        unknown.stream.animation.and_then(|style| style.subtype),
+        Some(ThreeDAnimationStyleType::Other("Bounce".into())),
+        "未识别样式原样保留，规范要求按 None 处理"
+    );
+}
+
+#[test]
+fn malformed_animation_styles_are_typed_errors() {
+    for (value, fragment) in [
+        (Value::Integer(1), "is not a dictionary"),
+        (
+            Value::Dict(Dict::new().insert("Type", Value::Name("Other".into()))),
+            "/Type",
+        ),
+        (
+            Value::Dict(Dict::new().insert("Subtype", Value::Integer(1))),
+            "/Subtype",
+        ),
+        (
+            Value::Dict(Dict::new().insert("PC", Value::Float(1.0))),
+            "/PC",
+        ),
+        (
+            Value::Dict(Dict::new().insert("PC", Value::String("3".into()))),
+            "/PC",
+        ),
+        (
+            Value::Dict(Dict::new().insert("TM", Value::Integer(0))),
+            "/TM",
+        ),
+        (
+            Value::Dict(Dict::new().insert("TM", Value::Float(-1.0))),
+            "/TM",
+        ),
+    ] {
+        let error = super::stream::parse_stream(
+            &document(),
+            &stream("U3D").insert("AN", value),
+            "3D stream",
+        )
+        .expect_err("malformed animation style");
+        assert!(error.to_string().contains(fragment), "{error}");
+    }
 }

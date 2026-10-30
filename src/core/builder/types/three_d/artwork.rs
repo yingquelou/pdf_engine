@@ -4,14 +4,15 @@
 //! 非缺省的 `/VA` 视图数组、`/DV` 默认视图与 `/Resources`。U3D 字节原样
 //! 写入，不附加过滤器。`/OnInstantiate` 是 JavaScript 流，经
 //! [`ThreeDArtwork::with_on_instantiate`] 声明后写成独立间接流对象并由流
-//! 字典引用。
+//! 字典引用；`/AN` 动画样式字典（PDF 1.7，Table 301/302）经
+//! [`ThreeDArtwork::with_animation_style`] 声明后内联写出。
 //!
 //! 默认注解 `/3DD` 直接引用 3D 流；启用
 //! [`ThreeDArtwork::with_reference_dictionary`] 后改由 Table 303 引用字典
 //! 承载，多个 3D 注解引用同一字典时共享一个运行实例（13.6.3.3）。
 
 use super::super::validate_name_value;
-use super::{ThreeDView, ThreeDViewSelection};
+use super::{ThreeDAnimationStyle, ThreeDView, ThreeDViewSelection};
 use crate::core::reader::three_d::ThreeDStreamFormat;
 use crate::core::types::{Array, Dict, StreamData, Value};
 use std::collections::BTreeSet;
@@ -26,6 +27,7 @@ pub struct ThreeDArtwork {
     resources: Option<Dict>,
     reference: bool,
     on_instantiate: Option<Vec<u8>>,
+    animation: Option<ThreeDAnimationStyle>,
 }
 
 impl ThreeDArtwork {
@@ -39,6 +41,7 @@ impl ThreeDArtwork {
             resources: None,
             reference: false,
             on_instantiate: None,
+            animation: None,
         }
     }
 
@@ -87,6 +90,19 @@ impl ThreeDArtwork {
     pub fn with_on_instantiate(mut self, script: impl Into<Vec<u8>>) -> Self {
         self.on_instantiate = Some(script.into());
         self
+    }
+
+    /// 动画样式字典 `/AN`（PDF 1.7，Table 301/302）。
+    ///
+    /// 仅 PDF 1.7 及以上版本可写出，低版本在 `build` 时拒绝。
+    pub fn with_animation_style(mut self, style: ThreeDAnimationStyle) -> Self {
+        self.animation = Some(style);
+        self
+    }
+
+    /// 动画样式字典 `/AN`；未声明时为 `None`。
+    pub(crate) fn animation(&self) -> Option<&ThreeDAnimationStyle> {
+        self.animation.as_ref()
     }
 
     /// 视图数组（注解 `/3DV` 的下标与按名选择在此校验）。
@@ -142,6 +158,11 @@ impl ThreeDArtwork {
         if let Some(view) = &self.default_view {
             view.validate(&self.views, "3D stream /DV")?;
         }
+        if let Some(animation) = &self.animation {
+            animation
+                .validate()
+                .map_err(|message| format!("3D stream /AN: {message}"))?;
+        }
         Ok(())
     }
 
@@ -174,6 +195,9 @@ impl ThreeDArtwork {
         }
         if let Some(number) = on_instantiate {
             dict = dict.insert("OnInstantiate", Value::Ref(number, 0));
+        }
+        if let Some(animation) = &self.animation {
+            dict = dict.insert("AN", Value::Dict(animation.to_dict()));
         }
         dict = dict.insert("Length", Value::Integer(self.data.len() as i64));
         Value::Stream(dict, StreamData::Owned(self.data.clone()))

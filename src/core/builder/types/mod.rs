@@ -112,10 +112,11 @@ pub use shading::{
 };
 pub use sound::{Sound, SoundEncoding};
 pub use three_d::{
-    ThreeDActivation, ThreeDActivationPolicy, ThreeDArtwork, ThreeDArtworkState, ThreeDBackground,
-    ThreeDBackgroundType, ThreeDClipping, ThreeDDeactivationPolicy, ThreeDMatrixSource,
-    ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
-    ThreeDStreamFormat, ThreeDView, ThreeDViewSelection,
+    ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,
+    ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,
+    ThreeDDeactivationPolicy, ThreeDMatrixSource, ThreeDProjection, ThreeDProjectionBinding,
+    ThreeDProjectionScale, ThreeDProjectionType, ThreeDStreamFormat, ThreeDView,
+    ThreeDViewSelection,
 };
 pub use transition::{
     Transition, TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle,

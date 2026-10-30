@@ -4,19 +4,22 @@
 //! [`PdfBuilder::add_three_d_artwork`](crate::core::builder::PdfBuilder::add_three_d_artwork)
 //! 注册为句柄，`build` 时写成独立间接流对象（Table 300）；3D 注解
 //! （Table 298）以 `/3DD` 引用该流，并可附带 `/3DV` `/3DA` `/3DI` `/3DB`。
-//! 视图（Table 304）、投影（Table 305）、背景（Table 306）与激活字典
-//! （Table 299）的取值模型与读端逐项对应，缺省条目不物化。
+//! 视图（Table 304）、投影（Table 305）、背景（Table 306）、激活字典
+//! （Table 299）与动画样式字典（Table 301/302）的取值模型与读端逐项对应，
+//! 缺省条目不物化。
 //!
 //! 取值枚举直接复用读端类型，保证名字拼写与往返一致；各结构体只保留
 //! 写端需要的构建方法。U3D 字节不解码，`/RM` `/LS` `/SA` `/NA` 原样透传。
 
 mod activation;
+mod animation;
 mod artwork;
 mod background;
 mod projection;
 mod view;
 
 pub use activation::ThreeDActivation;
+pub use animation::{ThreeDAnimationStyle, ThreeDAnimationStyleType};
 pub use artwork::ThreeDArtwork;
 pub use background::ThreeDBackground;
 pub use projection::ThreeDProjection;

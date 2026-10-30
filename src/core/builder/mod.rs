@@ -66,13 +66,14 @@ pub use types::{
     SelectorRendition, Separation, SetOcgStateAction, Shading, ShadingOptions, ShadingPattern,
     SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction, SoundEncoding,
     StitchingFunction, TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading,
-    ThreadAction, ThreeDActivation, ThreeDActivationPolicy, ThreeDArtwork, ThreeDArtworkState,
-    ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDDeactivationPolicy,
-    ThreeDMatrixSource, ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale,
-    ThreeDProjectionType, ThreeDStreamFormat, ThreeDView, ThreeDViewSelection, TilingPattern,
-    TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
-    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem,
-    XmpListKind, XmpPacket, XmpPacketError, XmpValue,
+    ThreadAction, ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle,
+    ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState, ThreeDBackground,
+    ThreeDBackgroundType, ThreeDClipping, ThreeDDeactivationPolicy, ThreeDMatrixSource,
+    ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
+    ThreeDStreamFormat, ThreeDView, ThreeDViewSelection, TilingPattern, TilingType, Transition,
+    TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle, Type1Halftone,
+    Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem, XmpListKind, XmpPacket,
+    XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};

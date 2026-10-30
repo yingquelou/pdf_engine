@@ -227,6 +227,8 @@ pub enum PdfFeature {
     /// 3D artwork 流（13.6 Table 300）与 3D 注解（12.5.6.19 Table 298），
     /// PDF 1.6 引入。
     ThreeDAnnotations,
+    /// 3D 流字典的动画样式字典 `/AN`（13.6.3.2 Table 301/302），PDF 1.7 引入。
+    ThreeDAnimationStyle,
     /// Go-To-3D-View 动作（12.6.4.15 Table 216），PDF 1.6 引入。
     GoTo3DViewAction,
 }
@@ -287,7 +289,8 @@ impl PdfFeature {
             | PdfFeature::AnnotationMeasure
             | PdfFeature::SubmitFormUrlType
             | PdfFeature::Collection
-            | PdfFeature::CollectionItem => PdfVersion::V1_7,
+            | PdfFeature::CollectionItem
+            | PdfFeature::ThreeDAnimationStyle => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -353,6 +356,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MovieObjects => "movie objects",
             PdfFeature::Renditions => "renditions",
             PdfFeature::ThreeDAnnotations => "3D annotations",
+            PdfFeature::ThreeDAnimationStyle => "3D animation styles",
             PdfFeature::GoTo3DViewAction => "go-to-3D-view actions",
         };
         write!(f, "{name}")

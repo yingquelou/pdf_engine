@@ -3,11 +3,13 @@
 //! `/Subtype` 必填，唯一合法值为 `U3D`；未知格式保留为
 //! [`ThreeDStreamFormat::Other`]（规范要求消费者宽容）。`/VA` 为 3D 视图
 //! 字典数组（上限 1024），`/DV` 的解析与 `/VA` 存在时的缺省下标 0 见
-//! [`ThreeDStream::default_view`]。`/Resources` `/OnInstantiate` `/AN`
-//! 本切片保留原值，不类型化名称树、JavaScript 流与动画样式字典。
+//! [`ThreeDStream::default_view`]。`/Resources` `/OnInstantiate` 保留原值，
+//! 不类型化名称树与 JavaScript 流；`/AN` 动画样式字典（PDF 1.7，
+//! Table 301/302）解析为 [`ThreeDAnimationStyle`]。
 
-use crate::core::types::{Dict, Document};
+use crate::core::types::{Dict, Document, Value};
 
+use super::animation::{ThreeDAnimationStyle, parse_animation_style};
 use super::view::{ThreeDView, ThreeDViewSelection, parse_view, parse_view_selection};
 use super::{MAX_VIEWS, ThreeDError, array_value, check_type, malformed, resolve_value};
 
@@ -34,8 +36,8 @@ pub struct ThreeDStream {
     pub resources: Option<crate::core::types::Value>,
     /// `/OnInstantiate` 实例化时执行的 JavaScript 流（原值保留）。
     pub on_instantiate: Option<crate::core::types::Value>,
-    /// `/AN` 动画样式字典（PDF 1.7，原值保留，Table 301/302 不建模）。
-    pub animation: Option<crate::core::types::Value>,
+    /// `/AN` 动画样式字典（PDF 1.7，Table 301/302）；缺省不物化。
+    pub animation: Option<ThreeDAnimationStyle>,
 }
 
 /// 3D 流解析结果：流模型 + `/VA` 是否存在（`Some(视图数)`）。
@@ -106,6 +108,18 @@ pub(super) fn parse_stream(
         None => None,
     };
 
+    let animation = match dict.get("AN") {
+        None => None,
+        Some(value) => {
+            let context = format!("{context} /AN");
+            let resolved = resolve_value(document, value)?;
+            let Value::Dict(animation) = resolved else {
+                return Err(malformed(format!("{context} is not a dictionary")));
+            };
+            Some(parse_animation_style(document, &animation, &context)?)
+        }
+    };
+
     Ok(ParsedStream {
         stream: ThreeDStream {
             format,
@@ -113,7 +127,7 @@ pub(super) fn parse_stream(
             default_view,
             resources: dict.get("Resources").cloned(),
             on_instantiate: dict.get("OnInstantiate").cloned(),
-            animation: dict.get("AN").cloned(),
+            animation,
         },
         view_count,
     })

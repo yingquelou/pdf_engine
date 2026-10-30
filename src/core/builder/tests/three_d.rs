@@ -1,6 +1,6 @@
 //! 3D artwork 流（13.6 Table 300）与 3D 注解（Table 298）写端：流对象
-//! 分配、`/3DD` 引用、视图选择、激活/交互/视图框条目、取值校验与
-//! PDF 1.6 门禁。
+//! 分配、`/3DD` 引用、视图选择、激活/交互/视图框条目、动画样式字典
+//! （Table 301/302）、取值校验与 PDF 1.6/1.7 门禁。
 
 use super::support::annot_object;
 use super::*;
@@ -56,6 +56,18 @@ fn overlay_view(form: usize) -> ThreeDView {
         .with_camera_to_world(camera())
         .with_projection(overlay_projection())
         .with_overlay(form)
+}
+
+/// 取 3D 流对象字典。
+fn stream_dict(doc: &Document, stream_num: i64) -> Dict {
+    let object = doc
+        .get_object(stream_num)
+        .expect("3D stream object")
+        .expect("3D stream exists");
+    match &object.value {
+        Value::Stream(dict, _) => dict.clone(),
+        other => panic!("expected 3D stream at object {stream_num}, got {other:?}"),
+    }
 }
 
 /// 取 3D 流对象 `/VA[0]` 的视图字典。
@@ -405,4 +417,104 @@ fn three_d_view_overlay_rejects_unknown_form_handle() {
         "unexpected message: {error}"
     );
     assert_eq!(out.len(), 0, "rejected build must not emit bytes");
+}
+
+/// `/AN` 动画样式字典（Table 301/302）：`/Type` 恒定、显式条目才写出；
+/// 未声明的 artwork 不写 `/AN`，特性画像登记 PDF 1.7 动画样式。
+#[test]
+fn three_d_animation_style_is_written() {
+    let mut b = PdfBuilder::new();
+    let p0 = b.page(PageSize::A4);
+    let animated = b.add_three_d_artwork(
+        valid_artwork().with_animation_style(
+            ThreeDAnimationStyle::new(ThreeDAnimationStyleType::Linear)
+                .with_play_count(-1)
+                .with_time_multiplier(2.0),
+        ),
+    );
+    let plain = b.add_three_d_artwork(valid_artwork());
+    b.add_annotation(p0, three_d_annotation(animated));
+    b.add_annotation(p0, three_d_annotation(plain));
+
+    let doc = b.assemble_document().expect("assemble 3D animation style");
+    let animated_num = referenced_num(annot_object(&doc, 3, 0).get("3DD"));
+    let animation = stream_dict(&doc, animated_num)
+        .get("AN")
+        .and_then(Value::as_dict)
+        .cloned()
+        .expect("/AN animation style dictionary");
+    assert_eq!(
+        animation.get("Type"),
+        Some(&Value::Name("3DAnimationStyle".into()))
+    );
+    assert_eq!(
+        animation.get("Subtype"),
+        Some(&Value::Name("Linear".into()))
+    );
+    assert_eq!(animation.get("PC"), Some(&Value::Integer(-1)));
+    assert_eq!(animation.get("TM"), Some(&Value::Float(2.0)));
+
+    let plain_num = referenced_num(annot_object(&doc, 3, 1).get("3DD"));
+    assert_eq!(
+        stream_dict(&doc, plain_num).get("AN"),
+        None,
+        "未声明动画样式时不应写 /AN"
+    );
+    assert!(
+        doc.features
+            .borrow()
+            .contains(PdfFeature::ThreeDAnimationStyle)
+    );
+}
+
+/// `/AN` 自 PDF 1.7 引入；1.6 构建返回 UnsupportedVersion 且零字节，
+/// 1.7 构建成功。
+#[test]
+fn three_d_animation_style_requires_pdf_1_7() {
+    let build = |version: PdfVersion| {
+        let mut b = PdfBuilder::with_version(version);
+        let p0 = b.page(PageSize::A4);
+        let artwork = b.add_three_d_artwork(valid_artwork().with_animation_style(
+            ThreeDAnimationStyle::new(ThreeDAnimationStyleType::Oscillating),
+        ));
+        b.add_annotation(p0, three_d_annotation(artwork));
+        let mut out = Vec::new();
+        let result = b.build(&mut out);
+        (result, out)
+    };
+
+    let (error, out) = build(PdfVersion::V1_6);
+    let error = error.expect_err("animation style requires PDF 1.7");
+    assert!(
+        matches!(error, WriteError::UnsupportedVersion(_)),
+        "expected UnsupportedVersion, got {error}"
+    );
+    assert_eq!(out.len(), 0);
+
+    let (result, out) = build(PdfVersion::V1_7);
+    result.expect("PDF 1.7 animation style");
+    assert!(!out.is_empty(), "1.7 build should emit bytes");
+}
+
+/// `/TM` 非正数与非法 `Other` 样式名在写出前拒绝，且零字节。
+#[test]
+fn invalid_animation_styles_are_rejected() {
+    let cases = [
+        ThreeDAnimationStyle::new(ThreeDAnimationStyleType::Linear).with_time_multiplier(0.0),
+        ThreeDAnimationStyle::new(ThreeDAnimationStyleType::Oscillating).with_time_multiplier(-1.0),
+        ThreeDAnimationStyle::new(ThreeDAnimationStyleType::Other("bad name".into())),
+    ];
+    for style in cases {
+        let mut b = PdfBuilder::new();
+        let p0 = b.page(PageSize::A4);
+        let artwork = b.add_three_d_artwork(valid_artwork().with_animation_style(style));
+        b.add_annotation(p0, three_d_annotation(artwork));
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("invalid animation style");
+        assert!(
+            matches!(error, WriteError::InvalidObject(_)),
+            "expected InvalidObject, got {error}"
+        );
+        assert_eq!(out.len(), 0, "rejected build must not emit bytes");
+    }
 }
