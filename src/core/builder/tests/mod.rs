@@ -28,6 +28,7 @@
 //! - `articles`：文章线（12.4.3 Table 160/161）的线程/bead 对象、`/B` 与 PDF 1.1 门禁；
 //! - `collection`：便携集合（12.3.5 Table 155–158）的模式、`/D` `/View` `/Sort` 与 PDF 1.7 门禁；
 //! - `templates`：命名模板页（12.7.6 Table 31）的 `/Names /Templates` 名称树、`/Type /Template` 对象与 PDF 1.3 门禁；
+//! - `alternate_presentation`：备用演示（13.5 Table 297）的幻灯片对象、`/Names /AlternatePresentations` 名称树、嵌入文件引用与 PDF 1.4 门禁；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
@@ -50,6 +51,7 @@ mod action_gotoe;
 mod action_ocg;
 mod action_thread;
 mod action_transition;
+mod alternate_presentation;
 mod annotation;
 mod annotation_appearance;
 mod annotation_border;

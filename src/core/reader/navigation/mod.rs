@@ -1,16 +1,17 @@
 //! 文档级导航读取：名称树、显式/命名目标、大纲、页面标签、命名页面、
-//! 命名模板页、文章线与便携集合。
+//! 命名模板页、文章线、便携集合与备用演示。
 //!
 //! 覆盖 ISO 32000-1 7.7.4（名称字典）、12.3（Destinations、Outline、
-//! Collections）、12.4.2（Page Labels）、12.4.3（Articles）与 12.7.6
-//! （命名页面与模板页）。动作（12.6）由 E3 建模，大纲条目的 `/A` 在此
-//! 原样保留。
+//! Collections）、12.4.2（Page Labels）、12.4.3（Articles）、12.7.6
+//! （命名页面与模板页）与 13.5（Alternate Presentations）。动作（12.6）
+//! 由 E3 建模，大纲条目的 `/A` 在此原样保留。
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::core::types::{Dict, Document, Value};
 
+mod alternate_presentation;
 mod articles;
 mod collection;
 pub mod destination;
@@ -22,6 +23,7 @@ mod templates;
 #[cfg(test)]
 mod tests;
 
+pub use alternate_presentation::Slideshow;
 pub(crate) use articles::MAX_ARTICLE_BEADS;
 pub use articles::{ArticleBead, ArticleThread};
 pub use collection::{

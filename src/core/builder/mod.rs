@@ -34,7 +34,7 @@ mod types;
 pub use metadata::{DocumentInfo, FileIdentifier};
 pub use navigation::{
     ArticleBead, ArticleThread, Collection, CollectionField, CollectionFieldType, CollectionSort,
-    CollectionView, OutlineEntry,
+    CollectionView, OutlineEntry, Slideshow,
 };
 
 pub(crate) use types::GraphicsStateFunctions;
@@ -61,7 +61,8 @@ pub use types::{
     SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
     StitchingFunction, TensorProductPatch, TensorProductPatchShading, ThreadAction, TilingPattern,
     TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
-    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
+    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem,
+    XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -186,6 +187,8 @@ pub struct PdfBuilder {
     file_identifier: Option<FileIdentifier>,
     /// XMP 元数据流原文（14.3.2）；`None`（默认）时不写出。
     xmp_metadata: Option<Vec<u8>>,
+    /// 类型化 XMP 包（14.3.2）；与 `xmp_metadata` 互斥。
+    xmp_packet: Option<XmpPacket>,
 }
 
 impl Default for PdfBuilder {
@@ -216,6 +219,7 @@ impl PdfBuilder {
             document_info: DocumentInfo::default(),
             file_identifier: None,
             xmp_metadata: None,
+            xmp_packet: None,
         }
     }
 
@@ -240,6 +244,7 @@ impl PdfBuilder {
             document_info: DocumentInfo::default(),
             file_identifier: None,
             xmp_metadata: None,
+            xmp_packet: None,
         }
     }
 
@@ -277,8 +282,29 @@ impl PdfBuilder {
     /// 引用。调用方负责 XML良构性；本层原样透传字节。要求目标版本
     /// ≥1.4，否则 [`build`](Self::build) 返回
     /// [`WriteError::UnsupportedVersion`] 且零字节输出。
+    ///
+    /// 与类型化入口 [`set_xmp_packet`](Self::set_xmp_packet) 互斥：
+    /// 两者同时设置时 `build` 返回 [`WriteError::InvalidObject`]，
+    /// 不静默择一。
     pub fn set_xmp_metadata(&mut self, xml: impl Into<Vec<u8>>) -> &mut Self {
         self.xmp_metadata = Some(xml.into());
+        self
+    }
+
+    /// 设置类型化 XMP 包（14.3.2）：`build` 时由
+    /// [`XmpPacket::to_xml`] 序列化为 RDF/XML，写成独立
+    /// `/Type /Metadata /Subtype /XML` 流对象并在目录挂 `/Metadata`。
+    ///
+    /// 序列化失败（非法 Clark 键、XML 1.0 非法字符、非法
+    /// `rdf:datatype` URI 等）返回 [`WriteError::InvalidObject`] 且零
+    /// 字节输出。要求目标版本 ≥1.4，否则返回
+    /// [`WriteError::UnsupportedVersion`] 且零字节输出。
+    ///
+    /// 与原文透传入口 [`set_xmp_metadata`](Self::set_xmp_metadata)
+    /// 互斥：两者同时设置时 `build` 返回
+    /// [`WriteError::InvalidObject`]，不静默择一。
+    pub fn set_xmp_packet(&mut self, packet: XmpPacket) -> &mut Self {
+        self.xmp_packet = Some(packet);
         self
     }
 

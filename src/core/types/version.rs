@@ -212,6 +212,9 @@ pub enum PdfFeature {
     /// 命名页面模板名称树（目录 `/Names /Templates`，12.7.6 与 Table 31），
     /// PDF 1.3 引入。
     PageTemplates,
+    /// 备用演示（目录 `/Names /AlternatePresentations` 名称树，13.5 与
+    /// Table 297），PDF 1.4 引入。
+    AlternatePresentations,
 }
 
 impl PdfFeature {
@@ -242,7 +245,8 @@ impl PdfFeature {
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
             | PdfFeature::FormButtonOptions
-            | PdfFeature::FormChoiceIndices => PdfVersion::V1_4,
+            | PdfFeature::FormChoiceIndices
+            | PdfFeature::AlternatePresentations => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -325,6 +329,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::Collection => "collections",
             PdfFeature::CollectionItem => "collection items",
             PdfFeature::PageTemplates => "page templates",
+            PdfFeature::AlternatePresentations => "alternate presentations",
         };
         write!(f, "{name}")
     }

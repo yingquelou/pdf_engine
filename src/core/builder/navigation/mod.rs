@@ -1,14 +1,16 @@
-//! 文档级导航写端：页面标签、命名目标、命名页面、命名模板页与大纲
-//! （ISO 32000-1 12.3、12.4.2、12.7.6）。
+//! 文档级导航写端：页面标签、命名目标、命名页面、命名模板页、大纲、
+//! 文章线、便携集合与备用演示（ISO 32000-1 12.3、12.4.2、12.4.3、12.7.6、
+//! 13.5）。
 //!
 //! 这些结构都挂在目录（catalog）上。构建器在 [`PdfBuilder::build`] 完成
-//! 对象组装后统一写入：目录字典被覆盖写回，大纲条目与模板页对象从现有
-//! 最大对象号之后分配，因此不影响既有对象布局。
+//! 对象组装后统一写入：目录字典被覆盖写回，大纲条目、模板页对象、文章线
+//! 与幻灯片对象从现有最大对象号之后分配，因此不影响既有对象布局。
 //!
 //! 版本门控（构建期返回 [`WriteError::UnsupportedVersion`]，零字节输出）：
 //! 大纲自 PDF 1.1 起、命名目标自 1.2 起、页面标签、命名页面与命名模板页
-//! 自 1.3 起。输入非法（页码越界、名称重复、标签起点乱序、颜色越界等）
-//! 返回 [`WriteError::InvalidObject`]，同样零字节输出。
+//! 自 1.3 起、备用演示自 1.4 起。输入非法（页码越界、名称重复、标签起点
+//! 乱序、颜色越界、未知嵌入文件等）返回 [`WriteError::InvalidObject`]，
+//! 同样零字节输出。
 
 use crate::core::reader::navigation::{
     Destination, OutlineDestination, PageLabelRange, PageLabelStyle,
@@ -23,11 +25,13 @@ use super::types::Action;
 use super::types::PageSize;
 use super::types::text_string_value;
 
+mod alternate_presentation;
 mod articles;
 mod collection;
 mod templates;
 mod validate;
 
+pub use alternate_presentation::Slideshow;
 pub use articles::{ArticleBead, ArticleThread};
 pub use collection::{
     Collection, CollectionField, CollectionFieldType, CollectionSort, CollectionView,
@@ -65,6 +69,8 @@ pub(crate) struct NavigationState {
     named_pages: Vec<(String, usize)>,
     /// 命名模板页（12.7.6 `/Names /Templates`）：名称 + 不可见页尺寸。
     templates: Vec<(String, PageSize)>,
+    /// 备用演示幻灯片（13.5 `/Names /AlternatePresentations`）。
+    alternate_presentations: Vec<Slideshow>,
     outline: Vec<OutlineEntry>,
     actions: Vec<Action>,
     article_threads: Vec<ArticleThread>,
@@ -158,6 +164,20 @@ impl PdfBuilder {
         handle
     }
 
+    /// 注册一个备用演示幻灯片（13.5），写入目录
+    /// `/Names /AlternatePresentations` 名称树。
+    ///
+    /// 每个资源的值为对应嵌入文件在目录 `/Names /EmbeddedFiles` 中的
+    /// 文件规格引用，因此须先通过 [`PdfBuilder::embed_file`] 注册。幻灯片
+    /// 名称须非空且唯一、`/StartResource` 须为已声明的资源键、资源键须非空
+    /// 且唯一、引用的嵌入文件名须已注册，否则构建返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.4 返回
+    /// [`WriteError::UnsupportedVersion`]，均零字节输出。
+    pub fn add_alternate_presentation(&mut self, show: Slideshow) -> &mut Self {
+        self.navigation.alternate_presentations.push(show);
+        self
+    }
+
     /// 设置文档大纲（12.3.4），整体替换已有配置。
     ///
     /// 条目深度与数量不得超过读端上限（64 层、10,000 条）；颜色分量须在
@@ -231,6 +251,11 @@ pub(super) fn apply(
             PdfVersion::V1_3,
             "page templates",
         ),
+        (
+            !navigation.alternate_presentations.is_empty(),
+            PdfVersion::V1_4,
+            "alternate presentations",
+        ),
         (!navigation.outline.is_empty(), PdfVersion::V1_1, "outlines"),
         (has_actions, PdfVersion::V1_2, "outline actions (/A)"),
         (
@@ -275,6 +300,11 @@ pub(super) fn apply(
         )));
     }
 
+    // 备用演示的资源值引用目录 `/Names /EmbeddedFiles` 中的文件规格；
+    // 在分配任何新对象号之前读取名称树并校验，保持零字节输出契约。
+    let embedded_files = alternate_presentation::catalog_embedded_files(doc, &catalog)?;
+    alternate_presentation::validate(&navigation.alternate_presentations, &embedded_files)?;
+
     if !navigation.page_labels.is_empty() {
         catalog = catalog.insert(
             "PageLabels",
@@ -290,9 +320,15 @@ pub(super) fn apply(
         templates::write(doc, &navigation.templates)
     };
 
+    // 幻灯片对象同样在构造名称树之前分配：引用其对象号写入
+    // `/AlternatePresentations`。
+    let show_refs =
+        alternate_presentation::write(doc, &navigation.alternate_presentations, &embedded_files);
+
     if !navigation.named_destinations.is_empty()
         || !navigation.named_pages.is_empty()
         || !template_refs.is_empty()
+        || !show_refs.is_empty()
     {
         // 与 assemble 阶段已写入的 `/Names` 类别（如 /EmbeddedFiles）合并，
         // 不覆盖既有字典。
@@ -330,6 +366,9 @@ pub(super) fn apply(
                 .map(|((name, _), reference)| (name.clone(), reference.clone()))
                 .collect();
             names = names.insert("Templates", name_tree(entries));
+        }
+        if !show_refs.is_empty() {
+            names = names.insert("AlternatePresentations", name_tree(show_refs));
         }
         catalog = catalog.insert("Names", Value::Dict(names));
     }

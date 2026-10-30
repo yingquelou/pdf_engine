@@ -113,3 +113,115 @@ fn xmp_metadata_absent_returns_none() {
     let doc = parse_buf(&buf);
     assert!(doc.xmp_metadata().is_none());
 }
+
+/// 类型化 XMP 包：文本、语言备选列表、嵌套资源与类型化值写出后，
+/// 经读端 `Document::xmp()` 还原为相同的 `XmpValue`。
+#[test]
+fn builder_typed_xmp_packet_roundtrips_through_reader() {
+    use pdf_engine::core::builder::{
+        PageSize, PdfBuilder, XmpListItem, XmpListKind, XmpPacket, XmpValue,
+    };
+    use pdf_engine::core::reader::xmp::{
+        XmpListItem as ReaderListItem, XmpListKind as ReaderListKind, XmpValue as ReaderValue,
+    };
+    use pdf_engine::core::types::PdfVersion;
+    use std::collections::BTreeMap;
+
+    const DC: &str = "http://purl.org/dc/elements/1.1/";
+    const EX: &str = "urn:example:typed";
+    const W3CDTF: &str = "http://purl.org/dc/terms/W3CDTF";
+
+    fn clark(namespace: &str, local: &str) -> String {
+        format!("{{{namespace}}}{local}")
+    }
+
+    let mut packet = XmpPacket::new();
+    packet
+        .set(clark(DC, "title"), XmpValue::Text("Roundtrip".into()))
+        .set(
+            clark(DC, "description"),
+            XmpValue::List {
+                kind: XmpListKind::Alt,
+                items: vec![
+                    XmpListItem {
+                        lang: Some("x-default".into()),
+                        value: "Default".into(),
+                    },
+                    XmpListItem {
+                        lang: Some("fr".into()),
+                        value: "Défaut".into(),
+                    },
+                ],
+            },
+        )
+        .set(
+            clark(EX, "author"),
+            XmpValue::Resource(BTreeMap::from([
+                (clark(EX, "name"), XmpValue::Text("Ada".into())),
+                (
+                    clark(EX, "address"),
+                    XmpValue::Resource(BTreeMap::from([(
+                        clark(EX, "city"),
+                        XmpValue::Text("London".into()),
+                    )])),
+                ),
+            ])),
+        )
+        .set(
+            clark(EX, "created"),
+            XmpValue::Typed {
+                value: Box::new(XmpValue::Text("2024-05-01T09:00:00Z".into())),
+                datatype: Some(W3CDTF.into()),
+                language: Some("en".into()),
+            },
+        );
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    builder.page(PageSize::A4);
+    builder.set_xmp_packet(packet);
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+
+    let doc = parse_buf(&buf);
+    let xmp = doc.xmp().expect("parse XMP").expect("/Metadata stream");
+    assert!(xmp.packet.starts_with("<x:xmpmeta"));
+    assert_eq!(xmp.text(&clark(DC, "title")), Some("Roundtrip"));
+    assert_eq!(
+        xmp.properties.get(&clark(DC, "description")),
+        Some(&ReaderValue::List {
+            kind: ReaderListKind::Alt,
+            items: vec![
+                ReaderListItem {
+                    lang: Some("x-default".into()),
+                    value: "Default".into(),
+                },
+                ReaderListItem {
+                    lang: Some("fr".into()),
+                    value: "Défaut".into(),
+                },
+            ],
+        })
+    );
+    let Some(ReaderValue::Resource(author)) = xmp.properties.get(&clark(EX, "author")) else {
+        panic!("author must roundtrip as a resource");
+    };
+    assert_eq!(
+        author.get(&clark(EX, "name")),
+        Some(&ReaderValue::Text("Ada".into()))
+    );
+    let Some(ReaderValue::Resource(address)) = author.get(&clark(EX, "address")) else {
+        panic!("address must roundtrip as a nested resource");
+    };
+    assert_eq!(
+        address.get(&clark(EX, "city")),
+        Some(&ReaderValue::Text("London".into()))
+    );
+    assert_eq!(
+        xmp.properties.get(&clark(EX, "created")),
+        Some(&ReaderValue::Typed {
+            value: Box::new(ReaderValue::Text("2024-05-01T09:00:00Z".into())),
+            datatype: Some(W3CDTF.into()),
+            language: Some("en".into()),
+        })
+    );
+}

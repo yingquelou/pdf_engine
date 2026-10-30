@@ -3,6 +3,33 @@
 
 use super::*;
 
+/// `build` 后重新解析，供目录 `/Metadata` 断言使用。
+fn build_and_parse(b: &mut PdfBuilder) -> Document {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut out = Vec::new();
+    b.build(&mut out).expect("build");
+    let base = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.ancestors().nth(3).map(|t| t.to_path_buf()))
+        .filter(|p| p.file_name() == Some(std::ffi::OsStr::new("target")))
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("test-tmp");
+    std::fs::create_dir_all(&dir).expect("create test-tmp");
+    let path = dir.join(format!(
+        "pdf-engine-metadata-{}-{}.pdf",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, &out).expect("write temp pdf");
+    let file = std::fs::File::open(&path).expect("open temp pdf");
+    let mut parser = crate::core::reader::Parser::new(file).expect("parser");
+    let doc = parser.parse_document().expect("parse");
+    let _ = std::fs::remove_file(&path);
+    doc
+}
+
 #[test]
 fn document_info_is_written_as_indirect_object() {
     let mut b = PdfBuilder::new();
@@ -131,5 +158,116 @@ fn xmp_metadata_requires_pdf_1_4() {
         matches!(error, WriteError::UnsupportedVersion(_)),
         "{error}"
     );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn typed_xmp_packet_is_written_to_catalog() {
+    use crate::core::builder::{XmpListItem, XmpListKind, XmpPacket, XmpValue};
+    use crate::core::reader::xmp::{
+        XmpListItem as ReaderListItem, XmpListKind as ReaderListKind, XmpValue as ReaderValue,
+    };
+
+    const DC: &str = "http://purl.org/dc/elements/1.1/";
+    let mut packet = XmpPacket::new();
+    packet
+        .set(
+            format!("{{{DC}}}title"),
+            XmpValue::Text("Typed packet".into()),
+        )
+        .set(
+            format!("{{{DC}}}creator"),
+            XmpValue::List {
+                kind: XmpListKind::Seq,
+                items: vec![
+                    XmpListItem {
+                        lang: None,
+                        value: "Ada".into(),
+                    },
+                    XmpListItem {
+                        lang: None,
+                        value: "Grace".into(),
+                    },
+                ],
+            },
+        );
+
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.set_xmp_packet(packet);
+    let doc = build_and_parse(&mut b);
+
+    let xmp = doc.xmp().expect("parse XMP").expect("metadata stream");
+    assert!(xmp.packet.contains("<x:xmpmeta"), "{}", xmp.packet);
+    assert_eq!(xmp.text(&format!("{{{DC}}}title")), Some("Typed packet"));
+    assert_eq!(
+        xmp.properties.get(&format!("{{{DC}}}creator")),
+        Some(&ReaderValue::List {
+            kind: ReaderListKind::Seq,
+            items: vec![
+                ReaderListItem {
+                    lang: None,
+                    value: "Ada".into(),
+                },
+                ReaderListItem {
+                    lang: None,
+                    value: "Grace".into(),
+                },
+            ],
+        })
+    );
+}
+
+#[test]
+fn invalid_xmp_packet_fails_without_output() {
+    use crate::core::builder::{XmpPacket, XmpValue};
+
+    let mut packet = XmpPacket::new();
+    packet.set("{urn:example}text", XmpValue::Text("bad\u{0}".into()));
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.set_xmp_packet(packet);
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("invalid packet should fail");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn typed_xmp_packet_requires_pdf_1_4() {
+    use crate::core::builder::{XmpPacket, XmpValue};
+
+    let mut packet = XmpPacket::new();
+    packet.set("{urn:example}title", XmpValue::Text("v".into()));
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
+    b.page(PageSize::A4);
+    b.set_xmp_packet(packet);
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("should reject 1.3");
+    assert!(
+        matches!(error, WriteError::UnsupportedVersion(_)),
+        "{error}"
+    );
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn raw_and_typed_xmp_are_mutually_exclusive() {
+    use crate::core::builder::{XmpPacket, XmpValue};
+
+    let mut packet = XmpPacket::new();
+    packet.set("{urn:example}title", XmpValue::Text("v".into()));
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.set_xmp_metadata(b"<x:xmpmeta/>".to_vec());
+    b.set_xmp_packet(packet);
+
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("ambiguous XMP source should fail");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
     assert_eq!(out.len(), 0);
 }

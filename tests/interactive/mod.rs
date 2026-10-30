@@ -9,8 +9,8 @@
 //! `annotation_appearance`、`annotation_geometry`、`annotation_link`、
 //! `annotation_measure`、`annotation_mk`、`annotation_popup`、
 //! `annotation_redact`、`annotation_subtype_table`、`annotation_watermark`、
-//! `form`、`embedded`、`metadata`、`page_presentation`、`page_thumbnail`、
-//! `incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
+//! `alternate_presentation`、`form`、`embedded`、`metadata`、`page_presentation`、
+//! `page_thumbnail`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
 //! （子模块经 `use super::*;` 取用）。
 
 #[path = "../support/mod.rs"]
@@ -20,6 +20,7 @@ mod action;
 mod action_gotoe;
 mod action_ocg;
 mod action_thread;
+mod alternate_presentation;
 mod annotation;
 mod annotation_appearance;
 mod annotation_geometry;

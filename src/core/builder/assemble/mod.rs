@@ -702,7 +702,13 @@ impl PdfBuilder {
         }
         // XMP 元数据流（14.3.2）：独立 `/Type /Metadata /Subtype /XML`
         // 流对象，目录 `/Metadata` 间接引用；要求目标版本 ≥1.4。
-        if let Some(xml) = &self.xmp_metadata {
+        // 原文透传与类型化包互斥，歧义按调用方错误处理，不静默择一。
+        if self.xmp_metadata.is_some() && self.xmp_packet.is_some() {
+            return Err(WriteError::InvalidObject(
+                "raw XMP metadata and typed XMP packet are both set; use only one".into(),
+            ));
+        }
+        if self.xmp_metadata.is_some() || self.xmp_packet.is_some() {
             if self.version < PdfVersion::V1_4 {
                 return Err(WriteError::UnsupportedVersion(format!(
                     "XMP metadata (/Metadata) require PDF {}, got {}",
@@ -710,6 +716,16 @@ impl PdfBuilder {
                     self.version.as_str()
                 )));
             }
+            let xml = match (&self.xmp_metadata, &self.xmp_packet) {
+                (Some(raw), None) => raw.clone(),
+                (None, Some(packet)) => packet
+                    .to_xml()
+                    .map_err(|error| {
+                        WriteError::InvalidObject(format!("typed XMP packet: {error}"))
+                    })?
+                    .into_bytes(),
+                _ => unreachable!("exactly one XMP source is set"),
+            };
             let meta_num = num;
             num += 1;
             let meta_dict = Dict::new()
@@ -719,7 +735,7 @@ impl PdfBuilder {
             doc.set_object(Object::new(
                 meta_num,
                 0,
-                Value::Stream(meta_dict, StreamData::Owned(xml.clone())),
+                Value::Stream(meta_dict, StreamData::Owned(xml)),
             ));
             catalog_dict = catalog_dict.insert("Metadata", Value::Ref(meta_num, 0));
         }

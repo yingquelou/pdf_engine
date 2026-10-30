@@ -19,7 +19,8 @@
 //! - `optional_content`：可选内容组（OCG）；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池；
-//! - `transition`：过渡字典（12.4.4 Table 162 与 Transition 动作 12.6.4.14）。
+//! - `transition`：过渡字典（12.4.4 Table 162 与 Transition 动作 12.6.4.14）；
+//! - `xmp`：类型化 XMP 包（14.3.2）的构造与 RDF/XML 序列化。
 
 mod action;
 mod annotation;
@@ -41,6 +42,7 @@ mod shading;
 mod transition;
 mod type3;
 mod viewport;
+mod xmp;
 
 pub use action::{
     Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, GoToEAction, GoToETarget,
@@ -95,6 +97,7 @@ pub use transition::{
 };
 pub use type3::{Type3Font, Type3Glyph};
 pub use viewport::Viewport;
+pub use xmp::{XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue};
 
 /// 页面尺寸预设。
 ///
