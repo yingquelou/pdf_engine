@@ -82,6 +82,12 @@ impl PdfBuilder {
 
         // 嵌入文件（7.11）：逐项校验与版本门禁在任何对象写出前完成。
         embedded_file::validate_registration(&self.embedded, self.version)?;
+        // 集合（12.3.5）与集合项（7.11.6）：`/D` 名称树与 `/CI` ↔ `/Schema`
+        // 交叉校验同样在任何对象写出前完成。
+        embedded_file::validate_collection_references(
+            &self.embedded,
+            self.navigation.collection(),
+        )?;
 
         // 页面视口字典（12.9.2 Table 260）：PDF 1.6 门禁与取值校验在
         // 任何对象写出前完成。

@@ -12,9 +12,10 @@
 
 use std::fmt::Write as _;
 
-use crate::core::builder::navigation::name_tree;
+use crate::core::builder::navigation::{Collection, CollectionFieldType, name_tree};
 use crate::core::builder::types::EmbeddedFile;
 use crate::core::builder::types::text_string_value;
+use crate::core::builder::types::{CollectionItemValue, CollectionSubitemValue};
 use crate::core::types::{Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Value};
 use crate::core::writer::WriteError;
 
@@ -75,6 +76,102 @@ pub(super) fn validate_registration(
         }
     }
     Ok(())
+}
+
+/// 集合交叉校验（12.3.5 Table 155 / 7.11.6 Table 48/49）：`/D` 必须
+/// 指向 EmbeddedFiles 名称树中的展示名；`/CI` 键必须在集合模式中声明，
+/// 值类型须与字段 `/Subtype` 一致。在分配任何对象号之前调用，非法输入
+/// 保持零字节输出契约。
+pub(super) fn validate_collection_references(
+    files: &[EmbeddedFile],
+    collection: Option<&Collection>,
+) -> Result<(), WriteError> {
+    let Some(collection) = collection else {
+        if let Some(file) = files.iter().find(|file| file.collection_item().is_some()) {
+            return Err(WriteError::InvalidObject(format!(
+                "embedded file {:?} has a collection item but no collection is set",
+                file.name()
+            )));
+        }
+        return Ok(());
+    };
+    if let Some(name) = &collection.initial_document
+        && !files.iter().any(|file| file.name() == name)
+    {
+        return Err(WriteError::InvalidObject(format!(
+            "collection initial document {name:?} is not an embedded file name"
+        )));
+    }
+    if !files.iter().any(|file| file.collection_item().is_some()) {
+        return Ok(());
+    }
+    let Some(schema) = collection.schema.as_deref() else {
+        return Err(WriteError::InvalidObject(
+            "collection items require a collection schema".into(),
+        ));
+    };
+    for file in files {
+        let Some(item) = file.collection_item() else {
+            continue;
+        };
+        for (key, value) in item.values() {
+            let Some(field) = schema.iter().find(|field| &field.key == key) else {
+                return Err(WriteError::InvalidObject(format!(
+                    "collection item field {key:?} of embedded file {:?} is not declared in the collection schema",
+                    file.name()
+                )));
+            };
+            let expected = expected_item_type(field.field_type);
+            let actual = match value {
+                CollectionItemValue::Text(_) => ItemType::Text,
+                CollectionItemValue::Number(_) => ItemType::Number,
+                CollectionItemValue::Subitem(subitem) => match subitem.datum() {
+                    Some(CollectionSubitemValue::Text(_)) => ItemType::Text,
+                    Some(CollectionSubitemValue::Number(_)) => ItemType::Number,
+                    // 只有前缀、没有数据时无从比较类型。
+                    None => continue,
+                },
+            };
+            if actual != expected {
+                return Err(WriteError::InvalidObject(format!(
+                    "collection item field {key:?} of embedded file {:?} expects {}, got {}",
+                    file.name(),
+                    expected.describe(),
+                    actual.describe()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 集合字段的数据形态，用于对照 `/CI` 值与 `/Subtype`。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ItemType {
+    Text,
+    Number,
+}
+
+impl ItemType {
+    const fn describe(self) -> &'static str {
+        match self {
+            Self::Text => "a text string",
+            Self::Number => "a number",
+        }
+    }
+}
+
+/// Table 157 `/Subtype` → `/CI` 值形态：`N`/`Size` 为数，其余为文本串。
+const fn expected_item_type(field: CollectionFieldType) -> ItemType {
+    match field {
+        CollectionFieldType::Number | CollectionFieldType::Size => ItemType::Number,
+        CollectionFieldType::Text
+        | CollectionFieldType::Date
+        | CollectionFieldType::FileName
+        | CollectionFieldType::Description
+        | CollectionFieldType::ModificationDate
+        | CollectionFieldType::CreationDate => ItemType::Text,
+    }
 }
 
 /// 为每个注册项分配（文件规格，嵌入流）两个对象号；`/CI` 另占一个。

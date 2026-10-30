@@ -8,8 +8,8 @@ use super::*;
 #[test]
 fn builder_collection_roundtrips_through_parser() {
     use pdf_engine::core::builder::{
-        Collection, CollectionField, CollectionFieldType, CollectionSort, CollectionView, PageSize,
-        PdfBuilder,
+        Collection, CollectionField, CollectionFieldType, CollectionSort, CollectionView,
+        EmbeddedFile, PageSize, PdfBuilder,
     };
     use pdf_engine::core::reader::navigation::{
         CollectionFieldType as ReadFieldType, CollectionView as ReadView,
@@ -18,6 +18,7 @@ fn builder_collection_roundtrips_through_parser() {
 
     let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
     builder.page(PageSize::A4);
+    builder.embed_file(EmbeddedFile::new("report.pdf", b"report".to_vec()));
     builder.collection(
         Collection::new()
             .with_schema(vec![

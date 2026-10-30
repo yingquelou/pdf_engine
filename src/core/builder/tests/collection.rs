@@ -66,6 +66,7 @@ fn features(doc: &Document) -> Vec<PdfFeature> {
 fn collection_writes_schema_view_and_sort() {
     let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
     b.page(PageSize::A4);
+    b.embed_file(EmbeddedFile::new("report.pdf", b"x".to_vec()));
     b.collection(
         Collection::new()
             .with_schema(vec![

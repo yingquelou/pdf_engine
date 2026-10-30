@@ -214,6 +214,11 @@ impl CollectionItem {
         self
     }
 
+    /// 已声明的条目，供写端对照集合模式交叉校验。
+    pub(crate) fn values(&self) -> &BTreeMap<String, CollectionItemValue> {
+        &self.values
+    }
+
     /// 键须为合法 PDF 名字，数值须有限。
     fn validate(&self) -> Result<(), String> {
         for (key, value) in &self.values {
@@ -283,6 +288,11 @@ impl CollectionSubitem {
     pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = Some(prefix.into());
         self
+    }
+
+    /// 已声明的 `/D` 数据，供写端对照集合模式交叉校验。
+    pub(crate) fn datum(&self) -> Option<&CollectionSubitemValue> {
+        self.datum.as_ref()
     }
 
     fn validate(&self) -> Result<(), String> {

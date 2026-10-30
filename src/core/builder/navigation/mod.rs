@@ -76,6 +76,11 @@ impl NavigationState {
             .collect()
     }
 
+    /// 集合配置；供嵌入文件写端交叉校验模式与初始文档。
+    pub(super) fn collection(&self) -> Option<&Collection> {
+        self.collection.as_ref()
+    }
+
     /// 大纲条目实际引用到的动作（含子项，按文档顺序）。
     pub(super) fn outline_actions(&self) -> Vec<&Action> {
         fn collect<'a>(

@@ -60,10 +60,22 @@ fn sample_item() -> CollectionItem {
         .with_subitem("Pages", CollectionSubitem::new().with_number(42.0))
 }
 
+/// 与 [`sample_item`] 键和类型一一对应的集合模式。
+fn sample_schema() -> Vec<CollectionField> {
+    vec![
+        CollectionField::new("Title", CollectionFieldType::Text, "Title"),
+        CollectionField::new("Copies", CollectionFieldType::Number, "Copies"),
+        CollectionField::new("Score", CollectionFieldType::Number, "Score"),
+        CollectionField::new("Issued", CollectionFieldType::Date, "Issued"),
+        CollectionField::new("Pages", CollectionFieldType::Number, "Pages"),
+    ]
+}
+
 #[test]
 fn collection_item_is_written_as_indirect_object() {
     let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
     b.page(PageSize::A4);
+    b.collection(Collection::new().with_schema(sample_schema()));
     b.embed_file(
         EmbeddedFile::new("report.pdf", b"%PDF fake".to_vec()).with_collection_item(sample_item()),
     );
@@ -160,4 +172,87 @@ fn collection_item_requires_pdf_1_7() {
         "{error}"
     );
     assert!(out.is_empty(), "构建失败时不应写出任何字节");
+}
+
+/// `/CI` ↔ `/Schema` 交叉校验（12.3.5 Table 155/157、7.11.6 Table 48/49）：
+/// 键必须在模式中声明，值形态须与 `/Subtype` 一致；无集合时 `/CI` 无模式可依。
+#[test]
+fn collection_item_values_must_match_the_schema() {
+    let cases: Vec<(Option<Collection>, EmbeddedFile, &str)> = vec![
+        (
+            None,
+            EmbeddedFile::new("a.txt", b"x".to_vec())
+                .with_collection_item(CollectionItem::new().with_text("Title", "x")),
+            "has a collection item but no collection is set",
+        ),
+        (
+            Some(Collection::new()),
+            EmbeddedFile::new("a.txt", b"x".to_vec())
+                .with_collection_item(CollectionItem::new().with_text("Title", "x")),
+            "collection items require a collection schema",
+        ),
+        (
+            Some(Collection::new().with_schema(sample_schema())),
+            EmbeddedFile::new("a.txt", b"x".to_vec())
+                .with_collection_item(CollectionItem::new().with_text("Missing", "x")),
+            "is not declared in the collection schema",
+        ),
+        (
+            Some(Collection::new().with_schema(sample_schema())),
+            EmbeddedFile::new("a.txt", b"x".to_vec())
+                .with_collection_item(CollectionItem::new().with_number("Title", 1.0)),
+            "expects a text string, got a number",
+        ),
+        (
+            Some(Collection::new().with_schema(sample_schema())),
+            EmbeddedFile::new("a.txt", b"x".to_vec())
+                .with_collection_item(CollectionItem::new().with_text("Copies", "two")),
+            "expects a number, got a text string",
+        ),
+        (
+            Some(Collection::new().with_schema(sample_schema())),
+            EmbeddedFile::new("a.txt", b"x".to_vec()).with_collection_item(
+                CollectionItem::new()
+                    .with_subitem("Copies", CollectionSubitem::new().with_text("two")),
+            ),
+            "expects a number, got a text string",
+        ),
+    ];
+    for (collection, file, expected) in cases {
+        let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
+        b.page(PageSize::A4);
+        if let Some(collection) = collection {
+            b.collection(collection);
+        }
+        b.embed_file(file);
+        let mut out = Vec::new();
+        let error = b.build(&mut out).expect_err("集合交叉校验失败应拒绝构建");
+        assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(out.is_empty(), "构建失败时不应写出任何字节");
+    }
+}
+
+/// Table 155 `/D`：初始文档须标识 EmbeddedFiles 名称树中的一个条目。
+#[test]
+fn collection_initial_document_must_name_an_embedded_file() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
+    b.page(PageSize::A4);
+    b.collection(Collection::new().with_initial_document("report.pdf"));
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("/D 必须指向嵌入文件");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("is not an embedded file name"),
+        "{error}"
+    );
+    assert!(out.is_empty(), "构建失败时不应写出任何字节");
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
+    b.page(PageSize::A4);
+    b.collection(Collection::new().with_initial_document("report.pdf"));
+    b.embed_file(EmbeddedFile::new("report.pdf", b"x".to_vec()));
+    let mut out = Vec::new();
+    b.build(&mut out).expect("/D 指向已嵌入的文件应通过");
+    assert!(!out.is_empty());
 }
