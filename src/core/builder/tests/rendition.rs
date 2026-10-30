@@ -6,25 +6,10 @@ use super::support::{annot_object, assert_text_entry};
 use super::*;
 use crate::core::types::PdfFeature;
 
-fn screen(b: &mut PdfBuilder, page: usize) -> usize {
-    b.add_annotation(
-        page,
-        PdfAnnotation::new(AnnotationKind::Screen, [72.0, 500.0, 392.0, 740.0]),
-    )
-}
+mod params;
+mod support;
 
-fn link_with(action: Action) -> PdfAnnotation {
-    PdfAnnotation::new(AnnotationKind::Link, [72.0, 460.0, 240.0, 480.0]).with_action(action)
-}
-
-/// 在注解 `/A` 中取内联动作字典。
-fn action_dict(annot: &Dict) -> Dict {
-    annot
-        .get("A")
-        .and_then(Value::as_dict)
-        .expect("annotation /A")
-        .clone()
-}
+use self::support::{action_dict, link_with, screen};
 
 #[test]
 fn rendition_action_writes_embedded_file_clip() {
@@ -216,118 +201,4 @@ fn rendition_action_writes_script_only_form() {
     assert!(action.get("AN").is_none(), "脚本形态不要求 /AN");
     assert!(action.get("R").is_none(), "脚本形态不要求 /R");
     assert!(matches!(action.get("JS"), Some(Value::HexString(_))));
-}
-
-/// 断言构建失败、消息命中且未写出任何字节。
-fn expect_rejected(builder: &mut PdfBuilder, fragment: &str) {
-    let mut out = Vec::new();
-    let error = builder
-        .build(&mut out)
-        .expect_err("rendition action contract violation");
-    let message = error.to_string();
-    assert!(
-        matches!(error, WriteError::InvalidObject(_)),
-        "expected InvalidObject, got {message}"
-    );
-    assert!(message.contains(fragment), "{message}");
-    assert_eq!(out.len(), 0);
-}
-
-/// 构造带单个动作的最小文档并返回构建器与页面号；`make` 接收 Screen
-/// 注解句柄。
-fn builder_with(make: impl FnOnce(usize) -> Action, version: PdfVersion) -> (PdfBuilder, usize) {
-    let mut b = PdfBuilder::with_version(version);
-    let p0 = b.page(PageSize::A4);
-    let screen = screen(&mut b, p0);
-    b.add_annotation(p0, link_with(make(screen)));
-    (b, p0)
-}
-
-#[test]
-fn rendition_action_rejects_invalid_configurations() {
-    // 空脚本。
-    let (mut b, _) = builder_with(
-        |_| Action::Rendition(RenditionAction::script("")),
-        PdfVersion::V1_7,
-    );
-    expect_rejected(&mut b, "/JS must not be empty");
-
-    // /AN 越界。
-    let (mut b, _) = builder_with(
-        |_| Action::Rendition(RenditionAction::script("x").with_annotation(99)),
-        PdfVersion::V1_7,
-    );
-    expect_rejected(&mut b, "unknown annotation handle 99");
-
-    // /AN 目标不是 Screen 注解：句柄 0 为 Text 注解。
-    let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
-    let p0 = b.page(PageSize::A4);
-    let text = b.add_annotation(
-        p0,
-        PdfAnnotation::new(AnnotationKind::Text, [0.0, 0.0, 10.0, 10.0]),
-    );
-    b.add_annotation(
-        p0,
-        link_with(Action::Rendition(
-            RenditionAction::script("x").with_annotation(text),
-        )),
-    );
-    expect_rejected(&mut b, "not a Screen annotation");
-
-    // /D 引用未知嵌入文件。
-    let (mut b, _) = builder_with(
-        |screen| {
-            Action::Rendition(RenditionAction::play(
-                screen,
-                Rendition::media(MediaClipData::new(MediaClipSource::EmbeddedFile(7))),
-            ))
-        },
-        PdfVersion::V1_7,
-    );
-    expect_rejected(&mut b, "unknown embedded file handle 7");
-
-    // /D URL 为空。
-    let (mut b, _) = builder_with(
-        |screen| {
-            Action::Rendition(RenditionAction::play(
-                screen,
-                Rendition::media(MediaClipData::new(MediaClipSource::Url(String::new()))),
-            ))
-        },
-        PdfVersion::V1_7,
-    );
-    expect_rejected(&mut b, "URL must be non-empty printable ASCII");
-
-    // /D 引用未知 Form XObject。
-    let (mut b, _) = builder_with(
-        |screen| {
-            Action::Rendition(RenditionAction::play(
-                screen,
-                Rendition::media(MediaClipData::new(MediaClipSource::FormXObject(3))),
-            ))
-        },
-        PdfVersion::V1_7,
-    );
-    expect_rejected(&mut b, "unknown form handle 3");
-}
-
-#[test]
-fn rendition_action_requires_pdf_15() {
-    let (mut b, _) = builder_with(
-        |screen| {
-            Action::Rendition(RenditionAction::play(
-                screen,
-                Rendition::media(MediaClipData::new(MediaClipSource::Url("clip.mp4".into()))),
-            ))
-        },
-        PdfVersion::V1_4,
-    );
-    let mut out = Vec::new();
-    let error = b.build(&mut out).expect_err("PDF 1.4 rejects renditions");
-    assert!(
-        matches!(error, WriteError::UnsupportedVersion(_)),
-        "{error}"
-    );
-    assert!(error.to_string().contains("renditions"), "{error}");
-    assert_eq!(out.len(), 0);
 }

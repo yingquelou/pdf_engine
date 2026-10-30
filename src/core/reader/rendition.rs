@@ -4,7 +4,8 @@
 //! rendition（`/S /SR`）；媒体 rendition 的 `/C` 指向 media clip 对象
 //! （Table 273–278），后者分 media clip data（`/S /MCD`）与 media clip
 //! section（`/S /MCS`）。播放参数 `/P`（Table 279–281）与屏幕参数 `/SP`
-//! （Table 282）当前保留原始值，不在此模块类型化。
+//! （Table 282–284）类型化于 `play`/`screen` 子模块；`/P` 的 `/PL`
+//! media players（13.2.7）仍保留原始值。
 //!
 //! 递归结构（选择器嵌套、clip section 链）限深 32 并做间接引用环检测，
 //! 避免恶意输入造成无限递归。
@@ -14,6 +15,15 @@ use std::fmt;
 use crate::core::reader::content::text_value;
 use crate::core::reader::navigation::{NavigationError, resolve};
 use crate::core::types::{Dict, Document, Value};
+
+mod play;
+mod screen;
+
+pub use play::{
+    MediaDuration, MediaDurationKind, MediaFit, MediaPlayParameters, MediaPlaySettings,
+    MediaTimespan,
+};
+pub use screen::{MediaFloatingWindow, MediaScreenParameters, MediaScreenSettings, MediaWindow};
 
 /// 递归嵌套上限。
 const MAX_DEPTH: usize = 32;
@@ -41,10 +51,10 @@ pub struct MediaRendition {
     pub name: Option<String>,
     /// `/C` media clip 对象；播放参数带 `/PL` 时可缺省。
     pub clip: Option<MediaClip>,
-    /// `/P` media play parameters 字典（Table 279，保留原值）。
-    pub play: Option<Value>,
-    /// `/SP` media screen parameters 字典（Table 282，保留原值）。
-    pub screen: Option<Value>,
+    /// `/P` media play parameters 字典（Table 279）。
+    pub play: Option<MediaPlayParameters>,
+    /// `/SP` media screen parameters 字典（Table 282）。
+    pub screen: Option<MediaScreenParameters>,
     /// `/MH` 可行性条件字典（Table 267，保留原值）。
     pub mh: Option<Value>,
     /// `/BE` 最佳努力条件字典（Table 267，保留原值）。
@@ -289,11 +299,19 @@ fn parse_rendition_inner(
                 None => None,
                 Some(value) => Some(parse_media_clip(document, value, depth + 1, path)?),
             };
+            let play = match dict.get("P") {
+                None => None,
+                Some(value) => Some(play::parse_play_parameters(document, value, depth + 1)?),
+            };
+            let screen = match dict.get("SP") {
+                None => None,
+                Some(value) => Some(screen::parse_screen_parameters(document, value, depth + 1)?),
+            };
             Ok(Rendition::Media(Box::new(MediaRendition {
                 name,
                 clip,
-                play: dict.get("P").cloned(),
-                screen: dict.get("SP").cloned(),
+                play,
+                screen,
                 mh: dict.get("MH").cloned(),
                 be: dict.get("BE").cloned(),
             })))

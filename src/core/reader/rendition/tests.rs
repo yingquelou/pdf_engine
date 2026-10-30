@@ -4,6 +4,8 @@ use crate::core::types::{Array, Dict, Object, Value};
 
 use super::*;
 
+mod params;
+
 fn name(value: &str) -> Value {
     Value::Name(value.to_owned())
 }
@@ -35,6 +37,45 @@ fn media_rendition(clip: Value) -> Dict {
         .insert("Type", name("Rendition"))
         .insert("S", name("MR"))
         .insert("C", clip)
+}
+
+fn playback_clip() -> Value {
+    Value::Dict(clip_data(Value::Dict(filespec("clip.mov"))))
+}
+
+fn rendition_with_play(play: Value) -> Value {
+    Value::Dict(media_rendition(playback_clip()).insert("P", play))
+}
+
+fn rendition_with_screen(screen: Value) -> Value {
+    Value::Dict(media_rendition(playback_clip()).insert("SP", screen))
+}
+
+fn settings(entries: Dict) -> Value {
+    Value::Dict(entries)
+}
+
+fn duration(subtype: &str, timespan: Option<Value>) -> Value {
+    let mut dict = Dict::new()
+        .insert("Type", name("MediaDuration"))
+        .insert("S", name(subtype));
+    if let Some(timespan) = timespan {
+        dict = dict.insert("T", timespan);
+    }
+    Value::Dict(dict)
+}
+
+fn timespan(seconds: Value) -> Value {
+    Value::Dict(
+        Dict::new()
+            .insert("Type", name("Timespan"))
+            .insert("S", name("S"))
+            .insert("V", seconds),
+    )
+}
+
+fn floating_window(entries: Dict) -> Value {
+    Value::Dict(entries.insert("Type", name("FWParams")))
 }
 
 #[test]

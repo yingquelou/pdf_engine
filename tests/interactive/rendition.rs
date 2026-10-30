@@ -195,3 +195,97 @@ fn builder_rendition_script_only_roundtrip() {
     assert_eq!(action.rendition, None);
     assert_eq!(action.javascript.as_deref(), Some("this.pageNum = 0;"));
 }
+
+/// 播放参数（Table 279–281）与屏幕参数（Table 282–284）经写端嵌套
+/// 字典写出后由读取端还原为同一类型化模型。
+#[test]
+fn builder_rendition_play_and_screen_parameters_roundtrip() {
+    use pdf_engine::core::builder::{
+        Action, AnnotationKind, EmbeddedFile, MediaClipData, MediaClipSource, MediaDuration,
+        MediaFit, MediaFloatingWindow, MediaPlayParameters, MediaPlaySettings, MediaRendition,
+        MediaScreenParameters, MediaScreenSettings, MediaTimespan, MediaWindow, PageSize,
+        PdfAnnotation, PdfBuilder, Rendition, RenditionAction,
+    };
+    use pdf_engine::core::reader::action::Action as ReadAction;
+    use pdf_engine::core::reader::rendition::{
+        MediaDurationKind, MediaFit as ReadMediaFit, MediaWindow as ReadMediaWindow,
+        Rendition as ReadRendition,
+    };
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let p0 = builder.page(PageSize::A4);
+    let screen = builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Screen, [72.0, 500.0, 392.0, 740.0]),
+    );
+    let clip = builder.embed_file(EmbeddedFile::new("clip.mp4", vec![0, 1, 2, 3]));
+    let play = MediaPlayParameters::new().with_must_honour(
+        MediaPlaySettings::new()
+            .with_volume(75)
+            .with_fit(MediaFit::Slice)
+            .with_duration(MediaDuration::explicit(MediaTimespan::new(12.5)))
+            .with_repeat_count(2.0),
+    );
+    let screen_parameters = MediaScreenParameters::new().with_must_honour(
+        MediaScreenSettings::new()
+            .with_window(MediaWindow::Floating)
+            .with_background([0.25, 0.5, 0.75])
+            .with_opacity(0.75)
+            .with_floating(
+                MediaFloatingWindow::new(640, 480)
+                    .with_title_bar(false)
+                    .with_title(vec!["clip".into(), "intro".into()]),
+            ),
+    );
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 460.0, 240.0, 480.0]).with_action(
+            Action::Rendition(RenditionAction::play(
+                screen,
+                Rendition::Media(Box::new(
+                    MediaRendition::new(MediaClipData::new(MediaClipSource::EmbeddedFile(clip)))
+                        .with_play(play)
+                        .with_screen(screen_parameters),
+                )),
+            )),
+        ),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build rendition parameters");
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    let action = doc
+        .action(annotations[1].action.as_ref().expect("/A"))
+        .expect("typed action");
+    let ReadAction::Rendition(action) = action else {
+        panic!("expected a rendition action, got {action:?}");
+    };
+    let ReadRendition::Media(media) = action.rendition.expect("/R") else {
+        panic!("expected a media rendition");
+    };
+
+    let play = media.play.expect("/P");
+    let must = play.must_honour.expect("/MH");
+    assert_eq!(must.volume, Some(75));
+    assert_eq!(must.fit, Some(ReadMediaFit::Slice));
+    assert_eq!(must.repeat_count, Some(2.0));
+    assert!(must.controller.is_none(), "未设置条目保持缺省");
+    let duration = must.duration.expect("/D");
+    assert_eq!(duration.kind, MediaDurationKind::Explicit);
+    assert_eq!(duration.timespan.expect("/T").seconds, 12.5);
+
+    let screen = media.screen.expect("/SP");
+    let must = screen.must_honour.expect("/MH");
+    assert_eq!(must.window, Some(ReadMediaWindow::Floating));
+    assert_eq!(must.background, Some([0.25, 0.5, 0.75]));
+    assert_eq!(must.opacity, Some(0.75));
+    let floating = must.floating.expect("/F");
+    assert_eq!(floating.dimensions, [640, 480]);
+    assert_eq!(floating.title_bar, Some(false));
+    assert_eq!(
+        floating.title.as_deref(),
+        Some(["clip".to_owned(), "intro".to_owned()].as_slice())
+    );
+}

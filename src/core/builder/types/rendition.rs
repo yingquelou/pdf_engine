@@ -4,8 +4,9 @@
 //! （`/S /SR`，Table 272）。media clip 只建模 media clip data
 //! （`/S /MCD`，Table 274）：`/D` 的媒体数据写成嵌入文件规格或
 //! Form XObject 的间接引用，也可写成 URL 文件规格；clip section
-//! （`/S /MCS`，Table 277）目前仅有读端能力。播放参数 `/P` 与屏幕
-//! 参数 `/SP`（Table 279/282）不在此建模。
+//! （`/S /MCS`，Table 277）目前仅有读端能力。播放参数 `/P`
+//! （Table 279–281）与屏幕参数 `/SP`（Table 282–284）在 `play`/`screen`
+//! 子模块建模；`/P` 的 `/PL` media players（13.2.7）留待后续切片。
 //!
 //! 嵌入文件与 Form XObject 句柄由 [`MediaClipData::to_dict`] 按对象号
 //! 表解析；句柄上界在 `action_requirements` 于任何对象写出前拒绝。
@@ -13,6 +14,12 @@
 use super::text_string_value;
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
+
+mod play;
+mod screen;
+
+pub use play::{MediaDuration, MediaFit, MediaPlayParameters, MediaPlaySettings, MediaTimespan};
+pub use screen::{MediaFloatingWindow, MediaScreenParameters, MediaScreenSettings, MediaWindow};
 
 /// media clip data 的 `/D` 媒体数据来源（Table 274）。
 #[derive(Debug, Clone, PartialEq)]
@@ -236,18 +243,37 @@ impl MediaClipData {
 pub struct MediaRendition {
     name: Option<String>,
     clip: MediaClipData,
+    play: Option<MediaPlayParameters>,
+    screen: Option<MediaScreenParameters>,
 }
 
 impl MediaRendition {
-    /// 以 media clip 对象构造；`/C` 必写（播放参数未建模，无法借助
-    /// `/P` 的 `/PL` 省略该条目）。
+    /// 以 media clip 对象构造；`/C` 必写（`/P` 的 `/PL` media players
+    /// 未建模，无法据此省略该条目）。
     pub fn new(clip: MediaClipData) -> Self {
-        Self { name: None, clip }
+        Self {
+            name: None,
+            clip,
+            play: None,
+            screen: None,
+        }
     }
 
     /// `/N` 名称。
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// `/P` media play parameters（Table 279）。
+    pub fn with_play(mut self, play: MediaPlayParameters) -> Self {
+        self.play = Some(play);
+        self
+    }
+
+    /// `/SP` media screen parameters（Table 282）。
+    pub fn with_screen(mut self, screen: MediaScreenParameters) -> Self {
+        self.screen = Some(screen);
         self
     }
 
@@ -261,7 +287,14 @@ impl MediaRendition {
                 "rendition /N must not be empty".into(),
             ));
         }
-        self.clip.validate(form_count, embedded_count)
+        self.clip.validate(form_count, embedded_count)?;
+        if let Some(play) = &self.play {
+            play.validate()?;
+        }
+        if let Some(screen) = &self.screen {
+            screen.validate()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn form_handle(&self) -> Option<usize> {
@@ -282,6 +315,12 @@ impl MediaRendition {
             );
         if let Some(name) = &self.name {
             dict = dict.insert("N", text_string_value(name));
+        }
+        if let Some(play) = &self.play {
+            dict = dict.insert("P", Value::Dict(play.to_dict()));
+        }
+        if let Some(screen) = &self.screen {
+            dict = dict.insert("SP", Value::Dict(screen.to_dict()));
         }
         Ok(dict)
     }
@@ -352,10 +391,12 @@ impl SelectorRendition {
 }
 
 /// rendition 对象（Table 266）。
+///
+/// 媒体 rendition 装箱，避免播放/屏幕参数放大 rendition 与动作枚举的尺寸。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Rendition {
     /// 媒体 rendition（Table 271）。
-    Media(MediaRendition),
+    Media(Box<MediaRendition>),
     /// 选择器 rendition（Table 272）。
     Selector(SelectorRendition),
 }
@@ -363,7 +404,7 @@ pub enum Rendition {
 impl Rendition {
     /// 以 media clip 构造媒体 rendition。
     pub fn media(clip: MediaClipData) -> Self {
-        Self::Media(MediaRendition::new(clip))
+        Self::Media(Box::new(MediaRendition::new(clip)))
     }
 
     /// 以候选列表构造选择器 rendition。
@@ -375,7 +416,7 @@ impl Rendition {
     pub fn with_name(self, name: impl Into<String>) -> Self {
         let name = name.into();
         match self {
-            Self::Media(media) => Self::Media(media.with_name(name)),
+            Self::Media(media) => Self::Media(Box::new(media.with_name(name))),
             Self::Selector(selector) => Self::Selector(selector.with_name(name)),
         }
     }

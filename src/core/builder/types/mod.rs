@@ -95,7 +95,9 @@ pub use pattern::{PaintType, TilingPattern, TilingType};
 pub use program::FontProgram;
 pub(crate) use program::OpenTypeFlavor;
 pub use rendition::{
-    MediaClipData, MediaClipSource, MediaPermissions, MediaRendition, Rendition, SelectorRendition,
+    MediaClipData, MediaClipSource, MediaDuration, MediaFit, MediaFloatingWindow, MediaPermissions,
+    MediaPlayParameters, MediaPlaySettings, MediaRendition, MediaScreenParameters,
+    MediaScreenSettings, MediaTimespan, MediaWindow, Rendition, SelectorRendition,
     TemporaryFilePermission,
 };
 pub(crate) use shading::mesh_component_ranges;
