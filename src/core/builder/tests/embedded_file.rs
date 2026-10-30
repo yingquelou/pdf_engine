@@ -363,6 +363,8 @@ fn embedded_names_tree_merges_with_navigation_entries() {
             sound_nums: &b.sound_nums,
             form_nums: &b.form_nums,
             embedded_nums: &b.embedded_nums,
+            rendition_nums: &b.rendition_nums,
+            rendition_cursor: Some(&b.rendition_cursor),
         },
     )
     .expect("apply");

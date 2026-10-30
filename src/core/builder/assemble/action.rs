@@ -8,7 +8,10 @@ use crate::core::types::PdfFeature;
 use crate::core::writer::WriteError;
 
 impl PdfBuilder {
-    /// 注解与大纲实际引用到的全部动作（含 Link `/PA` 与父条目动作）。
+    /// 注解与大纲实际引用到的全部动作（含 Link `/PA` 与父条目动作），按
+    /// 实际写出顺序：注解按注册顺序，大纲按子项先于父项且同一动作句柄只
+    /// 出现一次。Link `/PA` 只允许 URI 动作，不消费 media clip section
+    /// 目标；section 目标对象分配依赖此顺序与注解/大纲写出顺序对齐。
     pub(super) fn used_actions(&self) -> Vec<&Action> {
         let mut actions = Vec::new();
         for entry in &self.annotations {

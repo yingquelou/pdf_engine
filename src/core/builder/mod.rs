@@ -55,24 +55,26 @@ pub use types::{
     GoToETargetRelation, GraphicsState, GraphicsStateFont, GroupXObject, Halftone,
     HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit, IconScaleWhen, IconScaling,
     ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, LineEndStyle, LineIntent,
-    LinkHighlightMode, Measure, MediaClipData, MediaClipSource, MediaDuration, MediaFit,
-    MediaFloatingWindow, MediaPermissions, MediaPlayParameters, MediaPlaySettings, MediaPlayerInfo,
-    MediaPlayers, MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan,
-    MediaWindow, MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget, MovieActivation,
-    MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder, OcgStateOperation,
-    OcgStateSequence, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent,
-    RadialShading, Rendition, RenditionAction, RenditionOperation, SampledFunction,
-    SelectorRendition, Separation, SetOcgStateAction, Shading, ShadingOptions, ShadingPattern,
-    SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction, SoundEncoding,
-    StitchingFunction, TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading,
-    ThreadAction, TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
-    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
-    Viewport, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
+    LinkHighlightMode, Measure, MediaClip, MediaClipData, MediaClipSection, MediaClipSource,
+    MediaDuration, MediaFit, MediaFloatingWindow, MediaPermissions, MediaPlayParameters,
+    MediaPlaySettings, MediaPlayerInfo, MediaPlayers, MediaRendition, MediaScreenParameters,
+    MediaScreenSettings, MediaTimespan, MediaWindow, MeshFunction, MeshVertex, Movie, MovieAction,
+    MovieActionTarget, MovieActivation, MoviePlayback, NumberFormat, NumberFraction,
+    NumberLabelOrder, OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize,
+    PaintType, PdfAnnotation, PolygonIntent, RadialShading, Rendition, RenditionAction,
+    RenditionOperation, SampledFunction, SelectorRendition, Separation, SetOcgStateAction, Shading,
+    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound,
+    SoundAction, SoundEncoding, StitchingFunction, TemporaryFilePermission, TensorProductPatch,
+    TensorProductPatchShading, ThreadAction, TilingPattern, TilingType, Transition,
+    TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle, Type1Halftone,
+    Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem, XmpListKind, XmpPacket,
+    XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
 use crate::core::types::PdfVersion;
 use crate::core::writer::{DocumentWriter, StreamCompression, WriteError};
+use std::cell::Cell;
 use std::io::Write;
 
 /// 单页的构建态：尚未分配对象号的内容。
@@ -189,6 +191,14 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 分配的嵌入文件规格对象号（下标即嵌入文件句柄）；
     /// 供 Rendition 动作的 media clip `/D` 解析。
     embedded_nums: Vec<i64>,
+    /// 最近一次 assemble 分配的内联 media clip section 首级 `/D` 目标号
+    /// （按动作写出顺序）；供注解与大纲 `/C` 内联 section 消费。
+    rendition_nums: Vec<i64>,
+    /// 最近一次 assemble 分配的 section 链全部 `/D` 目标号（按分配顺序）；
+    /// 供 `assemble::rendition::write_objects` 写出。
+    rendition_targets: Vec<i64>,
+    /// 内联 section 的消费游标；一次构建内注解与大纲共享。
+    rendition_cursor: Cell<usize>,
     /// 文档级嵌入文件池；`PdfBuilder::embed_file` 返回其索引。
     embedded: Vec<EmbeddedFile>,
     /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
@@ -232,6 +242,9 @@ impl PdfBuilder {
             sound_nums: Vec::new(),
             form_nums: Vec::new(),
             embedded_nums: Vec::new(),
+            rendition_nums: Vec::new(),
+            rendition_targets: Vec::new(),
+            rendition_cursor: Cell::new(0),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -261,6 +274,9 @@ impl PdfBuilder {
             sound_nums: Vec::new(),
             form_nums: Vec::new(),
             embedded_nums: Vec::new(),
+            rendition_nums: Vec::new(),
+            rendition_targets: Vec::new(),
+            rendition_cursor: Cell::new(0),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -755,8 +771,19 @@ impl PdfBuilder {
                 sound_nums: &self.sound_nums,
                 form_nums: &self.form_nums,
                 embedded_nums: &self.embedded_nums,
+                rendition_nums: &self.rendition_nums,
+                rendition_cursor: Some(&self.rendition_cursor),
             },
         )?;
+        // 内联 section 的消费游标必须覆盖全部首级目标：遗漏说明注解/大纲
+        // 的写出顺序与分配顺序不一致，此时在任何字节写出前拒绝。
+        if self.rendition_cursor.get() != self.rendition_nums.len() {
+            return Err(WriteError::InvalidObject(format!(
+                "media clip section inline /D wrote {} of {} allocated roots",
+                self.rendition_cursor.get(),
+                self.rendition_nums.len()
+            )));
+        }
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {
             writer = writer.with_compression(compression);

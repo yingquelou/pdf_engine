@@ -18,6 +18,7 @@ use crate::core::builder::types::{
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
+use std::cell::Cell;
 
 use super::annotation_mk::appearance_characteristics_dict;
 use super::annotation_popup::PopupPairs;
@@ -36,6 +37,10 @@ pub(super) struct AnnotationRefs<'a> {
     pub(super) ocg_nums: &'a [i64],
     /// Sound 动作与 Sound 注解 `/Sound` 的声音流对象。
     pub(super) sound_nums: &'a [i64],
+    /// Rendition 动作内联 media clip section 的首级 `/D` 目标对象号。
+    pub(super) rendition_nums: &'a [i64],
+    /// 内联 section 的消费游标；与大纲写出共享。
+    pub(super) rendition_cursor: Option<&'a Cell<usize>>,
 }
 
 impl AnnotationRefs<'_> {
@@ -47,6 +52,8 @@ impl AnnotationRefs<'_> {
             sound_nums: self.sound_nums,
             form_nums: self.form_nums,
             embedded_nums: self.embedded_nums,
+            rendition_nums: self.rendition_nums,
+            rendition_cursor: self.rendition_cursor,
         }
     }
 }

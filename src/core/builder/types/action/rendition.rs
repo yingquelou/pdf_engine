@@ -3,8 +3,9 @@
 //! `/OP` 与 `/JS` 至少写其一：`/OP` 取 Table 214 定义的五个操作之一时
 //! `/AN` 必需，其中 Play（0）与 PlayIfPaused（4）还要求 `/R`；未声明
 //! `/OP` 时 `/JS` 必需。`/JS` 可与 `/OP` 并存，供不识别该操作的查看器
-//! 回退执行。rendition 对象随动作内联写出，其嵌入文件与 Form XObject
-//! 句柄由 [`ActionRefs`] 解析。
+//! 回退执行。rendition 对象随动作内联写出，其嵌入文件、Form XObject
+//! 与 media clip section 链对象号由 [`ActionRefs`] 解析；section 的
+//! 首级 `/D` 目标号按动作写出顺序从共享游标取得。
 //!
 //! 句柄越界与操作依赖缺失在任何对象写出前由 `action_requirements` 拒绝，
 //! 保证零字节输出契约。
@@ -140,6 +141,11 @@ impl RenditionAction {
         self.annotation
     }
 
+    /// `/R` rendition 对象。
+    pub(crate) fn rendition(&self) -> Option<&Rendition> {
+        self.rendition.as_ref()
+    }
+
     /// 校验操作依赖与句柄上界。
     pub(crate) fn validate(
         &self,
@@ -214,10 +220,7 @@ impl RenditionAction {
             dict = dict.insert("AN", Value::Ref(*num, 0));
         }
         if let Some(rendition) = &self.rendition {
-            dict = dict.insert(
-                "R",
-                Value::Dict(rendition.to_dict(refs.form_nums, refs.embedded_nums)?),
-            );
+            dict = dict.insert("R", Value::Dict(rendition.to_dict(&refs.clip_refs())?));
         }
         if let Some(javascript) = &self.javascript {
             dict = dict.insert("JS", text_string_value(javascript));

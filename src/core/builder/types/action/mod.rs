@@ -15,11 +15,13 @@
 //! Movie 动作的注解目标与电影激活参数，`rendition` 收 Rendition 动作的
 //! 操作/脚本依赖与 Screen 注解目标。
 
+use super::ClipRefs;
 use super::text_string_value;
 use super::transition::Transition;
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
+use std::cell::Cell;
 
 mod gotoe;
 mod hide;
@@ -48,8 +50,8 @@ pub use thread::ThreadAction;
 ///
 /// Hide 的 `/T` 与 Rendition 的 `/AN` 用注解映射，Set-OCG-State 的
 /// `/State` 用可选内容组映射，Sound 的 `/Sound` 用声音对象映射，
-/// Rendition 的 media clip `/D` 用嵌入文件与 Form XObject 映射；
-/// 未涉及的类别传空切片。
+/// Rendition 的 media clip `/D` 用嵌入文件、Form XObject 与 section
+/// 链对象号映射；未涉及的类别传空切片。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ActionRefs<'a> {
     /// 注解句柄 → 注解对象号。
@@ -62,6 +64,22 @@ pub(crate) struct ActionRefs<'a> {
     pub(crate) form_nums: &'a [i64],
     /// 嵌入文件句柄 → 文件规格对象号。
     pub(crate) embedded_nums: &'a [i64],
+    /// 内联 media clip section 的首级 `/D` 目标对象号。
+    pub(crate) rendition_nums: &'a [i64],
+    /// 内联 media clip section 的消费游标；注解与大纲共享同一次构建的游标。
+    pub(crate) rendition_cursor: Option<&'a Cell<usize>>,
+}
+
+impl ActionRefs<'_> {
+    /// media clip 写出所需的同一组对象号映射。
+    pub(crate) fn clip_refs(&self) -> ClipRefs<'_> {
+        ClipRefs {
+            form_nums: self.form_nums,
+            embedded_nums: self.embedded_nums,
+            roots: self.rendition_nums,
+            cursor: self.rendition_cursor,
+        }
+    }
 }
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。

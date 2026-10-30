@@ -1,28 +1,39 @@
 //! Rendition 与 media clip 对象写端（13.2，PDF 1.5）。
 //!
 //! 覆盖媒体 rendition（`/S /MR`，Table 271）与选择器 rendition
-//! （`/S /SR`，Table 272）。media clip 只建模 media clip data
-//! （`/S /MCD`，Table 274）：`/D` 的媒体数据写成嵌入文件规格或
-//! Form XObject 的间接引用，也可写成 URL 文件规格；clip section
-//! （`/S /MCS`，Table 277）目前仅有读端能力。播放参数 `/P`
-//! （Table 279–281）与屏幕参数 `/SP`（Table 282–284）在 `play`/`screen`
-//! 子模块建模，两处 `/PL` media players（13.2.7 Table 290–293）在
-//! `players` 子模块建模。
+//! （`/S /SR`，Table 272）。media clip 建模 media clip data
+//! （`/S /MCD`，Table 274）与 media clip section（`/S /MCS`，Table 277）：
+//! data 的 `/D` 媒体数据写成嵌入文件规格或 Form XObject 的间接引用，也可
+//! 写成 URL 文件规格；section 的 `/D` 指向独立写出的下一级 clip 对象。
+//! section 目前只写 `/N` 与 `/D`，`/Alt`、`/MH`、`/BE`（Table 278）尚未
+//! 建模。播放参数 `/P`（Table 279–281）与屏幕参数 `/SP`（Table 282–284）
+//! 在 `play`/`screen` 子模块建模，两处 `/PL` media players（13.2.7
+//! Table 290–293）在 `players` 子模块建模。
 //!
-//! 嵌入文件与 Form XObject 句柄由 [`MediaClipData::to_dict`] 按对象号
-//! 表解析；句柄上界在 `action_requirements` 于任何对象写出前拒绝。
+//! 嵌入文件、Form XObject 与 section 链对象号由
+//! [`MediaClipData::to_dict`] 与 [`MediaClipSection::to_dict`] 按
+//! [`ClipRefs`] 解析；句柄上界与嵌套深度在 `action_requirements` 于任何
+//! 对象写出前拒绝。
 
 use super::text_string_value;
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
+/// rendition 与 media clip 的嵌套深度上限，与读端计数一致：最外层
+/// rendition 深度为 0，media clip 为 1，section 的 `/D` 每级加一，最终
+/// media clip data 也计入深度；达到上限即拒绝。
+pub(super) const MAX_DEPTH: usize = 32;
+
 mod play;
 mod players;
 mod screen;
+mod section;
 
 pub use play::{MediaDuration, MediaFit, MediaPlayParameters, MediaPlaySettings, MediaTimespan};
 pub use players::{MediaPlayerInfo, MediaPlayers, SoftwareIdentifier};
 pub use screen::{MediaFloatingWindow, MediaScreenParameters, MediaScreenSettings, MediaWindow};
+pub(crate) use section::ClipRefs;
+pub use section::{MediaClip, MediaClipSection};
 
 /// media clip data 的 `/D` 媒体数据来源（Table 274）。
 #[derive(Debug, Clone, PartialEq)]
@@ -259,17 +270,17 @@ impl MediaClipData {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaRendition {
     name: Option<String>,
-    clip: MediaClipData,
+    clip: MediaClip,
     play: Option<MediaPlayParameters>,
     screen: Option<MediaScreenParameters>,
 }
 
 impl MediaRendition {
     /// 以 media clip 对象构造；`/C` 必写。
-    pub fn new(clip: MediaClipData) -> Self {
+    pub fn new(clip: impl Into<MediaClip>) -> Self {
         Self {
             name: None,
-            clip,
+            clip: clip.into(),
             play: None,
             screen: None,
         }
@@ -293,8 +304,10 @@ impl MediaRendition {
         self
     }
 
-    pub(crate) fn validate(
+    /// 按 rendition 深度校验名称、clip 结构与播放/屏幕参数。
+    pub(crate) fn validate_at_depth(
         &self,
+        depth: usize,
         form_count: usize,
         embedded_count: usize,
     ) -> Result<(), WriteError> {
@@ -303,7 +316,8 @@ impl MediaRendition {
                 "rendition /N must not be empty".into(),
             ));
         }
-        self.clip.validate(form_count, embedded_count)?;
+        self.clip
+            .validate_at_depth(depth + 1, form_count, embedded_count)?;
         if let Some(play) = &self.play {
             play.validate()?;
         }
@@ -317,18 +331,16 @@ impl MediaRendition {
         self.clip.form_handle()
     }
 
-    pub(crate) fn to_dict(
-        &self,
-        form_nums: &[i64],
-        embedded_nums: &[i64],
-    ) -> Result<Dict, WriteError> {
+    /// `/C` media clip 对象。
+    pub(crate) fn clip(&self) -> &MediaClip {
+        &self.clip
+    }
+
+    pub(crate) fn to_dict(&self, refs: &ClipRefs<'_>) -> Result<Dict, WriteError> {
         let mut dict = Dict::new()
             .insert("Type", Value::Name("Rendition".into()))
             .insert("S", Value::Name("MR".into()))
-            .insert(
-                "C",
-                Value::Dict(self.clip.to_dict(form_nums, embedded_nums)?),
-            );
+            .insert("C", self.clip.inline_value(refs)?);
         if let Some(name) = &self.name {
             dict = dict.insert("N", text_string_value(name));
         }
@@ -364,8 +376,10 @@ impl SelectorRendition {
         self
     }
 
-    pub(crate) fn validate(
+    /// 按候选项校验名称与嵌套深度；候选 rendition 深度逐级加一。
+    pub(crate) fn validate_at_depth(
         &self,
+        depth: usize,
         form_count: usize,
         embedded_count: usize,
     ) -> Result<(), WriteError> {
@@ -375,7 +389,7 @@ impl SelectorRendition {
             ));
         }
         for rendition in &self.renditions {
-            rendition.validate(form_count, embedded_count)?;
+            rendition.validate_at_depth(depth + 1, form_count, embedded_count)?;
         }
         Ok(())
     }
@@ -386,14 +400,15 @@ impl SelectorRendition {
         }
     }
 
-    pub(crate) fn to_dict(
-        &self,
-        form_nums: &[i64],
-        embedded_nums: &[i64],
-    ) -> Result<Dict, WriteError> {
+    /// `/R` 候选 rendition 数组。
+    pub(crate) fn renditions(&self) -> &[Rendition] {
+        &self.renditions
+    }
+
+    pub(crate) fn to_dict(&self, refs: &ClipRefs<'_>) -> Result<Dict, WriteError> {
         let mut entries = Vec::with_capacity(self.renditions.len());
         for rendition in &self.renditions {
-            entries.push(Value::Dict(rendition.to_dict(form_nums, embedded_nums)?));
+            entries.push(Value::Dict(rendition.to_dict(refs)?));
         }
         let mut dict = Dict::new()
             .insert("Type", Value::Name("Rendition".into()))
@@ -419,7 +434,7 @@ pub enum Rendition {
 
 impl Rendition {
     /// 以 media clip 构造媒体 rendition。
-    pub fn media(clip: MediaClipData) -> Self {
+    pub fn media(clip: impl Into<MediaClip>) -> Self {
         Self::Media(Box::new(MediaRendition::new(clip)))
     }
 
@@ -437,15 +452,32 @@ impl Rendition {
         }
     }
 
-    /// 校验嵌套结构与数据来源句柄。
+    /// 校验嵌套结构与数据来源句柄；最外层 rendition 深度为 0。
     pub(crate) fn validate(
         &self,
         form_count: usize,
         embedded_count: usize,
     ) -> Result<(), WriteError> {
+        self.validate_at_depth(0, form_count, embedded_count)
+    }
+
+    /// 按读端同一计数校验 rendition 深度（选择器候选逐级加一）。
+    fn validate_at_depth(
+        &self,
+        depth: usize,
+        form_count: usize,
+        embedded_count: usize,
+    ) -> Result<(), WriteError> {
+        if depth >= MAX_DEPTH {
+            return Err(WriteError::InvalidObject(
+                "rendition nesting exceeds the depth limit".into(),
+            ));
+        }
         match self {
-            Self::Media(media) => media.validate(form_count, embedded_count),
-            Self::Selector(selector) => selector.validate(form_count, embedded_count),
+            Self::Media(media) => media.validate_at_depth(depth, form_count, embedded_count),
+            Self::Selector(selector) => {
+                selector.validate_at_depth(depth, form_count, embedded_count)
+            }
         }
     }
 
@@ -462,14 +494,10 @@ impl Rendition {
     }
 
     /// 写出 rendition 字典。
-    pub(crate) fn to_dict(
-        &self,
-        form_nums: &[i64],
-        embedded_nums: &[i64],
-    ) -> Result<Dict, WriteError> {
+    pub(crate) fn to_dict(&self, refs: &ClipRefs<'_>) -> Result<Dict, WriteError> {
         match self {
-            Self::Media(media) => media.to_dict(form_nums, embedded_nums),
-            Self::Selector(selector) => selector.to_dict(form_nums, embedded_nums),
+            Self::Media(media) => media.to_dict(refs),
+            Self::Selector(selector) => selector.to_dict(refs),
         }
     }
 }

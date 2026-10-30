@@ -92,24 +92,32 @@ impl NavigationState {
         self.collection.as_ref()
     }
 
-    /// 大纲条目实际引用到的动作（含子项，按文档顺序）。
+    /// 大纲条目实际引用到的动作，按写出顺序（子项先于父项），同一动作
+    /// 句柄只出现一次。
+    ///
+    /// 写出顺序与 [`write_outline_items`] 一致：每个条目先写子项，再写
+    /// 自身 `/A`，且动作对象按句柄缓存。Rendition section 的目标对象分配
+    /// 依赖此顺序与注解写出顺序对齐。
     pub(super) fn outline_actions(&self) -> Vec<&Action> {
         fn collect<'a>(
             entries: &'a [OutlineEntry],
             actions: &'a [Action],
             used: &mut Vec<&'a Action>,
+            seen: &mut std::collections::HashSet<usize>,
         ) {
             for entry in entries {
+                collect(&entry.children, actions, used, seen);
                 if let Some(handle) = entry.action
                     && let Some(action) = actions.get(handle)
+                    && seen.insert(handle)
                 {
                     used.push(action);
                 }
-                collect(&entry.children, actions, used);
             }
         }
         let mut used = Vec::new();
-        collect(&self.outline, &self.actions, &mut used);
+        let mut seen = std::collections::HashSet::new();
+        collect(&self.outline, &self.actions, &mut used, &mut seen);
         used
     }
 }

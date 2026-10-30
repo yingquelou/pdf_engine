@@ -290,6 +290,162 @@ fn builder_rendition_play_and_screen_parameters_roundtrip() {
     );
 }
 
+/// media clip section 链（13.2.6 Table 277）经写端独立对象写出后由读取端
+/// 还原为相同的 `/C` → `/D` → `/D` 结构。
+#[test]
+fn builder_rendition_clip_section_roundtrip() {
+    use pdf_engine::core::builder::{
+        Action, AnnotationKind, MediaClipData, MediaClipSection, MediaClipSource, PageSize,
+        PdfAnnotation, PdfBuilder, Rendition, RenditionAction,
+    };
+    use pdf_engine::core::reader::action::Action as ReadAction;
+    use pdf_engine::core::reader::rendition::{
+        MediaClip, MediaClipDataSource, Rendition as ReadRendition,
+    };
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_5);
+    let p0 = builder.page(PageSize::A4);
+    let screen = builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Screen, [72.0, 500.0, 392.0, 740.0]),
+    );
+    let clip = MediaClipSection::new(
+        MediaClipSection::new(MediaClipData::new(MediaClipSource::Url(
+            "https://example.com/clip.mp4".into(),
+        )))
+        .with_name("part"),
+    )
+    .with_name("whole");
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 460.0, 240.0, 480.0]).with_action(
+            Action::Rendition(RenditionAction::play(screen, Rendition::media(clip))),
+        ),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build clip section");
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    assert_eq!(annotations.len(), 2);
+
+    let action = doc
+        .action(annotations[1].action.as_ref().expect("/A"))
+        .expect("typed action");
+    let ReadAction::Rendition(action) = action else {
+        panic!("expected a rendition action, got {action:?}");
+    };
+    let ReadRendition::Media(media) = action.rendition.expect("/R") else {
+        panic!("expected a media rendition");
+    };
+    let Some(MediaClip::Section(outer)) = media.clip else {
+        panic!("expected outer media clip section");
+    };
+    assert_eq!(outer.name.as_deref(), Some("whole"));
+    let MediaClip::Section(inner) = *outer.next else {
+        panic!("expected inner media clip section");
+    };
+    assert_eq!(inner.name.as_deref(), Some("part"));
+    let MediaClip::Data(data) = *inner.next else {
+        panic!("expected media clip data");
+    };
+    let MediaClipDataSource::FileSpec(filespec) = data.data else {
+        panic!("expected URL filespec");
+    };
+    assert_eq!(filespec.file_system.as_deref(), Some("URL"));
+    assert_eq!(
+        filespec.short_name.as_deref(),
+        Some("https://example.com/clip.mp4")
+    );
+}
+
+/// 写端与读端采用同一深度计数（rendition 深度 0、clip 深度 1、最终
+/// media clip data 也计入）：30 级 section 链（data 深度 31）可回读，
+/// 31 级在写出任何字节前拒绝。
+#[test]
+fn builder_rendition_clip_section_depth_limit_roundtrip() {
+    use pdf_engine::core::builder::{
+        Action, AnnotationKind, MediaClip, MediaClipData, MediaClipSection, MediaClipSource,
+        PageSize, PdfAnnotation, PdfBuilder, Rendition, RenditionAction,
+    };
+    use pdf_engine::core::reader::action::Action as ReadAction;
+    use pdf_engine::core::reader::rendition::{MediaClip as ReadClip, Rendition as ReadRendition};
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_5);
+    let p0 = builder.page(PageSize::A4);
+    let screen = builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Screen, [72.0, 500.0, 392.0, 740.0]),
+    );
+    let mut clip: MediaClip = MediaClipData::new(MediaClipSource::Url("deep.mp4".into())).into();
+    for _ in 0..30 {
+        clip = MediaClipSection::new(clip).into();
+    }
+    builder.add_annotation(
+        p0,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 460.0, 240.0, 480.0]).with_action(
+            Action::Rendition(RenditionAction::play(screen, Rendition::media(clip))),
+        ),
+    );
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build 30-level clip section");
+    let doc = parse_buf(&buf);
+    let annotations = doc.page_annotations(0).expect("annotations");
+    let action = doc
+        .action(annotations[1].action.as_ref().expect("/A"))
+        .expect("typed action");
+    let ReadAction::Rendition(action) = action else {
+        panic!("expected a rendition action, got {action:?}");
+    };
+    let ReadRendition::Media(media) = action.rendition.expect("/R") else {
+        panic!("expected a media rendition");
+    };
+    let mut node = media.clip.expect("/C");
+    let mut sections = 0;
+    while let ReadClip::Section(section) = node {
+        sections += 1;
+        node = *section.next;
+    }
+    assert_eq!(sections, 30);
+    let ReadClip::Data(_) = node else {
+        panic!("expected media clip data at the bottom of the chain");
+    };
+
+    let mut rejected = PdfBuilder::with_version(PdfVersion::V1_5);
+    let page = rejected.page(PageSize::A4);
+    let screen = rejected.add_annotation(
+        page,
+        PdfAnnotation::new(AnnotationKind::Screen, [72.0, 500.0, 392.0, 740.0]),
+    );
+    let mut too_deep: MediaClip =
+        MediaClipData::new(MediaClipSource::Url("deep.mp4".into())).into();
+    for _ in 0..31 {
+        too_deep = MediaClipSection::new(too_deep).into();
+    }
+    rejected.add_annotation(
+        page,
+        PdfAnnotation::new(AnnotationKind::Link, [72.0, 460.0, 240.0, 480.0]).with_action(
+            Action::Rendition(RenditionAction::play(screen, Rendition::media(too_deep))),
+        ),
+    );
+    let mut out = Vec::new();
+    let error = rejected
+        .build(&mut out)
+        .expect_err("31-level clip section exceeds the reader depth limit");
+    assert!(
+        error
+            .to_string()
+            .contains("media clip nesting exceeds the depth limit"),
+        "{error}"
+    );
+    assert!(out.is_empty());
+}
+
 /// 媒体播放器 `/PL`（13.2.7 Table 290–293）在 clip data 与 play parameters
 /// 两处经写端嵌套字典写出后由读取端还原为同一类型化模型。
 #[test]
