@@ -1,161 +1,32 @@
 //! 动作字典写端（ISO 32000-1 12.6 / 12.7.5）。
 //!
 //! 覆盖六种常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Hide
-//! 动作（隐藏/显示注解）与三种表单动作（SubmitForm、ResetForm、
-//! ImportData）。动作字典经 [`PdfBuilder::action`] 注册为句柄，由大纲条目
-//! 或注解引用写出。
+//! 动作（隐藏/显示注解）、Set-OCG-State 动作（切换可选内容组状态）与三种
+//! 表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
+//! [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
+//!
+//! 按族拆分：`targets` 收文件规格/远程目标/预定义动作名，`hide` 收 Hide
+//! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列。
 
+use super::text_string_value;
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
-use super::text_string_value;
+mod hide;
+mod ocg;
+mod targets;
 
-/// 文件规格（7.11.2）：写端只生成 `/UF` 统一文件路径。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ActionFileSpec {
-    file: String,
-}
+#[cfg(test)]
+mod tests;
 
-impl ActionFileSpec {
-    /// 构造文件规格；路径按 UTF-16BE 文本字符串写出。
-    pub fn new(file: impl Into<String>) -> Self {
-        Self { file: file.into() }
-    }
-
-    pub(crate) fn to_value(&self) -> Value {
-        Value::Dict(Dict::new().insert("UF", text_string_value(&self.file)))
-    }
-}
-
-/// 远程文档目标（GoToR `/D`）。
-#[derive(Debug, Clone, PartialEq)]
-pub enum ActionRemoteDestination {
-    /// 远程文档中的命名目标。
-    Named(String),
-    /// 远程文档中的 0 基页号。
-    Page(i64),
-}
-
-impl ActionRemoteDestination {
-    pub(crate) fn to_value(&self) -> Value {
-        match self {
-            Self::Named(name) => Value::String(name.clone()),
-            Self::Page(page) => Value::Integer(*page),
-        }
-    }
-}
-
-/// Hide 动作（12.6.4.10 Table 210）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct HideAction {
-    targets: Vec<HideTarget>,
-    hide: Option<bool>,
-}
-
-impl HideAction {
-    /// 构造 Hide 动作；`targets` 至少一项。
-    pub fn new(targets: Vec<HideTarget>) -> Self {
-        Self {
-            targets,
-            hide: None,
-        }
-    }
-
-    /// 显式写 `/H`：`true` 隐藏、`false` 显示；缺省按 Table 210 视为 `true`。
-    pub fn with_hidden(mut self, hidden: bool) -> Self {
-        self.hide = Some(hidden);
-        self
-    }
-
-    pub(crate) fn targets(&self) -> &[HideTarget] {
-        &self.targets
-    }
-
-    pub(crate) fn hide(&self) -> Option<bool> {
-        self.hide
-    }
-
-    /// 校验目标并与注解池规模比对（写出前的零字节契约）。
-    pub(crate) fn validate(&self, annotation_count: usize) -> Result<(), WriteError> {
-        if self.targets.is_empty() {
-            return Err(WriteError::InvalidObject(
-                "Hide action /T must name at least one target".into(),
-            ));
-        }
-        let mut names = std::collections::HashSet::new();
-        let mut handles = std::collections::HashSet::new();
-        for target in &self.targets {
-            match target {
-                HideTarget::FieldName(name) => {
-                    if name.trim().is_empty() {
-                        return Err(WriteError::InvalidObject(
-                            "Hide action /T field name must not be empty".into(),
-                        ));
-                    }
-                    if !names.insert(name.as_str()) {
-                        return Err(WriteError::InvalidObject(format!(
-                            "Hide action /T field name {name:?} is duplicated"
-                        )));
-                    }
-                }
-                HideTarget::Annotation(handle) => {
-                    if *handle >= annotation_count {
-                        return Err(WriteError::InvalidObject(format!(
-                            "Hide action /T references unknown annotation handle {handle}"
-                        )));
-                    }
-                    if !handles.insert(*handle) {
-                        return Err(WriteError::InvalidObject(format!(
-                            "Hide action /T references annotation handle {handle} twice"
-                        )));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Hide 动作的目标（Table 210 `/T`）。
-#[derive(Debug, Clone, PartialEq)]
-pub enum HideTarget {
-    /// 注解注册句柄（`PdfBuilder::add_annotation` 的返回值）。
-    Annotation(usize),
-    /// 交互表单字段的全限定名。
-    FieldName(String),
-}
-
-/// 查看器预定义动作。
-#[derive(Debug, Clone, PartialEq)]
-pub enum ActionNamedAction {
-    /// 下一页。
-    NextPage,
-    /// 上一页。
-    PrevPage,
-    /// 第一页。
-    FirstPage,
-    /// 最后一页。
-    LastPage,
-    /// 其他预定义动作（按名称原样写出）。
-    Other(String),
-}
-
-impl ActionNamedAction {
-    pub(crate) fn name(&self) -> &str {
-        match self {
-            Self::NextPage => "NextPage",
-            Self::PrevPage => "PrevPage",
-            Self::FirstPage => "FirstPage",
-            Self::LastPage => "LastPage",
-            Self::Other(name) => name,
-        }
-    }
-}
+pub use hide::{HideAction, HideTarget};
+pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
+pub use targets::{ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
 ///
-/// 写端支持十种动作；未知子类型不建模，由调用方直接构造字典。
+/// 写端支持十一种动作；未知子类型不建模，由调用方直接构造字典。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// 本地跳转；`/D` 为显式目标数组或命名目标。
@@ -182,6 +53,8 @@ pub enum Action {
     JavaScript(String),
     /// 隐藏或显示注解（12.6.4.10 Table 210）。
     Hide(HideAction),
+    /// 设置可选内容组状态（12.6.4.12 Table 213）。
+    SetOcgState(SetOcgStateAction),
     /// 提交表单数据（12.7.5.2 Table 236）：`/F` 写成 URL 文件规格。
     SubmitForm {
         /// 提交目标 URL；须为可打印 ASCII。
@@ -218,15 +91,21 @@ impl Action {
             Self::Launch { .. } => "Launch",
             Self::JavaScript(_) => "JavaScript",
             Self::Hide(_) => "Hide",
+            Self::SetOcgState(_) => "SetOCGState",
             Self::SubmitForm { .. } => "SubmitForm",
             Self::ResetForm { .. } => "ResetForm",
             Self::ImportData { .. } => "ImportData",
         }
     }
 
-    /// 构造动作字典；`annotation_nums` 为注解句柄到对象号的映射，
-    /// 供 Hide 的 `/T` 引用解析。
-    pub(crate) fn to_dict(&self, annotation_nums: &[i64]) -> Result<Dict, WriteError> {
+    /// 构造动作字典；`annotation_nums` 与 `ocg_nums` 分别是注解、可选内容组
+    /// 句柄到对象号的映射，供 Hide 的 `/T` 与 Set-OCG-State 的 `/State`
+    /// 引用解析。
+    pub(crate) fn to_dict(
+        &self,
+        annotation_nums: &[i64],
+        ocg_nums: &[i64],
+    ) -> Result<Dict, WriteError> {
         let mut dict = Dict::new().insert("S", Value::Name(self.subtype().into()));
         match self {
             Self::GoTo(dest) => {
@@ -277,6 +156,29 @@ impl Action {
                 dict = dict.insert("T", value);
                 if let Some(hidden) = hide.hide() {
                     dict = dict.insert("H", Value::Bool(hidden));
+                }
+            }
+            Self::SetOcgState(state) => {
+                state.validate(ocg_nums.len())?;
+                let mut items = Vec::new();
+                for sequence in state.sequences() {
+                    items.push(Value::Name(sequence.operation().name().into()));
+                    for &handle in sequence.groups() {
+                        let num = ocg_nums
+                            .get(handle)
+                            .copied()
+                            .filter(|num| *num > 0)
+                            .ok_or_else(|| {
+                                WriteError::InvalidObject(format!(
+                                    "SetOCGState action /State references optional content group handle {handle} with no allocated object number"
+                                ))
+                            })?;
+                        items.push(Value::Ref(num, 0));
+                    }
+                }
+                dict = dict.insert("State", Value::Array(Array(items)));
+                if let Some(preserve) = state.preserve_radio_buttons() {
+                    dict = dict.insert("PreserveRB", Value::Bool(preserve));
                 }
             }
             Self::SubmitForm {
@@ -379,112 +281,5 @@ fn destination_to_value(dest: &Destination) -> Value {
             Value::Name("FitBV".into()),
             left.map_or(Value::Null, |v| Value::Float(v)),
         ])),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::reader::navigation::Destination;
-
-    #[test]
-    fn goto_action_writes_dictionary() {
-        let action = Action::GoTo(Destination::Fit { page: 0 });
-        let dict = action.to_dict(&[]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("GoTo".into())));
-        assert!(dict.get("D").is_some());
-    }
-
-    #[test]
-    fn uri_action_writes_string() {
-        let action = Action::Uri("https://example.com".into());
-        let dict = action.to_dict(&[]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("URI".into())));
-        assert!(matches!(dict.get("URI"), Some(Value::HexString(_))));
-    }
-
-    #[test]
-    fn launch_action_writes_new_window() {
-        let action = Action::Launch {
-            file: ActionFileSpec::new("viewer.exe"),
-            new_window: Some(true),
-        };
-        let dict = action.to_dict(&[]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("Launch".into())));
-        assert_eq!(dict.get("NewWindow"), Some(&Value::Bool(true)));
-    }
-
-    #[test]
-    fn javascript_action_writes_script() {
-        let action = Action::JavaScript("app.alert(1);".into());
-        let dict = action.to_dict(&[]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("JavaScript".into())));
-        assert!(matches!(dict.get("JS"), Some(Value::HexString(_))));
-    }
-
-    #[test]
-    fn named_action_writes_name() {
-        let action = Action::Named(ActionNamedAction::NextPage);
-        let dict = action.to_dict(&[]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("Named".into())));
-        assert_eq!(dict.get("N"), Some(&Value::Name("NextPage".into())));
-    }
-
-    #[test]
-    fn goto_remote_action_writes_file_and_destination() {
-        let action = Action::GoToR {
-            file: ActionFileSpec::new("other.pdf"),
-            destination: ActionRemoteDestination::Page(5),
-        };
-        let dict = action.to_dict(&[]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("GoToR".into())));
-        assert!(dict.get("F").is_some());
-        assert_eq!(dict.get("D"), Some(&Value::Integer(5)));
-    }
-
-    #[test]
-    fn hide_action_writes_targets_and_flag() {
-        let action = Action::Hide(
-            HideAction::new(vec![
-                HideTarget::Annotation(0),
-                HideTarget::FieldName("group.note".into()),
-            ])
-            .with_hidden(false),
-        );
-        let dict = action.to_dict(&[20]).unwrap();
-        assert_eq!(dict.get("S"), Some(&Value::Name("Hide".into())));
-        let targets = dict.get("T").and_then(Value::as_array).expect("/T");
-        assert_eq!(targets.0[0], Value::Ref(20, 0));
-        assert!(matches!(targets.0[1], Value::HexString(_)));
-        assert_eq!(dict.get("H"), Some(&Value::Bool(false)));
-
-        let single = Action::Hide(HideAction::new(vec![HideTarget::Annotation(0)]));
-        let dict = single.to_dict(&[20]).unwrap();
-        assert_eq!(dict.get("T"), Some(&Value::Ref(20, 0)), "单目标写标量");
-        assert!(dict.get("H").is_none(), "缺省 /H 不物化");
-    }
-
-    #[test]
-    fn hide_action_rejects_invalid_targets() {
-        let empty = Action::Hide(HideAction::new(Vec::new()));
-        assert!(matches!(
-            empty.to_dict(&[]),
-            Err(WriteError::InvalidObject(_))
-        ));
-
-        let unknown = Action::Hide(HideAction::new(vec![HideTarget::Annotation(3)]));
-        assert!(matches!(
-            unknown.to_dict(&[20]),
-            Err(WriteError::InvalidObject(_))
-        ));
-
-        let duplicated = Action::Hide(HideAction::new(vec![
-            HideTarget::FieldName("name".into()),
-            HideTarget::FieldName("name".into()),
-        ]));
-        assert!(matches!(
-            duplicated.to_dict(&[]),
-            Err(WriteError::InvalidObject(_))
-        ));
     }
 }

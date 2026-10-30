@@ -56,6 +56,29 @@ pub(crate) struct NavigationState {
     actions: Vec<Action>,
 }
 
+impl NavigationState {
+    /// 大纲条目实际引用到的动作（含子项，按文档顺序）。
+    pub(super) fn outline_actions(&self) -> Vec<&Action> {
+        fn collect<'a>(
+            entries: &'a [OutlineEntry],
+            actions: &'a [Action],
+            used: &mut Vec<&'a Action>,
+        ) {
+            for entry in entries {
+                if let Some(handle) = entry.action
+                    && let Some(action) = actions.get(handle)
+                {
+                    used.push(action);
+                }
+                collect(&entry.children, actions, used);
+            }
+        }
+        let mut used = Vec::new();
+        collect(&self.outline, &self.actions, &mut used);
+        used
+    }
+}
+
 impl PdfBuilder {
     /// 设置页面标签范围（12.4.2），按起始页升序给出。
     ///
@@ -120,6 +143,7 @@ pub(super) fn apply(
     page_count: usize,
     navigation: &NavigationState,
     annotation_nums: &[i64],
+    ocg_nums: &[i64],
 ) -> Result<(), WriteError> {
     let has_actions = outline_has_actions(&navigation.outline);
     let required = [
@@ -218,6 +242,7 @@ pub(super) fn apply(
             page_refs: &page_refs,
             actions: &navigation.actions,
             annotation_nums,
+            ocg_nums,
         };
         let root = write_outline(doc, &navigation.outline, &context, &mut next_num)?;
         catalog = catalog.insert("Outlines", Value::Ref(root, 0));
@@ -328,11 +353,13 @@ fn outline_destination_value(
     }
 }
 
-/// 大纲写出期间共享的只读上下文；含 Hide 动作所需的注解对象号映射。
+/// 大纲写出期间共享的只读上下文；含 Hide 与 Set-OCG-State 动作所需的
+/// 注解/可选内容组对象号映射。
 struct OutlineContext<'a> {
     page_refs: &'a [(i64, i64)],
     actions: &'a [Action],
     annotation_nums: &'a [i64],
+    ocg_nums: &'a [i64],
 }
 
 fn write_outline(
@@ -400,7 +427,8 @@ fn write_outline_items(
                 if action_refs[action_handle] == 0 {
                     let action_num = *next_num;
                     *next_num += 1;
-                    let action_dict = actions[action_handle].to_dict(context.annotation_nums)?;
+                    let action_dict = actions[action_handle]
+                        .to_dict(context.annotation_nums, context.ocg_nums)?;
                     doc.set_object(Object::new(action_num, 0, Value::Dict(action_dict)));
                     action_refs[action_handle] = action_num;
                 }

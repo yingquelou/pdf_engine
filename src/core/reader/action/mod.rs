@@ -1,8 +1,9 @@
 //! 动作字典读取（ISO 32000-1 12.6 / 12.7.5）。
 //!
-//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript、Hide，以及
-//! 表单动作 SubmitForm、ResetForm、ImportData；未知子类型保留名称。动作值
-//! 可为间接引用，`/D` 的显式目标经页面树映射为 0 基页号。
+//! 覆盖常用动作：GoTo、GoToR、Named、URI、Launch、JavaScript、Hide、
+//! SetOCGState，以及表单动作 SubmitForm、ResetForm、ImportData；未知
+//! 子类型保留名称。动作值可为间接引用，`/D` 的显式目标经页面树映射为
+//! 0 基页号。
 
 use std::fmt;
 
@@ -36,6 +37,8 @@ pub enum Action {
     JavaScript(String),
     /// 隐藏或显示注解（12.6.4.10 Table 210）。
     Hide(HideAction),
+    /// 设置可选内容组状态（12.6.4.12 Table 213）。
+    SetOCGState(SetOcgStateAction),
     /// 提交表单数据（12.7.5.2 Table 236）。
     SubmitForm(SubmitFormAction),
     /// 重置表单字段（12.7.5.3 Table 238）。
@@ -106,6 +109,37 @@ pub enum HideTarget {
     },
     /// 交互表单字段的全限定名（12.7.3.2）。
     FieldName(String),
+}
+
+/// Set-OCG-State 动作（12.6.4.12 Table 213）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetOcgStateAction {
+    /// `/State`：从左到右依次应用的操作序列。
+    pub state: Vec<OcgStateSequence>,
+    /// `/PreserveRB`；缺省 `true`（保留单选按钮关系），此处不物化。
+    pub preserve_radio_buttons: Option<bool>,
+}
+
+/// `/State` 中的一个操作序列：操作名及其后的一个或多个组引用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcgStateSequence {
+    /// 序列起始的操作名。
+    pub operation: OcgStateOperation,
+    /// 该操作作用的可选内容组字典间接引用（对象号、生成号）。
+    pub groups: Vec<(i64, i64)>,
+}
+
+/// Set-OCG-State 的操作名（Table 213）；未知名字保留。
+#[derive(Debug, Clone, PartialEq)]
+pub enum OcgStateOperation {
+    /// `ON`：置为可见。
+    On,
+    /// `OFF`：置为隐藏。
+    Off,
+    /// `Toggle`：反转。
+    Toggle,
+    /// 非标准操作名。
+    Other(String),
 }
 
 /// 文件规格（7.11.2）：优先取 `/UF`，其次 `/F` 与平台相关路径。
@@ -269,6 +303,28 @@ impl Document {
                 };
                 Ok(Action::Hide(HideAction { targets, hide }))
             }
+            "SetOCGState" => {
+                let state = parse_set_ocg_state(
+                    self,
+                    dict.get("State")
+                        .ok_or_else(|| malformed("SetOCGState action is missing /State"))?,
+                )?;
+                let preserve_radio_buttons = match dict.get("PreserveRB") {
+                    None => None,
+                    Some(value) => match resolve(self, value)? {
+                        Value::Bool(flag) => Some(flag),
+                        _ => {
+                            return Err(malformed(
+                                "SetOCGState action /PreserveRB is not a boolean",
+                            ));
+                        }
+                    },
+                };
+                Ok(Action::SetOCGState(SetOcgStateAction {
+                    state,
+                    preserve_radio_buttons,
+                }))
+            }
             "SubmitForm" => {
                 let file = parse_file_spec(
                     self,
@@ -428,6 +484,75 @@ fn parse_hide_target(document: &Document, value: &Value) -> Result<HideTarget, A
         _ => Err(malformed(
             "Hide action /T entry is neither an annotation reference nor a text string",
         )),
+    }
+}
+
+/// 解析 Set-OCG-State 的 `/State` 扁平数组：名字开启一个序列，其后直到
+/// 下一个名字的组字典间接引用归入该序列（Table 213）。
+fn parse_set_ocg_state(
+    document: &Document,
+    value: &Value,
+) -> Result<Vec<OcgStateSequence>, ActionError> {
+    let value = resolve(document, value)?;
+    let array = value
+        .as_array()
+        .ok_or_else(|| malformed("SetOCGState action /State is not an array"))?;
+    let mut sequences: Vec<OcgStateSequence> = Vec::new();
+    for item in &array.0 {
+        if let Value::Ref(number, generation) = item {
+            let sequence = sequences.last_mut().ok_or_else(|| {
+                malformed("SetOCGState action /State begins with groups before an operation")
+            })?;
+            if !matches!(resolve(document, item)?, Value::Dict(_)) {
+                return Err(malformed(
+                    "SetOCGState action /State group reference does not resolve to an optional content group dictionary",
+                ));
+            }
+            sequence.groups.push((*number, *generation));
+            continue;
+        }
+        match resolve(document, item)? {
+            Value::Name(name) => {
+                if sequences
+                    .last()
+                    .is_some_and(|sequence| sequence.groups.is_empty())
+                {
+                    return Err(malformed(
+                        "SetOCGState action /State has an operation without groups",
+                    ));
+                }
+                sequences.push(OcgStateSequence {
+                    operation: ocg_state_operation(&name),
+                    groups: Vec::new(),
+                });
+            }
+            _ => {
+                return Err(malformed(
+                    "SetOCGState action /State entry is neither an operation name nor a group reference",
+                ));
+            }
+        }
+    }
+    if sequences.is_empty() {
+        return Err(malformed("SetOCGState action /State array is empty"));
+    }
+    if sequences
+        .last()
+        .is_some_and(|sequence| sequence.groups.is_empty())
+    {
+        return Err(malformed(
+            "SetOCGState action /State has an operation without groups",
+        ));
+    }
+    Ok(sequences)
+}
+
+fn ocg_state_operation(name: &str) -> OcgStateOperation {
+    match name {
+        "ON" => OcgStateOperation::On,
+        "OFF" => OcgStateOperation::Off,
+        "Toggle" => OcgStateOperation::Toggle,
+        other => OcgStateOperation::Other(other.to_owned()),
     }
 }
 

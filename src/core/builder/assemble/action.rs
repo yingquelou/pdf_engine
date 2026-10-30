@@ -8,11 +8,8 @@ use crate::core::types::PdfFeature;
 use crate::core::writer::WriteError;
 
 impl PdfBuilder {
-    /// 校验全部注解动作并返回其版本特性需求。
-    ///
-    /// 非法取值返回 [`WriteError::InvalidObject`]，版本不足返回
-    /// [`WriteError::UnsupportedVersion`]；两者都在任何对象写出前发生。
-    pub(super) fn action_requirements(&self) -> Result<Vec<PdfFeature>, WriteError> {
+    /// 注解与大纲实际引用到的全部动作（含 Link `/PA` 与父条目动作）。
+    pub(super) fn used_actions(&self) -> Vec<&Action> {
         let mut actions = Vec::new();
         for entry in &self.annotations {
             if let Some(action) = entry.annot.action() {
@@ -22,9 +19,22 @@ impl PdfBuilder {
                 actions.push(action);
             }
         }
+        actions.extend(self.navigation.outline_actions());
+        actions
+    }
+
+    /// 校验全部注解动作并返回其版本特性需求。
+    ///
+    /// 非法取值返回 [`WriteError::InvalidObject`]，版本不足返回
+    /// [`WriteError::UnsupportedVersion`]；两者都在任何对象写出前发生。
+    pub(super) fn action_requirements(&self) -> Result<Vec<PdfFeature>, WriteError> {
         let mut features = Vec::new();
-        for action in actions {
-            validate_action(action, self.annotations.len())?;
+        for action in self.used_actions() {
+            validate_action(
+                action,
+                self.annotations.len(),
+                self.optional_content_groups.len(),
+            )?;
             for feature in action_features(action) {
                 if !features.contains(&feature) {
                     features.push(feature);
@@ -69,13 +79,19 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         }
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
         Action::Hide(_) => vec![PdfFeature::HideAction],
+        Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
         _ => Vec::new(),
     }
 }
 
-fn validate_action(action: &Action, annotation_count: usize) -> Result<(), WriteError> {
+fn validate_action(
+    action: &Action,
+    annotation_count: usize,
+    ocg_count: usize,
+) -> Result<(), WriteError> {
     match action {
         Action::Hide(hide) => hide.validate(annotation_count)?,
+        Action::SetOcgState(state) => state.validate(ocg_count)?,
         Action::SubmitForm {
             url,
             fields,

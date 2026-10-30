@@ -23,21 +23,29 @@ use super::annotation_mk::appearance_characteristics_dict;
 use super::annotation_popup::PopupPairs;
 use super::real_array;
 
+/// 注解写出时按句柄解析的间接对象号映射。
+pub(super) struct AnnotationRefs<'a> {
+    /// `/Popup`、`/Parent` 与 Hide 动作 `/T` 的注解目标。
+    pub(super) annotation_nums: &'a [i64],
+    /// `/AP`、`/RO` 与 `/MK` 的外观流。
+    pub(super) form_nums: &'a [i64],
+    /// `/FS` 关联的文件规格。
+    pub(super) embedded_nums: &'a [i64],
+    /// Set-OCG-State 动作 `/State` 的可选内容组。
+    pub(super) ocg_nums: &'a [i64],
+}
+
 /// 把单个注解写成字典；对象号已由 assemble 主流程按句柄分配。
 ///
 /// `page_refs` 用于把 `/Dest` 与 `GoTo` 动作中的 0 基页号解析为
-/// Page 字典间接引用；`annotation_nums` 用于解析 `/Popup` 与 `/Parent` 句柄；
-/// `popup_pairs` 提供按单侧声明补出的另一端；
-/// `form_nums` 用于把 `/AP` 外观流句柄解析为 Form XObject 流引用；
-/// `embedded_nums` 用于把 `/FS` 句柄解析为文件规格引用。
+/// Page 字典间接引用；`popup_pairs` 提供按单侧声明补出的另一端；
+/// `refs` 提供注解、外观流、嵌入文件与可选内容组的对象号映射。
 pub(super) fn annotation_dict(
     annot: &PdfAnnotation,
     handle: usize,
-    annotation_nums: &[i64],
     popup_pairs: &PopupPairs,
     page_refs: &[(i64, i64)],
-    form_nums: &[i64],
-    embedded_nums: &[i64],
+    refs: &AnnotationRefs<'_>,
 ) -> Result<Dict, WriteError> {
     let mut dict = Dict::new()
         .insert("Type", Value::Name("Annot".into()))
@@ -184,7 +192,10 @@ pub(super) fn annotation_dict(
         dict = dict.insert("H", Value::Name(highlight.name().into()));
     }
     if let Some(action) = link.pressed_action() {
-        dict = dict.insert("PA", Value::Dict(action.to_dict(annotation_nums)?));
+        dict = dict.insert(
+            "PA",
+            Value::Dict(action.to_dict(refs.annotation_nums, refs.ocg_nums)?),
+        );
     }
     let redact = annot.redact();
     if let Some(text) = redact.overlay_text() {
@@ -200,7 +211,7 @@ pub(super) fn annotation_dict(
         dict = dict.insert("Repeat", Value::Bool(repeat));
     }
     if let Some(form) = redact.overlay_form() {
-        let num = form_nums.get(form).ok_or_else(|| {
+        let num = refs.form_nums.get(form).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /RO references unknown form handle {form}"
             ))
@@ -208,7 +219,7 @@ pub(super) fn annotation_dict(
         dict = dict.insert("RO", Value::Ref(*num, 0));
     }
     if let Some(characteristics) = annot.appearance_characteristics() {
-        let mk = appearance_characteristics_dict(characteristics, handle, form_nums)?;
+        let mk = appearance_characteristics_dict(characteristics, handle, refs.form_nums)?;
         dict = dict.insert("MK", Value::Dict(mk));
     }
     // `/FixedPrint` 写成直接字典（Table 191）；缺省条目不物化。
@@ -235,7 +246,7 @@ pub(super) fn annotation_dict(
                     .insert("S", Value::Name("GoTo".into()))
                     .insert("D", value)
             }
-            other => other.to_dict(annotation_nums)?,
+            other => other.to_dict(refs.annotation_nums, refs.ocg_nums)?,
         };
         dict = dict.insert("A", Value::Dict(action_dict));
     }
@@ -244,7 +255,7 @@ pub(super) fn annotation_dict(
         dict = dict.insert("Dest", value);
     }
     if let Some(popup) = annot.popup().or_else(|| popup_pairs.popup_of(handle)) {
-        let num = annotation_nums.get(popup).ok_or_else(|| {
+        let num = refs.annotation_nums.get(popup).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /Popup references unknown annotation handle {popup}"
             ))
@@ -260,7 +271,7 @@ pub(super) fn annotation_dict(
                 "annotation handle {handle}: /Parent must not reference the annotation itself"
             )));
         }
-        let num = annotation_nums.get(parent).ok_or_else(|| {
+        let num = refs.annotation_nums.get(parent).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /Parent references unknown annotation handle {parent}"
             ))
@@ -268,7 +279,7 @@ pub(super) fn annotation_dict(
         dict = dict.insert("Parent", Value::Ref(*num, 0));
     }
     if let Some(target) = annot.filespec() {
-        let num = embedded_nums.get(target).ok_or_else(|| {
+        let num = refs.embedded_nums.get(target).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /FS references unknown embedded file handle {target}"
             ))
@@ -280,7 +291,7 @@ pub(super) fn annotation_dict(
         // `/N` 为状态名 → 外观流引用（Widget 多状态外观，Table 168）。
         let mut states = Dict::new();
         for (state, form) in annot.appearance_states() {
-            let num = form_nums.get(*form).ok_or_else(|| {
+            let num = refs.form_nums.get(*form).ok_or_else(|| {
                 WriteError::InvalidObject(format!(
                     "annotation handle {handle}: /AP /N state {state} references unknown form handle {form}"
                 ))
@@ -289,7 +300,7 @@ pub(super) fn annotation_dict(
         }
         appearance = appearance.insert("N", Value::Dict(states));
     } else if let Some(form) = annot.appearance_normal() {
-        let num = form_nums.get(form).ok_or_else(|| {
+        let num = refs.form_nums.get(form).ok_or_else(|| {
             WriteError::InvalidObject(format!(
                 "annotation handle {handle}: /AP /N references unknown form handle {form}"
             ))
@@ -301,7 +312,7 @@ pub(super) fn annotation_dict(
         ("R", annot.appearance_rollover()),
     ] {
         if let Some(form) = form {
-            let num = form_nums.get(form).ok_or_else(|| {
+            let num = refs.form_nums.get(form).ok_or_else(|| {
                 WriteError::InvalidObject(format!(
                     "annotation handle {handle}: /AP /{key} references unknown form handle {form}"
                 ))

@@ -170,6 +170,9 @@ pub enum PdfFeature {
     AnnotationMeasure,
     /// Hide 动作（隐藏/显示注解，12.6.4.10 Table 210），PDF 1.2 引入。
     HideAction,
+    /// Set-OCG-State 动作（切换可选内容组状态，12.6.4.12 Table 213），
+    /// PDF 1.5 引入。
+    SetOcgState,
     /// 旧式注解边框数组的虚线项（`/Border` 第四项，Table 164），PDF 1.1 引入。
     AnnotationBorderDash,
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
@@ -221,7 +224,8 @@ impl PdfFeature {
             | PdfFeature::JPXDecode
             | PdfFeature::OptionalContent
             | PdfFeature::AnnotationBorderEffect
-            | PdfFeature::AnnotationRectDifferences => PdfVersion::V1_5,
+            | PdfFeature::AnnotationRectDifferences
+            | PdfFeature::SetOcgState => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
@@ -281,6 +285,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::FormCalculationOrder => "form calculation order",
             PdfFeature::FormDataActions => "form data actions",
             PdfFeature::HideAction => "hide action",
+            PdfFeature::SetOcgState => "Set-OCG-State action",
             PdfFeature::FormActionFieldNames => "form action field names",
             PdfFeature::SubmitFormUrlType => "submit-form URL type",
             PdfFeature::PageViewports => "page viewport dictionaries",

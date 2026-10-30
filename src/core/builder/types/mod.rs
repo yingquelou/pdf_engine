@@ -1,7 +1,7 @@
 //! 逻辑层公共数据类型：页面尺寸、字体与编码配置、图片数据。
 //!
 //! 按领域拆分为子模块，并由本模块统一 `pub use`：
-//! - `action`：动作字典（GoTo/GoToR/Named/URI/Launch/JavaScript）；
+//! - `action`：动作字典（12.6 的 Hide/Set-OCG-State 与 12.7.5 表单动作）；
 //! - `annotation`：注解字典（12.5 通用条目与常用子类型）；
 //! - `descriptor`：字体描述符度量；
 //! - `embedded_file`：嵌入文件与文件规格（7.11）；
@@ -42,6 +42,7 @@ mod viewport;
 
 pub use action::{
     Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, HideAction, HideTarget,
+    OcgStateOperation, OcgStateSequence, SetOcgStateAction,
 };
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{

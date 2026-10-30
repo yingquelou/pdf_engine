@@ -51,10 +51,11 @@ pub use types::{
     HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit, IconScaleWhen, IconScaling,
     ImageData, ImageIntent, ImageMask, Indexed, Lab, LatticeMeshShading, LineEndStyle, LineIntent,
     LinkHighlightMode, Measure, MeshFunction, MeshVertex, NumberFormat, NumberFraction,
-    NumberLabelOrder, OptionalContentGroup, PageSize, PaintType, PdfAnnotation, PolygonIntent,
-    RadialShading, SampledFunction, Separation, Shading, ShadingOptions, ShadingPattern, SoftMask,
-    SoftMaskSubtype, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
-    TilingPattern, TilingType, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
+    NumberLabelOrder, OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize,
+    PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation,
+    SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
+    StitchingFunction, TensorProductPatch, TensorProductPatchShading, TilingPattern, TilingType,
+    Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -156,6 +157,9 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 分配的注解对象号（下标即注解句柄）；供大纲
     /// `/A` 解析 Hide 动作的注解目标。
     annotation_nums: Vec<i64>,
+    /// 最近一次 assemble 分配的可选内容组对象号（下标即组句柄）；供大纲
+    /// `/A` 解析 Set-OCG-State 动作的组目标。
+    ocg_nums: Vec<i64>,
     /// 文档级嵌入文件池；`PdfBuilder::embed_file` 返回其索引。
     embedded: Vec<EmbeddedFile>,
     /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
@@ -192,6 +196,7 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
+            ocg_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -215,6 +220,7 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
+            ocg_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -622,6 +628,7 @@ impl PdfBuilder {
             self.pages.len(),
             &self.navigation,
             &self.annotation_nums,
+            &self.ocg_nums,
         )?;
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {

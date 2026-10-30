@@ -25,8 +25,8 @@ mod shading;
 mod type3;
 
 use super::{
-    CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions, GroupXObject,
-    ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
+    Action, CidFont, ColorSpace, Font, Function, GraphicsState, GraphicsStateFunctions,
+    GroupXObject, ImageData, ImageMask, OptionalContentGroup, Pattern, PdfBuilder, same_font,
 };
 use crate::core::builder::types::text_string_value;
 use crate::core::types::{
@@ -374,6 +374,16 @@ impl PdfBuilder {
             }
             if let Some(group) = form.optional_content {
                 used_ocgs.insert(group);
+            }
+        }
+        // Set-OCG-State 动作（12.6.4.12）引用的组即使未被页面标记也须写出；
+        // 句柄上界已由 `action_requirements` 校验。
+        for action in self.used_actions() {
+            let Action::SetOcgState(state) = action else {
+                continue;
+            };
+            for sequence in state.sequences() {
+                used_ocgs.extend(sequence.groups().iter().copied());
             }
         }
         let mut ocg_nums = vec![0i64; self.optional_content_groups.len()];
@@ -853,19 +863,20 @@ impl PdfBuilder {
                 .collect::<Vec<_>>(),
         )?;
         for (handle, entry) in self.annotations.iter().enumerate() {
-            let dict = annotation::annotation_dict(
-                &entry.annot,
-                handle,
-                &annotation_nums,
-                &popup_pairs,
-                &page_refs,
-                &form_nums,
-                &embedded_nums,
-            )?;
+            let refs = annotation::AnnotationRefs {
+                annotation_nums: &annotation_nums,
+                form_nums: &form_nums,
+                embedded_nums: &embedded_nums,
+                ocg_nums: &ocg_nums,
+            };
+            let dict =
+                annotation::annotation_dict(&entry.annot, handle, &popup_pairs, &page_refs, &refs)?;
             doc.set_object(Object::new(annotation_nums[handle], 0, Value::Dict(dict)));
         }
-        // 导航层随后写大纲 `/A`；Hide 动作的注解句柄在此解析为对象号。
+        // 导航层随后写大纲 `/A`；Hide 与 Set-OCG-State 动作的目标句柄
+        // 在此解析为对象号。
         self.annotation_nums = annotation_nums.clone();
+        self.ocg_nums = ocg_nums.clone();
 
         // 表单字段/Widget 间接对象：`/P` 指向页面字典，`/Kids`/`/Parent`
         // 已按字段树对象号互引，`/AP` 解析为 Form XObject 流引用。
