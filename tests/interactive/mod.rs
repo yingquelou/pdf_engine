@@ -8,8 +8,8 @@
 //! `annotation_appearance`、`annotation_geometry`、`annotation_link`、
 //! `annotation_measure`、`annotation_mk`、`annotation_popup`、
 //! `annotation_redact`、`annotation_subtype_table`、`annotation_watermark`、
-//! `form`、`embedded`、`metadata`、`page_presentation`、`incremental`、
-//! `signature`；根模块只保留主题文档、子模块声明与共享导入
+//! `form`、`embedded`、`metadata`、`page_presentation`、`page_thumbnail`、
+//! `incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
 //! （子模块经 `use super::*;` 取用）。
 
 #[path = "../support/mod.rs"]
@@ -33,6 +33,7 @@ mod incremental;
 mod metadata;
 mod navigation;
 mod page_presentation;
+mod page_thumbnail;
 mod signature;
 
 pub use pdf_engine::core::types::{Array, Dict, Object, StreamData, Value};

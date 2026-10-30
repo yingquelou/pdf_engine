@@ -209,6 +209,29 @@ impl PdfBuilder {
             page_image_nums.push(v);
         }
 
+        // 页面缩略图（12.3.4 `/Thumb`）：与页面绘制图像共用去重池，
+        // 但只作为页面字典条目引用，不进入内容资源字典。
+        let mut page_thumbnail_nums: Vec<Option<i64>> = Vec::with_capacity(self.pages.len());
+        for (index, page) in self.pages.iter().enumerate() {
+            let Some(thumbnail) = &page.thumbnail else {
+                page_thumbnail_nums.push(None);
+                continue;
+            };
+            validate_thumbnail(thumbnail).map_err(|message| {
+                WriteError::InvalidObject(format!("page {index} /Thumb: {message}"))
+            })?;
+            let obj_num = match image_pool.iter().position(|(g, _)| g == thumbnail) {
+                Some(i) => image_pool[i].1.base,
+                None => {
+                    let nums = allocate_image_objects(thumbnail, &mut num);
+                    let base = nums.base;
+                    image_pool.push((thumbnail.clone(), nums));
+                    base
+                }
+            };
+            page_thumbnail_nums.push(Some(obj_num));
+        }
+
         // CIDFont 去重池：跨页合并同一 CidFont，复用同一 Type 0 父对象号。
         let mut cid_font_pool: Vec<(CidFont, i64)> = Vec::new();
         let mut page_cid_font_nums: Vec<Vec<i64>> = Vec::with_capacity(self.pages.len());
@@ -877,6 +900,9 @@ impl PdfBuilder {
                     .borrow_mut()
                     .insert(PdfFeature::PagePresentation);
             }
+            if let Some(thumbnail_num) = page_thumbnail_nums[i] {
+                page_dict = page_dict.insert("Thumb", Value::Ref(thumbnail_num, 0));
+            }
             if !page_annotation_handles[i].is_empty() || !page_widget_nums[i].is_empty() {
                 let mut annots = Array::new();
                 for &handle in &page_annotation_handles[i] {
@@ -1251,6 +1277,28 @@ fn group_dict(group: &GroupXObject, doc: &mut Document, num: &mut i64) -> Result
         dict = dict.insert("K", Value::Bool(true));
     }
     Ok(dict)
+}
+
+/// 12.3.4：页面缩略图须为常规图像，颜色空间限于 DeviceGray、
+/// DeviceRGB 或基于二者的 Indexed。
+fn validate_thumbnail(img: &ImageData) -> Result<(), String> {
+    if img.image_mask {
+        return Err("thumbnail must not be an image mask".into());
+    }
+    let supported = match &img.color_space {
+        ColorSpace::DeviceGray | ColorSpace::DeviceRGB => true,
+        ColorSpace::Indexed(indexed) => matches!(
+            indexed.base.as_ref(),
+            ColorSpace::DeviceGray | ColorSpace::DeviceRGB
+        ),
+        _ => false,
+    };
+    if !supported {
+        return Err(
+            "thumbnail color space must be DeviceGray, DeviceRGB or Indexed based on them".into(),
+        );
+    }
+    Ok(())
 }
 
 /// 图像及其从属对象（软蒙版、显式蒙版、替代图像）的对象号。

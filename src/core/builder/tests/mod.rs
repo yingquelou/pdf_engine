@@ -23,6 +23,7 @@
 //! - `action_ocg`：Set-OCG-State 动作 `/State`（Table 213）的组对象分配、写出与 PDF 1.5 门禁；
 //! - `action_transition`：Transition 动作 `/Trans`（Table 215）的过渡字典写出、条目校验与 PDF 1.5 门禁；
 //! - `page_presentation`：页面 `/Dur` 与 `/Trans`（12.4.4 Table 30）的写出、PDF 1.1 门禁与 1.5 样式条目门禁；
+//! - `thumbnail`：页面缩略图 `/Thumb`（12.3.4 Table 30）的图像引用、去重与颜色空间契约；
 //! - `support`：注解字典取用的共享夹具；
 //! - `form_action`：表单数据动作（SubmitForm/ResetForm/ImportData，12.7.5）与版本门禁；
 //! - `form_appearance`：Widget `/AP /N` 状态子字典与 `/AS` 校验；
@@ -85,6 +86,7 @@ mod page_presentation;
 mod pattern;
 mod shading;
 mod support;
+mod thumbnail;
 mod to_unicode;
 mod type3;
 mod viewport;

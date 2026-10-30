@@ -92,6 +92,7 @@ pub mod signature;
 #[cfg(test)]
 mod tests;
 pub mod text;
+pub mod thumbnail;
 pub mod transition;
 pub mod viewport;
 pub mod xmp;

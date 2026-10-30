@@ -96,6 +96,8 @@ struct PageBuild {
     transition: Option<Transition>,
     /// 页面停留时长（页面 `/Dur`，12.4.4 Table 30，单位秒）。
     duration: Option<f64>,
+    /// 页面缩略图（页面 `/Thumb`，12.3.4 Table 30）。
+    thumbnail: Option<ImageData>,
     /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
     invalid_code_length: Option<usize>,
 }
@@ -294,6 +296,7 @@ impl PdfBuilder {
             viewports: Vec::new(),
             transition: None,
             duration: None,
+            thumbnail: None,
             invalid_code_length: None,
         });
         idx
@@ -472,6 +475,20 @@ impl PdfBuilder {
     pub fn set_page_duration(&mut self, page: usize, seconds: f64) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.duration = Some(seconds);
+        }
+        self
+    }
+
+    /// 为指定页设置缩略图（页面 `/Thumb`，12.3.4 Table 30，PDF 1.0）。
+    ///
+    /// 缩略图是页面字典直接引用的图像 XObject，不进入页面内容资源；
+    /// 与页面绘制的图像共用去重池。按 12.3.4 仅接受 DeviceGray、
+    /// DeviceRGB 或基于二者的 Indexed 颜色空间，且不得是图像蒙版，非法
+    /// 输入在 [`PdfBuilder::build`] 阶段返回 [`WriteError::InvalidObject`]
+    /// 且不写出任何字节。未知页索引被忽略；重复设置以后一次为准。
+    pub fn set_page_thumbnail(&mut self, page: usize, thumbnail: &ImageData) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.thumbnail = Some(thumbnail.clone());
         }
         self
     }
