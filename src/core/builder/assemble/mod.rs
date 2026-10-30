@@ -11,6 +11,7 @@
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出；
 //! - `acro_form`：AcroForm `/DR` 默认资源字典（字体/ExtGState/ColorSpace/ProcSet）；
 //! - `sound`：声音对象流（13.3 Table 294）的分配、写出与注解 `/Sound` 引用；
+//! - `three_d`：3D artwork 流（13.6 Table 300）的分配、写出与注解 `/3DD` 等条目；
 //! - `rendition`：media clip section 链（13.2.6 Table 277）的对象分配与写出。
 
 mod acro_form;
@@ -26,6 +27,7 @@ mod form_field;
 mod rendition;
 mod shading;
 mod sound;
+mod three_d;
 mod type3;
 
 use super::{
@@ -89,6 +91,9 @@ impl PdfBuilder {
         // 声音对象（13.3 Table 294）：采样参数与 PDF 1.2 门禁同样在
         // 任何对象写出前完成。
         sound::validate_registration(&self.sounds, self.version)?;
+        // 3D artwork（13.6 Table 300）：视图/默认视图与 PDF 1.6 门禁同样在
+        // 任何对象写出前完成。
+        three_d::validate_registration(&self.three_d_artworks, self.version)?;
         // 集合（12.3.5）与集合项（7.11.6）：`/D` 名称树与 `/CI` ↔ `/Schema`
         // 交叉校验同样在任何对象写出前完成。
         embedded_file::validate_collection_references(
@@ -607,6 +612,10 @@ impl PdfBuilder {
         // 对象号分配前完成。
         let sound_nums = sound::allocate(&self.sounds, &mut num);
 
+        // 3D artwork（13.6 Table 300）：每个注册项分配一个独立流对象号，
+        // 供 3D 注解 `/3DD` 引用。
+        let three_d_nums = three_d::allocate(&self.three_d_artworks, &mut num);
+
         // media clip section（13.2.6 Table 277）：section 链上每个 `/D`
         // 目标分配独立对象号；最外层 clip 内联在 rendition `/C` 中，不占
         // 对象号。分配顺序与注解/大纲实际写出顺序一致，内联写入时由共享
@@ -1014,6 +1023,8 @@ impl PdfBuilder {
                 embedded_nums: &embedded_nums,
                 ocg_nums: &ocg_nums,
                 sound_nums: &sound_nums,
+                three_d_nums: &three_d_nums,
+                three_d_artworks: &self.three_d_artworks,
                 rendition_nums: &self.rendition_nums,
                 rendition_cursor: Some(&self.rendition_cursor),
             };
@@ -1041,6 +1052,9 @@ impl PdfBuilder {
 
         // 声音流对象（13.3 Table 294）：对象号已在 `annotation_nums` 之前分配。
         sound::write_objects(&mut doc, &self.sounds, &sound_nums);
+
+        // 3D artwork 流对象（13.6 Table 300）：对象号已在上方分配。
+        three_d::write_objects(&mut doc, &self.three_d_artworks, &three_d_nums);
 
         // media clip section 目标对象（13.2.6 Table 277）：`/D` 逐级引用；
         // 对象号已在注解与大纲写出前分配。

@@ -436,6 +436,7 @@ impl PdfAnnotation {
         self.validate_redact_entries()?;
         self.validate_sound_entries()?;
         self.validate_movie_entries()?;
+        self.validate_three_d_entries()?;
         self.validate_appearance_characteristics()?;
         self.validate_fixed_print()?;
         // 文本标记注解的 `/QuadPoints` 是 Table 179 必填条目，空数组视同缺失。

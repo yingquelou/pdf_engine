@@ -65,10 +65,13 @@ pub use types::{
     RenditionOperation, SampledFunction, SelectorRendition, Separation, SetOcgStateAction, Shading,
     ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound,
     SoundAction, SoundEncoding, StitchingFunction, TemporaryFilePermission, TensorProductPatch,
-    TensorProductPatchShading, ThreadAction, TilingPattern, TilingType, Transition,
-    TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle, Type1Halftone,
-    Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem, XmpListKind, XmpPacket,
-    XmpPacketError, XmpValue,
+    TensorProductPatchShading, ThreadAction, ThreeDActivation, ThreeDActivationPolicy,
+    ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,
+    ThreeDDeactivationPolicy, ThreeDMatrixSource, ThreeDProjection, ThreeDProjectionBinding,
+    ThreeDProjectionScale, ThreeDProjectionType, ThreeDStreamFormat, ThreeDView,
+    ThreeDViewSelection, TilingPattern, TilingType, Transition, TransitionDimension,
+    TransitionDirection, TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone,
+    Type3Font, Type3Glyph, Viewport, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -185,6 +188,9 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 分配的声音流对象号（下标即声音句柄）；供 Sound
     /// 动作 `/Sound` 与 Sound 注解 `/Sound` 解析。
     sound_nums: Vec<i64>,
+    /// 文档级 3D artwork 池（13.6）；`PdfBuilder::add_three_d_artwork`
+    /// 返回其索引。
+    three_d_artworks: Vec<ThreeDArtwork>,
     /// 最近一次 assemble 分配的 Form XObject 对象号（下标即表单句柄）；
     /// 供大纲 `/A` 中 Rendition 动作的 media clip `/D` 解析。
     form_nums: Vec<i64>,
@@ -240,6 +246,7 @@ impl PdfBuilder {
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
+            three_d_artworks: Vec::new(),
             form_nums: Vec::new(),
             embedded_nums: Vec::new(),
             rendition_nums: Vec::new(),
@@ -272,6 +279,7 @@ impl PdfBuilder {
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
+            three_d_artworks: Vec::new(),
             form_nums: Vec::new(),
             embedded_nums: Vec::new(),
             rendition_nums: Vec::new(),
@@ -600,6 +608,19 @@ impl PdfBuilder {
     pub fn add_sound(&mut self, sound: Sound) -> usize {
         let handle = self.sounds.len();
         self.sounds.push(sound);
+        handle
+    }
+
+    /// 注册一个 3D artwork 流（13.6 Table 300），返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfAnnotation::with_three_d`]（3D 注解 `/3DD`）引用。
+    /// 每个注册项在 [`PdfBuilder::build`] 时写成独立间接流对象；数据格式、
+    /// 视图与默认视图在构建阶段校验，非法输入返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.6 返回
+    /// [`WriteError::UnsupportedVersion`]，均不写出任何字节。
+    pub fn add_three_d_artwork(&mut self, artwork: ThreeDArtwork) -> usize {
+        let handle = self.three_d_artworks.len();
+        self.three_d_artworks.push(artwork);
         handle
     }
 

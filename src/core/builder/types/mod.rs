@@ -21,6 +21,7 @@
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池；
 //! - `rendition`：多媒体 rendition 与 media clip 对象（13.2）；
 //! - `sound`：声音对象（13.3 Table 294）；
+//! - `three_d`：3D artwork、视图、投影、背景与激活字典（13.6）；
 //! - `transition`：过渡字典（12.4.4 Table 162 与 Transition 动作 12.6.4.14）；
 //! - `xmp`：类型化 XMP 包（14.3.2）的构造与 RDF/XML 序列化。
 
@@ -44,6 +45,7 @@ mod program;
 mod rendition;
 mod shading;
 mod sound;
+mod three_d;
 mod transition;
 mod type3;
 mod viewport;
@@ -108,6 +110,12 @@ pub use shading::{
     ShadingPattern, TensorProductPatch, TensorProductPatchShading,
 };
 pub use sound::{Sound, SoundEncoding};
+pub use three_d::{
+    ThreeDActivation, ThreeDActivationPolicy, ThreeDArtwork, ThreeDArtworkState, ThreeDBackground,
+    ThreeDBackgroundType, ThreeDClipping, ThreeDDeactivationPolicy, ThreeDMatrixSource,
+    ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
+    ThreeDStreamFormat, ThreeDView, ThreeDViewSelection,
+};
 pub use transition::{
     Transition, TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle,
 };

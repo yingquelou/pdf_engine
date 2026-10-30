@@ -14,6 +14,7 @@ use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
 use crate::core::builder::types::{
     Action, ActionRefs, AnnotationDestination, AnnotationKind, PdfAnnotation, PolygonIntent,
+    ThreeDArtwork,
 };
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
@@ -24,6 +25,7 @@ use super::annotation_mk::appearance_characteristics_dict;
 use super::annotation_popup::PopupPairs;
 use super::real_array;
 use super::sound::annotation_sound;
+use super::three_d::write_annotation_entries;
 
 /// 注解写出时按句柄解析的间接对象号映射。
 pub(super) struct AnnotationRefs<'a> {
@@ -37,6 +39,10 @@ pub(super) struct AnnotationRefs<'a> {
     pub(super) ocg_nums: &'a [i64],
     /// Sound 动作与 Sound 注解 `/Sound` 的声音流对象。
     pub(super) sound_nums: &'a [i64],
+    /// 3D 注解 `/3DD` 的 artwork 流对象。
+    pub(super) three_d_nums: &'a [i64],
+    /// 3D 注解 `/3DV` 索引/名称选择所依据的注册 artwork。
+    pub(super) three_d_artworks: &'a [ThreeDArtwork],
     /// Rendition 动作内联 media clip section 的首级 `/D` 目标对象号。
     pub(super) rendition_nums: &'a [i64],
     /// 内联 section 的消费游标；与大纲写出共享。
@@ -309,6 +315,13 @@ pub(super) fn annotation_dict(
     if let Some(sound) = annotation_sound(annot, handle, refs.sound_nums)? {
         dict = dict.insert("Sound", sound);
     }
+    write_annotation_entries(
+        annot,
+        handle,
+        refs.three_d_nums,
+        refs.three_d_artworks,
+        &mut dict,
+    )?;
     if let Some(movie) = annot.movie() {
         dict = dict.insert("Movie", Value::Dict(movie.to_dict()));
     }

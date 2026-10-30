@@ -11,7 +11,8 @@
 //! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）
 //! 、`link`（Link，Table 173 的 `/H` `/PA`）与 `redact`（Redact，Table 192
 //! 的 `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`）；`sound` 覆盖 Sound 注解的
-//! `/Sound` 声音对象引用与 `/Name` 图标名（Table 185）；`measure` 覆盖 12.9 的
+//! `/Sound` 声音对象引用与 `/Name` 图标名（Table 185）；`three_d` 覆盖
+//! 3D 注解的 `/3DD` `/3DV` `/3DA` `/3DI` `/3DB`（Table 298）；`measure` 覆盖 12.9 的
 //! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
 //! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
 //! 字典 `/FixedPrint`（Table 190/191），子类型归属守卫集中在 `guard`。
@@ -28,6 +29,7 @@ mod movie;
 mod redact;
 mod sound;
 mod subtype;
+mod three_d;
 mod watermark;
 
 pub use border::BorderArray;
@@ -48,6 +50,7 @@ pub use watermark::FixedPrint;
 
 use super::Action;
 use super::movie::{Movie, MoviePlayback};
+use super::three_d::{ThreeDActivation, ThreeDViewSelection};
 use crate::core::reader::navigation::Destination;
 
 /// 注解边框样式（`/BS` 字典 `/S`，Table 162）。
@@ -124,6 +127,11 @@ pub struct PdfAnnotation {
     movie_playback: Option<MoviePlayback>,
     measure: Option<Measure>,
     sound: Option<usize>,
+    three_d: Option<usize>,
+    three_d_view: Option<ThreeDViewSelection>,
+    three_d_activation: Option<ThreeDActivation>,
+    three_d_interactive: Option<bool>,
+    three_d_view_box: Option<Vec<f64>>,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -177,6 +185,11 @@ impl PdfAnnotation {
             movie_playback: None,
             measure: None,
             sound: None,
+            three_d: None,
+            three_d_view: None,
+            three_d_activation: None,
+            three_d_interactive: None,
+            three_d_view_box: None,
             action: None,
             destination: None,
             popup: None,
@@ -462,6 +475,31 @@ impl PdfAnnotation {
     /// `/Sound` 声音对象句柄（Sound 注解必填，Table 185）。
     pub(crate) fn sound(&self) -> Option<usize> {
         self.sound
+    }
+
+    /// `/3DD` 3D artwork 句柄（3D 注解必填，Table 298）。
+    pub(crate) fn three_d(&self) -> Option<usize> {
+        self.three_d
+    }
+
+    /// `/3DV` 初始视图选择。
+    pub(crate) fn three_d_view(&self) -> Option<&ThreeDViewSelection> {
+        self.three_d_view.as_ref()
+    }
+
+    /// `/3DA` 激活字典。
+    pub(crate) fn three_d_activation(&self) -> Option<&ThreeDActivation> {
+        self.three_d_activation.as_ref()
+    }
+
+    /// `/3DI` 交互标志。
+    pub(crate) fn three_d_interactive(&self) -> Option<bool> {
+        self.three_d_interactive
+    }
+
+    /// `/3DB` 视图框（四项有限数）。
+    pub(crate) fn three_d_view_box(&self) -> Option<&[f64]> {
+        self.three_d_view_box.as_deref()
     }
 
     /// 是否声明了任意 `/AP` 外观流。

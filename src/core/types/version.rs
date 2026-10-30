@@ -224,6 +224,9 @@ pub enum PdfFeature {
     /// 多媒体 rendition（13.2 Table 266–278）、Rendition 动作（12.6.4.13
     /// Table 214）与 Screen 注解（12.5.6.18 Table 187），PDF 1.5 引入。
     Renditions,
+    /// 3D artwork 流（13.6 Table 300）与 3D 注解（12.5.6.19 Table 298），
+    /// PDF 1.6 引入。
+    ThreeDAnnotations,
 }
 
 impl PdfFeature {
@@ -273,7 +276,8 @@ impl PdfFeature {
             | PdfFeature::LinkAnnotationQuadPoints
             | PdfFeature::LinkAnnotationBorderStyle
             | PdfFeature::PageViewports
-            | PdfFeature::EmbeddedGoToAction => PdfVersion::V1_6,
+            | PdfFeature::EmbeddedGoToAction
+            | PdfFeature::ThreeDAnnotations => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -345,6 +349,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::SoundObjects => "sound objects",
             PdfFeature::MovieObjects => "movie objects",
             PdfFeature::Renditions => "renditions",
+            PdfFeature::ThreeDAnnotations => "3D annotations",
         };
         write!(f, "{name}")
     }
