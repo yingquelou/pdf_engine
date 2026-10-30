@@ -1,9 +1,10 @@
 //! 文档级导航读取：名称树、显式/命名目标、大纲、页面标签、命名页面、
-//! 文章线与便携集合。
+//! 命名模板页、文章线与便携集合。
 //!
 //! 覆盖 ISO 32000-1 7.7.4（名称字典）、12.3（Destinations、Outline、
 //! Collections）、12.4.2（Page Labels）、12.4.3（Articles）与 12.7.6
-//! （命名页面）。动作（12.6）由 E3 建模，大纲条目的 `/A` 在此原样保留。
+//! （命名页面与模板页）。动作（12.6）由 E3 建模，大纲条目的 `/A` 在此
+//! 原样保留。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,6 +18,7 @@ mod name_tree;
 mod outline;
 mod page_labels;
 mod page_tree;
+mod templates;
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +31,7 @@ pub use destination::Destination;
 pub use outline::{Outline, OutlineDestination, OutlineItem};
 pub use page_labels::{PageLabelRange, PageLabelStyle, PageLabels};
 pub(crate) use page_tree::{PageTreeIndex, page_tree_index};
+pub use templates::TemplatePage;
 
 /// 导航结构读取中的类型化错误。
 #[derive(Debug, Clone, PartialEq)]

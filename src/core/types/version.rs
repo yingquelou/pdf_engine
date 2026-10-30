@@ -209,6 +209,9 @@ pub enum PdfFeature {
     Collection,
     /// 集合项字典（文件规格 `/CI`，7.11.6 Table 48/49），PDF 1.7 引入。
     CollectionItem,
+    /// 命名页面模板名称树（目录 `/Names /Templates`，12.7.6 与 Table 31），
+    /// PDF 1.3 引入。
+    PageTemplates,
 }
 
 impl PdfFeature {
@@ -233,7 +236,8 @@ impl PdfFeature {
             | PdfFeature::LinkAnnotationPressedAction
             | PdfFeature::FormFieldAdditionalActions
             | PdfFeature::FormCalculationOrder
-            | PdfFeature::FormActionFieldNames => PdfVersion::V1_3,
+            | PdfFeature::FormActionFieldNames
+            | PdfFeature::PageTemplates => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
@@ -320,6 +324,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::ArticleThreads => "article threads",
             PdfFeature::Collection => "collections",
             PdfFeature::CollectionItem => "collection items",
+            PdfFeature::PageTemplates => "page templates",
         };
         write!(f, "{name}")
     }

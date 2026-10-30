@@ -1,14 +1,14 @@
-//! 文档级导航写端：页面标签、命名目标、命名页面与大纲
+//! 文档级导航写端：页面标签、命名目标、命名页面、命名模板页与大纲
 //! （ISO 32000-1 12.3、12.4.2、12.7.6）。
 //!
 //! 这些结构都挂在目录（catalog）上。构建器在 [`PdfBuilder::build`] 完成
-//! 对象组装后统一写入：目录字典被覆盖写回，大纲条目从现有最大对象号之后
-//! 分配，因此不影响既有对象布局。
+//! 对象组装后统一写入：目录字典被覆盖写回，大纲条目与模板页对象从现有
+//! 最大对象号之后分配，因此不影响既有对象布局。
 //!
 //! 版本门控（构建期返回 [`WriteError::UnsupportedVersion`]，零字节输出）：
-//! 大纲自 PDF 1.1 起、命名目标自 1.2 起、页面标签与命名页面自 1.3 起。
-//! 输入非法（页码越界、名称重复、标签起点乱序、颜色越界等）返回
-//! [`WriteError::InvalidObject`]，同样零字节输出。
+//! 大纲自 PDF 1.1 起、命名目标自 1.2 起、页面标签、命名页面与命名模板页
+//! 自 1.3 起。输入非法（页码越界、名称重复、标签起点乱序、颜色越界等）
+//! 返回 [`WriteError::InvalidObject`]，同样零字节输出。
 
 use crate::core::reader::navigation::{
     Destination, OutlineDestination, PageLabelRange, PageLabelStyle,
@@ -20,10 +20,12 @@ use crate::core::writer::WriteError;
 
 use super::PdfBuilder;
 use super::types::Action;
+use super::types::PageSize;
 use super::types::text_string_value;
 
 mod articles;
 mod collection;
+mod templates;
 mod validate;
 
 pub use articles::{ArticleBead, ArticleThread};
@@ -61,6 +63,8 @@ pub(crate) struct NavigationState {
     page_labels: Vec<PageLabelRange>,
     named_destinations: Vec<(String, Destination)>,
     named_pages: Vec<(String, usize)>,
+    /// 命名模板页（12.7.6 `/Names /Templates`）：名称 + 不可见页尺寸。
+    templates: Vec<(String, PageSize)>,
     outline: Vec<OutlineEntry>,
     actions: Vec<Action>,
     article_threads: Vec<ArticleThread>,
@@ -139,6 +143,21 @@ impl PdfBuilder {
         self
     }
 
+    /// 注册一个命名模板页（12.7.6），写入目录 `/Names /Templates` 名称树，
+    /// 返回注册顺序下标。
+    ///
+    /// 模板页是不可见页面：以 `/Type /Template` 的间接对象写出，`/MediaBox`
+    /// 取自 `size`，**不含** `/Parent` 与 `/B`，也不进入页面树（`/Pages`
+    /// 的 `/Kids` 与 `/Count` 不变）。本切片不生成内容流，模板页没有
+    /// `/Contents`。名称为名称树键（PDF 文本串），须非空、不含 NUL 且
+    /// 互不重复，否则构建返回 [`WriteError::InvalidObject`]；目标版本低于
+    /// 1.3 返回 [`WriteError::UnsupportedVersion`]，均零字节输出。
+    pub fn add_template(&mut self, name: impl Into<String>, size: PageSize) -> usize {
+        let handle = self.navigation.templates.len();
+        self.navigation.templates.push((name.into(), size));
+        handle
+    }
+
     /// 设置文档大纲（12.3.4），整体替换已有配置。
     ///
     /// 条目深度与数量不得超过读端上限（64 层、10,000 条）；颜色分量须在
@@ -207,6 +226,11 @@ pub(super) fn apply(
             PdfVersion::V1_3,
             "named pages",
         ),
+        (
+            !navigation.templates.is_empty(),
+            PdfVersion::V1_3,
+            "page templates",
+        ),
         (!navigation.outline.is_empty(), PdfVersion::V1_1, "outlines"),
         (has_actions, PdfVersion::V1_2, "outline actions (/A)"),
         (
@@ -235,6 +259,7 @@ pub(super) fn apply(
     validate::page_labels(&navigation.page_labels, page_count)?;
     validate::named_destinations(&navigation.named_destinations, page_count)?;
     validate::named_pages(&navigation.named_pages, page_count)?;
+    templates::validate(&navigation.templates)?;
     validate::outline(&navigation.outline, page_count)?;
     articles::validate(&navigation.article_threads, page_count)?;
     if let Some(collection) = &navigation.collection {
@@ -257,7 +282,18 @@ pub(super) fn apply(
         );
     }
 
-    if !navigation.named_destinations.is_empty() || !navigation.named_pages.is_empty() {
+    // 模板页对象在构造名称树之前分配：引用其对象号写入 `/Templates`。
+    // 模板页不进入页面树，故页面 `/Kids` 与 `/Count` 保持不变。
+    let template_refs = if navigation.templates.is_empty() {
+        Vec::new()
+    } else {
+        templates::write(doc, &navigation.templates)
+    };
+
+    if !navigation.named_destinations.is_empty()
+        || !navigation.named_pages.is_empty()
+        || !template_refs.is_empty()
+    {
         // 与 assemble 阶段已写入的 `/Names` 类别（如 /EmbeddedFiles）合并，
         // 不覆盖既有字典。
         let mut names = catalog
@@ -285,6 +321,15 @@ pub(super) fn apply(
                 })
                 .collect();
             names = names.insert("Pages", name_tree(entries));
+        }
+        if !template_refs.is_empty() {
+            let entries = navigation
+                .templates
+                .iter()
+                .zip(&template_refs)
+                .map(|((name, _), reference)| (name.clone(), reference.clone()))
+                .collect();
+            names = names.insert("Templates", name_tree(entries));
         }
         catalog = catalog.insert("Names", Value::Dict(names));
     }

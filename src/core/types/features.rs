@@ -53,6 +53,7 @@ impl FeatureProfile {
 /// - `/OCProperties` 键存在 → OptionalContent
 /// - `/Threads` 键存在（目录）→ ArticleThreads
 /// - `/Collection` 键存在（目录）→ Collection
+/// - `/Templates` 键存在（名称字典）→ PageTemplates
 /// - `/Encrypt` 键存在 → EncryptionRC4
 pub(crate) fn scan_dict_features(features: &mut FeatureProfile, d: &Dict) {
     inspect_dict_features(features, d);
@@ -131,6 +132,11 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 便携集合（PDF 1.7）：目录 /Collection
     if d.0.contains_key("Collection") {
         features.insert(PdfFeature::Collection);
+    }
+    // 命名页面模板（PDF 1.3）：目录 /Names /Templates 名称树。`Templates`
+    // 键只出现在名称字典中（Table 31），扫描到名称字典即命中。
+    if d.0.contains_key("Templates") {
+        features.insert(PdfFeature::PageTemplates);
     }
     // 加密：trailer /Encrypt（标准安全处理器自 PDF 1.1 引入）
     if d.0.contains_key("Encrypt") {

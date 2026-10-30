@@ -1,164 +1,42 @@
-//! XMP 元数据包读取（14.3.2）：目录 `/Metadata` 流的 RDF/XML 属性视图。
+//! XMP 包的最小 XML 解析器（14.3.2）：元素、属性、字符数据与命名空间。
 //!
-//! 支持 `xpacket` 包装、`rdf:Description` 的属性与子元素、
-//! `rdf:Alt`/`rdf:Seq`/`rdf:Bag` 列表、预定义/数字字符引用与命名空间
-//! 前缀解析；属性键使用 Clark 记法（`{命名空间}本地名`）。不支持
-//! `rdf:parseType` 资源嵌套与 XMP 类型化值，嵌套结构退化为文本。
-//! 解析不处理 DTD 与外部实体，仅做良构性下限检查。
+//! 只解析良构性下限：标签配对、属性加引号、实体引用与 CDATA；
+//! 不处理 DTD 与外部实体，也不做校验。
 
 use std::collections::BTreeMap;
-use std::fmt;
 
-use crate::core::types::Document;
+use super::{MAX_DEPTH, MAX_ELEMENTS, XML_NS, XmpError, malformed};
 
-/// XMP 包大小上限（4 MiB）。
-const MAX_PACKET_BYTES: usize = 4 * 1024 * 1024;
-/// 元素嵌套深度上限。
-const MAX_DEPTH: usize = 32;
-/// 元素总数上限。
-const MAX_ELEMENTS: usize = 4096;
-/// 属性（键值对）总数上限。
-const MAX_PROPERTIES: usize = 1024;
-
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-
-/// XMP 包解析错误。
-#[derive(Debug, Clone, PartialEq)]
-pub enum XmpError {
-    /// XML 结构不合法（标签未闭合、属性缺引号、未知实体等）。
-    Malformed(String),
-    /// 超出包大小、嵌套深度、元素或属性数量上限。
-    LimitExceeded(&'static str),
+pub(super) struct XmlAttr {
+    pub(super) ns: String,
+    pub(super) local: String,
+    pub(super) value: String,
 }
 
-impl fmt::Display for XmpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Malformed(message) => write!(f, "malformed XMP packet: {message}"),
-            Self::LimitExceeded(what) => write!(f, "XMP limit exceeded: {what}"),
-        }
-    }
+pub(super) struct XmlNode {
+    pub(super) ns: String,
+    pub(super) local: String,
+    pub(super) attrs: Vec<XmlAttr>,
+    pub(super) xmlns: Vec<(String, String)>,
+    pub(super) children: Vec<XmlNode>,
+    pub(super) text: String,
 }
 
-impl std::error::Error for XmpError {}
-
-/// XMP 列表容器（`rdf:Alt`/`rdf:Seq`/`rdf:Bag`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum XmpListKind {
-    Alt,
-    Seq,
-    Bag,
-}
-
-/// XMP 列表项（`rdf:li`）；`lang` 取自 `xml:lang`。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct XmpListItem {
-    pub lang: Option<String>,
-    pub value: String,
-}
-
-/// XMP 属性值：简单文本或列表。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum XmpValue {
-    Text(String),
-    List {
-        kind: XmpListKind,
-        items: Vec<XmpListItem>,
-    },
-}
-
-/// XMP 包（14.3.2）的基本属性视图。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct XmpMetadata {
-    /// 原始 XML 文本（含 `xpacket` 包装）。
-    pub packet: String,
-    /// 前缀 → 命名空间 URI；默认命名空间以空串为键。
-    pub namespaces: BTreeMap<String, String>,
-    /// Clark 记法键（`{namespace}local`）→ 属性值。
-    pub properties: BTreeMap<String, XmpValue>,
-}
-
-impl XmpMetadata {
-    /// 解析 XMP 包。
-    ///
-    /// 要求至少一个 `rdf:Description`；无 RDF 描述的包视为损坏。
-    pub fn parse(packet: &str) -> Result<Self, XmpError> {
-        if packet.len() > MAX_PACKET_BYTES {
-            return Err(XmpError::LimitExceeded("XMP packet size"));
-        }
-        let text = packet.strip_prefix('\u{feff}').unwrap_or(packet);
-        let mut parser = XmlParser {
-            src: text,
-            pos: 0,
-            elements: 0,
-        };
-        let root = parser.parse_document()?;
-        let mut namespaces = BTreeMap::new();
-        collect_namespaces(&root, &mut namespaces);
-        let mut properties = BTreeMap::new();
-        let descriptions = collect_properties(&root, &mut properties)?;
-        if descriptions == 0 {
-            return Err(malformed("packet contains no rdf:Description"));
-        }
-        Ok(Self {
-            packet: packet.to_string(),
-            namespaces,
-            properties,
-        })
-    }
-
-    /// 取文本属性；列表属性返回首项，缺失返回 `None`。
-    pub fn text(&self, key: &str) -> Option<&str> {
-        match self.properties.get(key)? {
-            XmpValue::Text(value) => Some(value),
-            XmpValue::List { items, .. } => items.first().map(|item| item.value.as_str()),
-        }
-    }
-}
-
-impl Document {
-    /// 读取并解析 XMP 元数据（14.3.2）。
-    ///
-    /// 缺失 `/Metadata`、非流或流解码失败返回 `Ok(None)`（与
-    /// [`Document::xmp_metadata`] 一致）；非 UTF-8 或 XML 损坏返回
-    /// [`XmpError`]。
-    pub fn xmp(&self) -> Result<Option<XmpMetadata>, XmpError> {
-        let Some(bytes) = self.xmp_metadata() else {
-            return Ok(None);
-        };
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|error| malformed(format!("packet is not UTF-8: {error}")))?;
-        XmpMetadata::parse(text).map(Some)
-    }
-}
-
-fn malformed(message: impl Into<String>) -> XmpError {
-    XmpError::Malformed(message.into())
-}
-
-struct XmlAttr {
-    ns: String,
-    local: String,
-    value: String,
-}
-
-struct XmlNode {
-    ns: String,
-    local: String,
-    attrs: Vec<XmlAttr>,
-    xmlns: Vec<(String, String)>,
-    children: Vec<XmlNode>,
-    text: String,
-}
-
-struct XmlParser<'a> {
-    src: &'a str,
-    pos: usize,
-    elements: usize,
+pub(super) struct XmlParser<'a> {
+    pub(super) src: &'a str,
+    pub(super) pos: usize,
+    pub(super) elements: usize,
 }
 
 impl<'a> XmlParser<'a> {
+    pub(super) fn new(src: &'a str) -> Self {
+        Self {
+            src,
+            pos: 0,
+            elements: 0,
+        }
+    }
+
     fn rest(&self) -> &'a str {
         &self.src[self.pos..]
     }
@@ -202,7 +80,7 @@ impl<'a> XmlParser<'a> {
         }
     }
 
-    fn parse_document(&mut self) -> Result<XmlNode, XmpError> {
+    pub(super) fn parse_document(&mut self) -> Result<XmlNode, XmpError> {
         self.skip_misc()?;
         if self.rest().is_empty() {
             return Err(malformed("empty packet"));
@@ -462,7 +340,7 @@ fn decode_entities(raw: &str) -> Result<String, XmpError> {
     Ok(out)
 }
 
-fn collect_namespaces(node: &XmlNode, out: &mut BTreeMap<String, String>) {
+pub(super) fn collect_namespaces(node: &XmlNode, out: &mut BTreeMap<String, String>) {
     for (prefix, uri) in &node.xmlns {
         out.insert(prefix.clone(), uri.clone());
     }
@@ -470,91 +348,3 @@ fn collect_namespaces(node: &XmlNode, out: &mut BTreeMap<String, String>) {
         collect_namespaces(child, out);
     }
 }
-
-fn collect_properties(
-    node: &XmlNode,
-    out: &mut BTreeMap<String, XmpValue>,
-) -> Result<usize, XmpError> {
-    let mut descriptions = 0;
-    if node.ns == RDF_NS && node.local == "Description" {
-        descriptions += 1;
-        for attr in &node.attrs {
-            if is_rdf_syntax_attr(attr) {
-                continue;
-            }
-            insert_property(
-                out,
-                clark(&attr.ns, &attr.local),
-                XmpValue::Text(attr.value.clone()),
-            )?;
-        }
-        for child in &node.children {
-            insert_property(out, clark(&child.ns, &child.local), property_value(child))?;
-        }
-    }
-    for child in &node.children {
-        descriptions += collect_properties(child, out)?;
-    }
-    Ok(descriptions)
-}
-
-fn is_rdf_syntax_attr(attr: &XmlAttr) -> bool {
-    attr.ns == XML_NS
-        || (attr.ns == RDF_NS
-            && matches!(
-                attr.local.as_str(),
-                "about" | "ID" | "nodeID" | "parseType" | "datatype" | "resource"
-            ))
-}
-
-fn insert_property(
-    out: &mut BTreeMap<String, XmpValue>,
-    key: String,
-    value: XmpValue,
-) -> Result<(), XmpError> {
-    if !out.contains_key(&key) && out.len() >= MAX_PROPERTIES {
-        return Err(XmpError::LimitExceeded("XMP property count"));
-    }
-    out.insert(key, value);
-    Ok(())
-}
-
-fn property_value(node: &XmlNode) -> XmpValue {
-    if node.children.len() == 1 {
-        let list = &node.children[0];
-        let kind = match (list.ns.as_str(), list.local.as_str()) {
-            (RDF_NS, "Alt") => Some(XmpListKind::Alt),
-            (RDF_NS, "Seq") => Some(XmpListKind::Seq),
-            (RDF_NS, "Bag") => Some(XmpListKind::Bag),
-            _ => None,
-        };
-        if let Some(kind) = kind {
-            let items = list
-                .children
-                .iter()
-                .filter(|item| item.ns == RDF_NS && item.local == "li")
-                .map(|item| XmpListItem {
-                    lang: item
-                        .attrs
-                        .iter()
-                        .find(|attr| attr.ns == XML_NS && attr.local == "lang")
-                        .map(|attr| attr.value.clone()),
-                    value: item.text.trim().to_string(),
-                })
-                .collect();
-            return XmpValue::List { kind, items };
-        }
-    }
-    XmpValue::Text(node.text.trim().to_string())
-}
-
-fn clark(ns: &str, local: &str) -> String {
-    if ns.is_empty() {
-        local.to_string()
-    } else {
-        format!("{{{ns}}}{local}")
-    }
-}
-
-#[cfg(test)]
-mod tests;
