@@ -43,6 +43,7 @@ impl FeatureProfile {
 ///
 /// - `/Type /XRef` → XRefStream
 /// - `/Type /ObjStm` → ObjectStream
+/// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
 /// - `/Filter` 中的 JPXDecode → JPXDecode，JBIG2Decode → JBIG2Decode
 /// - `/ShadingType` 或 `/PatternType 2` → Shading
 /// - `/PatternType 1` → TilingPattern
@@ -81,6 +82,16 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 对象流：/Type /ObjStm
     if d.get("Type").and_then(|v| v.as_name()) == Some("ObjStm") {
         features.insert(PdfFeature::ObjectStream);
+    }
+    // 声音（PDF 1.2）：声音流的 /Type /Sound（13.3 Table 294）、Sound
+    // 注解的 /Subtype /Sound（Table 185）与 Sound 动作的 /S /Sound
+    // （Table 208）。三者均为静态名称标记；仅按语法命中，个别同名
+    // 但非声音用途的字典只会抬高版本画像，不影响语义。
+    if d.get("Type").and_then(|v| v.as_name()) == Some("Sound")
+        || d.get("Subtype").and_then(|v| v.as_name()) == Some("Sound")
+        || (d.get("S").and_then(|v| v.as_name()) == Some("Sound") && d.0.contains_key("Sound"))
+    {
+        features.insert(PdfFeature::SoundObjects);
     }
     // 图像过滤器（JPX/JBIG2，其余通用过滤器不记）
     if let Some(f) = image_filter_feature(d) {

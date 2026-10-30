@@ -127,6 +127,7 @@ fn outline_set_ocg_state_action_resolves_group_objects() {
         &b.navigation,
         &b.annotation_nums,
         &b.ocg_nums,
+        &b.sound_nums,
     )
     .expect("apply");
     assert!(b.ocg_nums[group] > 0, "大纲动作引用的组有对象号");

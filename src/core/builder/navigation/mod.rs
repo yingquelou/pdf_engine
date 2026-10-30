@@ -22,6 +22,7 @@ use crate::core::writer::WriteError;
 
 use super::PdfBuilder;
 use super::types::Action;
+use super::types::ActionRefs;
 use super::types::PageSize;
 use super::types::text_string_value;
 
@@ -228,6 +229,7 @@ pub(super) fn apply(
     navigation: &NavigationState,
     annotation_nums: &[i64],
     ocg_nums: &[i64],
+    sound_nums: &[i64],
 ) -> Result<(), WriteError> {
     let has_actions = outline_has_actions(&navigation.outline);
     let required = [
@@ -386,6 +388,7 @@ pub(super) fn apply(
             actions: &navigation.actions,
             annotation_nums,
             ocg_nums,
+            sound_nums,
         };
         let root = write_outline(doc, &navigation.outline, &context, &mut next_num)?;
         catalog = catalog.insert("Outlines", Value::Ref(root, 0));
@@ -517,6 +520,17 @@ struct OutlineContext<'a> {
     actions: &'a [Action],
     annotation_nums: &'a [i64],
     ocg_nums: &'a [i64],
+    sound_nums: &'a [i64],
+}
+
+impl OutlineContext<'_> {
+    fn action_refs(&self) -> ActionRefs<'_> {
+        ActionRefs {
+            annotation_nums: self.annotation_nums,
+            ocg_nums: self.ocg_nums,
+            sound_nums: self.sound_nums,
+        }
+    }
 }
 
 fn write_outline(
@@ -584,8 +598,7 @@ fn write_outline_items(
                 if action_refs[action_handle] == 0 {
                     let action_num = *next_num;
                     *next_num += 1;
-                    let action_dict = actions[action_handle]
-                        .to_dict(context.annotation_nums, context.ocg_nums)?;
+                    let action_dict = actions[action_handle].to_dict(&context.action_refs())?;
                     doc.set_object(Object::new(action_num, 0, Value::Dict(action_dict)));
                     action_refs[action_handle] = action_num;
                 }

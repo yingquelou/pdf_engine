@@ -20,6 +20,7 @@
 //! - `annotation_redact`：Redact 注解条目（Table 192）的取值契约与 PDF 1.7 门禁；
 //! - `annotation_mk`：外观特性字典 `/MK`（Table 189）与图标适配 `/IF`（Table 247）的取值契约、Screen 归属与 PDF 1.5 门禁；
 //! - `hide_action`：Hide 动作 `/T` 目标解析与 `/H`（Table 210）的写出、校验与 PDF 1.2 门禁；
+//! - `sound`：声音对象（13.3 Table 294）、Sound 动作（Table 208）与 Sound 注解（Table 185）的流对象分配、引用解析与 PDF 1.2 门禁；
 //! - `action_ocg`：Set-OCG-State 动作 `/State`（Table 213）的组对象分配、写出与 PDF 1.5 门禁；
 //! - `action_transition`：Transition 动作 `/Trans`（Table 215）的过渡字典写出、条目校验与 PDF 1.5 门禁；
 //! - `action_thread`：Thread 动作 `/D` `/B` 索引（Table 205）的写出、越界校验与 PDF 1.1 门禁；
@@ -96,6 +97,7 @@ mod page_group;
 mod page_presentation;
 mod pattern;
 mod shading;
+mod sound;
 mod support;
 mod templates;
 mod thumbnail;

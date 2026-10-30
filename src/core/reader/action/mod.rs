@@ -17,6 +17,7 @@ use crate::core::types::{Document, Value};
 
 mod gotoe;
 mod ocg;
+mod sound;
 mod thread;
 
 pub use gotoe::{
@@ -24,6 +25,7 @@ pub use gotoe::{
 };
 use ocg::parse_set_ocg_state;
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
+pub use sound::SoundAction;
 pub use thread::{BeadTarget, ThreadAction, ThreadTarget};
 
 /// 动作字典（12.6.2 Table 197）。
@@ -42,6 +44,8 @@ pub enum Action {
     Named(NamedAction),
     /// 解析 URI。
     Uri(String),
+    /// 播放声音（12.6.4.8 Table 208）。
+    Sound(SoundAction),
     /// 启动外部文件。
     Launch {
         file: FileSpec,
@@ -260,6 +264,7 @@ impl Document {
                 };
                 Ok(Action::Launch { file, new_window })
             }
+            "Sound" => Ok(Action::Sound(sound::parse_sound_action(self, dict)?)),
             "JavaScript" => {
                 let script = dict
                     .get("JS")

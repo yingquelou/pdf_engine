@@ -1,16 +1,16 @@
 //! 动作字典写端（ISO 32000-1 12.6 / 12.7.5）。
 //!
-//! 覆盖六种常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Hide
-//! 动作（隐藏/显示注解）、Set-OCG-State 动作（切换可选内容组状态）、
-//! Transition 动作（全屏演示过渡特效）、Thread 动作（跳转到文章线 bead）、
-//! Embedded Go-To 动作（嵌套嵌入文档间跳转）与三种表单动作
-//! （SubmitForm、ResetForm、ImportData）。动作字典经
+//! 覆盖常用动作（GoTo、GoToR、Named、URI、Launch、JavaScript）、Sound
+//! 动作（播放声音对象）、Hide 动作（隐藏/显示注解）、Set-OCG-State 动作
+//! （切换可选内容组状态）、Transition 动作（全屏演示过渡特效）、Thread
+//! 动作（跳转到文章线 bead）、Embedded Go-To 动作（嵌套嵌入文档间跳转）
+//! 与三种表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
 //! [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
 //!
 //! 按族拆分：`targets` 收文件规格/远程目标/预定义动作名，`hide` 收 Hide
 //! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列，`thread` 收
 //! Thread 动作的线程/bead 索引契约，`gotoe` 收 Embedded Go-To 的目标
-//! 字典路径链。
+//! 字典路径链，`sound` 收 Sound 动作的声音句柄与播放参数。
 
 use super::text_string_value;
 use super::transition::Transition;
@@ -21,6 +21,7 @@ use crate::core::writer::WriteError;
 mod gotoe;
 mod hide;
 mod ocg;
+mod sound;
 mod targets;
 mod thread;
 
@@ -32,8 +33,23 @@ pub use gotoe::{
 };
 pub use hide::{HideAction, HideTarget};
 pub use ocg::{OcgStateOperation, OcgStateSequence, SetOcgStateAction};
+pub use sound::SoundAction;
 pub use targets::{ActionFileSpec, ActionNamedAction, ActionRemoteDestination};
 pub use thread::ThreadAction;
+
+/// 动作字典写出时的间接对象号映射。
+///
+/// Hide 的 `/T` 用注解映射，Set-OCG-State 的 `/State` 用可选内容组映射，
+/// Sound 的 `/Sound` 用声音对象映射；未涉及的类别传空切片。
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ActionRefs<'a> {
+    /// 注解句柄 → 注解对象号。
+    pub(crate) annotation_nums: &'a [i64],
+    /// 可选内容组句柄 → 组对象号。
+    pub(crate) ocg_nums: &'a [i64],
+    /// 声音句柄 → 声音流对象号。
+    pub(crate) sound_nums: &'a [i64],
+}
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
 ///
@@ -55,6 +71,8 @@ pub enum Action {
     Named(ActionNamedAction),
     /// 解析 URI。
     Uri(String),
+    /// 播放声音（12.6.4.8 Table 208，PDF 1.2）。
+    Sound(SoundAction),
     /// 启动外部文件。
     Launch {
         /// 文件规格。
@@ -106,6 +124,7 @@ impl Action {
             Self::GoToE(_) => "GoToE",
             Self::Named(_) => "Named",
             Self::Uri(_) => "URI",
+            Self::Sound(_) => "Sound",
             Self::Launch { .. } => "Launch",
             Self::JavaScript(_) => "JavaScript",
             Self::Hide(_) => "Hide",
@@ -118,14 +137,10 @@ impl Action {
         }
     }
 
-    /// 构造动作字典；`annotation_nums` 与 `ocg_nums` 分别是注解、可选内容组
-    /// 句柄到对象号的映射，供 Hide 的 `/T` 与 Set-OCG-State 的 `/State`
-    /// 引用解析。
-    pub(crate) fn to_dict(
-        &self,
-        annotation_nums: &[i64],
-        ocg_nums: &[i64],
-    ) -> Result<Dict, WriteError> {
+    /// 构造动作字典；`refs` 提供注解、可选内容组与声音句柄到对象号的
+    /// 映射，供 Hide 的 `/T`、Set-OCG-State 的 `/State` 与 Sound 的
+    /// `/Sound` 引用解析。
+    pub(crate) fn to_dict(&self, refs: &ActionRefs<'_>) -> Result<Dict, WriteError> {
         let mut dict = Dict::new().insert("S", Value::Name(self.subtype().into()));
         match self {
             Self::GoTo(dest) => {
@@ -147,6 +162,11 @@ impl Action {
             Self::Uri(uri) => {
                 dict = dict.insert("URI", text_string_value(uri));
             }
+            Self::Sound(action) => {
+                for (key, value) in action.to_dict(refs.sound_nums)?.0 {
+                    dict = dict.insert(key, value);
+                }
+            }
             Self::Launch { file, new_window } => {
                 dict = dict.insert("F", file.to_value());
                 if let Some(flag) = new_window {
@@ -157,12 +177,12 @@ impl Action {
                 dict = dict.insert("JS", text_string_value(script));
             }
             Self::Hide(hide) => {
-                hide.validate(annotation_nums.len())?;
+                hide.validate(refs.annotation_nums.len())?;
                 let mut targets = Vec::with_capacity(hide.targets().len());
                 for target in hide.targets() {
                     match target {
                         HideTarget::Annotation(handle) => {
-                            let num = annotation_nums.get(*handle).ok_or_else(|| {
+                            let num = refs.annotation_nums.get(*handle).ok_or_else(|| {
                                 WriteError::InvalidObject(format!(
                                     "Hide action /T references unknown annotation handle {handle}"
                                 ))
@@ -184,12 +204,13 @@ impl Action {
                 }
             }
             Self::SetOcgState(state) => {
-                state.validate(ocg_nums.len())?;
+                state.validate(refs.ocg_nums.len())?;
                 let mut items = Vec::new();
                 for sequence in state.sequences() {
                     items.push(Value::Name(sequence.operation().name().into()));
                     for &handle in sequence.groups() {
-                        let num = ocg_nums
+                        let num = refs
+                            .ocg_nums
                             .get(handle)
                             .copied()
                             .filter(|num| *num > 0)
@@ -273,9 +294,9 @@ fn destination_to_value(dest: &Destination) -> Value {
             zoom,
         } => {
             let mut arr = vec![Value::Integer(*page as i64), Value::Name("XYZ".into())];
-            arr.push(left.map_or(Value::Null, |v| Value::Float(v)));
-            arr.push(top.map_or(Value::Null, |v| Value::Float(v)));
-            arr.push(zoom.map_or(Value::Null, |v| Value::Float(v)));
+            arr.push(left.map_or(Value::Null, Value::Float));
+            arr.push(top.map_or(Value::Null, Value::Float));
+            arr.push(zoom.map_or(Value::Null, Value::Float));
             Value::Array(crate::core::types::Array(arr))
         }
         Fit { page } => Value::Array(crate::core::types::Array(vec![
@@ -285,12 +306,12 @@ fn destination_to_value(dest: &Destination) -> Value {
         FitH { page, top } => Value::Array(crate::core::types::Array(vec![
             Value::Integer(*page as i64),
             Value::Name("FitH".into()),
-            top.map_or(Value::Null, |v| Value::Float(v)),
+            top.map_or(Value::Null, Value::Float),
         ])),
         FitV { page, left } => Value::Array(crate::core::types::Array(vec![
             Value::Integer(*page as i64),
             Value::Name("FitV".into()),
-            left.map_or(Value::Null, |v| Value::Float(v)),
+            left.map_or(Value::Null, Value::Float),
         ])),
         FitR { page, rect } => Value::Array(crate::core::types::Array(vec![
             Value::Integer(*page as i64),
@@ -307,12 +328,12 @@ fn destination_to_value(dest: &Destination) -> Value {
         FitBH { page, top } => Value::Array(crate::core::types::Array(vec![
             Value::Integer(*page as i64),
             Value::Name("FitBH".into()),
-            top.map_or(Value::Null, |v| Value::Float(v)),
+            top.map_or(Value::Null, Value::Float),
         ])),
         FitBV { page, left } => Value::Array(crate::core::types::Array(vec![
             Value::Integer(*page as i64),
             Value::Name("FitBV".into()),
-            left.map_or(Value::Null, |v| Value::Float(v)),
+            left.map_or(Value::Null, Value::Float),
         ])),
     }
 }

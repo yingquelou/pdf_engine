@@ -10,7 +10,7 @@
 //! `annotation_measure`、`annotation_mk`、`annotation_popup`、
 //! `annotation_redact`、`annotation_subtype_table`、`annotation_watermark`、
 //! `alternate_presentation`、`form`、`embedded`、`metadata`、`page_presentation`、
-//! `page_thumbnail`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
+//! `page_thumbnail`、`sound`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
 //! （子模块经 `use super::*;` 取用）。
 
 #[path = "../support/mod.rs"]
@@ -42,6 +42,7 @@ mod outline_action;
 mod page_presentation;
 mod page_thumbnail;
 mod signature;
+mod sound;
 mod templates;
 
 pub use pdf_engine::core::types::{Array, Dict, Object, StreamData, Value};

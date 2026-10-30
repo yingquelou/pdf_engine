@@ -10,7 +10,8 @@
 //! Ink/Line）、`free_text`（FreeText，Table 174）、`geometry`
 //! （Polygon/PolyLine，Table 178；`/BE` `/RD` `/LE` 的跨子类型归属也在此校准）
 //! 、`link`（Link，Table 173 的 `/H` `/PA`）与 `redact`（Redact，Table 192
-//! 的 `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`）；`measure` 覆盖 12.9 的
+//! 的 `/OverlayText` `/DA` `/Q` `/Repeat` `/RO`）；`sound` 覆盖 Sound 注解的
+//! `/Sound` 声音对象引用与 `/Name` 图标名（Table 185）；`measure` 覆盖 12.9 的
 //! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
 //! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
 //! 字典 `/FixedPrint`（Table 190/191），子类型归属守卫集中在 `guard`。
@@ -24,6 +25,7 @@ mod link;
 mod measure;
 mod mk;
 mod redact;
+mod sound;
 mod subtype;
 mod watermark;
 
@@ -117,6 +119,7 @@ pub struct PdfAnnotation {
     characteristics: Option<AppearanceCharacteristics>,
     fixed_print: Option<FixedPrint>,
     measure: Option<Measure>,
+    sound: Option<usize>,
     action: Option<Action>,
     destination: Option<AnnotationDestination>,
     popup: Option<usize>,
@@ -167,6 +170,7 @@ impl PdfAnnotation {
             characteristics: None,
             fixed_print: None,
             measure: None,
+            sound: None,
             action: None,
             destination: None,
             popup: None,
@@ -447,6 +451,11 @@ impl PdfAnnotation {
 
     pub(crate) fn filespec(&self) -> Option<usize> {
         self.filespec
+    }
+
+    /// `/Sound` 声音对象句柄（Sound 注解必填，Table 185）。
+    pub(crate) fn sound(&self) -> Option<usize> {
+        self.sound
     }
 
     /// 是否声明了任意 `/AP` 外观流。

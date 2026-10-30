@@ -35,6 +35,7 @@ impl PdfBuilder {
                 action,
                 self.annotations.len(),
                 self.optional_content_groups.len(),
+                self.sounds.len(),
                 &thread_beads,
             )?;
             for feature in action_features(action) {
@@ -80,6 +81,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
             features
         }
         Action::ImportData { .. } => vec![PdfFeature::FormDataActions],
+        Action::Sound(_) => vec![PdfFeature::SoundObjects],
         Action::Hide(_) => vec![PdfFeature::HideAction],
         Action::GoToE(_) => vec![PdfFeature::EmbeddedGoToAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
@@ -93,9 +95,11 @@ fn validate_action(
     action: &Action,
     annotation_count: usize,
     ocg_count: usize,
+    sound_count: usize,
     thread_beads: &[usize],
 ) -> Result<(), WriteError> {
     match action {
+        Action::Sound(sound) => sound.validate(sound_count)?,
         Action::Hide(hide) => hide.validate(annotation_count)?,
         Action::GoToE(action) => action.validate()?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,

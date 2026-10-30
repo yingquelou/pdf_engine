@@ -359,6 +359,7 @@ fn embedded_names_tree_merges_with_navigation_entries() {
         &b.navigation,
         &b.annotation_nums,
         &b.ocg_nums,
+        &b.sound_nums,
     )
     .expect("apply");
 

@@ -6,7 +6,7 @@ use crate::core::reader::navigation::Destination;
 #[test]
 fn goto_action_writes_dictionary() {
     let action = Action::GoTo(Destination::Fit { page: 0 });
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("GoTo".into())));
     assert!(dict.get("D").is_some());
 }
@@ -14,7 +14,7 @@ fn goto_action_writes_dictionary() {
 #[test]
 fn uri_action_writes_string() {
     let action = Action::Uri("https://example.com".into());
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("URI".into())));
     assert!(matches!(dict.get("URI"), Some(Value::HexString(_))));
 }
@@ -25,7 +25,7 @@ fn launch_action_writes_new_window() {
         file: ActionFileSpec::new("viewer.exe"),
         new_window: Some(true),
     };
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("Launch".into())));
     assert_eq!(dict.get("NewWindow"), Some(&Value::Bool(true)));
 }
@@ -33,7 +33,7 @@ fn launch_action_writes_new_window() {
 #[test]
 fn javascript_action_writes_script() {
     let action = Action::JavaScript("app.alert(1);".into());
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("JavaScript".into())));
     assert!(matches!(dict.get("JS"), Some(Value::HexString(_))));
 }
@@ -41,7 +41,7 @@ fn javascript_action_writes_script() {
 #[test]
 fn named_action_writes_name() {
     let action = Action::Named(ActionNamedAction::NextPage);
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("Named".into())));
     assert_eq!(dict.get("N"), Some(&Value::Name("NextPage".into())));
 }
@@ -52,7 +52,7 @@ fn goto_remote_action_writes_file_and_destination() {
         file: ActionFileSpec::new("other.pdf"),
         destination: ActionRemoteDestination::Page(5),
     };
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("GoToR".into())));
     assert!(dict.get("F").is_some());
     assert_eq!(dict.get("D"), Some(&Value::Integer(5)));
@@ -67,7 +67,12 @@ fn hide_action_writes_targets_and_flag() {
         ])
         .with_hidden(false),
     );
-    let dict = action.to_dict(&[20], &[]).unwrap();
+    let dict = action
+        .to_dict(&ActionRefs {
+            annotation_nums: &[20],
+            ..ActionRefs::default()
+        })
+        .unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("Hide".into())));
     let targets = dict.get("T").and_then(Value::as_array).expect("/T");
     assert_eq!(targets.0[0], Value::Ref(20, 0));
@@ -75,7 +80,12 @@ fn hide_action_writes_targets_and_flag() {
     assert_eq!(dict.get("H"), Some(&Value::Bool(false)));
 
     let single = Action::Hide(HideAction::new(vec![HideTarget::Annotation(0)]));
-    let dict = single.to_dict(&[20], &[]).unwrap();
+    let dict = single
+        .to_dict(&ActionRefs {
+            annotation_nums: &[20],
+            ..ActionRefs::default()
+        })
+        .unwrap();
     assert_eq!(dict.get("T"), Some(&Value::Ref(20, 0)), "单目标写标量");
     assert!(dict.get("H").is_none(), "缺省 /H 不物化");
 }
@@ -84,13 +94,16 @@ fn hide_action_writes_targets_and_flag() {
 fn hide_action_rejects_invalid_targets() {
     let empty = Action::Hide(HideAction::new(Vec::new()));
     assert!(matches!(
-        empty.to_dict(&[], &[]),
+        empty.to_dict(&ActionRefs::default()),
         Err(WriteError::InvalidObject(_))
     ));
 
     let unknown = Action::Hide(HideAction::new(vec![HideTarget::Annotation(3)]));
     assert!(matches!(
-        unknown.to_dict(&[20], &[]),
+        unknown.to_dict(&ActionRefs {
+            annotation_nums: &[20],
+            ..ActionRefs::default()
+        }),
         Err(WriteError::InvalidObject(_))
     ));
 
@@ -99,7 +112,7 @@ fn hide_action_rejects_invalid_targets() {
         HideTarget::FieldName("name".into()),
     ]));
     assert!(matches!(
-        duplicated.to_dict(&[], &[]),
+        duplicated.to_dict(&ActionRefs::default()),
         Err(WriteError::InvalidObject(_))
     ));
 }
@@ -113,7 +126,12 @@ fn set_ocg_state_action_writes_flat_state_array() {
         ])
         .with_preserve_radio_buttons(false),
     );
-    let dict = action.to_dict(&[], &[31, 32]).unwrap();
+    let dict = action
+        .to_dict(&ActionRefs {
+            ocg_nums: &[31, 32],
+            ..ActionRefs::default()
+        })
+        .unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("SetOCGState".into())));
     let state = dict.get("State").and_then(Value::as_array).expect("/State");
     assert_eq!(
@@ -132,7 +150,12 @@ fn set_ocg_state_action_writes_flat_state_array() {
         OcgStateOperation::On,
         vec![0],
     )]));
-    let dict = minimal.to_dict(&[], &[31]).unwrap();
+    let dict = minimal
+        .to_dict(&ActionRefs {
+            ocg_nums: &[31],
+            ..ActionRefs::default()
+        })
+        .unwrap();
     assert_eq!(
         dict.get("State"),
         Some(&Value::Array(Array(vec![
@@ -147,7 +170,7 @@ fn set_ocg_state_action_writes_flat_state_array() {
 fn set_ocg_state_action_rejects_invalid_groups() {
     let empty = Action::SetOcgState(SetOcgStateAction::new(Vec::new()));
     assert!(matches!(
-        empty.to_dict(&[], &[]),
+        empty.to_dict(&ActionRefs::default()),
         Err(WriteError::InvalidObject(_))
     ));
 
@@ -156,7 +179,7 @@ fn set_ocg_state_action_rejects_invalid_groups() {
         Vec::new(),
     )]));
     assert!(matches!(
-        no_groups.to_dict(&[], &[]),
+        no_groups.to_dict(&ActionRefs::default()),
         Err(WriteError::InvalidObject(_))
     ));
 
@@ -165,7 +188,10 @@ fn set_ocg_state_action_rejects_invalid_groups() {
         vec![2],
     )]));
     assert!(matches!(
-        unknown.to_dict(&[], &[31, 32]),
+        unknown.to_dict(&ActionRefs {
+            ocg_nums: &[31, 32],
+            ..ActionRefs::default()
+        }),
         Err(WriteError::InvalidObject(_))
     ));
 }
@@ -173,13 +199,13 @@ fn set_ocg_state_action_rejects_invalid_groups() {
 #[test]
 fn thread_action_writes_indices() {
     let action = Action::Thread(ThreadAction::new(2).with_bead(1));
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("Thread".into())));
     assert_eq!(dict.get("D"), Some(&Value::Integer(2)));
     assert_eq!(dict.get("B"), Some(&Value::Integer(1)));
 
     let no_bead = Action::Thread(ThreadAction::new(0));
-    let dict = no_bead.to_dict(&[], &[]).unwrap();
+    let dict = no_bead.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("D"), Some(&Value::Integer(0)));
     assert!(dict.get("B").is_none(), "缺省 /B 不物化");
 }
@@ -194,7 +220,7 @@ fn go_to_e_action_writes_target_dictionary() {
             ),
         ),
     );
-    let dict = action.to_dict(&[], &[]).unwrap();
+    let dict = action.to_dict(&ActionRefs::default()).unwrap();
     assert_eq!(dict.get("S"), Some(&Value::Name("GoToE".into())));
     assert_eq!(dict.get("D"), Some(&Value::Integer(2)));
     assert!(dict.get("F").is_none(), "缺省 /F 不物化");

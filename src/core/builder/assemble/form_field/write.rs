@@ -1,6 +1,6 @@
 //! 单个字段/Widget 节点字典的写出。
 
-use crate::core::builder::types::{FieldValue, FormOption, text_string_value};
+use crate::core::builder::types::{ActionRefs, FieldValue, FormOption, text_string_value};
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
@@ -125,7 +125,10 @@ pub(crate) fn field_dict(
     if !field.actions().is_empty() {
         let mut additional = Dict::new();
         for (event, action) in field.actions() {
-            additional = additional.insert(event.name(), Value::Dict(action.to_dict(&[], &[])?));
+            additional = additional.insert(
+                event.name(),
+                Value::Dict(action.to_dict(&ActionRefs::default())?),
+            );
         }
         dict = dict.insert("AA", Value::Dict(additional));
     }

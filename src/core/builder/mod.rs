@@ -58,11 +58,11 @@ pub use types::{
     LinkHighlightMode, Measure, MeshFunction, MeshVertex, NumberFormat, NumberFraction,
     NumberLabelOrder, OcgStateOperation, OcgStateSequence, OptionalContentGroup, PageSize,
     PaintType, PdfAnnotation, PolygonIntent, RadialShading, SampledFunction, Separation,
-    SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
-    StitchingFunction, TensorProductPatch, TensorProductPatchShading, ThreadAction, TilingPattern,
-    TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
-    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem,
-    XmpListKind, XmpPacket, XmpPacketError, XmpValue,
+    SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, Sound,
+    SoundAction, SoundEncoding, StitchingFunction, TensorProductPatch, TensorProductPatchShading,
+    ThreadAction, TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
+    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
+    Viewport, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -173,6 +173,11 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 分配的可选内容组对象号（下标即组句柄）；供大纲
     /// `/A` 解析 Set-OCG-State 动作的组目标。
     ocg_nums: Vec<i64>,
+    /// 文档级声音对象池（13.3）；`PdfBuilder::add_sound` 返回其索引。
+    sounds: Vec<Sound>,
+    /// 最近一次 assemble 分配的声音流对象号（下标即声音句柄）；供 Sound
+    /// 动作 `/Sound` 与 Sound 注解 `/Sound` 解析。
+    sound_nums: Vec<i64>,
     /// 文档级嵌入文件池；`PdfBuilder::embed_file` 返回其索引。
     embedded: Vec<EmbeddedFile>,
     /// 交互表单（AcroForm）：表单级条目与按页绑定的字段树。
@@ -212,6 +217,8 @@ impl PdfBuilder {
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
             ocg_nums: Vec::new(),
+            sounds: Vec::new(),
+            sound_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -237,6 +244,8 @@ impl PdfBuilder {
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
             ocg_nums: Vec::new(),
+            sounds: Vec::new(),
+            sound_nums: Vec::new(),
             embedded: Vec::new(),
             acro_form: None,
             compression: None,
@@ -549,6 +558,20 @@ impl PdfBuilder {
         idx
     }
 
+    /// 注册一个声音对象（13.3 Table 294），返回文档级句柄。
+    ///
+    /// 句柄供 [`PdfAnnotation::with_sound`]（Sound 注解，12.5.6.16）与
+    /// [`SoundAction`]（Sound 动作，12.6.4.8）引用。每个注册的声音在
+    /// [`PdfBuilder::build`] 时写成独立间接流对象；采样率、声道数、
+    /// 每样本位数与数据在构建阶段校验，非法输入返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.2 返回
+    /// [`WriteError::UnsupportedVersion`]，均不写出任何字节。
+    pub fn add_sound(&mut self, sound: Sound) -> usize {
+        let handle = self.sounds.len();
+        self.sounds.push(sound);
+        handle
+    }
+
     /// 设置交互表单（AcroForm，12.7.2–12.7.4）。
     ///
     /// 字段树在 [`PdfBuilder::build`] 时写成独立间接对象：目录
@@ -713,6 +736,7 @@ impl PdfBuilder {
             &self.navigation,
             &self.annotation_nums,
             &self.ocg_nums,
+            &self.sound_nums,
         )?;
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {

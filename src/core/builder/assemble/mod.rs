@@ -9,7 +9,8 @@
 //! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出与配对冲突校验；
 //! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出；
-//! - `acro_form`：AcroForm `/DR` 默认资源字典（字体/ExtGState/ColorSpace/ProcSet）。
+//! - `acro_form`：AcroForm `/DR` 默认资源字典（字体/ExtGState/ColorSpace/ProcSet）；
+//! - `sound`：声音对象流（13.3 Table 294）的分配、写出与注解 `/Sound` 引用。
 
 mod acro_form;
 mod action;
@@ -22,6 +23,7 @@ mod embedded_file;
 mod fonts;
 mod form_field;
 mod shading;
+mod sound;
 mod type3;
 
 use super::{
@@ -82,6 +84,9 @@ impl PdfBuilder {
 
         // 嵌入文件（7.11）：逐项校验与版本门禁在任何对象写出前完成。
         embedded_file::validate_registration(&self.embedded, self.version)?;
+        // 声音对象（13.3 Table 294）：采样参数与 PDF 1.2 门禁同样在
+        // 任何对象写出前完成。
+        sound::validate_registration(&self.sounds, self.version)?;
         // 集合（12.3.5）与集合项（7.11.6）：`/D` 名称树与 `/CI` ↔ `/Schema`
         // 交叉校验同样在任何对象写出前完成。
         embedded_file::validate_collection_references(
@@ -580,6 +585,11 @@ impl PdfBuilder {
             .map(|slot| slot.filespec_num)
             .collect();
 
+        // 声音对象（13.3 Table 294）：每个注册的声音分配一个独立流对象号，
+        // 供 Sound 动作与 Sound 注解的 `/Sound` 引用；注册校验已在任何
+        // 对象号分配前完成。
+        let sound_nums = sound::allocate(&self.sounds, &mut num);
+
         // —— 构造 Document ——
         let mut doc = Document::new();
         if !used_shadings.is_empty() {
@@ -971,6 +981,7 @@ impl PdfBuilder {
                 form_nums: &form_nums,
                 embedded_nums: &embedded_nums,
                 ocg_nums: &ocg_nums,
+                sound_nums: &sound_nums,
             };
             let dict =
                 annotation::annotation_dict(&entry.annot, handle, &popup_pairs, &page_refs, &refs)?;
@@ -980,6 +991,7 @@ impl PdfBuilder {
         // 在此解析为对象号。
         self.annotation_nums = annotation_nums.clone();
         self.ocg_nums = ocg_nums.clone();
+        self.sound_nums = sound_nums.clone();
 
         // 表单字段/Widget 间接对象：`/P` 指向页面字典，`/Kids`/`/Parent`
         // 已按字段树对象号互引，`/AP` 解析为 Form XObject 流引用。
@@ -990,6 +1002,9 @@ impl PdfBuilder {
 
         // 嵌入文件对对象：文件规格 + 嵌入文件流。
         embedded_file::write_objects(&mut doc, &self.embedded, &embedded_slots, self.version);
+
+        // 声音流对象（13.3 Table 294）：对象号已在 `annotation_nums` 之前分配。
+        sound::write_objects(&mut doc, &self.sounds, &sound_nums);
 
         // 字体对象
         for (f, fnum) in &font_pool {

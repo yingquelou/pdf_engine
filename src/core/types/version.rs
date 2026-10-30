@@ -215,6 +215,9 @@ pub enum PdfFeature {
     /// 备用演示（目录 `/Names /AlternatePresentations` 名称树，13.5 与
     /// Table 297），PDF 1.4 引入。
     AlternatePresentations,
+    /// 声音对象（声音流字典，13.3 与 Table 294）、Sound 动作（12.6.4.8
+    /// Table 208）与 Sound 注解（12.5.6.16 Table 185），PDF 1.2 引入。
+    SoundObjects,
 }
 
 impl PdfFeature {
@@ -229,7 +232,8 @@ impl PdfFeature {
             PdfFeature::TilingPattern
             | PdfFeature::LinkAnnotationHighlighting
             | PdfFeature::HideAction
-            | PdfFeature::FormDataActions => PdfVersion::V1_2,
+            | PdfFeature::FormDataActions
+            | PdfFeature::SoundObjects => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
@@ -330,6 +334,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::CollectionItem => "collection items",
             PdfFeature::PageTemplates => "page templates",
             PdfFeature::AlternatePresentations => "alternate presentations",
+            PdfFeature::SoundObjects => "sound objects",
         };
         write!(f, "{name}")
     }

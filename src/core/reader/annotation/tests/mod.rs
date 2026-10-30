@@ -15,6 +15,7 @@ mod link;
 mod measure;
 mod mk;
 mod redact;
+mod sound;
 mod subtype;
 mod support;
 mod watermark;

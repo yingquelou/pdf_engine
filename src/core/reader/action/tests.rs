@@ -803,4 +803,5 @@ fn malformed_transition_actions_are_typed_errors() {
 }
 
 mod gotoe;
+mod sound;
 mod thread;

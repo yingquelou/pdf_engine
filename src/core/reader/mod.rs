@@ -89,6 +89,7 @@ mod parser;
 mod security;
 pub mod shading;
 pub mod signature;
+pub mod sound;
 #[cfg(test)]
 mod tests;
 pub mod text;

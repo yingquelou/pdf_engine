@@ -366,8 +366,12 @@ fn table_169_rows_map_to_names_versions_and_markup_flags() {
     assert_eq!(TABLE_169.len(), 26, "PDF 1.7 全集应为 26 种");
     let mut variants = Vec::new();
     for (name, version, markup) in TABLE_169 {
-        let annotation =
-            parse_annotation(&doc(vec![]), 0, None, &base_annotation(name)).expect("subtype");
+        // Sound 注解的 `/Sound`（Table 185）是必填条目，解析期只要求间接引用。
+        let mut dict = base_annotation(name);
+        if name == "Sound" {
+            dict = dict.insert("Sound", Value::Ref(99, 0));
+        }
+        let annotation = parse_annotation(&doc(vec![]), 0, None, &dict).expect("subtype");
         assert!(
             !matches!(annotation.subtype, AnnotationSubtype::Unknown(_)),
             "{name} 应是标准子类型"

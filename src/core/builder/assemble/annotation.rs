@@ -13,7 +13,7 @@
 use crate::core::builder::navigation::destination_value;
 use crate::core::builder::types::text_string_value;
 use crate::core::builder::types::{
-    Action, AnnotationDestination, AnnotationKind, PdfAnnotation, PolygonIntent,
+    Action, ActionRefs, AnnotationDestination, AnnotationKind, PdfAnnotation, PolygonIntent,
 };
 use crate::core::reader::navigation::Destination;
 use crate::core::types::{Array, Dict, PdfFeature, PdfVersion, Value};
@@ -22,6 +22,7 @@ use crate::core::writer::WriteError;
 use super::annotation_mk::appearance_characteristics_dict;
 use super::annotation_popup::PopupPairs;
 use super::real_array;
+use super::sound::annotation_sound;
 
 /// 注解写出时按句柄解析的间接对象号映射。
 pub(super) struct AnnotationRefs<'a> {
@@ -33,6 +34,19 @@ pub(super) struct AnnotationRefs<'a> {
     pub(super) embedded_nums: &'a [i64],
     /// Set-OCG-State 动作 `/State` 的可选内容组。
     pub(super) ocg_nums: &'a [i64],
+    /// Sound 动作与 Sound 注解 `/Sound` 的声音流对象。
+    pub(super) sound_nums: &'a [i64],
+}
+
+impl AnnotationRefs<'_> {
+    /// 动作字典写出所需的同一组对象号映射。
+    fn action_refs(&self) -> ActionRefs<'_> {
+        ActionRefs {
+            annotation_nums: self.annotation_nums,
+            ocg_nums: self.ocg_nums,
+            sound_nums: self.sound_nums,
+        }
+    }
 }
 
 /// 把单个注解写成字典；对象号已由 assemble 主流程按句柄分配。
@@ -192,10 +206,7 @@ pub(super) fn annotation_dict(
         dict = dict.insert("H", Value::Name(highlight.name().into()));
     }
     if let Some(action) = link.pressed_action() {
-        dict = dict.insert(
-            "PA",
-            Value::Dict(action.to_dict(refs.annotation_nums, refs.ocg_nums)?),
-        );
+        dict = dict.insert("PA", Value::Dict(action.to_dict(&refs.action_refs())?));
     }
     let redact = annot.redact();
     if let Some(text) = redact.overlay_text() {
@@ -246,7 +257,7 @@ pub(super) fn annotation_dict(
                     .insert("S", Value::Name("GoTo".into()))
                     .insert("D", value)
             }
-            other => other.to_dict(refs.annotation_nums, refs.ocg_nums)?,
+            other => other.to_dict(&refs.action_refs())?,
         };
         dict = dict.insert("A", Value::Dict(action_dict));
     }
@@ -285,6 +296,9 @@ pub(super) fn annotation_dict(
             ))
         })?;
         dict = dict.insert("FS", Value::Ref(*num, 0));
+    }
+    if let Some(sound) = annotation_sound(annot, handle, refs.sound_nums)? {
+        dict = dict.insert("Sound", sound);
     }
     let mut appearance = Dict::new();
     if !annot.appearance_states().is_empty() {

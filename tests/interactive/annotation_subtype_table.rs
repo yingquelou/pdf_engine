@@ -1,19 +1,19 @@
-//! E2：写端支持的 20 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
+//! E2：写端支持的 21 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
 //! 与写端 `AnnotationKind::subtype()` 一致（12.5.6.1 Table 169，读写共用单点表）。
 
 use super::*;
 
-/// 写端支持的 20 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
+/// 写端支持的 21 种子类型逐个写出后，读端解析的 `AnnotationSubtype`
 /// 与写端 `AnnotationKind::subtype()` 一致，且名称、引入版本与标记类归属
 /// 全部落在同一张 Table 169 上（读写共用单点表）。
 #[test]
 fn builder_annotation_subtype_table_roundtrips_through_parser() {
     use pdf_engine::core::builder::{
-        AnnotationKind, EmbeddedFile, PageSize, PdfAnnotation, PdfBuilder,
+        AnnotationKind, EmbeddedFile, PageSize, PdfAnnotation, PdfBuilder, Sound,
     };
     use pdf_engine::core::reader::annotation::TABLE_169;
 
-    const KINDS: [AnnotationKind; 20] = [
+    const KINDS: [AnnotationKind; 21] = [
         AnnotationKind::Text,
         AnnotationKind::Link,
         AnnotationKind::FreeText,
@@ -34,12 +34,15 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         AnnotationKind::Redact,
         AnnotationKind::Screen,
         AnnotationKind::Watermark,
+        AnnotationKind::Sound,
     ];
 
     let mut builder = PdfBuilder::new();
     let p0 = builder.page(PageSize::A4);
     // `FileAttachment` 注解必须带 `/FS` 文件规格句柄（E6 构建期校验）。
     let filespec = builder.embed_file(EmbeddedFile::new("note.txt", b"subtype table".to_vec()));
+    // `Sound` 注解必须带 `/Sound` 声音对象句柄（Table 185 必填）。
+    let sound = builder.add_sound(Sound::new(vec![1, 2], 8000.0, 1, 8));
     for (index, kind) in KINDS.iter().enumerate() {
         let top = 740.0 - (index as f64) * 20.0;
         let rect = [72.0, top - 10.0, 200.0, top];
@@ -53,6 +56,9 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         }
         if *kind == AnnotationKind::FileAttachment {
             annot = annot.with_filespec(filespec);
+        }
+        if *kind == AnnotationKind::Sound {
+            annot = annot.with_sound(sound);
         }
         if *kind == AnnotationKind::Popup {
             // `/Parent` 是 Table 183 必填条目：回指首个注解（Text），
@@ -78,7 +84,7 @@ fn builder_annotation_subtype_table_roundtrips_through_parser() {
         builder.add_annotation(p0, annot);
     }
     let mut buf = Vec::new();
-    builder.build(&mut buf).expect("build 20 subtypes");
+    builder.build(&mut buf).expect("build 21 subtypes");
 
     let doc = parse_buf(&buf);
     let annotations = doc.page_annotations(0).expect("annotations");

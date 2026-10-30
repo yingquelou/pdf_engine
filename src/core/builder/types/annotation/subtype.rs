@@ -370,7 +370,10 @@ impl PdfAnnotation {
     /// 校验子类型专有条目的归属与取值；由 [`PdfAnnotation::validate`] 调用。
     pub(super) fn validate_subtype_entries(&self) -> Result<(), String> {
         if self.icon_name.is_some() {
-            self.require_kind(AnnotationKind::Text, "annotation /Name")?;
+            self.require_kind_in(
+                &[AnnotationKind::Text, AnnotationKind::Sound],
+                "annotation /Name",
+            )?;
         }
         if self.is_open.is_some() {
             self.require_kind_in(
@@ -431,6 +434,7 @@ impl PdfAnnotation {
         self.validate_geometry_entries()?;
         self.validate_measure_entries()?;
         self.validate_redact_entries()?;
+        self.validate_sound_entries()?;
         self.validate_appearance_characteristics()?;
         self.validate_fixed_print()?;
         // 文本标记注解的 `/QuadPoints` 是 Table 179 必填条目，空数组视同缺失。

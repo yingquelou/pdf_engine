@@ -19,6 +19,9 @@
 //!   Polygon/PolyLine `/Vertices`、`/LE`、`/BE`、`/IT`（Table 178）；
 //!   Link `/H` 高亮模式与 `/PA` 按下 URI 动作（Table 173，`/PA` 经
 //!   `Document::annotation_pressed_action` 解析为 12.6 动作模型）。
+//! - Sound（Table 185）：`/Sound` 声音流引用经 `Document::annotation_sound`
+//!   解析为 13.3 声音模型；`/Name` 图标名复用通用 `icon_name`
+//!   （标准值 `Speaker`、`Mic`，缺省 `Speaker`）。
 //! - Measure 字典（12.9，Table 261–263）：Line 与 Polygon/PolyLine 的
 //!   `/Measure` 类型化为 [`Measure`]（直角坐标条目 + 数字格式数组），
 //!   解析在 [`measure`]。
@@ -37,6 +40,7 @@ use std::fmt;
 
 use crate::core::reader::action::{Action, ActionError};
 use crate::core::reader::navigation::{NavigationError, OutlineDestination};
+use crate::core::reader::sound::Sound;
 use crate::core::types::{Dict, Document, Value};
 
 #[cfg(test)]
@@ -49,6 +53,7 @@ mod link;
 mod measure;
 mod mk;
 mod redact;
+mod sound;
 pub mod subtype;
 mod watermark;
 
@@ -204,6 +209,9 @@ pub struct Annotation {
     pub quad_points: Option<Vec<f64>>,
     /// `/Name` 图标名（Text 注解专有条目；名字或文本串，取值由查看器定义）。
     pub icon_name: Option<String>,
+    /// `/Sound` 声音流对象引用（Sound 注解必填，Table 185）；类型化解析见
+    /// [`Document::annotation_sound`]。
+    pub sound: Option<Value>,
     /// `/Open` Text/Popup 注解气泡是否展开（Table 172/183；Popup 缺省 false）。
     pub is_open: Option<bool>,
     /// `/State` Text 注解标记状态（文本串；标准值随 `/StateModel` 而变）。
@@ -363,6 +371,19 @@ impl Document {
         Ok(Some(self.action(value)?))
     }
 
+    /// 解析 Sound 注解的 `/Sound` 声音对象（12.5.6.16 Table 185）。
+    ///
+    /// 无 `/Sound` 返回 `None`；引用的流对象非法或解码失败时返回
+    /// [`AnnotationError::Malformed`]。
+    pub fn annotation_sound(&self, annotation: &Annotation) -> Result<Option<Sound>> {
+        let Some(value) = annotation.sound.as_ref() else {
+            return Ok(None);
+        };
+        self.sound(value)
+            .map(Some)
+            .map_err(|error| malformed(format!("Sound annotation: {error}")))
+    }
+
     /// 按 0 基页号遍历页面树，返回页面字典（含直接嵌入页）。
     fn page_dict_at(&self, page_index: usize) -> Result<Dict> {
         let catalog = crate::core::reader::navigation::catalog(self)
@@ -458,6 +479,7 @@ fn parse_annotation(
     let redact = redact::parse_redact_entries(dict)?;
     let mk = mk::parse_appearance_characteristics(document, dict)?;
     let fixed_print = watermark::parse_fixed_print(document, dict)?;
+    let sound = sound::parse_sound_entries(dict, &subtype)?;
 
     Ok(Annotation {
         page_index,
@@ -485,6 +507,7 @@ fn parse_annotation(
             .transpose()?,
         quad_points: parse_number_array(dict, "QuadPoints", true)?,
         icon_name: entries.icon_name,
+        sound,
         is_open: entries.is_open,
         state: entries.state,
         state_model: entries.state_model,
