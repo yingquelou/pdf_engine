@@ -9,8 +9,8 @@ use std::fmt;
 
 use crate::core::reader::content::text_value;
 use crate::core::reader::navigation::{
-    NavigationError, OutlineDestination, destination::parse_outline_destination, page_tree_index,
-    resolve,
+    NavigationError, OutlineDestination, OutlineItem, destination::parse_outline_destination,
+    page_tree_index, resolve,
 };
 use crate::core::reader::transition::{Transition, parse_transition};
 use crate::core::types::{Document, Value};
@@ -365,6 +365,18 @@ impl Document {
             }),
         }
     }
+
+    /// 解析大纲条目的 `/A` 动作（12.3.3 大纲条目表、12.6）；无 `/A` 返回 `None`。
+    ///
+    /// 动作语义完全复用 [`Document::action`]（GoTo/GoToR/GoToE/Uri/JavaScript/
+    /// Hide/SetOCGState/Transition/Thread/SubmitForm/ResetForm/ImportData 等），
+    /// 条目只有 `/Dest` 时同样返回 `None`。
+    pub fn outline_action(&self, item: &OutlineItem) -> Result<Option<Action>, ActionError> {
+        item.action
+            .as_ref()
+            .map(|value| self.action(value))
+            .transpose()
+    }
 }
 
 fn malformed(message: impl Into<String>) -> ActionError {
@@ -537,5 +549,7 @@ fn parse_remote_destination(
     }
 }
 
+#[cfg(test)]
+mod outline_tests;
 #[cfg(test)]
 mod tests;

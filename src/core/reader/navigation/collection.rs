@@ -2,11 +2,13 @@
 //!
 //! 集合字典挂在文档目录 `/Collection` 上，描述嵌入式文件集合的展示与
 //! 组织方式：字段模式（Table 156/157）、初始文档（`/D`）、初始视图
-//! （`/View`）与排序（Table 158）。集合项 `/CI`（7.11.6）不在本模块范围。
+//! （`/View`）与排序（Table 158）。集合项 `/CI`（7.11.6）经
+//! [`Document::collection_items`] 与字段模式交叉校验。
 
 use std::collections::BTreeMap;
 
 use crate::core::reader::content::text_value;
+use crate::core::reader::embedded::{CollectionItem, CollectionItemValue, CollectionSubitemValue};
 use crate::core::reader::page_content::decode_name_escapes;
 use crate::core::types::{Dict, Document, Value};
 
@@ -92,6 +94,46 @@ impl Document {
     /// 读取便携集合（12.3.5）；目录无 `/Collection` 时返回 `None`。
     pub fn collection(&self) -> Result<Option<Collection>, NavigationError> {
         read_collection(self)
+    }
+
+    /// 读取并校验集合项（7.11.6 Table 48/49），按键排序。
+    ///
+    /// `/CI` 的键须在集合模式（12.3.5 Table 157）中声明，值形态须与字段
+    /// `/Subtype` 一致；无集合或无模式时 `/CI` 无参照可依，返回类型化错误。
+    pub fn collection_items(&self) -> Result<BTreeMap<String, CollectionItem>, NavigationError> {
+        let collection = self.collection()?;
+        let files = self
+            .embedded_files()
+            .map_err(|error| malformed(error.to_string()))?;
+        let Some(collection) = collection else {
+            if let Some((name, _)) = files
+                .iter()
+                .find(|(_, filespec)| filespec.collection_item.is_some())
+            {
+                return Err(malformed(format!(
+                    "embedded file {name:?} has a collection item but no collection is set"
+                )));
+            }
+            return Ok(BTreeMap::new());
+        };
+        if collection.schema.is_none()
+            && files
+                .values()
+                .any(|filespec| filespec.collection_item.is_some())
+        {
+            return Err(malformed("collection items require a collection schema"));
+        }
+        let mut items = BTreeMap::new();
+        for (name, filespec) in &files {
+            let Some(item) = &filespec.collection_item else {
+                continue;
+            };
+            if let Some(schema) = &collection.schema {
+                validate_collection_item(name, item, schema)?;
+            }
+            items.insert(name.clone(), item.clone());
+        }
+        Ok(items)
     }
 }
 
@@ -294,6 +336,73 @@ fn read_sort(
         }
     }
     Ok(CollectionSort { fields, ascending })
+}
+
+/// `/CI` 条目值的形态，用于对照 Table 157 `/Subtype`。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ItemShape {
+    Text,
+    Number,
+}
+
+impl ItemShape {
+    const fn describe(self) -> &'static str {
+        match self {
+            Self::Text => "a text string",
+            Self::Number => "a number",
+        }
+    }
+}
+
+/// Table 157 `/Subtype` → `/CI` 值形态：`N`/`Size` 为数，其余为文本串；
+/// 未定义的名字（`Other`）不限定形态。
+fn expected_shape(field_type: &CollectionFieldType) -> Option<ItemShape> {
+    match field_type {
+        CollectionFieldType::Number | CollectionFieldType::Size => Some(ItemShape::Number),
+        CollectionFieldType::Text
+        | CollectionFieldType::Date
+        | CollectionFieldType::FileName
+        | CollectionFieldType::Description
+        | CollectionFieldType::ModificationDate
+        | CollectionFieldType::CreationDate => Some(ItemShape::Text),
+        CollectionFieldType::Other(_) => None,
+    }
+}
+
+/// `/CI` 键须在模式中声明，值形态须与字段 `/Subtype` 一致；
+/// 子项 `/D` 按同一形态校验，缺 `/D` 时无从比较。
+fn validate_collection_item(
+    name: &str,
+    item: &CollectionItem,
+    schema: &BTreeMap<String, CollectionField>,
+) -> Result<(), NavigationError> {
+    for (key, value) in &item.values {
+        let Some(field) = schema.get(key) else {
+            return Err(malformed(format!(
+                "collection item field {key:?} of embedded file {name:?} is not declared in the collection schema"
+            )));
+        };
+        let Some(expected) = expected_shape(&field.field_type) else {
+            continue;
+        };
+        let actual = match value {
+            CollectionItemValue::Text(_) => ItemShape::Text,
+            CollectionItemValue::Number(_) => ItemShape::Number,
+            CollectionItemValue::Subitem(subitem) => match &subitem.datum {
+                Some(CollectionSubitemValue::Text(_)) => ItemShape::Text,
+                Some(CollectionSubitemValue::Number(_)) => ItemShape::Number,
+                None => continue,
+            },
+        };
+        if actual != expected {
+            return Err(malformed(format!(
+                "collection item field {key:?} of embedded file {name:?} expects {}, got {}",
+                expected.describe(),
+                actual.describe()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// PDF 字节串（字面量或十六进制）；字面量按原始字节逐字符存储。

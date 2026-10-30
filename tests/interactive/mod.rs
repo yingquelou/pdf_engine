@@ -37,6 +37,7 @@ mod form;
 mod incremental;
 mod metadata;
 mod navigation;
+mod outline_action;
 mod page_presentation;
 mod page_thumbnail;
 mod signature;

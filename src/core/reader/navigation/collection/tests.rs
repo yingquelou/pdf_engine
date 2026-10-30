@@ -1,6 +1,7 @@
 //! 便携集合读端测试：`/Collection` 模式、初始文档、视图与排序。
 
-use crate::core::types::{Array, Dict, Object, Trailer, Value};
+use crate::core::reader::embedded::{CollectionItemValue, CollectionSubitemValue};
+use crate::core::types::{Array, Dict, Object, StreamData, Trailer, Value};
 
 use super::*;
 
@@ -45,6 +46,80 @@ fn field(subtype: &str, name: &str) -> Value {
 
 fn collection_with(entries: Dict) -> Document {
     document(Dict::new().insert("Collection", Value::Dict(entries)))
+}
+
+/// 集合模式字段集合（`Type` + 字段条目）。
+fn schema(fields: Vec<(&str, &str, &str)>) -> Dict {
+    let mut dict = Dict::new().insert("Type", Value::Name("CollectionSchema".into()));
+    for (key, subtype, name) in fields {
+        dict = dict.insert(key, field(subtype, name));
+    }
+    dict
+}
+
+/// 集合字典；`schema` 为 `None` 时不写 `/Schema`。
+fn collection(schema: Option<Dict>) -> Dict {
+    schema.map_or_else(Dict::new, |schema| {
+        Dict::new().insert("Schema", Value::Dict(schema))
+    })
+}
+
+/// 集合项 `/CI` 字典（`Type` + 条目）。
+fn item(entries: Vec<(&str, Value)>) -> Dict {
+    let mut dict = Dict::new().insert("Type", Value::Name("CollectionItem".into()));
+    for (key, value) in entries {
+        dict = dict.insert(key, value);
+    }
+    dict
+}
+
+/// 只含 `title` 文本字段的 `/CI`。
+fn title_item() -> Option<Dict> {
+    Some(item(vec![("title", text("Annual Report"))]))
+}
+
+/// 文件规格 + 嵌入流；`item` 为 `Some` 时以间接对象写出 `/CI`。
+fn filespec(doc: &Document, num: i64, name: &str, item: Option<Dict>) {
+    let mut spec = Dict::new()
+        .insert("Type", Value::Name("Filespec".into()))
+        .insert("F", text(name))
+        .insert("EF", Value::Ref(num + 1, 0));
+    if let Some(item) = item {
+        spec = spec.insert("CI", Value::Ref(num + 2, 0));
+        insert(doc, num + 2, Value::Dict(item));
+    }
+    insert(doc, num, Value::Dict(spec));
+    insert(
+        doc,
+        num + 1,
+        Value::Stream(Dict::new(), StreamData::Owned(Vec::new())),
+    );
+}
+
+/// 带 `/Names /EmbeddedFiles` 名称树的文档；`files` 为
+/// （文件规格对象号、名称、`/CI` 字典）。
+fn collection_document(
+    collection: Option<Dict>,
+    files: Vec<(i64, &str, Option<Dict>)>,
+) -> Document {
+    let mut entries = Vec::with_capacity(files.len() * 2);
+    for (num, name, _) in &files {
+        entries.push(Value::String((*name).into()));
+        entries.push(Value::Ref(*num, 0));
+    }
+    let names = Dict::new().insert(
+        "EmbeddedFiles",
+        Value::Dict(Dict::new().insert("Names", Value::Array(Array(entries)))),
+    );
+    let mut catalog = Dict::new().insert("Names", Value::Dict(names));
+    if let Some(collection) = collection {
+        catalog = catalog.insert("Collection", Value::Dict(collection));
+    }
+    let doc = document(catalog);
+    for (num, name, item) in files {
+        filespec(&doc, num, name, item);
+    }
+    doc
 }
 
 #[test]
@@ -349,5 +424,175 @@ fn collection_field_subtypes_and_escaped_keys_are_preserved() {
     assert_eq!(
         schema["weird"].field_type,
         CollectionFieldType::Other("Weird".into())
+    );
+}
+
+#[test]
+fn collection_items_validate_against_schema() {
+    let schema = schema(vec![
+        ("title", "S", "Title"),
+        ("copies", "N", "Copies"),
+        ("size", "Size", "Size"),
+        ("date", "D", "Date"),
+        ("weird", "Weird", "Weird"),
+    ]);
+    let subitem = Value::Dict(
+        Dict::new()
+            .insert("D", text("Annual Report"))
+            .insert("P", text("Title: ")),
+    );
+    let doc = collection_document(
+        Some(collection(Some(schema))),
+        vec![
+            (
+                20,
+                "report.pdf",
+                Some(item(vec![
+                    ("title", subitem),
+                    ("copies", Value::Integer(2)),
+                    ("size", Value::Integer(1024)),
+                    ("date", text("D:20261030120000Z")),
+                    ("weird", text("free form")),
+                ])),
+            ),
+            (30, "notes.txt", Some(item(vec![("title", text("Notes"))]))),
+            (40, "plain.bin", None),
+        ],
+    );
+
+    let items = doc.collection_items().expect("collection items");
+    assert_eq!(
+        items.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["notes.txt", "report.pdf"]
+    );
+    let report = &items["report.pdf"];
+    match &report.values["title"] {
+        CollectionItemValue::Subitem(subitem) => {
+            assert_eq!(
+                subitem.datum,
+                Some(CollectionSubitemValue::Text("Annual Report".into()))
+            );
+            assert_eq!(subitem.prefix.as_deref(), Some("Title: "));
+        }
+        other => panic!("expected subitem, got {other:?}"),
+    }
+    assert_eq!(report.values["copies"], CollectionItemValue::Number(2.0));
+    assert_eq!(report.values["size"], CollectionItemValue::Number(1024.0));
+    assert_eq!(
+        report.values["date"],
+        CollectionItemValue::Text("D:20261030120000Z".into())
+    );
+    assert_eq!(
+        items["notes.txt"].values["title"],
+        CollectionItemValue::Text("Notes".into())
+    );
+    assert!(!items.contains_key("plain.bin"));
+}
+
+#[test]
+fn collection_items_require_a_collection() {
+    let doc = collection_document(None, vec![(20, "report.pdf", title_item())]);
+    let error = doc.collection_items().expect_err("no /Collection");
+    assert!(matches!(error, NavigationError::Malformed(_)), "{error:?}");
+    assert!(
+        error.to_string().contains(
+            "embedded file \"report.pdf\" has a collection item but no collection is set"
+        ),
+        "{error}"
+    );
+    // 无 `/Collection` 且无 `/CI` 时返回空映射。
+    let plain = collection_document(None, vec![(20, "plain.bin", None)]);
+    assert!(plain.collection_items().expect("no items").is_empty());
+}
+
+#[test]
+fn collection_items_require_a_schema() {
+    let doc = collection_document(
+        Some(collection(None)),
+        vec![(20, "report.pdf", title_item())],
+    );
+    let error = doc.collection_items().expect_err("no /Schema");
+    assert!(matches!(error, NavigationError::Malformed(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("collection items require a collection schema"),
+        "{error}"
+    );
+}
+
+#[test]
+fn collection_item_type_mismatches_are_typed_errors() {
+    let schema = || schema(vec![("title", "S", "Title"), ("copies", "N", "Copies")]);
+    let report = |entries| {
+        collection_document(
+            Some(collection(Some(schema()))),
+            vec![(20, "report.pdf", Some(item(entries)))],
+        )
+    };
+    let subitem = |datum: Value| Value::Dict(Dict::new().insert("D", datum));
+    let cases = [
+        (
+            "copies",
+            vec![("copies", text("two"))],
+            "expects a number, got a text string",
+        ),
+        (
+            "title",
+            vec![("title", Value::Integer(7))],
+            "expects a text string, got a number",
+        ),
+        (
+            "copies",
+            vec![("copies", subitem(text("two")))],
+            "expects a number, got a text string",
+        ),
+    ];
+    for (key, entries, expected) in cases {
+        let items = report(entries).collection_items();
+        let error = items.expect_err("type mismatch");
+        assert!(matches!(error, NavigationError::Malformed(_)), "{error:?}");
+        let message = error.to_string();
+        assert!(message.contains("report.pdf"), "{message}");
+        assert!(message.contains(key), "{message}");
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[test]
+fn collection_items_tolerate_unknown_field_subtypes() {
+    let schema = || schema(vec![("text", "Weird", "Text"), ("number", "Odd", "Number")]);
+    let doc = collection_document(
+        Some(collection(Some(schema()))),
+        vec![(
+            20,
+            "free.pdf",
+            Some(item(vec![
+                ("text", text("free form")),
+                ("number", Value::Integer(3)),
+            ])),
+        )],
+    );
+    let items = doc.collection_items().expect("unknown subtypes accepted");
+    assert_eq!(
+        items["free.pdf"].values["text"],
+        CollectionItemValue::Text("free form".into())
+    );
+    assert_eq!(
+        items["free.pdf"].values["number"],
+        CollectionItemValue::Number(3.0)
+    );
+    // 未声明键仍须报错。
+    let undeclared = collection_document(
+        Some(collection(Some(schema()))),
+        vec![(20, "bad.pdf", Some(item(vec![("extra", text("x"))])))],
+    );
+    let error = undeclared.collection_items().expect_err("undeclared key");
+    assert!(matches!(error, NavigationError::Malformed(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("field \"extra\" of embedded file \"bad.pdf\" is not declared"),
+        "{error}"
     );
 }
