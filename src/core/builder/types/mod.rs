@@ -53,10 +53,11 @@ mod xmp;
 
 pub(crate) use action::ActionRefs;
 pub use action::{
-    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, GoToEAction, GoToETarget,
-    GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation, HideAction, HideTarget,
-    MovieAction, MovieActionTarget, OcgStateOperation, OcgStateSequence, RenditionAction,
-    RenditionOperation, SetOcgStateAction, SoundAction, ThreadAction,
+    Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, GoTo3DViewAction,
+    GoTo3DViewSelection, GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage,
+    GoToETargetRelation, HideAction, HideTarget, MovieAction, MovieActionTarget, OcgStateOperation,
+    OcgStateSequence, RenditionAction, RenditionOperation, SetOcgStateAction, SoundAction,
+    ThreadAction,
 };
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{

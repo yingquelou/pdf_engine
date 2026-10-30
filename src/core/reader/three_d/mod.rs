@@ -157,6 +157,20 @@ pub(super) fn optional_name(
     }
 }
 
+/// 解析独立的 3D 视图值（Go-To-3D-View 动作 `/V`，12.6.4.15 Table 216）：
+/// 间接引用先解引用，值必须是视图字典（Table 304）。
+pub(crate) fn parse_view_value(
+    document: &Document,
+    value: &Value,
+    context: &str,
+) -> Result<ThreeDView, ThreeDError> {
+    let resolved = resolve_value(document, value)?;
+    let Value::Dict(dict) = resolved else {
+        return Err(malformed(format!("{context} is not a 3D view dictionary")));
+    };
+    view::parse_view(document, &dict, context)
+}
+
 /// 文本串（字面串或十六进制串），返回原值以便调用方保留编码。
 pub(super) fn text_value(value: &Value, context: &str) -> Result<Value, ThreeDError> {
     match value {

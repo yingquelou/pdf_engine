@@ -227,6 +227,8 @@ pub enum PdfFeature {
     /// 3D artwork 流（13.6 Table 300）与 3D 注解（12.5.6.19 Table 298），
     /// PDF 1.6 引入。
     ThreeDAnnotations,
+    /// Go-To-3D-View 动作（12.6.4.15 Table 216），PDF 1.6 引入。
+    GoTo3DViewAction,
 }
 
 impl PdfFeature {
@@ -277,6 +279,7 @@ impl PdfFeature {
             | PdfFeature::LinkAnnotationBorderStyle
             | PdfFeature::PageViewports
             | PdfFeature::EmbeddedGoToAction
+            | PdfFeature::GoTo3DViewAction
             | PdfFeature::ThreeDAnnotations => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
@@ -350,6 +353,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MovieObjects => "movie objects",
             PdfFeature::Renditions => "renditions",
             PdfFeature::ThreeDAnnotations => "3D annotations",
+            PdfFeature::GoTo3DViewAction => "go-to-3D-view actions",
         };
         write!(f, "{name}")
     }

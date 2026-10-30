@@ -802,6 +802,7 @@ fn malformed_transition_actions_are_typed_errors() {
     }
 }
 
+mod goto3d;
 mod gotoe;
 mod movie;
 mod sound;

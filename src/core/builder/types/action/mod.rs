@@ -4,16 +4,18 @@
 //! 动作（播放声音对象）、Movie 动作（播放电影注解）、Rendition 动作
 //! （播放多媒体 rendition）、Hide 动作（隐藏/显示注解）、Set-OCG-State 动作
 //! （切换可选内容组状态）、Transition 动作（全屏演示过渡特效）、Thread
-//! 动作（跳转到文章线 bead）、Embedded Go-To 动作（嵌套嵌入文档间跳转）
-//! 与三种表单动作（SubmitForm、ResetForm、ImportData）。动作字典经
-//! [`PdfBuilder::action`] 注册为句柄，由大纲条目或注解引用写出。
+//! 动作（跳转到文章线 bead）、Embedded Go-To 动作（嵌套嵌入文档间跳转）、
+//! Go-To-3D-View 动作（为 3D 注解指定视图）与三种表单动作（SubmitForm、
+//! ResetForm、ImportData）。动作字典经 [`PdfBuilder::action`] 注册为句柄，
+//! 由大纲条目或注解引用写出。
 //!
 //! 按族拆分：`targets` 收文件规格/远程目标/预定义动作名，`hide` 收 Hide
 //! 目标契约，`ocg` 收 Set-OCG-State 的扁平 `/State` 序列，`thread` 收
 //! Thread 动作的线程/bead 索引契约，`gotoe` 收 Embedded Go-To 的目标
-//! 字典路径链，`sound` 收 Sound 动作的声音句柄与播放参数，`movie` 收
-//! Movie 动作的注解目标与电影激活参数，`rendition` 收 Rendition 动作的
-//! 操作/脚本依赖与 Screen 注解目标。
+//! 字典路径链，`goto3d` 收 Go-To-3D-View 的 3D 注解目标与视图选择，
+//! `sound` 收 Sound 动作的声音句柄与播放参数，`movie` 收 Movie 动作的
+//! 注解目标与电影激活参数，`rendition` 收 Rendition 动作的操作/脚本依赖
+//! 与 Screen 注解目标。
 
 use super::ClipRefs;
 use super::text_string_value;
@@ -23,6 +25,7 @@ use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 use std::cell::Cell;
 
+mod goto3d;
 mod gotoe;
 mod hide;
 mod movie;
@@ -35,6 +38,7 @@ mod thread;
 #[cfg(test)]
 mod tests;
 
+pub use goto3d::{GoTo3DViewAction, GoTo3DViewSelection};
 pub use gotoe::{
     GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation,
 };
@@ -48,10 +52,10 @@ pub use thread::ThreadAction;
 
 /// 动作字典写出时的间接对象号映射。
 ///
-/// Hide 的 `/T` 与 Rendition 的 `/AN` 用注解映射，Set-OCG-State 的
-/// `/State` 用可选内容组映射，Sound 的 `/Sound` 用声音对象映射，
-/// Rendition 的 media clip `/D` 用嵌入文件、Form XObject 与 section
-/// 链对象号映射；未涉及的类别传空切片。
+/// Hide 的 `/T`、GoTo3DView 的 `/TA` 与 Rendition 的 `/AN` 用注解映射，
+/// Set-OCG-State 的 `/State` 用可选内容组映射，Sound 的 `/Sound` 用声音
+/// 对象映射，Rendition 的 media clip `/D` 用嵌入文件、Form XObject 与
+/// section 链对象号映射；未涉及的类别传空切片。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ActionRefs<'a> {
     /// 注解句柄 → 注解对象号。
@@ -84,7 +88,7 @@ impl ActionRefs<'_> {
 
 /// 动作字典（12.6.2 Table 197、12.7.5 Table 236/238/240）。
 ///
-/// 写端支持十六种动作；未知子类型不建模，由调用方直接构造字典。
+/// 写端支持十七种动作；未知子类型不建模，由调用方直接构造字典。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// 本地跳转；`/D` 为显式目标数组或命名目标。
@@ -123,6 +127,8 @@ pub enum Action {
     SetOcgState(SetOcgStateAction),
     /// 全屏演示过渡特效（12.6.4.14 Table 215，PDF 1.5）。
     Transition(Transition),
+    /// 为 3D 注解指定视图（12.6.4.15 Table 216，PDF 1.6）。
+    GoTo3DView(GoTo3DViewAction),
     /// 跳转到文章线上的指定 bead（12.6.4.6 Table 205，PDF 1.1）。
     Thread(ThreadAction),
     /// 提交表单数据（12.7.5.2 Table 236）：`/F` 写成 URL 文件规格。
@@ -167,6 +173,7 @@ impl Action {
             Self::Hide(_) => "Hide",
             Self::SetOcgState(_) => "SetOCGState",
             Self::Transition(_) => "Trans",
+            Self::GoTo3DView(_) => "GoTo3DView",
             Self::Thread(_) => "Thread",
             Self::SubmitForm { .. } => "SubmitForm",
             Self::ResetForm { .. } => "ResetForm",
@@ -276,6 +283,11 @@ impl Action {
             }
             Self::Transition(transition) => {
                 dict = dict.insert("Trans", Value::Dict(transition.to_dict()?));
+            }
+            Self::GoTo3DView(action) => {
+                for (key, value) in action.to_dict(refs.annotation_nums)?.0 {
+                    dict = dict.insert(key, value);
+                }
             }
             Self::Thread(thread) => {
                 for (key, value) in thread.to_dict().0 {

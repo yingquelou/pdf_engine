@@ -1,9 +1,9 @@
 //! 动作字典读取（ISO 32000-1 12.6 / 12.7.5）。
 //!
 //! 覆盖常用动作：GoTo、GoToR、GoToE、Named、URI、Launch、JavaScript、Hide、
-//! SetOCGState、Transition，以及表单动作 SubmitForm、ResetForm、ImportData；
-//! 未知子类型保留名称。动作值可为间接引用，`/D` 的显式目标经页面树映射为
-//! 0 基页号。
+//! SetOCGState、Transition、GoTo3DView，以及表单动作 SubmitForm、ResetForm、
+//! ImportData；未知子类型保留名称。动作值可为间接引用，`/D` 的显式目标经
+//! 页面树映射为 0 基页号。
 
 use std::fmt;
 
@@ -15,6 +15,7 @@ use crate::core::reader::navigation::{
 use crate::core::reader::transition::{Transition, parse_transition};
 use crate::core::types::{Document, Value};
 
+mod goto3d;
 mod gotoe;
 mod movie;
 mod ocg;
@@ -22,6 +23,7 @@ mod rendition;
 mod sound;
 mod thread;
 
+pub use goto3d::{GoTo3DViewAction, GoTo3DViewSelection};
 pub use gotoe::{
     GoToEAction, GoToETarget, GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation,
 };
@@ -70,6 +72,8 @@ pub enum Action {
     SetOCGState(SetOcgStateAction),
     /// 过渡动作（12.6.4.14 Table 215）。
     Transition(Transition),
+    /// 为 3D 注解指定视图（12.6.4.15 Table 216，PDF 1.6）。
+    GoTo3DView(GoTo3DViewAction),
     /// 跳转到文章线上的指定 bead（12.6.4.6 Table 205）。
     Thread(ThreadAction),
     /// 提交表单数据（12.7.5.2 Table 236）。
@@ -345,6 +349,9 @@ impl Document {
                 Ok(Action::Transition(transition))
             }
             "Thread" => Ok(Action::Thread(thread::parse_thread_action(self, dict)?)),
+            "GoTo3DView" => Ok(Action::GoTo3DView(goto3d::parse_go_to_3d_view_action(
+                self, dict,
+            )?)),
             "SubmitForm" => {
                 let file = parse_file_spec(
                     self,

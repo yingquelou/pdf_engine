@@ -67,6 +67,35 @@ impl PdfBuilder {
                     "Rendition action /AN references annotation handle {handle} which is not a Screen annotation"
                 )));
             }
+            // GoTo3DView 动作的 `/TA` 目标必须是带 artwork 的 3D 注解，
+            // `/V` 相对目标 artwork 的 `/VA` 视图表校验（Table 216）。
+            if let Action::GoTo3DView(action) = action {
+                let handle = action.target();
+                let entry = self.annotations.get(handle).ok_or_else(|| {
+                    WriteError::InvalidObject(format!(
+                        "GoTo3DView action /TA references unknown annotation handle {handle}"
+                    ))
+                })?;
+                if entry.annot.kind() != AnnotationKind::ThreeD {
+                    return Err(WriteError::InvalidObject(format!(
+                        "GoTo3DView action /TA references annotation handle {handle} which is not a 3D annotation"
+                    )));
+                }
+                let artwork_handle = entry.annot.three_d().ok_or_else(|| {
+                    WriteError::InvalidObject(format!(
+                        "GoTo3DView action /TA references annotation handle {handle} without a 3D artwork"
+                    ))
+                })?;
+                let artwork = self.three_d_artworks.get(artwork_handle).ok_or_else(|| {
+                    WriteError::InvalidObject(format!(
+                        "GoTo3DView action /TA annotation handle {handle} references unknown 3D artwork handle {artwork_handle}"
+                    ))
+                })?;
+                action
+                    .selection()
+                    .validate(artwork.views(), "GoTo3DView action /V")
+                    .map_err(WriteError::InvalidObject)?;
+            }
             for feature in action_features(action) {
                 if !features.contains(&feature) {
                     features.push(feature);
@@ -117,6 +146,7 @@ pub(super) fn action_features(action: &Action) -> Vec<PdfFeature> {
         Action::GoToE(_) => vec![PdfFeature::EmbeddedGoToAction],
         Action::SetOcgState(_) => vec![PdfFeature::SetOcgState],
         Action::Transition(_) => vec![PdfFeature::TransitionAction],
+        Action::GoTo3DView(_) => vec![PdfFeature::GoTo3DViewAction],
         Action::Thread(_) => vec![PdfFeature::ThreadAction],
         _ => Vec::new(),
     }
@@ -141,6 +171,7 @@ fn validate_action(
         Action::GoToE(action) => action.validate()?,
         Action::SetOcgState(state) => state.validate(ocg_count)?,
         Action::Transition(transition) => transition.validate()?,
+        Action::GoTo3DView(action) => action.validate(annotation_count)?,
         Action::Thread(thread) => thread.validate(thread_beads)?,
         Action::SubmitForm {
             url,
