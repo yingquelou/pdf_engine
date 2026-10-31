@@ -1,6 +1,8 @@
 //! 逻辑结构树读端测试（ISO 32000-1 14.7.1–14.7.4.4）。
 
-use crate::core::reader::structure::{ParentTreeEntry, StructureError, StructureKid};
+use crate::core::reader::structure::{
+    MAX_STRUCTURE_CHILDREN, ParentTreeEntry, StructureError, StructureKid,
+};
 use crate::core::types::{Array, Dict, Document, Object, Trailer, Value};
 
 const CATALOG: i64 = 1;
@@ -67,6 +69,34 @@ fn malformed_document(kid: Value) -> Document {
     ));
     insert(&doc, 5, kid);
     doc
+}
+
+/// 单个顶层结构元素，`/A` 为给定属性对象字典。
+fn attribute_document(attribute: Dict) -> Document {
+    malformed_document(Value::Dict(
+        element("P", ROOT).insert("A", Value::Dict(attribute)),
+    ))
+}
+
+/// 用户属性属性对象（Table 328）。
+fn user_properties(properties: Value) -> Dict {
+    Dict::new()
+        .insert("O", name("UserProperties"))
+        .insert("P", properties)
+}
+
+/// 用户属性字典（Table 329）。
+fn user_property(property_name: &str, value: Value) -> Dict {
+    Dict::new()
+        .insert("N", Value::String(property_name.to_owned()))
+        .insert("V", value)
+}
+
+/// 最小 Layout 属性对象。
+fn layout_attribute(space_before: i64) -> Dict {
+    Dict::new()
+        .insert("O", name("Layout"))
+        .insert("SpaceBefore", Value::Integer(space_before))
 }
 
 #[test]
@@ -141,7 +171,9 @@ fn structure_tree_reads_elements_and_content_items() {
     assert_eq!(first.classes[0].name, "Artifact");
     assert_eq!(first.classes[0].revision, Some(2));
     assert_eq!(first.attributes.len(), 1);
+    assert_eq!(first.attributes[0].owner, "Layout");
     assert_eq!(first.attributes[0].revision, None);
+    assert!(first.attributes[0].user_properties.is_none());
     assert_eq!(
         first.attributes[0].value,
         Value::Dict(attribute),
@@ -208,12 +240,11 @@ fn structure_tree_resolves_role_map_chains() {
     assert!(tree.resolved_role("Y").is_some());
     assert_eq!(tree.root().role_map.len(), 4);
     assert_eq!(tree.root().class_map.len(), 1);
+    let attributes = tree.root().class_map.get("Cls").expect("class map entry");
+    assert_eq!(attributes.len(), 1);
+    assert_eq!(attributes[0].owner, "Layout");
     assert_eq!(
-        tree.root()
-            .class_map
-            .get("Cls")
-            .and_then(Value::as_dict)
-            .and_then(|dict| dict.get("O")),
+        attributes[0].value.as_dict().and_then(|dict| dict.get("O")),
         Some(&name("Layout"))
     );
 }
@@ -427,6 +458,18 @@ fn structure_tree_limits_are_enforced() {
         }
         other => panic!("expected depth limit error, got {other:?}"),
     }
+
+    // 元素 `/A` 条目数上限。
+    let doc = malformed_document(Value::Dict(element("P", ROOT).insert(
+        "A",
+        arr(vec![Value::Integer(0); MAX_STRUCTURE_CHILDREN + 1]),
+    )));
+    match doc.structure_tree() {
+        Err(StructureError::LimitExceeded(what)) => {
+            assert_eq!(what, "structure attributes");
+        }
+        other => panic!("expected attribute limit error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -522,5 +565,241 @@ fn page_struct_parents_maps_page_mcids() {
             assert!(message.contains("parent tree has no entry"), "{message}");
         }
         other => panic!("expected missing parent tree entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn structure_attributes_expose_owner_and_user_properties() {
+    let layout = layout_attribute(12).insert("Placement", name("Block"));
+    let properties = arr(vec![
+        Value::Dict(
+            user_property("role", Value::String("caption".into()))
+                .insert("F", Value::String("Caption".into()))
+                .insert("H", Value::Bool(true)),
+        ),
+        Value::Dict(user_property("count", Value::Integer(3))),
+        Value::Dict(user_property("empty", Value::Null)),
+    ]);
+    let user = user_properties(properties);
+    let doc = malformed_document(Value::Dict(element("P", ROOT).insert(
+        "A",
+        arr(vec![Value::Dict(layout.clone()), Value::Dict(user)]),
+    )));
+
+    let tree = doc.structure_tree().expect("structure tree").expect("root");
+    let element = tree.element(0).expect("first element");
+    assert_eq!(element.attributes.len(), 2);
+    assert_eq!(element.attributes[0].owner, "Layout");
+    assert_eq!(element.attributes[0].value, Value::Dict(layout));
+    assert!(element.attributes[0].user_properties.is_none());
+
+    let attribute = &element.attributes[1];
+    assert_eq!(attribute.owner, "UserProperties");
+    let parsed = attribute.user_properties.as_ref().expect("user properties");
+    assert_eq!(parsed.dict.get("O"), Some(&name("UserProperties")));
+    assert_eq!(parsed.properties.len(), 3);
+    assert_eq!(parsed.properties[0].name, "role");
+    assert_eq!(parsed.properties[0].value, Value::String("caption".into()));
+    assert_eq!(parsed.properties[0].formatted.as_deref(), Some("Caption"));
+    assert!(parsed.properties[0].hidden);
+    assert_eq!(
+        parsed.properties[0].dict.get("F"),
+        Some(&Value::String("Caption".into())),
+        "原始属性字典应保留"
+    );
+    assert_eq!(parsed.properties[1].name, "count");
+    assert_eq!(parsed.properties[1].value, Value::Integer(3));
+    assert_eq!(parsed.properties[1].formatted, None);
+    assert!(!parsed.properties[1].hidden, "/H 缺省 false");
+    assert_eq!(parsed.properties[2].value, Value::Null, "/V 允许 null");
+}
+
+#[test]
+fn class_map_attributes_merge_with_element_attributes() {
+    let class_layout = layout_attribute(12).insert("Placement", name("Block"));
+    let class_user = user_properties(arr(vec![Value::Dict(user_property(
+        "role",
+        Value::String("caption".into()),
+    ))]));
+    let root = struct_root(Dict::new())
+        .insert(
+            "ClassMap",
+            Value::Dict(Dict::new().insert(
+                "Body",
+                arr(vec![Value::Dict(class_layout), Value::Dict(class_user)]),
+            )),
+        )
+        .insert("K", arr(vec![Value::Ref(5, 0)]));
+    let doc = document_with_root(root);
+    let overlay = layout_attribute(24).insert("InlineAlign", name("Center"));
+    insert(
+        &doc,
+        5,
+        Value::Dict(
+            element("P", ROOT)
+                .insert("C", arr(vec![name("Body"), Value::Integer(2)]))
+                .insert("A", arr(vec![Value::Dict(overlay), Value::Integer(3)])),
+        ),
+    );
+
+    let tree = doc.structure_tree().expect("structure tree").expect("root");
+    assert_eq!(tree.root().class_map["Body"].len(), 2);
+    assert_eq!(
+        tree.elements()[0].classes[0].attributes.len(),
+        2,
+        "类属性按类名回填"
+    );
+
+    let resolved = tree.resolved_attributes(0);
+    assert_eq!(resolved.len(), 2, "同 owner 合并后仍有两个属性对象");
+    assert_eq!(resolved[0].owner, "Layout");
+    assert_eq!(resolved[0].revision, Some(3), "/A 修订号优先");
+    let layout = resolved[0].value.as_dict().expect("layout dict");
+    assert_eq!(layout.get("Placement"), Some(&name("Block")), "类键保留");
+    assert_eq!(
+        layout.get("SpaceBefore"),
+        Some(&Value::Integer(24)),
+        "/A 覆盖类键"
+    );
+    assert_eq!(
+        layout.get("InlineAlign"),
+        Some(&name("Center")),
+        "/A 新键并入"
+    );
+
+    assert_eq!(resolved[1].owner, "UserProperties");
+    assert_eq!(resolved[1].revision, Some(2), "未被 /A 覆盖时沿用类修订号");
+    let user = resolved[1]
+        .user_properties
+        .as_ref()
+        .expect("user properties");
+    assert_eq!(user.properties[0].value, Value::String("caption".into()));
+
+    assert!(tree.resolved_attributes(99).is_empty(), "越界下标返回空");
+}
+
+#[test]
+fn structure_attribute_owner_is_required() {
+    assert_malformed(
+        &attribute_document(Dict::new().insert("Placement", name("Block"))),
+        "/O is required",
+    );
+    assert_malformed(
+        &attribute_document(Dict::new().insert("O", Value::Integer(1))),
+        "/O must be a name",
+    );
+    assert_malformed(
+        &attribute_document(Dict::new().insert("O", name(""))),
+        "/O must not be empty",
+    );
+
+    let doc = document_with_root(struct_root(Dict::new().insert(
+        "ClassMap",
+        Value::Dict(Dict::new().insert("Body", Value::Dict(Dict::new()))),
+    )));
+    assert_malformed(&doc, "/O is required");
+}
+
+#[test]
+fn user_properties_require_p_array_and_typed_entries() {
+    assert_malformed(
+        &attribute_document(Dict::new().insert("O", name("UserProperties"))),
+        "/P is required",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(Value::Integer(1))),
+        "/P must be an array",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(arr(vec![Value::Integer(1)]))),
+        "must be a dictionary",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(arr(vec![Value::Dict(
+            Dict::new().insert("V", Value::Integer(1)),
+        )]))),
+        "/N is required",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(arr(vec![Value::Dict(
+            Dict::new()
+                .insert("N", Value::Integer(1))
+                .insert("V", Value::Integer(1)),
+        )]))),
+        "/N must be a text string",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(arr(vec![Value::Dict(
+            Dict::new().insert("N", Value::String("role".into())),
+        )]))),
+        "/V is required",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(arr(vec![Value::Dict(
+            user_property("role", Value::Integer(1)).insert("F", Value::Integer(2)),
+        )]))),
+        "/F must be a text string",
+    );
+    assert_malformed(
+        &attribute_document(user_properties(arr(vec![Value::Dict(
+            user_property("role", Value::Integer(1)).insert("H", Value::Integer(2)),
+        )]))),
+        "/H must be a boolean",
+    );
+}
+
+#[test]
+fn class_map_accepts_attribute_object_arrays() {
+    let root = struct_root(Dict::new()).insert(
+        "ClassMap",
+        Value::Dict(
+            Dict::new()
+                .insert(
+                    "Body",
+                    arr(vec![
+                        Value::Dict(layout_attribute(12)),
+                        Value::Dict(user_properties(arr(vec![Value::Dict(user_property(
+                            "role",
+                            Value::String("caption".into()),
+                        ))]))),
+                    ]),
+                )
+                .insert("Empty", arr(Vec::new())),
+        ),
+    );
+    let doc = document_with_root(root);
+    let tree = doc.structure_tree().expect("structure tree").expect("root");
+    let body = tree.root().class_map.get("Body").expect("Body");
+    assert_eq!(body.len(), 2);
+    assert_eq!(body[0].owner, "Layout");
+    assert_eq!(body[1].owner, "UserProperties");
+    assert!(
+        body.iter().all(|attribute| attribute.revision.is_none()),
+        "类属性不带修订号"
+    );
+    assert!(
+        tree.root()
+            .class_map
+            .get("Empty")
+            .expect("Empty")
+            .is_empty(),
+        "空数组等价于没有类属性"
+    );
+
+    let doc = document_with_root(struct_root(Dict::new().insert(
+        "ClassMap",
+        Value::Dict(Dict::new().insert(
+            "Big",
+            arr(vec![
+                Value::Dict(layout_attribute(0));
+                MAX_STRUCTURE_CHILDREN + 1
+            ]),
+        )),
+    )));
+    match doc.structure_tree() {
+        Err(StructureError::LimitExceeded(what)) => {
+            assert_eq!(what, "structure class map attributes");
+        }
+        other => panic!("expected class map attribute limit, got {other:?}"),
     }
 }

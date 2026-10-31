@@ -69,11 +69,13 @@ fn builder_structure_tree_roundtrips_through_parser() {
     let class = root
         .class_map
         .get("Body")
-        .and_then(Value::as_dict)
+        .and_then(|attributes| attributes.first())
         .expect("class map /Body");
-    assert_eq!(class.get("O").and_then(Value::as_name), Some("Layout"));
+    assert_eq!(class.owner, "Layout");
+    assert_eq!(class.revision, None);
+    let class_dict = class.value.as_dict().expect("class attribute dict");
     assert_eq!(
-        class.get("SpaceBefore").and_then(Value::as_integer),
+        class_dict.get("SpaceBefore").and_then(Value::as_integer),
         Some(18)
     );
     assert_eq!(root.parent_tree_next_key, Some(2));
@@ -209,4 +211,136 @@ fn builder_structure_tree_roundtrips_through_parser() {
             .is_some()
     );
     assert!(catalog.get("MarkInfo").and_then(Value::as_dict).is_some());
+}
+
+#[test]
+fn builder_structure_attributes_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        PageSize, PdfBuilder, StructureAttribute, StructureElement, StructureMarkInfo,
+        StructureTree, UserProperty,
+    };
+    use pdf_engine::core::types::{Array, PdfFeature, PdfVersion, Value};
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    builder.page(PageSize::A4);
+
+    let layout = Dict::new()
+        .insert("O", Value::Name("Layout".into()))
+        .insert("SpaceBefore", Value::Integer(12))
+        .insert("InlineAlign", Value::Name("Center".into()));
+    let user_properties = StructureAttribute::user_properties(vec![
+        UserProperty::new("Department", Value::String("Legal".into()))
+            .with_formatted("Legal Department")
+            .with_hidden(true),
+        UserProperty::new("Reviewed", Value::Bool(true)),
+    ]);
+    let class_attributes = Array::new()
+        .push(Value::Dict(layout))
+        .push(user_properties.value);
+    let tree = StructureTree::new()
+        .with_class("Body", Value::Array(class_attributes))
+        .with_element(
+            StructureElement::new("P")
+                .with_class_revision("Body", 2)
+                .with_attribute(
+                    StructureAttribute::new(Value::Dict(
+                        Dict::new()
+                            .insert("O", Value::Name("Layout".into()))
+                            .insert("SpaceBefore", Value::Integer(24))
+                            .insert("Placement", Value::Name("Block".into())),
+                    ))
+                    .with_revision(3),
+                )
+                .with_attribute(
+                    StructureAttribute::new(Value::Dict(
+                        Dict::new()
+                            .insert("O", Value::Name("XML".into()))
+                            .insert("Lang", Value::Name("en-US".into())),
+                    ))
+                    .with_revision(5),
+                )
+                .with_marked_content(0, 0),
+        );
+    builder.set_structure_tree(tree);
+    builder.set_mark_info(
+        StructureMarkInfo::new()
+            .with_marked(true)
+            .with_user_properties(true),
+    );
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build structure attributes");
+    let doc = parse_buf(&buf);
+    let tree = doc
+        .structure_tree()
+        .expect("parse structure tree")
+        .expect("structure tree present");
+
+    let attributes = tree.resolved_attributes(0);
+    assert_eq!(attributes.len(), 3, "{attributes:?}");
+
+    let layout = attributes
+        .iter()
+        .find(|attribute| attribute.owner == "Layout")
+        .expect("Layout attribute");
+    let layout_dict = layout.value.as_dict().expect("Layout dict");
+    assert_eq!(
+        layout_dict.get("SpaceBefore").and_then(Value::as_integer),
+        Some(24),
+        "element /A overrides the class value"
+    );
+    assert_eq!(
+        layout_dict.get("InlineAlign").and_then(Value::as_name),
+        Some("Center"),
+        "class-only keys are retained"
+    );
+    assert_eq!(
+        layout_dict.get("Placement").and_then(Value::as_name),
+        Some("Block"),
+        "element-only keys are added"
+    );
+    assert_eq!(layout.revision, Some(3));
+    assert!(layout.user_properties.is_none());
+
+    let user = attributes
+        .iter()
+        .find(|attribute| attribute.owner == "UserProperties")
+        .expect("UserProperties attribute");
+    assert_eq!(user.revision, Some(2), "class revision applies");
+    let properties = user
+        .user_properties
+        .as_ref()
+        .expect("typed user properties");
+    assert_eq!(properties.properties.len(), 2);
+    assert_eq!(properties.properties[0].name, "Department");
+    assert_eq!(
+        properties.properties[0].value,
+        Value::String("Legal".into())
+    );
+    assert_eq!(
+        properties.properties[0].formatted.as_deref(),
+        Some("Legal Department")
+    );
+    assert!(properties.properties[0].hidden);
+    assert_eq!(properties.properties[1].name, "Reviewed");
+    assert_eq!(properties.properties[1].value, Value::Bool(true));
+    assert_eq!(properties.properties[1].formatted, None);
+    assert!(!properties.properties[1].hidden);
+
+    let xml = attributes
+        .iter()
+        .find(|attribute| attribute.owner == "XML")
+        .expect("XML attribute");
+    assert_eq!(xml.revision, Some(5));
+    assert_eq!(
+        xml.value.as_dict().and_then(|dict| dict.get("Lang")),
+        Some(&Value::Name("en-US".into()))
+    );
+
+    let mark_info = doc.mark_info().expect("mark info").expect("present");
+    assert!(mark_info.marked);
+    assert!(mark_info.user_properties);
+
+    let features: Vec<PdfFeature> = doc.features.borrow().iter().copied().collect();
+    assert!(features.contains(&PdfFeature::StructureUserProperties));
 }

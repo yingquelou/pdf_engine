@@ -265,6 +265,9 @@ pub enum PdfFeature {
     StructureLanguageText,
     /// 结构元素的缩写展开条目（`/E`，14.7.2 Table 323），PDF 1.5 引入。
     StructureExpandedText,
+    /// 结构属性对象的用户属性（`/O /UserProperties` 与 `/P`，14.7.5
+    /// Table 328/329），PDF 1.6 引入。
+    StructureUserProperties,
     /// 目录标记信息字典（`/MarkInfo`，14.7.1 Table 321），PDF 1.4 引入。
     MarkInfo,
     /// 标记信息的用户属性条目（`/MarkInfo /UserProperties`，Table 321），
@@ -338,7 +341,8 @@ impl PdfFeature {
             | PdfFeature::GoTo3DViewAction
             | PdfFeature::ThreeDAnnotations
             | PdfFeature::MarkInfoUserProperties
-            | PdfFeature::MarkInfoSuspects => PdfVersion::V1_6,
+            | PdfFeature::MarkInfoSuspects
+            | PdfFeature::StructureUserProperties => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -429,6 +433,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::LogicalStructure => "logical structure trees",
             PdfFeature::StructureLanguageText => "structure language and actual text",
             PdfFeature::StructureExpandedText => "structure expanded text",
+            PdfFeature::StructureUserProperties => "structure user properties",
             PdfFeature::MarkInfo => "mark info",
             PdfFeature::MarkInfoUserProperties => "mark info user properties",
             PdfFeature::MarkInfoSuspects => "mark info suspects",

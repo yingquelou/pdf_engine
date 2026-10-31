@@ -1,9 +1,10 @@
-//! 逻辑结构写端模型（ISO 32000-1 14.7.1–14.7.4.4）。
+//! 逻辑结构写端模型（ISO 32000-1 14.7.1–14.7.5）。
 //!
-//! 只建模写端可写出的条目：目录 `/MarkInfo`（Table 321）、结构树根
-//! `/StructTreeRoot`（Table 322）、结构元素（Table 323）与标记内容引用
-//! MCR（Table 324）。对象引用 OBJR（Table 325）、结构属性对象 `/A`
-//! （14.7.5）与 `/Stm` `/StmOwn` 不在本模型内。
+//! 建模写端可写出的条目：目录 `/MarkInfo`（Table 321）、结构树根
+//! `/StructTreeRoot`（Table 322）、结构元素（Table 323）、标记内容引用
+//! MCR（Table 324）与结构属性对象 `/A`（14.7.5 Table 327–329，含用户
+//! 属性）。对象引用 OBJR（Table 325）与 `/Stm` `/StmOwn` 不在本模型内；
+//! Layout/List/PrintField 等标准属性条目属于 14.8.5，同样不在本模型内。
 //!
 //! 结构元素以拥有所有权的树形 `Vec` 表达（`StructureKid::Element` 装箱
 //! 子元素），与读端的 arena 前序模型不同：写端在 `PdfBuilder::build`
@@ -11,14 +12,17 @@
 
 use std::collections::BTreeMap;
 
-use crate::core::types::Value;
+use crate::core::types::{Array, Dict, Value};
+
+use super::text_string_value;
 
 /// 结构树（14.7.2 Table 322）：顶层结构元素 + 根映射。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StructureTree {
     /// `/RoleMap`：结构类型 → 标准类型的近似映射；空时不写出。
     pub role_map: BTreeMap<String, String>,
-    /// `/ClassMap`：类名 → 属性对象（字典或流）；空时不写出。
+    /// `/ClassMap`：类名 → 属性对象或属性对象数组（14.7.5.2）；空时不
+    /// 写出。数组形式把多个属性对象组合成一个属性类。
     pub class_map: BTreeMap<String, Value>,
     /// `/K`：顶层结构元素，按文档顺序。
     pub elements: Vec<StructureElement>,
@@ -42,6 +46,9 @@ impl StructureTree {
     }
 
     /// 追加一条 `/ClassMap` 属性类。
+    ///
+    /// `attributes` 为属性对象字典/流，或 `Value::Array` 形式的属性对象
+    /// 数组（14.7.5.2）。每个属性对象须带合法非空 `/O`。
     pub fn with_class(mut self, name: impl Into<String>, attributes: Value) -> Self {
         self.class_map.insert(name.into(), attributes);
         self
@@ -54,10 +61,105 @@ impl StructureTree {
     }
 }
 
+/// 结构属性对象（14.7.5.2 Table 327）。
+///
+/// `value` 直接作为属性对象写出：字典内联，流提升为间接对象后写引用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructureAttribute {
+    /// 属性对象（字典或流，`/O` 为必填非空名字）。
+    pub value: Value,
+    /// 元素 `/A` 数组中的修订号；`None` 表示缺省 0 且不写出。
+    pub revision: Option<u32>,
+}
+
+impl StructureAttribute {
+    /// 由属性对象字典/流构造（无修订号）。
+    pub fn new(value: Value) -> Self {
+        Self {
+            value,
+            revision: None,
+        }
+    }
+
+    /// 设置数组 `/A` 中的修订号。
+    pub fn with_revision(mut self, revision: u32) -> Self {
+        self.revision = Some(revision);
+        self
+    }
+
+    /// 用户属性属性对象（14.7.5.3 Table 328）。
+    ///
+    /// 生成 `/O /UserProperties` + `/P` 属性数组，顺序与传入一致；
+    /// 要求 PDF 1.6，且文档 `/MarkInfo /UserProperties` 为 true。
+    pub fn user_properties(properties: Vec<UserProperty>) -> Self {
+        let mut array = Array::new();
+        for property in properties {
+            array = array.push(Value::Dict(property.into_dict()));
+        }
+        Self::new(Value::Dict(
+            Dict::new()
+                .insert("O", Value::Name("UserProperties".into()))
+                .insert("P", Value::Array(array)),
+        ))
+    }
+}
+
+/// 用户属性（14.7.5.3 Table 329）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserProperty {
+    /// `/N`：属性名（文本串，必填非空）。
+    pub name: String,
+    /// `/V`：属性值（任意值，必填）。
+    pub value: Value,
+    /// `/F`：属性值的格式化表示（可选文本串）。
+    pub formatted: Option<String>,
+    /// `/H`：是否隐藏（缺省 false；true 时写出 `/H true`）。
+    pub hidden: bool,
+}
+
+impl UserProperty {
+    /// 新建用户属性：`/N` + `/V`。
+    pub fn new(name: impl Into<String>, value: Value) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            formatted: None,
+            hidden: false,
+        }
+    }
+
+    /// 设置 `/F` 格式化表示。
+    pub fn with_formatted(mut self, formatted: impl Into<String>) -> Self {
+        self.formatted = Some(formatted.into());
+        self
+    }
+
+    /// 设置 `/H` 隐藏标志。
+    pub fn with_hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
+    /// 用户属性字典（Table 329）。
+    fn into_dict(self) -> Dict {
+        let mut dict = Dict::new()
+            .insert("N", text_string_value(&self.name))
+            .insert("V", self.value);
+        if let Some(formatted) = &self.formatted {
+            dict = dict.insert("F", text_string_value(formatted));
+        }
+        if self.hidden {
+            dict = dict.insert("H", Value::Bool(true));
+        }
+        dict
+    }
+}
+
 /// 结构元素（14.7.2 Table 323）。
 ///
 /// `/Pg` 不建模也不写出：内容项一律以带显式 `/Pg` 的 MCR 字典表达，
-/// 不存在父页继承。`/A` 属性对象与 `/Stm` `/StmOwn` 同样不在本切片内。
+/// 不存在父页继承。`/A` 属性对象（14.7.5）以 [`StructureAttribute`]
+/// 按声明顺序写出；`/Stm` `/StmOwn` 不在本切片内。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructureElement {
     /// `/S`：结构类型（非空 PDF 名字）。
@@ -76,6 +178,8 @@ pub struct StructureElement {
     pub actual_text: Option<String>,
     /// `/C`：属性类名与可选修订号，按声明顺序写出。
     pub classes: Vec<(String, Option<u32>)>,
+    /// `/A`：属性对象与可选修订号，按声明顺序写出。
+    pub attributes: Vec<StructureAttribute>,
     /// `/R`：结构元素修订号；0（缺省）不写出。
     pub revision: u32,
     /// `/K`：子结构元素与内容项，按文档顺序。
@@ -94,6 +198,7 @@ impl StructureElement {
             expanded: None,
             actual_text: None,
             classes: Vec::new(),
+            attributes: Vec::new(),
             revision: 0,
             kids: Vec::new(),
         }
@@ -145,6 +250,18 @@ impl StructureElement {
     pub fn with_class_revision(mut self, name: impl Into<String>, revision: u32) -> Self {
         self.classes.push((name.into(), Some(revision)));
         self
+    }
+
+    /// 追加一个 `/A` 属性对象（14.7.5.2）。
+    pub fn with_attribute(mut self, attribute: StructureAttribute) -> Self {
+        self.attributes.push(attribute);
+        self
+    }
+
+    /// 追加一个用户属性属性对象（14.7.5.3）；要求 PDF 1.6 且文档
+    /// `/MarkInfo /UserProperties` 为 true。
+    pub fn with_user_properties(self, properties: Vec<UserProperty>) -> Self {
+        self.with_attribute(StructureAttribute::user_properties(properties))
     }
 
     /// 设置 `/R` 结构元素修订号；0 表示缺省、不写出。

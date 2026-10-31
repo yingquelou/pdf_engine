@@ -1,20 +1,23 @@
-//! 逻辑结构写端（ISO 32000-1 14.7.1–14.7.4.4、Table 321–326）。
+//! 逻辑结构写端（ISO 32000-1 14.7.1–14.7.5、Table 321–329）。
 //!
 //! 目录 `/StructTreeRoot`（Table 322）与 `/MarkInfo`（Table 321）、结构
 //! 元素（Table 323）、MCR 内容项（Table 324）、父树（14.7.4.4）与
 //! `/IDTree` 名称树都从现有最大对象号之后分配，不影响既有对象布局；
-//! 页面字典追加 `/StructParents`（Table 326）。
+//! 页面字典追加 `/StructParents`（Table 326）。结构属性对象 `/A` 与
+//! `/ClassMap`（14.7.5）按 Table 327–329 写出，属性流提升为间接对象。
 //!
 //! 校验先于任何对象号分配：深度、元素数、单元素子项数与映射条目上限
 //! 直接复用读端常量；页索引越界、负 MCID、同页 MCID 重复、空结构类型、
-//! 空角色映射键/目标、类映射取值非字典/流、空类名、ID 为空/重复/非
-//! ASCII 一律返回 [`WriteError::InvalidObject`]。版本门禁：结构树 ≥1.3、
-//! `/Lang` `/ActualText` ≥1.4、`/E` ≥1.5、`/MarkInfo` ≥1.4、
-//! `/UserProperties` `/Suspects` ≥1.6，不满足返回
-//! [`WriteError::UnsupportedVersion`]。两类失败均不写出任何字节。
+//! 空角色映射键/目标、类映射/属性对象取值非字典/流或 `/O` 非法、空类名、
+//! ID 为空/重复/非 ASCII 一律返回 [`WriteError::InvalidObject`]。版本门禁：
+//! 结构树 ≥1.3、`/Lang` `/ActualText` ≥1.4、`/E` ≥1.5、`/MarkInfo` ≥1.4、
+//! `/UserProperties` `/Suspects` ≥1.6、结构属性用户属性 ≥1.6，不满足返回
+//! [`WriteError::UnsupportedVersion`]。使用用户属性时还要求
+//! `/MarkInfo /UserProperties true`（14.7.5.4）。两类失败均不写出任何字节。
 //!
 //! 本切片的范围限制：`/K` 只写出子元素引用与 MCR 字典（带显式 `/Pg` 与
-//! `/MCID`），不写 OBJR、整数 MCID、`/A` 属性对象与 `/Stm` `/StmOwn`。
+//! `/MCID`），不写 OBJR、整数 MCID 与 `/Stm` `/StmOwn`；Layout/List/
+//! PrintField 等标准属性条目（14.8.5）不在此处校验或建模。
 
 use std::collections::BTreeMap;
 
@@ -25,7 +28,8 @@ use crate::core::types::{Array, Dict, Document, Object, PdfFeature, PdfVersion, 
 use crate::core::writer::WriteError;
 
 use super::super::types::{
-    StructureElement, StructureKid, StructureMarkInfo, StructureTree, text_string_value,
+    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo, StructureTree,
+    text_string_value,
 };
 use super::invalid;
 
@@ -73,6 +77,8 @@ struct Plan<'a> {
     uses_language: bool,
     /// 是否使用 `/E`（PDF 1.5）。
     uses_expanded: bool,
+    /// 是否使用用户属性属性对象（PDF 1.6，14.7.5.3）。
+    uses_user_properties: bool,
 }
 
 /// 把结构树与标记信息写入已组装的 `Document`，返回目录条目。
@@ -111,6 +117,15 @@ pub(super) fn write(
 
     let plan = plan(tree, version, page_refs.len())?;
 
+    // 14.7.5.4：含用户属性的文档必须在 `/MarkInfo` 声明 `/UserProperties
+    // true`。读端已在结构树之前校验过标记信息，这里只做交叉检查，仍在
+    // 任何对象号分配之前。
+    if plan.uses_user_properties && !mark_info.is_some_and(|info| info.user_properties) {
+        return Err(invalid(
+            "structure user properties require /MarkInfo /UserProperties true",
+        ));
+    }
+
     // 全部校验通过后才分配对象号：根 + 前序元素。
     let mut next_num = doc
         .objects_for_write()
@@ -132,22 +147,41 @@ pub(super) fn write(
         .collect();
 
     // `/ClassMap` 的流值不能内联（PDF 流必须是间接对象），逐个分配对象
-    // 并以引用写回映射。
+    // 并以引用写回映射；数组形式同样只提升其中的流项。
     let mut class_map = tree.class_map.clone();
     for value in class_map.values_mut() {
-        if matches!(value, Value::Stream(..)) {
-            let num = next_num;
-            next_num += 1;
-            doc.set_object(Object::new(num, 0, value.clone()));
-            *value = Value::Ref(num, 0);
-        }
+        promote_attribute_streams(doc, value, &mut next_num);
     }
+
+    // 元素 `/A` 的属性流同样提升为间接对象；其余值（字典）内联写出。
+    let element_attributes: Vec<Vec<StructureAttribute>> = plan
+        .flat
+        .iter()
+        .map(|flat| {
+            flat.element
+                .attributes
+                .iter()
+                .map(|attribute| {
+                    let mut attribute = attribute.clone();
+                    promote_attribute_streams(doc, &mut attribute.value, &mut next_num);
+                    attribute
+                })
+                .collect()
+        })
+        .collect();
 
     let root_dict = root_dict(&plan, &element_nums, &tree.role_map, &class_map);
     doc.set_object(Object::new(root_num, 0, Value::Dict(root_dict)));
     entries.struct_tree_root = Some(Value::Ref(root_num, 0));
 
-    write_elements(doc, &plan, &element_nums, root_num, page_refs);
+    write_elements(
+        doc,
+        &plan,
+        &element_nums,
+        &element_attributes,
+        root_num,
+        page_refs,
+    );
     write_page_parents(doc, &plan, page_refs)?;
 
     let mut features = doc.features.borrow_mut();
@@ -157,6 +191,9 @@ pub(super) fn write(
     }
     if plan.uses_expanded {
         features.insert(PdfFeature::StructureExpandedText);
+    }
+    if plan.uses_user_properties {
+        features.insert(PdfFeature::StructureUserProperties);
     }
     Ok(entries)
 }
@@ -174,6 +211,7 @@ fn plan<'a>(
         page_count,
         uses_language: false,
         uses_expanded: false,
+        uses_user_properties: false,
     };
     if tree.role_map.len() > MAX_STRUCTURE_MAP_ENTRIES {
         return Err(invalid(format!(
@@ -193,12 +231,7 @@ fn plan<'a>(
     }
     for (key, value) in &tree.class_map {
         validate_name(key, "structure class map key")?;
-        if !matches!(value, Value::Dict(_) | Value::Stream(..)) {
-            return Err(invalid(format!(
-                "structure class map /{key} must be an attribute dictionary or stream ({})",
-                value.type_name()
-            )));
-        }
+        validate_class_attributes(value, key, &mut flattener.uses_user_properties)?;
     }
     for element in &tree.elements {
         flattener.add(element, None, 0)?;
@@ -213,6 +246,12 @@ fn plan<'a>(
         return Err(WriteError::UnsupportedVersion(format!(
             "structure element /E requires PDF {}, got {version}",
             PdfFeature::StructureExpandedText.min_version()
+        )));
+    }
+    if flattener.uses_user_properties && !version.supports(PdfFeature::StructureUserProperties) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "structure user properties require PDF {}, got {version}",
+            PdfFeature::StructureUserProperties.min_version()
         )));
     }
 
@@ -236,7 +275,153 @@ fn plan<'a>(
         ids: flattener.ids,
         uses_language: flattener.uses_language,
         uses_expanded: flattener.uses_expanded,
+        uses_user_properties: flattener.uses_user_properties,
     })
+}
+
+/// `/ClassMap` 的单个值：属性对象或属性对象数组（14.7.5.2）。
+fn validate_class_attributes(
+    value: &Value,
+    key: &str,
+    uses_user_properties: &mut bool,
+) -> Result<(), WriteError> {
+    let context = format!("structure class map /{key}");
+    match value {
+        Value::Array(items) => {
+            if items.0.len() > MAX_STRUCTURE_CHILDREN {
+                return Err(invalid(format!(
+                    "{context} has {} attribute objects (limit {MAX_STRUCTURE_CHILDREN})",
+                    items.0.len()
+                )));
+            }
+            for item in &items.0 {
+                validate_attribute_object(item, &context, uses_user_properties)?;
+            }
+        }
+        single => validate_attribute_object(single, &context, uses_user_properties)?,
+    }
+    Ok(())
+}
+
+/// 单个属性对象（Table 327）：直接字典或流，`/O` 为合法非空名字。
+fn validate_attribute_object(
+    value: &Value,
+    context: &str,
+    uses_user_properties: &mut bool,
+) -> Result<(), WriteError> {
+    let dict = match value {
+        Value::Dict(dict) | Value::Stream(dict, _) => dict,
+        other => {
+            return Err(invalid(format!(
+                "{context} must be an attribute dictionary or stream ({})",
+                other.type_name()
+            )));
+        }
+    };
+    let owner = match dict.get("O") {
+        Some(Value::Name(name)) => name,
+        Some(other) => {
+            return Err(invalid(format!(
+                "{context} /O must be a name ({})",
+                other.type_name()
+            )));
+        }
+        None => return Err(invalid(format!("{context} /O is required (Table 327)"))),
+    };
+    validate_name(owner, &format!("{context} /O"))?;
+    if owner == "UserProperties" {
+        validate_user_properties(dict, context)?;
+        *uses_user_properties = true;
+    }
+    Ok(())
+}
+
+/// 用户属性属性对象（14.7.5.3 Table 328/329）：`/P` 为属性字典数组。
+fn validate_user_properties(dict: &Dict, context: &str) -> Result<(), WriteError> {
+    let properties = match dict.get("P") {
+        Some(Value::Array(items)) => items,
+        Some(other) => {
+            return Err(invalid(format!(
+                "{context} /P must be an array of user property dictionaries ({})",
+                other.type_name()
+            )));
+        }
+        None => return Err(invalid(format!("{context} /P is required (Table 328)"))),
+    };
+    if properties.0.len() > MAX_STRUCTURE_CHILDREN {
+        return Err(invalid(format!(
+            "{context} /P has {} entries (limit {MAX_STRUCTURE_CHILDREN})",
+            properties.0.len()
+        )));
+    }
+    for (index, item) in properties.0.iter().enumerate() {
+        let Value::Dict(property) = item else {
+            return Err(invalid(format!(
+                "{context} /P entry {index} must be a user property dictionary ({})",
+                item.type_name()
+            )));
+        };
+        match property.get("N") {
+            Some(Value::String(_) | Value::HexString(_)) => {}
+            Some(other) => {
+                return Err(invalid(format!(
+                    "{context} /P entry {index} /N must be a text string ({})",
+                    other.type_name()
+                )));
+            }
+            None => {
+                return Err(invalid(format!(
+                    "{context} /P entry {index} /N is required (Table 329)"
+                )));
+            }
+        }
+        if !property.0.contains_key("V") {
+            return Err(invalid(format!(
+                "{context} /P entry {index} /V is required (Table 329)"
+            )));
+        }
+        if let Some(formatted) = property.get("F")
+            && !matches!(formatted, Value::String(_) | Value::HexString(_))
+        {
+            return Err(invalid(format!(
+                "{context} /P entry {index} /F must be a text string ({})",
+                formatted.type_name()
+            )));
+        }
+        if let Some(hidden) = property.get("H")
+            && !matches!(hidden, Value::Bool(_))
+        {
+            return Err(invalid(format!(
+                "{context} /P entry {index} /H must be a boolean ({})",
+                hidden.type_name()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 把属性值中的流提升为间接对象并写回引用；数组只处理直接元素
+/// （ClassMap 数组项本身就是属性对象）。校验已保证数组项为字典/流。
+fn promote_attribute_streams(doc: &mut Document, value: &mut Value, next_num: &mut i64) {
+    match value {
+        Value::Stream(..) => {
+            let num = *next_num;
+            *next_num += 1;
+            doc.set_object(Object::new(num, 0, value.clone()));
+            *value = Value::Ref(num, 0);
+        }
+        Value::Array(items) => {
+            for item in &mut items.0 {
+                if matches!(item, Value::Stream(..)) {
+                    let num = *next_num;
+                    *next_num += 1;
+                    doc.set_object(Object::new(num, 0, item.clone()));
+                    *item = Value::Ref(num, 0);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// 前序展开与逐元素校验。
@@ -248,6 +433,7 @@ struct Flattener<'a> {
     page_count: usize,
     uses_language: bool,
     uses_expanded: bool,
+    uses_user_properties: bool,
 }
 
 impl<'a> Flattener<'a> {
@@ -292,6 +478,19 @@ impl<'a> Flattener<'a> {
         }
         for (name, _) in &element.classes {
             validate_name(name, "structure class name")?;
+        }
+        if element.attributes.len() > MAX_STRUCTURE_CHILDREN {
+            return Err(invalid(format!(
+                "structure element has {} attributes (limit {MAX_STRUCTURE_CHILDREN})",
+                element.attributes.len()
+            )));
+        }
+        for (index, attribute) in element.attributes.iter().enumerate() {
+            validate_attribute_object(
+                &attribute.value,
+                &format!("structure element /A attribute {index}"),
+                &mut self.uses_user_properties,
+            )?;
         }
         if element.lang.is_some() || element.actual_text.is_some() {
             self.uses_language = true;
@@ -428,6 +627,7 @@ fn write_elements(
     doc: &mut Document,
     plan: &Plan<'_>,
     element_nums: &[i64],
+    element_attributes: &[Vec<StructureAttribute>],
     root_num: i64,
     page_refs: &[(i64, i64)],
 ) {
@@ -458,6 +658,10 @@ fn write_elements(
         }
         if !element.classes.is_empty() {
             dict = dict.insert("C", classes_value(&element.classes));
+        }
+        let attributes = &element_attributes[index];
+        if !attributes.is_empty() {
+            dict = dict.insert("A", attributes_value(attributes));
         }
         if element.revision != 0 {
             dict = dict.insert("R", Value::Integer(i64::from(element.revision)));
@@ -492,6 +696,22 @@ fn classes_value(classes: &[(String, Option<u32>)]) -> Value {
         array = array.push(Value::Name(name.clone()));
         if let Some(revision) = revision {
             array = array.push(Value::Integer(i64::from(*revision)));
+        }
+    }
+    Value::Array(array)
+}
+
+/// `/A`（14.7.5.3）：单个无修订号属性直接写对象，否则写
+/// `[object revision? ...]`，顺序与声明一致。
+fn attributes_value(attributes: &[StructureAttribute]) -> Value {
+    if attributes.len() == 1 && attributes[0].revision.is_none() {
+        return attributes[0].value.clone();
+    }
+    let mut array = Array::new();
+    for attribute in attributes {
+        array = array.push(attribute.value.clone());
+        if let Some(revision) = attribute.revision {
+            array = array.push(Value::Integer(i64::from(revision)));
         }
     }
     Value::Array(array)

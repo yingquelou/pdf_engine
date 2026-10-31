@@ -72,6 +72,8 @@ impl FeatureProfile {
 /// - 目录 `/StructTreeRoot` 或 `/Type /StructTreeRoot`、结构元素字典 →
 ///   LogicalStructure（1.3）；结构元素的 `/Lang` `/ActualText` →
 ///   StructureLanguageText（1.4）、`/E` → StructureExpandedText（1.5）
+/// - 结构属性对象带 `/O /UserProperties` 与 `/P` → StructureUserProperties
+///   （1.6，14.7.5.3 Table 328；子属性字典只有 `/N` `/V`，无 `/O`）
 /// - 目录 `/MarkInfo` → MarkInfo（1.4）；其 `/UserProperties` `/Suspects`
 ///   → MarkInfoUserProperties / MarkInfoSuspects（1.6）
 /// - 页面字典的 `/BleedBox` `/TrimBox` `/ArtBox` → PageBoundaries（1.3）、
@@ -285,6 +287,12 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         if info.0.contains_key("Suspects") {
             features.insert(PdfFeature::MarkInfoSuspects);
         }
+    }
+    // 用户属性（PDF 1.6）：14.7.5.3 的用户属性属性对象以 `/O
+    // /UserProperties` 与 `/P` 数组标识（Table 328）。子属性字典只有
+    // `/N` `/V`（Table 329）、没有 `/O`，故不会重复命中。
+    if d.get("O").and_then(|v| v.as_name()) == Some("UserProperties") && d.0.contains_key("P") {
+        features.insert(PdfFeature::StructureUserProperties);
     }
     // 输出意图（PDF 1.4）：目录 /OutputIntents 非空数组（14.11.5 Table
     // 365）。空数组等价于未声明，不登记特性。

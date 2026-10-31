@@ -2,8 +2,10 @@
 //!
 //! 覆盖目录 `/MarkInfo`（14.7.1 Table 321）、结构树根 `/StructTreeRoot`
 //! （14.7.2 Table 322）、结构元素（Table 323）、标记内容引用 MCR
-//! （Table 324）与对象引用 OBJR（Table 325），以及父树（14.7.4.4
-//! Table 326）的页面/对象键映射。
+//! （Table 324）与对象引用 OBJR（Table 325）、父树（14.7.4.4 Table 326）
+//! 的页面/对象键映射，以及结构属性对象（14.7.5 Table 327–329，含
+//! `/ClassMap` 属性类与用户属性）。Layout/List/PrintField 等标准属性
+//! 条目属于 14.8.5，不在本模型内。
 //!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
@@ -90,8 +92,9 @@ pub struct StructureTreeRoot {
     pub parent_tree_next_key: Option<i64>,
     /// `/RoleMap`：结构类型 → 标准类型映射。
     pub role_map: BTreeMap<String, String>,
-    /// `/ClassMap`：类名 → 属性对象，值原样保留。
-    pub class_map: BTreeMap<String, Value>,
+    /// `/ClassMap`：类名 → 属性对象列表（单个对象规范化为单元素列表；
+    /// 值已解引用并按 Table 327 校验）。
+    pub class_map: BTreeMap<String, Vec<StructureAttribute>>,
     /// 原始根字典（保留未建模条目）。
     pub dict: Dict,
 }
@@ -135,13 +138,41 @@ pub struct ObjectReference {
     pub dict: Dict,
 }
 
-/// 结构属性（Table 323 `/A` 条目）。
+/// 结构属性对象（14.7.5.2 Table 327；`/A` 条目）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructureAttribute {
+    /// `/O`：属性数据的所有者（必填非空名字）。
+    pub owner: String,
     /// 属性对象（已解引用的字典或流）。
     pub value: Value,
     /// 属性字典后的修订号。
     pub revision: Option<u32>,
+    /// `/O` 为 `/UserProperties` 时的用户属性（Table 328）。
+    pub user_properties: Option<UserProperties>,
+}
+
+/// 用户属性（14.7.5.3 Table 329）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserProperty {
+    /// `/N`：属性名（文本串，必填）。
+    pub name: String,
+    /// `/V`：属性值（任意值，必填）。
+    pub value: Value,
+    /// `/F`：属性值的格式化表示（可选文本串）。
+    pub formatted: Option<String>,
+    /// `/H`：是否隐藏（可选布尔，缺省 false）。
+    pub hidden: bool,
+    /// 原始用户属性字典（保留未建模条目）。
+    pub dict: Dict,
+}
+
+/// 用户属性属性对象（14.7.5.3 Table 328）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserProperties {
+    /// `/P`：用户属性数组，按声明顺序。
+    pub properties: Vec<UserProperty>,
+    /// 原始属性对象字典（保留未建模条目）。
+    pub dict: Dict,
 }
 
 /// 结构类（Table 323 `/C` 条目）。
@@ -151,6 +182,8 @@ pub struct StructureClass {
     pub name: String,
     /// 类名后的修订号。
     pub revision: Option<u32>,
+    /// `/ClassMap` 中该类名对应的属性对象（缺省为空，类属性不继承）。
+    pub attributes: Vec<StructureAttribute>,
 }
 
 /// 结构元素（Table 323）。
@@ -265,6 +298,30 @@ impl StructureTree {
         }
     }
 
+    /// 结构元素实际生效的属性对象（14.7.5.2–14.7.5.3）。
+    ///
+    /// 先按 `/C` 顺序展开类属性（修订号取类条目），再以 `/A` 覆盖：同一
+    /// `/O` 的两个字典按键合并（`/A` 优先），任一侧为流时整体替换；新
+    /// owner 按首次出现顺序追加。修订号始终取覆盖方（缺省为 0）。
+    /// 越界下标返回空 `Vec`。
+    pub fn resolved_attributes(&self, index: usize) -> Vec<StructureAttribute> {
+        let Some(element) = self.elements.get(index) else {
+            return Vec::new();
+        };
+        let mut merged: Vec<StructureAttribute> = Vec::new();
+        for class in &element.classes {
+            for attribute in &class.attributes {
+                let mut attribute = attribute.clone();
+                attribute.revision = class.revision;
+                merge_attribute(&mut merged, attribute);
+            }
+        }
+        for attribute in &element.attributes {
+            merge_attribute(&mut merged, attribute.clone());
+        }
+        merged
+    }
+
     /// 沿 `/RoleMap` 解析结构类型；链终止时返回最后一个映射名。
     ///
     /// 名字没有映射时返回 `None`。映射成环时停在环上最后一个尚未重复的
@@ -292,6 +349,39 @@ impl StructureTree {
             last_key = Some(current.clone());
             current = next.clone();
         }
+    }
+}
+
+/// 按 `/O` 合并一个属性对象到结果列表（见
+/// [`StructureTree::resolved_attributes`]）。
+fn merge_attribute(merged: &mut Vec<StructureAttribute>, overlay: StructureAttribute) {
+    let Some(existing) = merged
+        .iter_mut()
+        .find(|attribute| attribute.owner == overlay.owner)
+    else {
+        merged.push(overlay);
+        return;
+    };
+    // 两侧均为字典时按键合并（覆盖方优先）；任一侧为流则整体替换。
+    let combined = match (&existing.value, &overlay.value) {
+        (Value::Dict(base), Value::Dict(new)) => {
+            let mut dict = base.clone();
+            for (key, value) in &new.0 {
+                dict = dict.insert(key.clone(), value.clone());
+            }
+            Some(Value::Dict(dict))
+        }
+        _ => None,
+    };
+    match combined {
+        Some(value) => {
+            existing.value = value;
+            existing.revision = overlay.revision;
+            if overlay.user_properties.is_some() {
+                existing.user_properties = overlay.user_properties;
+            }
+        }
+        None => *existing = overlay,
     }
 }
 

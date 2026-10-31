@@ -128,7 +128,10 @@ pub use shading::{
     ShadingPattern, TensorProductPatch, TensorProductPatchShading,
 };
 pub use sound::{Sound, SoundEncoding};
-pub use structure::{StructureElement, StructureKid, StructureMarkInfo, StructureTree};
+pub use structure::{
+    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo, StructureTree,
+    UserProperty,
+};
 pub use three_d::{
     ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,
     ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,

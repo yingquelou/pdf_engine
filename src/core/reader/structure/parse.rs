@@ -96,6 +96,15 @@ pub(super) fn structure_tree(document: &Document) -> Result<Option<StructureTree
     let id_tree = parse_id_tree(document, &root_dict, &builder)?;
     let parent_tree = parse_parent_tree(document, &root_dict, &builder)?;
 
+    // 类属性在元素解析完成后按类名回填：`/ClassMap` 与元素可以任意顺序
+    // 出现；类名缺失时不报错，只留空列表（14.7.5.2 类属性没有继承）。
+    let mut elements = builder.elements;
+    for element in &mut elements {
+        for class in &mut element.classes {
+            class.attributes = class_map.get(&class.name).cloned().unwrap_or_default();
+        }
+    }
+
     Ok(Some(StructureTree {
         root: StructureTreeRoot {
             kids,
@@ -106,7 +115,7 @@ pub(super) fn structure_tree(document: &Document) -> Result<Option<StructureTree
             class_map,
             dict: root_dict,
         },
-        elements: builder.elements,
+        elements,
         by_object: builder.by_object,
     }))
 }

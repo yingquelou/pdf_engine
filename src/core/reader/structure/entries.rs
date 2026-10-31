@@ -2,7 +2,8 @@
 //!
 //! 这些条目不参与结构元素 arena 的递归展开：`/RoleMap`、`/ClassMap`
 //! 在根层读取，`/A`、`/C` 属于单个结构元素，页面 `/StructParents`
-//! 在结构树构建完成后按父树查找。
+//! 在结构树构建完成后按父树查找。属性对象按 14.7.5（Table 327–329）
+//! 校验：`/O` 必填，用户属性属性对象另带 `/P` 数组。
 
 use std::collections::BTreeMap;
 
@@ -10,8 +11,9 @@ use crate::core::reader::content::text_value;
 use crate::core::types::{Dict, Document, Value};
 
 use super::{
-    MAX_STRUCTURE_MAP_ENTRIES, PageStructureParents, ParentTreeEntry, StructureAttribute,
-    StructureClass, StructureError, malformed, resolve_value,
+    MAX_STRUCTURE_CHILDREN, MAX_STRUCTURE_MAP_ENTRIES, PageStructureParents, ParentTreeEntry,
+    StructureAttribute, StructureClass, StructureError, UserProperties, UserProperty, malformed,
+    resolve_value,
 };
 
 /// `/ID`：字面串每个 `char` 作一字节；十六进制串奇数位末尾补 0。
@@ -95,13 +97,18 @@ pub(super) fn parse_attributes(
     };
     let value = resolve_value(document, value, "structure element /A")?;
     let items = match value {
-        Value::Array(items) => items,
+        Value::Array(items) => {
+            if items.0.len() > MAX_STRUCTURE_CHILDREN {
+                return Err(StructureError::LimitExceeded("structure attributes"));
+            }
+            items
+        }
         single => {
-            let attribute = attribute_value(document, &single)?;
-            return Ok(vec![StructureAttribute {
-                value: attribute,
-                revision: None,
-            }]);
+            return Ok(vec![attribute_object(
+                document,
+                &single,
+                "structure attribute",
+            )?]);
         }
     };
     let mut attributes = Vec::new();
@@ -113,30 +120,136 @@ pub(super) fn parse_attributes(
                 "structure attribute revision number has no preceding attribute",
             ));
         }
-        let value = attribute_value(document, item)?;
-        let revision = match items.0.get(index + 1) {
-            Some(Value::Integer(revision)) => {
-                index += 1;
-                Some(non_negative_revision(*revision, "structure attribute")?)
-            }
-            _ => None,
-        };
-        attributes.push(StructureAttribute { value, revision });
+        let mut attribute = attribute_object(document, item, "structure attribute")?;
+        if let Some(Value::Integer(revision)) = items.0.get(index + 1) {
+            index += 1;
+            attribute.revision = Some(non_negative_revision(*revision, "structure attribute")?);
+        }
+        attributes.push(attribute);
         index += 1;
     }
     Ok(attributes)
 }
 
-/// 属性对象必须是字典或流（间接引用解引用后判断），返回解引用值。
-fn attribute_value(document: &Document, value: &Value) -> Result<Value, StructureError> {
-    let resolved = resolve_value(document, value, "structure attribute")?;
-    if resolved.as_dict().is_none() {
+/// 属性对象（14.7.5.2 Table 327）：解引用后必须是字典或流，`/O` 必填。
+///
+/// `/O` 为 `/UserProperties` 时按 Table 328/329 解析 `/P` 用户属性数组。
+fn attribute_object(
+    document: &Document,
+    value: &Value,
+    context: &str,
+) -> Result<StructureAttribute, StructureError> {
+    let resolved = resolve_value(document, value, context)?;
+    let Some(dict) = resolved.as_dict() else {
         return Err(malformed(format!(
             "structure attribute must be a dictionary or stream ({})",
             resolved.type_name()
         )));
+    };
+    let owner = match dict.get("O") {
+        Some(Value::Name(name)) if !name.is_empty() => name.clone(),
+        Some(Value::Name(_)) => {
+            return Err(malformed("structure attribute /O must not be empty"));
+        }
+        Some(other) => {
+            return Err(malformed(format!(
+                "structure attribute /O must be a name ({})",
+                other.type_name()
+            )));
+        }
+        None => return Err(malformed("structure attribute /O is required (Table 327)")),
+    };
+    let user_properties = if owner == "UserProperties" {
+        Some(parse_user_properties(document, dict)?)
+    } else {
+        None
+    };
+    Ok(StructureAttribute {
+        owner,
+        value: resolved,
+        revision: None,
+        user_properties,
+    })
+}
+
+/// 用户属性属性对象（14.7.5.3 Table 328/329）。
+fn parse_user_properties(
+    document: &Document,
+    dict: &Dict,
+) -> Result<UserProperties, StructureError> {
+    let properties = match dict.get("P") {
+        Some(Value::Array(items)) => items,
+        Some(other) => {
+            return Err(malformed(format!(
+                "user properties /P must be an array ({})",
+                other.type_name()
+            )));
+        }
+        None => return Err(malformed("user properties /P is required (Table 328)")),
+    };
+    if properties.0.len() > MAX_STRUCTURE_CHILDREN {
+        return Err(StructureError::LimitExceeded("structure user properties"));
     }
-    Ok(resolved)
+    let mut parsed = Vec::with_capacity(properties.0.len());
+    for (index, item) in properties.0.iter().enumerate() {
+        let resolved = resolve_value(document, item, "user property")?;
+        let Some(property) = resolved.as_dict() else {
+            return Err(malformed(format!(
+                "user property {index} must be a dictionary ({})",
+                resolved.type_name()
+            )));
+        };
+        let name = user_property_text(property, "N", index)?.ok_or_else(|| {
+            malformed(format!("user property {index} /N is required (Table 329)"))
+        })?;
+        let Some(value) = property.get("V") else {
+            return Err(malformed(format!(
+                "user property {index} /V is required (Table 329)"
+            )));
+        };
+        let formatted = user_property_text(property, "F", index)?;
+        let hidden = match property.get("H") {
+            None => false,
+            Some(Value::Bool(hidden)) => *hidden,
+            Some(other) => {
+                return Err(malformed(format!(
+                    "user property {index} /H must be a boolean ({})",
+                    other.type_name()
+                )));
+            }
+        };
+        parsed.push(UserProperty {
+            name,
+            value: value.clone(),
+            formatted,
+            hidden,
+            dict: property.clone(),
+        });
+    }
+    Ok(UserProperties {
+        properties: parsed,
+        dict: dict.clone(),
+    })
+}
+
+/// 用户属性文本条目：只接受字符串/十六进制串；缺失返回 `None`。
+fn user_property_text(
+    dict: &Dict,
+    key: &str,
+    index: usize,
+) -> Result<Option<String>, StructureError> {
+    let Some(value) = dict.get(key) else {
+        return Ok(None);
+    };
+    if !matches!(value, Value::String(_) | Value::HexString(_)) {
+        return Err(malformed(format!(
+            "user property {index} /{key} must be a text string ({})",
+            value.type_name()
+        )));
+    }
+    text_value(value)
+        .map(Some)
+        .ok_or_else(|| malformed(format!("user property {index} /{key} cannot be decoded")))
 }
 
 /// `/C`：单个类名或数组；数组项后的整数为前一项修订号。
@@ -155,6 +268,7 @@ pub(super) fn parse_classes(
             return Ok(vec![StructureClass {
                 name: class,
                 revision: None,
+                attributes: Vec::new(),
             }]);
         }
     };
@@ -175,7 +289,11 @@ pub(super) fn parse_classes(
             }
             _ => None,
         };
-        classes.push(StructureClass { name, revision });
+        classes.push(StructureClass {
+            name,
+            revision,
+            attributes: Vec::new(),
+        });
         index += 1;
     }
     Ok(classes)
@@ -239,11 +357,14 @@ pub(super) fn parse_role_map(
     Ok(map)
 }
 
-/// `/ClassMap`：类名 → 属性对象（任意值原样保留）。
+/// `/ClassMap`：类名 → 属性对象列表（14.7.5.2）。
+///
+/// 每个值可以是单个属性对象或属性对象数组，逐项按 Table 327 校验；类
+/// 属性不带修订号（类属性没有继承，修订号只出现在元素 `/C` 中）。
 pub(super) fn parse_class_map(
     document: &Document,
     root: &Dict,
-) -> Result<BTreeMap<String, Value>, StructureError> {
+) -> Result<BTreeMap<String, Vec<StructureAttribute>>, StructureError> {
     let Some(value) = root.get("ClassMap") else {
         return Ok(BTreeMap::new());
     };
@@ -252,7 +373,27 @@ pub(super) fn parse_class_map(
         .as_dict()
         .ok_or_else(|| malformed("/ClassMap is not a dictionary"))?;
     check_map_limit(dict, "ClassMap entries")?;
-    Ok(dict.0.clone())
+    let mut map = BTreeMap::new();
+    for (key, value) in &dict.0 {
+        let context = format!("/ClassMap /{key}");
+        let attributes = match value {
+            Value::Array(items) => {
+                if items.0.len() > MAX_STRUCTURE_CHILDREN {
+                    return Err(StructureError::LimitExceeded(
+                        "structure class map attributes",
+                    ));
+                }
+                let mut attributes = Vec::with_capacity(items.0.len());
+                for item in &items.0 {
+                    attributes.push(attribute_object(document, item, &context)?);
+                }
+                attributes
+            }
+            single => vec![attribute_object(document, single, &context)?],
+        };
+        map.insert(key.clone(), attributes);
+    }
+    Ok(map)
 }
 
 fn check_map_limit(dict: &Dict, what: &'static str) -> Result<(), StructureError> {
