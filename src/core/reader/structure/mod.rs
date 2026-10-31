@@ -38,11 +38,12 @@ mod standard_types_tests;
 mod tests;
 
 pub use standard::{
-    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, GlyphOrientationVertical,
-    InlineAlign, LayoutAttributes, LineHeight, ListAttributes, ListNumbering, NumberOrAuto,
-    NumberOrFour, NumberOrNumbers, Placement, PrintFieldAttributes, PrintFieldChecked,
-    PrintFieldRole, RubyAlign, RubyPosition, StandardAttributeOwner, StandardAttributes,
-    TableAttributes, TableScope, TextAlign, TextDecorationType, WritingMode,
+    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, FormatSpecificAttributes,
+    FormatSpecificOwner, GlyphOrientationVertical, InlineAlign, LayoutAttributes, LineHeight,
+    ListAttributes, ListNumbering, NumberOrAuto, NumberOrFour, NumberOrNumbers, Placement,
+    PrintFieldAttributes, PrintFieldChecked, PrintFieldRole, RubyAlign, RubyPosition,
+    StandardAttributeOwner, StandardAttributes, TableAttributes, TableScope, TextAlign,
+    TextDecorationType, WritingMode,
 };
 pub use standard_types::{StandardStructureType, StructureTypeCategory};
 

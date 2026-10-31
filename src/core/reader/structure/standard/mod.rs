@@ -10,8 +10,11 @@
 //! - Table（Table 349）：`/RowSpan`、`/ColSpan`、`/Headers`、`/Scope`、
 //!   `/Summary`。
 //!
-//! 格式专用所有者（`XML-1.00`、`HTML-3.20` 等）的条目不在本模块建模，
-//! 保留在 [`StandardAttributes::other`]。
+//! Table 341 的 7 个格式专用所有者（`XML-1.00`、`HTML-3.20`、`HTML-4.01`、
+//! `OEB-1.00`、`RTF-1.05`、`CSS-1.00`、`CSS-2.00`）作为
+//! [`FormatSpecificOwner`] 类型化后进入 [`StandardAttributes::format_specific`]，
+//! 条目保持原始字典/流不解释（ISO 32000-1 不定义其集合）。格式专用属性不
+//! 参与 14.8.5.3 标准继承：它们只用于导出到对应格式，是取值优先级 (a)。
 //!
 //! [`StructureTree::standard_attributes`] 只报告元素自身（含其类）的合并
 //! 结果；14.8.5.3 的继承链解析（祖先可继承条目）由子模块 [`inherit`] 的
@@ -45,8 +48,7 @@ pub enum StandardAttributeOwner {
     PrintField,
     /// `/Table`：表格属性（Table 349）。
     Table,
-    /// 格式专用所有者（`XML-1.00`、`HTML-3.20`、`OEB-1.00` 等）或扩展
-    /// 所有者，保留原名字。
+    /// 未知/扩展所有者，保留原名字。
     Other(String),
 }
 
@@ -71,6 +73,78 @@ impl StandardAttributeOwner {
             Self::Table => "Table",
             Self::Other(name) => name,
         }
+    }
+}
+
+/// Table 341 定义的格式专用属性所有者（14.8.5.2）。
+///
+/// 这些所有者的属性条目集合是开放式的（ISO 32000-1 不定义），读端只识别
+/// 所有者名字，条目原样保留在 [`FormatSpecificAttributes::value`] 中。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatSpecificOwner {
+    /// `/XML-1.00`：XML 1.00。
+    Xml1_00,
+    /// `/HTML-3.20`：HTML 3.20。
+    Html3_20,
+    /// `/HTML-4.01`：HTML 4.01。
+    Html4_01,
+    /// `/OEB-1.00`：OEB 1.00。
+    Oeb1_00,
+    /// `/RTF-1.05`：RTF 1.05。
+    Rtf1_05,
+    /// `/CSS-1.00`：CSS 1.00。
+    Css1_00,
+    /// `/CSS-2.00`：CSS 2.00。
+    Css2_00,
+}
+
+impl FormatSpecificOwner {
+    /// 按 `/O` 名字识别 7 个 Table 341 格式专用所有者；其余名字返回 `None`。
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "XML-1.00" => Some(Self::Xml1_00),
+            "HTML-3.20" => Some(Self::Html3_20),
+            "HTML-4.01" => Some(Self::Html4_01),
+            "OEB-1.00" => Some(Self::Oeb1_00),
+            "RTF-1.05" => Some(Self::Rtf1_05),
+            "CSS-1.00" => Some(Self::Css1_00),
+            "CSS-2.00" => Some(Self::Css2_00),
+            _ => None,
+        }
+    }
+
+    /// 所有者的 PDF 名字（不含前导 `/`）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Xml1_00 => "XML-1.00",
+            Self::Html3_20 => "HTML-3.20",
+            Self::Html4_01 => "HTML-4.01",
+            Self::Oeb1_00 => "OEB-1.00",
+            Self::Rtf1_05 => "RTF-1.05",
+            Self::Css1_00 => "CSS-1.00",
+            Self::Css2_00 => "CSS-2.00",
+        }
+    }
+}
+
+/// 一个格式专用属性对象（14.8.5.2 Table 341）。
+///
+/// 条目集合由各目标格式自行定义，`value` 保留原始字典或流供调用方使用；
+/// 读端不解释条目，也不参与 14.8.5.3 标准继承。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatSpecificAttributes {
+    /// `/O`：格式专用所有者。
+    pub owner: FormatSpecificOwner,
+    /// 属性对象（原始字典或流）。
+    pub value: Value,
+    /// 属性对象的修订号（缺省 0）。
+    pub revision: u32,
+}
+
+impl FormatSpecificAttributes {
+    /// 属性对象为字典时返回引用；流形态返回 `None`。
+    pub fn dict(&self) -> Option<&Dict> {
+        self.value.as_dict()
     }
 }
 
@@ -242,7 +316,11 @@ pub struct StandardAttributes {
     pub print_field: Option<PrintFieldAttributes>,
     /// Table 属性（`/O /Table`）；缺省 `None`。
     pub table: Option<TableAttributes>,
-    /// 未类型化的属性对象（格式专用所有者等），按合并顺序克隆。
+    /// 格式专用属性对象（Table 341 的 7 个所有者），按合并顺序克隆；
+    /// 条目保持原始字典/流不解释。
+    pub format_specific: Vec<FormatSpecificAttributes>,
+    /// 既非四个标准所有者、也非 Table 341 格式专用所有者的属性对象
+    /// （如 `/O /UserProperties`），按合并顺序克隆。
     pub other: Vec<StructureAttribute>,
 }
 
@@ -289,7 +367,14 @@ pub(super) fn parse_attributes(
                 let dict = attribute_dict(attribute, index, "Table")?;
                 standard.table = Some(parse_table(dict, index)?);
             }
-            _ => standard.other.push(attribute.clone()),
+            _ => match FormatSpecificOwner::from_name(&attribute.owner) {
+                Some(owner) => standard.format_specific.push(FormatSpecificAttributes {
+                    owner,
+                    value: attribute.value.clone(),
+                    revision: attribute.revision.unwrap_or(0),
+                }),
+                None => standard.other.push(attribute.clone()),
+            },
         }
     }
     Ok(standard)

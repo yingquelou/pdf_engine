@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::builder::types::FormatSpecificOwner;
 use crate::core::types::{Dict, FeatureProfile, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
@@ -231,6 +232,11 @@ fn validate_entries(
         "Table" => {
             usage.standard_attributes = true;
             apply_table_entries(dict, context, resolved, usage)?;
+        }
+        // 14.8.5.2 Table 341：格式专用所有者的条目集合开放式，写端只登记
+        // 标准属性使用与版本门禁，不校验条目类型。
+        name if FormatSpecificOwner::from_name(name).is_some() => {
+            usage.standard_attributes = true;
         }
         _ => {}
     }

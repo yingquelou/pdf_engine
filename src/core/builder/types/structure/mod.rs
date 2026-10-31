@@ -4,8 +4,8 @@
 //! `/StructTreeRoot`（Table 322）、结构元素（Table 323）、标记内容引用
 //! MCR（Table 324）与结构属性对象 `/A`（14.7.5 Table 327–329，含用户
 //! 属性）。标准属性所有者（14.8.5.2 Table 341）与 Layout/List/PrintField/
-//! Table 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`layout`] 与
-//! [`standard`] 提供类型化构造器。
+//! Table 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`layout`]、
+//! [`standard`] 与 [`format_specific`] 提供类型化构造器。
 //! 对象引用 OBJR（Table 325）与 `/Stm` `/StmOwn` 同样不在本模型内。
 //!
 //! 结构元素以拥有所有权的树形 `Vec` 表达（`StructureKid::Element` 装箱
@@ -18,8 +18,10 @@ use crate::core::types::{Array, Dict, Value};
 
 use super::text_string_value;
 
+mod format_specific;
 mod layout;
 mod standard;
+pub use format_specific::{FormatSpecificAttributes, FormatSpecificOwner};
 pub use layout::{
     BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, GlyphOrientationVertical,
     InlineAlign, LayoutAttributes, LineHeight, NumberOrAuto, NumberOrFour, NumberOrNumbers,

@@ -135,12 +135,12 @@ pub use shading::{
 pub use sound::{Sound, SoundEncoding};
 pub use span::SpanProperties;
 pub use structure::{
-    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, GlyphOrientationVertical,
-    InlineAlign, LayoutAttributes, LineHeight, ListAttributes, ListNumbering, NumberOrAuto,
-    NumberOrFour, NumberOrNumbers, Placement, PrintFieldAttributes, PrintFieldChecked,
-    PrintFieldRole, RubyAlign, RubyPosition, StructureAttribute, StructureElement, StructureKid,
-    StructureMarkInfo, StructureTree, TableAttributes, TableScope, TextAlign, TextDecorationType,
-    UserProperty, WritingMode,
+    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, FormatSpecificAttributes,
+    FormatSpecificOwner, GlyphOrientationVertical, InlineAlign, LayoutAttributes, LineHeight,
+    ListAttributes, ListNumbering, NumberOrAuto, NumberOrFour, NumberOrNumbers, Placement,
+    PrintFieldAttributes, PrintFieldChecked, PrintFieldRole, RubyAlign, RubyPosition,
+    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo, StructureTree,
+    TableAttributes, TableScope, TextAlign, TextDecorationType, UserProperty, WritingMode,
 };
 pub use three_d::{
     ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,

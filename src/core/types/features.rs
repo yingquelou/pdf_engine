@@ -80,7 +80,8 @@ impl FeatureProfile {
 ///   （1.6，14.7.5.3 Table 328；子属性字典只有 `/N` `/V`，无 `/O`）
 /// - 标准结构属性（14.8.5.2 Table 341）：`/O /List` 带 `/ListNumbering`、
 ///   `/O /PrintField` 带 `/Role` `/checked` `/Desc` 之一、`/O /Table` 带
-///   `/RowSpan` `/ColSpan` `/Headers` `/Scope` `/Summary` 之一 →
+///   `/RowSpan` `/ColSpan` `/Headers` `/Scope` `/Summary` 之一、或 `/O` 为
+///   Table 341 的 7 个格式专用所有者之一 →
 ///   StandardStructureAttributes（1.4）；PrintField → PrintFieldAttributes
 ///   （1.7）、Table 的 `/Headers` `/Scope` → TableHeaderAttributes（1.5）、
 ///   `/Summary` → TableSummary（1.7）
@@ -433,6 +434,14 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
             if LAYOUT_COLUMN_KEYS.iter().any(|key| d.0.contains_key(*key)) {
                 features.insert(PdfFeature::LayoutColumnAttributes);
             }
+        }
+        // Table 341 的格式专用所有者：条目集合开放式，所有者名字本身即可
+        // 判定标准结构属性使用。
+        Some(
+            "XML-1.00" | "HTML-3.20" | "HTML-4.01" | "OEB-1.00" | "RTF-1.05" | "CSS-1.00"
+            | "CSS-2.00",
+        ) => {
+            features.insert(PdfFeature::StandardStructureAttributes);
         }
         _ => {}
     }
