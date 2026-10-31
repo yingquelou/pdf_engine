@@ -96,6 +96,7 @@ pub mod separation;
 pub mod shading;
 pub mod signature;
 pub mod sound;
+pub mod structure;
 #[cfg(test)]
 mod tests;
 pub mod text;
