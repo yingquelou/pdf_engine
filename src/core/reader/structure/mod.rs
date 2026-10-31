@@ -12,6 +12,12 @@
 //! [`StructureTree::effective_attributes`] 与
 //! [`StructureTree::effective_standard_attributes`] 提供。
 //!
+//! 14.8.4 的标准结构类型目录（Table 333–340 的 49 个标准名、分组与
+//! PDF 1.5 扩展标记）由子模块 [`standard_types`] 提供，经
+//! [`StandardStructureType`] 与 [`StructureTypeCategory`] 导出，
+//! [`StructureTree::standard_type`] 按 `/RoleMap` 解析给出元素生效的
+//! 标准类型。
+//!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
 //! [`crate::core::reader::navigation::resolve`] 解引用并按对象号取最新
@@ -25,6 +31,9 @@ use crate::core::types::{Dict, Document, Value};
 mod entries;
 mod parse;
 mod standard;
+mod standard_types;
+#[cfg(test)]
+mod standard_types_tests;
 #[cfg(test)]
 mod tests;
 
@@ -35,6 +44,7 @@ pub use standard::{
     PrintFieldRole, RubyAlign, RubyPosition, StandardAttributeOwner, StandardAttributes,
     TableAttributes, TableScope, TextAlign, TextDecorationType, WritingMode,
 };
+pub use standard_types::{StandardStructureType, StructureTypeCategory};
 
 /// 结构树最大嵌套深度（最多 64 层结构元素）。
 pub(crate) const MAX_STRUCTURE_DEPTH: usize = 64;

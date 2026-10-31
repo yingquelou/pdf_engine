@@ -9,31 +9,31 @@ const CATALOG: i64 = 1;
 const ROOT: i64 = 2;
 const PAGE: i64 = 10;
 
-fn arr(values: Vec<Value>) -> Value {
+pub(super) fn arr(values: Vec<Value>) -> Value {
     Value::Array(Array(values))
 }
 
-fn name(value: &str) -> Value {
+pub(super) fn name(value: &str) -> Value {
     Value::Name(value.to_owned())
 }
 
-fn insert(doc: &Document, num: i64, value: Value) {
+pub(super) fn insert(doc: &Document, num: i64, value: Value) {
     doc.set_object(Object::new(num, 0, value));
 }
 
-fn element(structure_type: &str, parent: i64) -> Dict {
+pub(super) fn element(structure_type: &str, parent: i64) -> Dict {
     Dict::new()
         .insert("Type", name("StructElem"))
         .insert("S", name(structure_type))
         .insert("P", Value::Ref(parent, 0))
 }
 
-fn struct_root(entries: Dict) -> Dict {
+pub(super) fn struct_root(entries: Dict) -> Dict {
     entries.insert("Type", name("StructTreeRoot"))
 }
 
 /// Catalog 1 → StructTreeRoot 2。
-fn document_with_root(root: Dict) -> Document {
+pub(super) fn document_with_root(root: Dict) -> Document {
     let mut doc = Document::new();
     insert(&doc, ROOT, Value::Dict(root));
     insert(

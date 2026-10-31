@@ -294,6 +294,9 @@ pub enum PdfFeature {
     /// 标记信息的可疑内容条目（`/MarkInfo /Suspects`，Table 321），
     /// PDF 1.6 引入。
     MarkInfoSuspects,
+    /// 标准结构类型的 PDF 1.5 扩展（14.8.4 的 THead/TBody/TFoot/Annot/
+    /// Ruby/RB/RT/RP/Warichu/WT/WP），PDF 1.5 引入。
+    StructureTypeExtensions,
 }
 
 impl PdfFeature {
@@ -351,6 +354,7 @@ impl PdfFeature {
             | PdfFeature::Renditions
             | PdfFeature::TableHeaderAttributes
             | PdfFeature::LayoutExtendedAttributes
+            | PdfFeature::StructureTypeExtensions
             | PdfFeature::StructureExpandedText => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
@@ -457,6 +461,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::LogicalStructure => "logical structure trees",
             PdfFeature::StructureLanguageText => "structure language and actual text",
             PdfFeature::StructureExpandedText => "structure expanded text",
+            PdfFeature::StructureTypeExtensions => "structure type extensions",
             PdfFeature::StructureUserProperties => "structure user properties",
             PdfFeature::StandardStructureAttributes => "standard structure attributes",
             PdfFeature::LayoutExtendedAttributes => "extended Layout attributes",

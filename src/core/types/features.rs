@@ -71,7 +71,10 @@ impl FeatureProfile {
 /// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
 /// - 目录 `/StructTreeRoot` 或 `/Type /StructTreeRoot`、结构元素字典 →
 ///   LogicalStructure（1.3）；结构元素的 `/Lang` `/ActualText` →
-///   StructureLanguageText（1.4）、`/E` → StructureExpandedText（1.5）
+///   StructureLanguageText（1.4）、`/E` → StructureExpandedText（1.5）；
+///   结构元素的 `/S` 或结构树根 `/RoleMap` 的任何目标为 PDF 1.5 扩展
+///   标准类型（THead/TBody/TFoot/Annot/Ruby/RB/RT/RP/Warichu/WT/WP）→
+///   StructureTypeExtensions（1.5，14.8.4）
 /// - 结构属性对象带 `/O /UserProperties` 与 `/P` → StructureUserProperties
 ///   （1.6，14.7.5.3 Table 328；子属性字典只有 `/N` `/V`，无 `/O`）
 /// - 标准结构属性（14.8.5.2 Table 341）：`/O /List` 带 `/ListNumbering`、
@@ -157,6 +160,17 @@ const LAYOUT_EXTENDED_KEYS: &[&str] = &[
 
 /// Layout 中 PDF 1.6 引入的 Table 346 分栏条目。
 const LAYOUT_COLUMN_KEYS: &[&str] = &["ColumnCount", "ColumnGap", "ColumnWidths"];
+
+/// PDF 1.5 引入的标准结构类型（14.8.4）：`THead` `TBody` `TFoot`
+/// （Table 337）、`Annot`（Table 338）与 Ruby/Warichu 家族（Table 339）。
+pub(crate) const EXTENDED_STRUCTURE_TYPES: &[&str] = &[
+    "THead", "TBody", "TFoot", "Annot", "Ruby", "RB", "RT", "RP", "Warichu", "WT", "WP",
+];
+
+/// 名字是否为 PDF 1.5 引入的标准结构类型。
+fn is_extended_structure_type(name: &str) -> bool {
+    EXTENDED_STRUCTURE_TYPES.contains(&name)
+}
 
 /// 只检查**单个字典自身**的键（不深入其值），供显式栈遍历调用。
 fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
@@ -323,6 +337,17 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         || d.get("Type").and_then(|v| v.as_name()) == Some("StructTreeRoot")
     {
         features.insert(PdfFeature::LogicalStructure);
+        // 扩展标准类型（PDF 1.5）：/RoleMap 任一目标为 1.5 名字时，映射后
+        // 的元素同样写出 1.5 类型名。值非名字的条目忽略（14.8.4.1）。
+        if let Some(Value::Dict(role_map)) = d.get("RoleMap")
+            && role_map
+                .0
+                .values()
+                .filter_map(Value::as_name)
+                .any(is_extended_structure_type)
+        {
+            features.insert(PdfFeature::StructureTypeExtensions);
+        }
     }
     let struct_elem = d.get("Type").and_then(|v| v.as_name()) == Some("StructElem")
         || (d.get("S").and_then(|v| v.as_name()).is_some()
@@ -330,6 +355,13 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
             && d.0.contains_key("K"));
     if struct_elem {
         features.insert(PdfFeature::LogicalStructure);
+        // 扩展标准类型（PDF 1.5）：/S 直接是 1.5 名字（14.8.4 Table 337–339）。
+        if d.get("S")
+            .and_then(Value::as_name)
+            .is_some_and(is_extended_structure_type)
+        {
+            features.insert(PdfFeature::StructureTypeExtensions);
+        }
         // 语言与替换文本（PDF 1.4）：Table 323 的 /Lang /ActualText。
         if d.0.contains_key("Lang") || d.0.contains_key("ActualText") {
             features.insert(PdfFeature::StructureLanguageText);

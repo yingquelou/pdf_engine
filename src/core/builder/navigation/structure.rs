@@ -22,6 +22,11 @@
 //! 不满足返回 [`WriteError::UnsupportedVersion`]。使用用户属性时还要求
 //! `/MarkInfo /UserProperties true`（14.7.5.4）。两类失败均不写出任何字节。
 //!
+//! 14.8.4 的 PDF 1.5 扩展标准结构类型（THead/TBody/TFoot/Annot/Ruby/
+//! RB/RT/RP/Warichu/WT/WP）同样设门禁：元素 `/S` 经 `/RoleMap` 解析后的
+//! 终点、或 `/RoleMap` 任一目标为这些名字时要求 ≥1.5（`/RoleMap` 目标
+//! 即使未被元素使用也计入，避免写出带 1.5 类型名的 1.3/1.4 文件）。
+//!
 //! 本切片的范围限制：`/K` 只写出子元素引用与 MCR 字典（带显式 `/Pg` 与
 //! `/MCID`），不写 OBJR、整数 MCID 与 `/Stm` `/StmOwn`。
 
@@ -43,6 +48,17 @@ use super::structure_standard::{self, StandardUsage};
 /// 写端 MCID 上限：父树数组按 MCID 作零基下标，与读端单元素子项上限
 /// 取同值，避免单页父树数组无界膨胀（65535 为最大可用 MCID）。
 const MAX_STRUCTURE_MCID: i64 = MAX_STRUCTURE_CHILDREN as i64 - 1;
+
+/// PDF 1.5 引入的标准结构类型（14.8.4）：`THead` `TBody` `TFoot`
+/// （Table 337）、`Annot`（Table 338）与 Ruby/Warichu 家族（Table 339）。
+const EXTENDED_STRUCTURE_TYPES: &[&str] = &[
+    "THead", "TBody", "TFoot", "Annot", "Ruby", "RB", "RT", "RP", "Warichu", "WT", "WP",
+];
+
+/// 名字是否为 PDF 1.5 引入的标准结构类型（14.8.4）。
+fn is_extended_structure_type(name: &str) -> bool {
+    EXTENDED_STRUCTURE_TYPES.contains(&name)
+}
 
 /// 写出目录条目：结构树根引用与 `/MarkInfo` 字典（均为可选）。
 #[derive(Debug, Default)]
@@ -86,6 +102,8 @@ struct Plan<'a> {
     uses_expanded: bool,
     /// 是否使用用户属性属性对象（PDF 1.6，14.7.5.3）。
     uses_user_properties: bool,
+    /// 是否使用 PDF 1.5 扩展标准结构类型（14.8.4）。
+    uses_extended_types: bool,
     /// 标准属性使用情况（14.8.5 的版本门禁与特性画像）。
     standard: StandardUsage,
 }
@@ -204,6 +222,9 @@ pub(super) fn write(
     if plan.uses_user_properties {
         features.insert(PdfFeature::StructureUserProperties);
     }
+    if plan.uses_extended_types {
+        features.insert(PdfFeature::StructureTypeExtensions);
+    }
     plan.standard.apply_features(&mut features);
     Ok(entries)
 }
@@ -224,6 +245,7 @@ fn plan<'a>(
         uses_language: false,
         uses_expanded: false,
         uses_user_properties: false,
+        uses_extended_types: false,
     };
     if tree.role_map.len() > MAX_STRUCTURE_MAP_ENTRIES {
         return Err(invalid(format!(
@@ -240,6 +262,11 @@ fn plan<'a>(
     for (key, target) in &tree.role_map {
         validate_name(key, "structure role map key")?;
         validate_name(target, &format!("structure role map target for {key:?}"))?;
+        // 映射目标本身也是写出内容：未使用的 1.5 类型名同样抬高版本要求，
+        // 避免写出 1.3/1.4 文件却带 1.5 标准结构类型（14.8.4）。
+        if is_extended_structure_type(target) {
+            flattener.uses_extended_types = true;
+        }
     }
     for (key, value) in &tree.class_map {
         validate_name(key, "structure class map key")?;
@@ -281,6 +308,12 @@ fn plan<'a>(
             PdfFeature::StructureUserProperties.min_version()
         )));
     }
+    if flattener.uses_extended_types && !version.supports(PdfFeature::StructureTypeExtensions) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "structure element types THead/TBody/TFoot/Annot/Ruby/Warichu require PDF {}, got {version}",
+            PdfFeature::StructureTypeExtensions.min_version()
+        )));
+    }
     flattener.standard.check_version(version)?;
 
     let mut page_keys = BTreeMap::new();
@@ -304,6 +337,7 @@ fn plan<'a>(
         uses_language: flattener.uses_language,
         uses_expanded: flattener.uses_expanded,
         uses_user_properties: flattener.uses_user_properties,
+        uses_extended_types: flattener.uses_extended_types,
         standard: flattener.standard,
     })
 }
@@ -475,6 +509,8 @@ struct Flattener<'a> {
     uses_language: bool,
     uses_expanded: bool,
     uses_user_properties: bool,
+    /// 是否使用 PDF 1.5 扩展标准结构类型（14.8.4）。
+    uses_extended_types: bool,
 }
 
 impl<'a> Flattener<'a> {
@@ -502,6 +538,12 @@ impl<'a> Flattener<'a> {
             )));
         }
         validate_name(&element.structure_type, "structure element /S")?;
+        // 14.8.4.1：/S 先沿 /RoleMap 一或多级解析，终点为 PDF 1.5 扩展
+        // 标准类型时置位；版本门禁在 plan 末尾统一执行（仍在对象号分配前）。
+        let resolved = structure_standard::resolved_type(self.role_map, &element.structure_type);
+        if is_extended_structure_type(&resolved) {
+            self.uses_extended_types = true;
+        }
         if let Some(id) = &element.id {
             if id.is_empty() {
                 return Err(invalid("structure element /ID must not be empty"));
