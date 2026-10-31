@@ -39,6 +39,7 @@ mod three_d;
 mod type3;
 
 use super::navigation::structure_content;
+use super::navigation::tag_suspect;
 use super::{
     Action, CidFont, ColorSpace, Font, Function, GoTo3DViewSelection, GraphicsState,
     GraphicsStateFunctions, GroupXObject, ImageData, ImageMask, OptionalContentGroup, Pattern,
@@ -214,6 +215,13 @@ impl PdfBuilder {
             .map_err(|message| {
                 WriteError::InvalidObject(format!("structure marked content: {message}"))
             })?;
+
+        // Tag suspects（14.8.2.3.1）：标签为精确 `TagSuspect` 的标记内容必须
+        // 写成规范的 `/TagSuspect /Ordering` 属性表，且文档要在目录声明
+        // `/MarkInfo << /Suspects true >>`、目标版本不低于 PDF 1.6。门禁同样
+        // 在任何对象号分配与写出之前完成，保持零字节失败契约。
+        let tag_suspects =
+            tag_suspect::validate(&self.pages, self.navigation.mark_info(), self.version)?;
 
         // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
         // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
@@ -1100,6 +1108,11 @@ impl PdfBuilder {
             doc.features
                 .borrow_mut()
                 .insert(PdfFeature::ArtifactSubtype);
+        }
+        // Tag suspects（14.8.2.3.1）：内容流扫描结果写入特征画像，供版本
+        // 推导；门禁已在上方完成。
+        if tag_suspects {
+            doc.features.borrow_mut().insert(PdfFeature::TagSuspects);
         }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &acro_form {

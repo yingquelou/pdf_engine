@@ -8,7 +8,7 @@
 //! [`content_model`](crate::core::reader::structure::content_model_violations)
 //! 诊断同一形态）。
 //!
-//! 三条规则与 shall/should 划分：
+//! 五条规则与 shall/should 划分：
 //!
 //! - [`ArtifactAttributionRule::ArtifactMarkedAsStructure`]（shall，
 //!   14.8.2.3.1）：`Artifact` 区段的属性表（Table 330 之外还混入了结构条目）
@@ -21,6 +21,26 @@
 //! - [`ArtifactAttributionRule::RealContentNotInStructure`]（should，
 //!   14.8.2.2.1）：非 `Artifact` 区段沿 [`MarkedSection::parent`] 链向外
 //!   （含自身）都找不到合法 `/MCID`，真实内容未进入逻辑结构。
+//! - [`ArtifactAttributionRule::TagSuspectMissingProperty`]（shall，
+//!   14.8.2.3.1）：标签为精确 `TagSuspect` 的区段没有属性表、属性表缺
+//!   `TagSuspect` 条目，或条目值不是名字 `Ordering`。
+//! - [`ArtifactAttributionRule::TagSuspectSuspectsFlagNotSet`]（shall，
+//!   14.8.2.3.1）：本页含 `TagSuspect` 区段，但目录 `/MarkInfo` 没有
+//!   `/Suspects true`。
+//!
+//! 后两条依据 14.8.2.3.1 原文（tag suspects 自 PDF 1.6 引入）：
+//!
+//! > In some situations, conforming writer may be unable to determine correct
+//! > page content order for part of a document's contents. In such cases, tag
+//! > suspects (PDF 1.6) can be used. The conforming writer shall identify
+//! > suspect content by using marked content (see 14.6, "Marked Content") with
+//! > a tag of TagSuspect, as shown in next Example. The marked content shall
+//! > have a properties dictionary with an entry whose name is TagSuspect and
+//! > whose value is Ordering, which indicates that the ordering of the enclosed
+//! > marked content does not meet Tagged PDF specifications.
+//! > EXAMPLE  /TagSuspect <</TagSuspect /Ordering>> BDC .... % Problem page contents EMC
+//! > Documents containing tag suspects shall contain a Suspects entry with a
+//! > value of true in the mark information dictionary (see Table 321).
 //!
 //! `/MCID` 的合法性与 [`span`](super::span) 模块共用同一取值规则
 //! （[`span::mcid_value`](super::span)）：整数或整数值的有限浮点数。
@@ -34,13 +54,18 @@
 //! tagged，再决定是否采纳这类发现。
 //!
 //! 豁免：标签为精确 `TagSuspect` 的区段（14.8.2.3.1 的 PDF 1.6 tag
-//! suspect）及其整个子树不参与 `RealContentNotInStructure` 判定。本切片
-//! 不交叉校验目录 `/MarkInfo /Suspects`，该检查留给后续切片。
+//! suspect）及其整个子树仍不参与 `RealContentNotInStructure` 判定——
+//! 规范承认这段内容的页序本就不合 Tagged PDF，不能据此再判它「未入
+//! 结构」。目录 `/MarkInfo /Suspects` 的交叉校验由
+//! `TagSuspectSuspectsFlagNotSet` 承担：读 `/MarkInfo` 失败（缺失、条目
+//! 非布尔、结构损坏）时一律按「未声明 tag suspects」处理，诊断本身
+//! 从不因此报错。
 //!
 //! 输出顺序确定：先全部 `ArtifactMarkedAsStructure`（区段下标升序），再
 //! `ArtifactInLogicalStructure`（元素 arena 下标、子项位置升序；同一 MCID
-//! 命中多个 artifact 区段时取最小下标），最后 `RealContentNotInStructure`
-//! （区段下标升序）。
+//! 命中多个 artifact 区段时取最小下标），再 `RealContentNotInStructure`
+//! （区段下标升序），最后 `TagSuspectMissingProperty`（区段下标升序）与
+//! 至多一条 `TagSuspectSuspectsFlagNotSet`。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -48,7 +73,7 @@ use std::fmt;
 use super::span::mcid_value;
 use crate::core::reader::content::{MarkedContentError, MarkedSection};
 use crate::core::reader::structure::{PageStructureParents, StructureError, StructureKid};
-use crate::core::types::Document;
+use crate::core::types::{Document, Value};
 
 /// 一条 Artifact 归属发现。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +100,12 @@ pub enum ArtifactAttributionRule {
     ArtifactInLogicalStructure,
     /// 真实内容区段（含祖先链）没有任何合法 `/MCID`（14.8.2.2.1，should）。
     RealContentNotInStructure,
+    /// `TagSuspect` 区段没有属性表，或其 `TagSuspect` 条目不是名字
+    /// `Ordering`（14.8.2.3.1，shall）。
+    TagSuspectMissingProperty,
+    /// 本页含 `TagSuspect` 区段但目录 `/MarkInfo` 没有 `/Suspects true`
+    /// （14.8.2.3.1 与 Table 321，shall）。
+    TagSuspectSuspectsFlagNotSet,
 }
 
 impl ArtifactAttributionRule {
@@ -126,12 +157,13 @@ impl From<StructureError> for ArtifactAttributionError {
 impl Document {
     /// 按 14.8.2 校验一页上 artifact 与逻辑结构的归属，返回全部发现。
     ///
-    /// 三条规则的判定见模块文档；`section`、`element`、`kid` 按规则填充，
+    /// 五条规则的判定见模块文档；`section`、`element`、`kid` 按规则填充，
     /// 定位不到的层级为 `None`。页码越界或页面内容流损坏返回
     /// [`ArtifactAttributionError::MarkedContent`]；结构树损坏返回
     /// [`ArtifactAttributionError::Structure`]。父树或结构树**缺失**
     /// （而非损坏）不报错：规则 1 的 `element` 降级为 `None`，规则 2 自然
-    /// 没有可检查的元素。
+    /// 没有可检查的元素；`/MarkInfo` 读取失败只按「未声明 tag suspects」
+    /// 处理。
     pub fn artifact_attribution_violations(
         &self,
         page_index: usize,
@@ -148,6 +180,7 @@ impl Document {
         );
         self.collect_structure_attribution_violations(page_index, &sections, &mut violations)?;
         self.collect_unstructured_content_violations(page_index, &sections, &mut violations);
+        self.collect_tag_suspect_violations(page_index, &sections, &mut violations);
         Ok(violations)
     }
 
@@ -289,6 +322,54 @@ impl Document {
                 element: None,
                 kid: None,
                 rule: ArtifactAttributionRule::RealContentNotInStructure,
+            });
+        }
+    }
+
+    /// 规则 4/5：`TagSuspect` 区段的属性表与目录 `/MarkInfo /Suspects`
+    /// （14.8.2.3.1）。
+    fn collect_tag_suspect_violations(
+        &self,
+        page_index: usize,
+        sections: &[MarkedSection],
+        violations: &mut Vec<ArtifactAttributionViolation>,
+    ) {
+        let mut has_suspect = false;
+        for (index, section) in sections.iter().enumerate() {
+            if section.tag != "TagSuspect" {
+                continue;
+            }
+            has_suspect = true;
+            // 属性表缺条目、或条目值不是名字 `Ordering`，都不满足规范的写法。
+            let conforming = section.properties.as_ref().is_some_and(|properties| {
+                matches!(properties.get("TagSuspect"), Some(Value::Name(name)) if name == "Ordering")
+            });
+            if !conforming {
+                violations.push(ArtifactAttributionViolation {
+                    page: page_index,
+                    section: Some(index),
+                    element: None,
+                    kid: None,
+                    rule: ArtifactAttributionRule::TagSuspectMissingProperty,
+                });
+            }
+        }
+        if !has_suspect {
+            return;
+        }
+        // `/MarkInfo` 读失败按「未声明 tag suspects」处理：诊断不因此报错。
+        let declared = self
+            .mark_info()
+            .ok()
+            .flatten()
+            .is_some_and(|info| info.suspects);
+        if !declared {
+            violations.push(ArtifactAttributionViolation {
+                page: page_index,
+                section: None,
+                element: None,
+                kid: None,
+                rule: ArtifactAttributionRule::TagSuspectSuspectsFlagNotSet,
             });
         }
     }

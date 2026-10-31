@@ -309,6 +309,9 @@ pub enum PdfFeature {
     /// 标记信息的可疑内容条目（`/MarkInfo /Suspects`，Table 321），
     /// PDF 1.6 引入。
     MarkInfoSuspects,
+    /// 页内容中的 tag suspects（标签为 `TagSuspect` 的标记内容，
+    /// 14.8.2.3.1），PDF 1.6 引入。
+    TagSuspects,
     /// 标准结构类型的 PDF 1.5 扩展（14.8.4 的 THead/TBody/TFoot/Annot/
     /// Ruby/RB/RT/RP/Warichu/WT/WP），PDF 1.5 引入。
     StructureTypeExtensions,
@@ -386,6 +389,7 @@ impl PdfFeature {
             | PdfFeature::ThreeDAnnotations
             | PdfFeature::MarkInfoUserProperties
             | PdfFeature::MarkInfoSuspects
+            | PdfFeature::TagSuspects
             | PdfFeature::LayoutColumnAttributes
             | PdfFeature::StructureUserProperties => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
@@ -499,6 +503,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MarkInfo => "mark info",
             PdfFeature::MarkInfoUserProperties => "mark info user properties",
             PdfFeature::MarkInfoSuspects => "mark info suspects",
+            PdfFeature::TagSuspects => "tag suspects",
         };
         write!(f, "{name}")
     }

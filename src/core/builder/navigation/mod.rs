@@ -35,6 +35,7 @@ mod structure;
 pub(super) mod structure_content;
 mod structure_layout;
 mod structure_standard;
+pub(super) mod tag_suspect;
 mod templates;
 mod validate;
 
@@ -106,6 +107,12 @@ impl NavigationState {
     /// `/MCID` 与结构树 MCR 的一致性。
     pub(super) fn structure_tree(&self) -> Option<&StructureTree> {
         self.structure_tree.as_ref()
+    }
+
+    /// 目录 `/MarkInfo` 配置；供 assemble 阶段在任何对象号分配之前校验
+    /// 含 tag suspects 的文档必须声明 `/Suspects true`（14.8.2.3.1）。
+    pub(super) fn mark_info(&self) -> Option<&StructureMarkInfo> {
+        self.mark_info.as_ref()
     }
 
     /// 大纲条目实际引用到的动作，按写出顺序（子项先于父项），同一动作
