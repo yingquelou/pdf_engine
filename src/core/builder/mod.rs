@@ -31,6 +31,7 @@ mod tests;
 mod text_codes;
 mod types;
 
+pub use crate::core::reader::accessibility::LanguageIdentifier;
 pub use metadata::{DocumentInfo, FileIdentifier};
 pub use navigation::{
     ArticleBead, ArticleThread, Collection, CollectionField, CollectionFieldType, CollectionSort,
@@ -234,6 +235,8 @@ pub struct PdfBuilder {
     navigation: navigation::NavigationState,
     /// trailer `/Info` 文档信息字典（14.3.3）；空时不写出。
     document_info: DocumentInfo,
+    /// 目录 `/Lang` 文档默认语言（14.9.2.1）；`None`（默认）时不写出。
+    document_language: Option<LanguageIdentifier>,
     /// trailer `/ID` 文件标识符（14.4）；`None`（默认）时不写出。
     file_identifier: Option<FileIdentifier>,
     /// XMP 元数据流原文（14.3.2）；`None`（默认）时不写出。
@@ -278,6 +281,7 @@ impl PdfBuilder {
             compression: None,
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
+            document_language: None,
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
@@ -313,6 +317,7 @@ impl PdfBuilder {
             compression: None,
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
+            document_language: None,
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
@@ -337,6 +342,16 @@ impl PdfBuilder {
     /// 设置）不写出，trailer 与既往一致。
     pub fn set_document_info(&mut self, info: DocumentInfo) -> &mut Self {
         self.document_info = info;
+        self
+    }
+
+    /// 设置文档默认自然语言（14.9.2.1：目录 `/Lang`，PDF 1.4）。
+    ///
+    /// 接收已按 RFC 3066 解析的 [`LanguageIdentifier`]；空标识符（未知
+    /// 语言）合法并写出空文本串。目标版本低于 1.4 时 [`build`](Self::build)
+    /// 返回 [`WriteError::UnsupportedVersion`] 且零字节输出。
+    pub fn set_document_language(&mut self, language: LanguageIdentifier) -> &mut Self {
+        self.document_language = Some(language);
         self
     }
 

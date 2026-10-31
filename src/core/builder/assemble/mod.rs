@@ -63,6 +63,17 @@ impl PdfBuilder {
         let pages_num: i64 = 2;
         let mut num = 3i64;
 
+        // 文档默认语言（14.9.2.1）：目标版本门禁在任何对象号分配与写出
+        // 之前完成；语法已由 `LanguageIdentifier` 保证，无需再解析。
+        if self.document_language.is_some() && !self.version.supports(PdfFeature::DocumentLanguage)
+        {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "document language (/Lang) requires PDF {}, got {}",
+                PdfFeature::DocumentLanguage.min_version(),
+                self.version
+            )));
+        }
+
         // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
         // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
         // 保持零字节契约。AcroForm 自 PDF 1.2 起引入。
@@ -947,6 +958,13 @@ impl PdfBuilder {
         let mut catalog_dict = Dict::new()
             .insert("Type", Value::Name("Catalog".into()))
             .insert("Pages", Value::Ref(pages_num, 0));
+        // 文档默认语言（14.9.2.1）：目录 `/Lang` 为文本串，空标识符写空串。
+        if let Some(language) = &self.document_language {
+            catalog_dict = catalog_dict.insert("Lang", text_string_value(language.as_str()));
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::DocumentLanguage);
+        }
         if !output_intent_values.is_empty() {
             catalog_dict =
                 catalog_dict.insert("OutputIntents", Value::Array(Array(output_intent_values)));

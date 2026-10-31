@@ -69,6 +69,7 @@ impl FeatureProfile {
 /// - `/Templates` 键存在（名称字典）→ PageTemplates
 /// - `/AlternatePresentations` 键存在（名称字典）→ AlternatePresentations
 /// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
+/// - 目录 `/Lang` → DocumentLanguage（1.4，14.9.2.1）
 /// - 目录 `/StructTreeRoot` 或 `/Type /StructTreeRoot`、结构元素字典 →
 ///   LogicalStructure（1.3）；结构元素的 `/Lang` `/ActualText` →
 ///   StructureLanguageText（1.4）、`/E` → StructureExpandedText（1.5）；
@@ -434,6 +435,11 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
             }
         }
         _ => {}
+    }
+    // 文档默认语言（PDF 1.4）：目录 /Lang（14.9.2.1）。结构元素的 /Lang
+    // 是另一项特性（StructureLanguageText），两者不混用。
+    if d.get("Type").and_then(|v| v.as_name()) == Some("Catalog") && d.get("Lang").is_some() {
+        features.insert(PdfFeature::DocumentLanguage);
     }
     // 输出意图（PDF 1.4）：目录 /OutputIntents 非空数组（14.11.5 Table
     // 365）。空数组等价于未声明，不登记特性。

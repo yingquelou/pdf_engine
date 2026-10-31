@@ -41,6 +41,7 @@
 //! - `structure_standard`：标准属性 owners 与 List/PrintField/Table 条目（14.8.5.2、14.8.5.5–14.8.5.7）的往返、适用性与版本门禁；
 //! - `structure_types`：PDF 1.5 扩展标准结构类型（14.8.4）的直接/`/RoleMap` 到达方式与版本门禁；
 //! - `structure_layout`：Layout 标准属性（14.8.5.4 Table 342–346）的往返、缺省省略、形态/适用性校验与 1.4/1.5/1.6 门禁；
+//! - `accessibility`：文档默认语言（目录 `/Lang`）与结构元素 `/Lang` 的写出、RFC 3066 校验与 PDF 1.4 门禁；
 //! - `three_d`：3D artwork 流（13.6 Table 300）与 3D 注解（Table 298）的流对象分配、视图选择、激活条目与 PDF 1.6 门禁；
 //! - `three_d_view_extensions`：3D 视图 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1 Table 304）的版本门禁与 `/NA` → `/NR` 依赖；
 //! - `three_d_payloads`：3D 视图负载字典（渲染模式/光照方案/截面/节点，Table 307–312）的类型化序列化、缺省省略与嵌套校验；
@@ -62,6 +63,7 @@
 //! - `color_space`：页级命名颜色空间（`/ColorSpace` 资源与 `CS`/`cs`）；
 //! - 本文件：公共夹具/渲染辅助与对象布局测试。
 
+mod accessibility;
 mod acro_form;
 mod acro_form_resources;
 mod action_goto3d;

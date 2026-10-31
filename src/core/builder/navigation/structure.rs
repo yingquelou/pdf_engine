@@ -32,6 +32,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::core::reader::accessibility::LanguageIdentifier;
 use crate::core::reader::structure::{
     MAX_STRUCTURE_CHILDREN, MAX_STRUCTURE_DEPTH, MAX_STRUCTURE_ELEMENTS, MAX_STRUCTURE_MAP_ENTRIES,
 };
@@ -581,6 +582,16 @@ impl<'a> Flattener<'a> {
         }
         if element.lang.is_some() || element.actual_text.is_some() {
             self.uses_language = true;
+        }
+        // 14.9.2.2：结构元素 `/Lang` 必须是空串或 RFC 3066 Language-Tag。
+        // 语法校验先于任何对象号分配；错误信息带上前序下标与原串。
+        if let Some(lang) = &element.lang {
+            LanguageIdentifier::parse(lang).map_err(|error| {
+                invalid(format!(
+                    "structure element {} /Lang {lang:?} is not a valid language tag: {error}",
+                    self.flat.len()
+                ))
+            })?;
         }
         if element.expanded.is_some() {
             self.uses_expanded = true;

@@ -260,6 +260,8 @@ pub enum PdfFeature {
     /// 逻辑结构树（目录 `/StructTreeRoot` 与结构元素，14.7 Table 322/323），
     /// PDF 1.3 引入。
     LogicalStructure,
+    /// 文档默认自然语言（目录 `/Lang`，14.9.2.1），PDF 1.4 引入。
+    DocumentLanguage,
     /// 结构元素的语言与替换文本条目（`/Lang` `/ActualText`，14.7.2
     /// Table 323），PDF 1.4 引入。
     StructureLanguageText,
@@ -340,6 +342,7 @@ impl PdfFeature {
             | PdfFeature::PrinterMarks
             | PdfFeature::TrapNetworkModificationDate
             | PdfFeature::PageBoxColorInfo
+            | PdfFeature::DocumentLanguage
             | PdfFeature::StructureLanguageText
             | PdfFeature::StandardStructureAttributes
             | PdfFeature::MarkInfo => PdfVersion::V1_4,
@@ -459,6 +462,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::SeparationInfo => "separation dictionaries",
             PdfFeature::OpiDictionaries => "OPI dictionaries",
             PdfFeature::LogicalStructure => "logical structure trees",
+            PdfFeature::DocumentLanguage => "document language",
             PdfFeature::StructureLanguageText => "structure language and actual text",
             PdfFeature::StructureExpandedText => "structure expanded text",
             PdfFeature::StructureTypeExtensions => "structure type extensions",
