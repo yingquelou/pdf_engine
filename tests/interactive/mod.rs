@@ -9,6 +9,7 @@
 //! `annotation_appearance`、`annotation_geometry`、`annotation_link`、
 //! `annotation_measure`、`annotation_mk`、`annotation_popup`、
 //! `annotation_printer_mark`、`annotation_redact`、`annotation_subtype_table`、
+//! `annotation_trap_net`、
 //! `annotation_watermark`、
 //! `alternate_presentation`、`form`、`embedded`、`metadata`、`page_box`、`page_presentation`、
 //! `page_thumbnail`、`rendition`、`sound`、`three_d`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
@@ -33,6 +34,7 @@ mod annotation_popup;
 mod annotation_printer_mark;
 mod annotation_redact;
 mod annotation_subtype_table;
+mod annotation_trap_net;
 mod annotation_watermark;
 mod articles;
 mod collection;

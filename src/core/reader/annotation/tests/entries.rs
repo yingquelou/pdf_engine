@@ -412,6 +412,27 @@ fn table_169_rows_map_to_names_versions_and_markup_flags() {
                 )),
             );
         }
+        // Trap 网络注解（14.11.6 Table 366/367）要求 `/F`、`/AP /N` 表单
+        // 与 `/LastModified` 跟踪条目（表单的 `/PCM` 必填）。
+        if name == "TrapNet" {
+            dict = dict
+                .insert("F", Value::Integer(68))
+                .insert("LastModified", Value::String("D:20240101000000Z".into()))
+                .insert(
+                    "AP",
+                    Value::Dict(
+                        Dict::new().insert(
+                            "N",
+                            Value::Stream(
+                                Dict::new()
+                                    .insert("Subtype", Value::Name("Form".into()))
+                                    .insert("PCM", Value::Name("DeviceCMYK".into())),
+                                StreamData::Owned(Vec::new()),
+                            ),
+                        ),
+                    ),
+                );
+        }
         let annotation = parse_annotation(&doc(vec![]), 0, None, &dict).expect("subtype");
         assert!(
             !matches!(annotation.subtype, AnnotationSubtype::Unknown(_)),

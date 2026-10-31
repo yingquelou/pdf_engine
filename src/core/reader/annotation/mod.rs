@@ -35,6 +35,9 @@
 //! - Printer's mark 注解（14.11.3，Table 362/363）：`/MN` 名称与按
 //!   `/AP`/`/AS` 选定的外观表单（`/MarkStyle`、`/Colorants`）类型化为
 //!   [`PrinterMark`]，解析在 [`printer_mark`]。
+//! - Trap 网络注解（14.11.6，Table 366/367）：`/LastModified` 或
+//!   `/Version` + `/AnnotStates` 跟踪条目与选定的外观表单（`/PCM` 等）
+//!   类型化为 [`TrapNetwork`]，解析在 [`trap_net`]。
 //! - 3D 标记注解的外部数据字典 `/ExData`（13.6.6 与 Table 170/313，
 //!   PDF 1.7）：`/Subtype /Markup3D` 的 `/3DA` `/3DV` `/MD5` 类型化为
 //!   [`Markup3D`]，解析在 [`exdata`]。
@@ -70,6 +73,7 @@ mod printer_mark;
 mod redact;
 mod sound;
 pub mod subtype;
+mod trap_net;
 mod watermark;
 
 pub use exdata::{ExDataSubtype, ExternalData, Markup3D, Markup3DAnnotation};
@@ -85,6 +89,7 @@ pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
     LineIntent, PolygonIntent,
 };
+pub use trap_net::{ProcessColorModel, TrapNetwork, TrapNetworkForm};
 pub use watermark::FixedPrint;
 
 /// 页面树遍历最大深度。
@@ -221,6 +226,8 @@ pub struct Annotation {
     pub appearance_state: Option<String>,
     /// Printer's mark 注解的 `/MN` 与外观表单条目（14.11.3 Table 362/363）。
     pub printer_mark: Option<PrinterMark>,
+    /// 陷印网络注解的 Table 366 跟踪条目与 Table 367 外观表单（14.11.6）。
+    pub trap_network: Option<TrapNetwork>,
     /// `/QuadPoints`（标记类注解，长度为 8 的倍数）。
     pub quad_points: Option<Vec<f64>>,
     /// `/Name` 图标名（Text 注解专有条目；名字或文本串，取值由查看器定义）。

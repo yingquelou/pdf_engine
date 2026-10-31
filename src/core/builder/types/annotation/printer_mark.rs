@@ -21,12 +21,13 @@ impl PdfAnnotation {
         self
     }
 
-    /// 实际写出的 `/F`：Printer's mark 恒为 68（Print | ReadOnly，14.11.3）。
+    /// 实际写出的 `/F`：Printer's mark 与 Trap 网络恒为 68
+    /// （Print | ReadOnly，14.11.3 / 14.11.6）。
     pub(crate) fn written_flags(&self) -> u32 {
-        if self.kind == AnnotationKind::PrinterMark {
-            PRINTER_MARK_FLAGS
-        } else {
-            self.flags()
+        match self.kind {
+            AnnotationKind::PrinterMark => PRINTER_MARK_FLAGS,
+            AnnotationKind::TrapNet => super::trap_net::TRAP_NETWORK_FLAGS,
+            _ => self.flags(),
         }
     }
 

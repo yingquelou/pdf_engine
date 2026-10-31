@@ -19,6 +19,7 @@
 //! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出、配对冲突与必填校验（12.5.2）；
 //! - `annotation_redact`：Redact 注解条目（Table 192）的取值契约与 PDF 1.7 门禁；
 //! - `annotation_printer_mark`：Printer's mark 注解 `/F` `/MN` 与表单条目（Table 362/363）的写出、校验与 PDF 1.4 门禁；
+//! - `annotation_trap_net`：Trap 网络注解跟踪条目（Table 366）与表单条目（Table 367）的写出、校验、每页唯一与 PDF 1.3/1.4 门禁；
 //! - `annotation_exdata`：`/ExData` 3D 标记（13.6.6 Table 313）的 `/3DA` `/3DV` `/MD5` 写出、跨注解目标校验与 PDF 1.7 门禁；
 //! - `annotation_mk`：外观特性字典 `/MK`（Table 189）与图标适配 `/IF`（Table 247）的取值契约、Screen 归属与 PDF 1.5 门禁；
 //! - `hide_action`：Hide 动作 `/T` 目标解析与 `/H`（Table 210）的写出、校验与 PDF 1.2 门禁；
@@ -79,6 +80,7 @@ mod annotation_popup;
 mod annotation_printer_mark;
 mod annotation_redact;
 mod annotation_subtype_table;
+mod annotation_trap_net;
 mod annotation_watermark;
 mod articles;
 mod choice_indices;

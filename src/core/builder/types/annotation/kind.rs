@@ -2,12 +2,13 @@
 //!
 //! 引入版本与标记类归属一律取自读端
 //! [`AnnotationSubtype`]（Table 169 唯一权威表），本枚举只提供写端子集。
-//! `TrapNet` 暂不建模：Widget 由 AcroForm 写端
+//! Widget 由 AcroForm 写端
 //! 的 [`FormField`](super::super::FormField) 合并字段与 Widget 字典写出（E4），
 //! 其余按需增补。Sound（Table 185）的 `/Sound` 与 `/Name` 由 `sound` 子模块
 //! 建模，Movie（Table 186）的 `/Movie` 与 `/A` 播放设置由 `movie` 子模块
 //! 建模，3D（Table 298）的 `/3DD` 等条目由 `three_d` 子模块建模，
-//! Printer's mark（14.11.3 Table 362）的 `/MN` 由 `printer_mark` 子模块建模。
+//! Printer's mark（14.11.3 Table 362）的 `/MN` 由 `printer_mark` 子模块建模，
+//! Trap 网络（14.11.6 Table 366）的跟踪条目由 `trap_net` 子模块建模。
 
 use crate::core::reader::annotation::AnnotationSubtype;
 use crate::core::types::PdfVersion;
@@ -63,6 +64,8 @@ pub enum AnnotationKind {
     ThreeD,
     /// 打印机标记（`/PrinterMark`，PDF 1.4；`/MN` 与 `/AP`/`/F` 契约，14.11.3）。
     PrinterMark,
+    /// Trap 网络（`/TrapNet`，PDF 1.3；跟踪条目与 Table 367 外观表单，14.11.6）。
+    TrapNet,
 }
 
 impl AnnotationKind {
@@ -93,6 +96,7 @@ impl AnnotationKind {
             Self::Watermark => AnnotationSubtype::Watermark,
             Self::ThreeD => AnnotationSubtype::ThreeD,
             Self::PrinterMark => AnnotationSubtype::PrinterMark,
+            Self::TrapNet => AnnotationSubtype::TrapNet,
         }
     }
 
@@ -123,6 +127,7 @@ impl AnnotationKind {
             Self::Watermark => "Watermark",
             Self::ThreeD => "3D",
             Self::PrinterMark => "PrinterMark",
+            Self::TrapNet => "TrapNet",
         }
     }
 

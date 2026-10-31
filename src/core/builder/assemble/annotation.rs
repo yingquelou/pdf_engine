@@ -82,8 +82,8 @@ pub(super) fn annotation_dict(
         .insert("Type", Value::Name("Annot".into()))
         .insert("Subtype", Value::Name(annot.kind().name().into()))
         .insert("Rect", real_array(&annot.rect()));
-    // Printer's mark 的 `/F` 恒为 Print|ReadOnly（68，14.11.3），即使调用方
-    // 未显式设置标志位也必须写出。
+    // Printer's mark 与 Trap 网络注解的 `/F` 恒为 Print|ReadOnly（68，
+    // 14.11.3 / 14.11.6），即使调用方未显式设置标志位也必须写出。
     let flags = annot.written_flags();
     if flags != 0 {
         dict = dict.insert("F", Value::Integer(i64::from(flags)));
@@ -108,6 +108,26 @@ pub(super) fn annotation_dict(
     }
     if let Some(date) = annot.creation_date() {
         dict = dict.insert("CreationDate", text_string_value(date));
+    }
+    // Trap 网络跟踪条目（Table 366）：`/LastModified` 或 `/Version` +
+    // `/AnnotStates`，二者由构建期校验保证互斥且恰有其一。
+    if let Some(trap) = annot.trap_network() {
+        if let Some(date) = trap.last_modified() {
+            dict = dict.insert("LastModified", text_string_value(&date.to_pdf_string()));
+        }
+        if let Some(version) = trap.version() {
+            dict = dict.insert("Version", Value::Array(Array(version.to_vec())));
+        }
+        if let Some(states) = trap.annot_states() {
+            let states = states
+                .iter()
+                .map(|state| match state {
+                    Some(name) => Value::Name(name.clone()),
+                    None => Value::Null,
+                })
+                .collect();
+            dict = dict.insert("AnnotStates", Value::Array(Array(states)));
+        }
     }
     if let Some(color) = annot.color() {
         dict = dict.insert("C", real_array(color));
@@ -449,6 +469,25 @@ fn explicit_destination_value(
         )));
     }
     destination_value(destination, page_refs)
+}
+
+/// Trap 网络注解跟踪条目的版本门禁：`/LastModified` 自 PDF 1.4 引入
+/// （Table 366）；子类型本身自 PDF 1.3 引入，由 `kind().min_version()` 门禁。
+pub(super) fn trap_network_feature_gate(
+    annot: &PdfAnnotation,
+    version: PdfVersion,
+) -> Result<(), WriteError> {
+    let has_last_modified = annot
+        .trap_network()
+        .is_some_and(|entries| entries.last_modified().is_some());
+    if has_last_modified && !version.supports(PdfFeature::TrapNetworkModificationDate) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "TrapNet annotation /LastModified requires PDF {}, got {}",
+            PdfVersion::V1_4.as_str(),
+            version.as_str()
+        )));
+    }
+    Ok(())
 }
 
 /// 几何类注解（Square/Circle/Polygon/PolyLine）子类型专有条目对应的特性集合。

@@ -242,6 +242,11 @@ pub enum PdfFeature {
     /// 打印机标记（14.11.3）：PrinterMark 注解（Table 362）与表单条目标
     /// 记（Table 363），PDF 1.4 引入。
     PrinterMarks,
+    /// Trap 网络（14.11.6）：TrapNet 注解（Table 366）与表单条目标记
+    /// （Table 367），PDF 1.3 引入。
+    TrapNetworks,
+    /// Trap 网络的修改日期 `/LastModified`（14.11.6 Table 366），PDF 1.4 引入。
+    TrapNetworkModificationDate,
     /// 页面处理框（`/BleedBox` `/TrimBox` `/ArtBox`，14.11.2 Table 30），
     /// PDF 1.3 引入。
     PageBoundaries,
@@ -278,7 +283,8 @@ impl PdfFeature {
             | PdfFeature::FormActionFieldNames
             | PdfFeature::PageTemplates
             | PdfFeature::PageBoundaries
-            | PdfFeature::SeparationInfo => PdfVersion::V1_3,
+            | PdfFeature::SeparationInfo
+            | PdfFeature::TrapNetworks => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
@@ -287,6 +293,7 @@ impl PdfFeature {
             | PdfFeature::AlternatePresentations
             | PdfFeature::OutputIntents
             | PdfFeature::PrinterMarks
+            | PdfFeature::TrapNetworkModificationDate
             | PdfFeature::PageBoxColorInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -387,6 +394,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::ThreeDMarkup => "3D markup annotations",
             PdfFeature::OutputIntents => "output intents",
             PdfFeature::PrinterMarks => "printer's marks",
+            PdfFeature::TrapNetworks => "trap networks",
+            PdfFeature::TrapNetworkModificationDate => "trap network modification dates",
             PdfFeature::PageBoundaries => "page boundaries",
             PdfFeature::PageBoxColorInfo => "page box color info",
             PdfFeature::SeparationInfo => "separation dictionaries",

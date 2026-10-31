@@ -8,6 +8,7 @@
 //! `exdata` 覆盖 3D 标记的 `/ExData` 外部数据字典（13.6.6 Table 313），
 //! `watermark` 覆盖 Watermark 的固定打印字典 `/FixedPrint`（Table 190/191），
 //! `printer_mark` 覆盖 Printer's mark 注解的 `/MN` 与表单项（Table 362/363），
+//! `trap_net` 覆盖 Trap 网络注解的跟踪条目与表单条目（14.11.6 Table 366/367），
 //! `dates` 覆盖 `/M` `/CreationDate` 的 PDF 日期解析（7.9.4），
 //! `three_d` 覆盖 3D 注解与 13.6 的 3D 流/视图/投影/背景字典（Table 298–306）。
 
@@ -25,4 +26,5 @@ mod sound;
 mod subtype;
 mod support;
 mod three_d;
+mod trap_net;
 mod watermark;

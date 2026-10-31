@@ -651,6 +651,7 @@ impl PdfBuilder {
         )?;
         let mut annotation_nums = vec![0i64; self.annotations.len()];
         let mut page_annotation_handles: Vec<Vec<usize>> = vec![Vec::new(); self.pages.len()];
+        let mut page_trap_net_counts: Vec<usize> = vec![0; self.pages.len()];
         for (handle, entry) in self.annotations.iter().enumerate() {
             if entry.page >= self.pages.len() {
                 return Err(WriteError::InvalidObject(format!(
@@ -702,6 +703,40 @@ impl PdfBuilder {
             annotation::markup_3d_feature_gate(&entry.annot, self.version)?;
             // Link 专有条目按 Table 173 的版本门起分组门禁。
             annotation::link_feature_gate(&entry.annot, self.version)?;
+            // Trap 网络跟踪条目（14.11.6 Table 366）PDF 1.4 / 1.3 门禁。
+            annotation::trap_network_feature_gate(&entry.annot, self.version)?;
+            // 14.11.6：每页至多一个 Trap 网络注解，且其 `/AP /N` 表单
+            // （含状态子字典的每个表单）必须已注册并声明 `/PCM`。
+            if entry.annot.kind() == AnnotationKind::TrapNet {
+                page_trap_net_counts[entry.page] += 1;
+                if page_trap_net_counts[entry.page] > 1 {
+                    return Err(WriteError::InvalidObject(format!(
+                        "at most one trap network annotation per page (page {})",
+                        entry.page
+                    )));
+                }
+                let mut appearance_forms: Vec<usize> = entry
+                    .annot
+                    .appearance_states()
+                    .iter()
+                    .map(|(_, form)| *form)
+                    .collect();
+                if let Some(form) = entry.annot.appearance_normal() {
+                    appearance_forms.push(form);
+                }
+                for form in appearance_forms {
+                    let form_object = self.forms.get(form).ok_or_else(|| {
+                        WriteError::InvalidObject(format!(
+                            "TrapNet annotation handle {handle}: appearance references unknown form handle {form}"
+                        ))
+                    })?;
+                    if form_object.pcm.is_none() {
+                        return Err(WriteError::InvalidObject(format!(
+                            "TrapNet annotation handle {handle}: appearance form handle {form} must declare /PCM"
+                        )));
+                    }
+                }
+            }
             page_annotation_handles[entry.page].push(handle);
             annotation_nums[handle] = num;
             num += 1;
@@ -846,6 +881,20 @@ impl PdfBuilder {
             // Printer's mark 注解（14.11.3 Table 362）自 PDF 1.4 引入。
             if entry.annot.kind() == AnnotationKind::PrinterMark {
                 doc.features.borrow_mut().insert(PdfFeature::PrinterMarks);
+            }
+            // Trap 网络注解（14.11.6 Table 366）自 PDF 1.3 引入；
+            // `/LastModified` 跟踪条目自 PDF 1.4 引入。
+            if entry.annot.kind() == AnnotationKind::TrapNet {
+                doc.features.borrow_mut().insert(PdfFeature::TrapNetworks);
+                if entry
+                    .annot
+                    .trap_network()
+                    .is_some_and(|entries| entries.last_modified().is_some())
+                {
+                    doc.features
+                        .borrow_mut()
+                        .insert(PdfFeature::TrapNetworkModificationDate);
+                }
             }
         }
         // 表单数据动作与字段名条目（12.7.5.2–12.7.5.4），写入特征画像。
@@ -1165,11 +1214,20 @@ impl PdfBuilder {
             }
             if !page_annotation_handles[i].is_empty() || !page_widget_nums[i].is_empty() {
                 let mut annots = Array::new();
+                // 14.11.6：Trap 网络注解必须是页面 `/Annots` 的最后一项。
+                // 其余注解保持注册相对顺序，Widget 紧随其后，Trap 网络最后。
                 for &handle in &page_annotation_handles[i] {
-                    annots = annots.push(Value::Ref(annotation_nums[handle], 0));
+                    if self.annotations[handle].annot.kind() != AnnotationKind::TrapNet {
+                        annots = annots.push(Value::Ref(annotation_nums[handle], 0));
+                    }
                 }
                 for &num in &page_widget_nums[i] {
                     annots = annots.push(Value::Ref(num, 0));
+                }
+                for &handle in &page_annotation_handles[i] {
+                    if self.annotations[handle].annot.kind() == AnnotationKind::TrapNet {
+                        annots = annots.push(Value::Ref(annotation_nums[handle], 0));
+                    }
                 }
                 page_dict = page_dict.insert("Annots", Value::Array(annots));
             }
@@ -1291,6 +1349,15 @@ impl PdfBuilder {
                     self.version.as_str()
                 )));
             }
+            // Trap 网络表单条目（14.11.6 Table 367）自 PDF 1.3 引入，同样
+            // 先于条目校验，保证低版本一律报 UnsupportedVersion。
+            if form.has_trap_network_entries() && self.version < PdfVersion::V1_3 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "trap network form entries require PDF {}, got {}",
+                    PdfVersion::V1_3.as_str(),
+                    self.version.as_str()
+                )));
+            }
             form.validate()
                 .map_err(|message| WriteError::InvalidObject(format!("form XObject: {message}")))?;
             let content_bytes = form.content.to_bytes();
@@ -1357,6 +1424,39 @@ impl PdfBuilder {
                     dict = dict.insert("Colorants", Value::Dict(colorants));
                 }
                 doc.features.borrow_mut().insert(PdfFeature::PrinterMarks);
+            }
+            // Trap 网络表单条目（14.11.6 Table 367，PDF 1.3）：`/PCM` 为
+            // name，`/SeparationColorNames` 为 name 数组，`/TrapRegions` 为
+            // 间接引用数组，`/TrapStyles` 为文本串，`/FontFauxing` 为字体
+            // 字典数组（原样写出）。
+            if form.has_trap_network_entries() {
+                if let Some(pcm) = &form.pcm {
+                    dict = dict.insert("PCM", Value::Name(pcm.name().into()));
+                }
+                if !form.separation_color_names.is_empty() {
+                    let names = form
+                        .separation_color_names
+                        .iter()
+                        .map(|name| Value::Name(name.clone()))
+                        .collect();
+                    dict = dict.insert("SeparationColorNames", Value::Array(Array(names)));
+                }
+                if !form.trap_regions.is_empty() {
+                    let regions = form
+                        .trap_regions
+                        .iter()
+                        .map(|(num, generation)| Value::Ref(*num, *generation))
+                        .collect();
+                    dict = dict.insert("TrapRegions", Value::Array(Array(regions)));
+                }
+                if let Some(styles) = &form.trap_styles {
+                    dict = dict.insert("TrapStyles", text_string_value(styles));
+                }
+                if !form.font_fauxing.is_empty() {
+                    let fonts = form.font_fauxing.iter().cloned().map(Value::Dict).collect();
+                    dict = dict.insert("FontFauxing", Value::Array(Array(fonts)));
+                }
+                doc.features.borrow_mut().insert(PdfFeature::TrapNetworks);
             }
             doc.set_object(Object::new(
                 form_nums[handle],

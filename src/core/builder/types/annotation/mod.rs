@@ -17,7 +17,9 @@
 //! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
 //! 字典 `/FixedPrint`（Table 190/191）；`exdata` 覆盖 3D 标记注解的外部数据
 //! 字典 `/ExData`（13.6.6 Table 313）；`printer_mark` 覆盖 Printer's mark
-//! 注解的 `/MN` 与 `/F`/外观契约（14.11.3 Table 362），子类型归属守卫集中在 `guard`。
+//! 注解的 `/MN` 与 `/F`/外观契约（14.11.3 Table 362）；`trap_net` 覆盖
+//! Trap 网络注解的跟踪条目与 `/F`/外观契约（14.11.6 Table 366），子类型
+//! 归属守卫集中在 `guard`。
 
 mod border;
 mod exdata;
@@ -34,6 +36,7 @@ mod redact;
 mod sound;
 mod subtype;
 mod three_d;
+mod trap_net;
 mod watermark;
 
 pub use border::BorderArray;
@@ -52,6 +55,7 @@ use redact::RedactEntries;
 use subtype::LineEntries;
 pub(crate) use subtype::validate_name_value;
 pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
+use trap_net::TrapNetworkEntries;
 pub use watermark::FixedPrint;
 
 use super::Action;
@@ -106,6 +110,7 @@ pub struct PdfAnnotation {
     title: Option<String>,
     name: Option<String>,
     printer_mark: Option<PrinterMarkEntries>,
+    trap_network: Option<TrapNetworkEntries>,
     modified_date: Option<String>,
     creation_date: Option<String>,
     color: Option<Vec<f64>>,
@@ -166,6 +171,7 @@ impl PdfAnnotation {
             title: None,
             name: None,
             printer_mark: None,
+            trap_network: None,
             modified_date: None,
             creation_date: None,
             color: None,
@@ -646,6 +652,7 @@ impl PdfAnnotation {
         }
         self.validate_subtype_entries()?;
         printer_mark::validate(self)?;
+        trap_net::validate(self)?;
         Ok(())
     }
 }

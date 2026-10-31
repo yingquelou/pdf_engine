@@ -2,6 +2,8 @@
 
 use super::{ColorSpace, Font, ImageData};
 use crate::core::content::ContentStream;
+use crate::core::reader::annotation::ProcessColorModel;
+use crate::core::types::Dict;
 
 /// 组属性字典（ISO 32000-1 §8.10.3 Table 96、§11.6.6）。
 ///
@@ -131,6 +133,16 @@ pub struct FormXObject {
     pub mark_style: Option<String>,
     /// Printer's mark 表单的 `/Colorants`（Table 363）：色料名 → Separation 空间。
     pub colorants: Vec<(String, ColorSpace)>,
+    /// Trap 网络表单的过程颜色模型 `/PCM`（14.11.6 Table 367，PDF 1.3）。
+    pub pcm: Option<ProcessColorModel>,
+    /// Trap 网络表单的 `/SeparationColorNames`（Table 367）：创建网络时假定的色料名。
+    pub separation_color_names: Vec<String>,
+    /// Trap 网络表单的 `/TrapRegions`（Table 367）：TrapRegion 对象引用。
+    pub trap_regions: Vec<(i64, i64)>,
+    /// Trap 网络表单的 `/TrapStyles`（Table 367）：人类可读的陷印样式串。
+    pub trap_styles: Option<String>,
+    /// Trap 网络表单的 `/FontFauxing`（Table 367）：字体字典数组。
+    pub font_fauxing: Vec<Dict>,
     /// 表单内容流。
     pub content: ContentStream,
 }
@@ -146,6 +158,11 @@ impl FormXObject {
             optional_content: None,
             mark_style: None,
             colorants: Vec::new(),
+            pcm: None,
+            separation_color_names: Vec::new(),
+            trap_regions: Vec::new(),
+            trap_styles: None,
+            font_fauxing: Vec::new(),
             content,
         }
     }
@@ -194,6 +211,47 @@ impl FormXObject {
         self.mark_style.is_some() || !self.colorants.is_empty()
     }
 
+    /// 设置 Trap 网络表单的过程颜色模型 `/PCM`（14.11.6 Table 367）。
+    pub fn with_pcm(mut self, pcm: ProcessColorModel) -> Self {
+        self.pcm = Some(pcm);
+        self
+    }
+
+    /// 追加一项 Trap 网络色料名 `/SeparationColorNames`（Table 367）。
+    pub fn with_separation_color_name(mut self, name: impl Into<String>) -> Self {
+        self.separation_color_names.push(name.into());
+        self
+    }
+
+    /// 追加一个 Trap 网络区域对象引用 `/TrapRegions`（Table 367）。
+    ///
+    /// 参数为 TrapRegion 对象的对象号；写出为 `num 0 R`。
+    pub fn with_trap_region(mut self, object: i64) -> Self {
+        self.trap_regions.push((object, 0));
+        self
+    }
+
+    /// 设置 Trap 网络样式串 `/TrapStyles`（Table 367）。
+    pub fn with_trap_styles(mut self, styles: impl Into<String>) -> Self {
+        self.trap_styles = Some(styles.into());
+        self
+    }
+
+    /// 追加一个 `/FontFauxing` 字体字典（Table 367，原样写出）。
+    pub fn with_font_fauxing(mut self, font: Dict) -> Self {
+        self.font_fauxing.push(font);
+        self
+    }
+
+    /// 是否声明了 Table 367 的 Trap 网络表单条目。
+    pub(crate) fn has_trap_network_entries(&self) -> bool {
+        self.pcm.is_some()
+            || !self.separation_color_names.is_empty()
+            || !self.trap_regions.is_empty()
+            || self.trap_styles.is_some()
+            || !self.font_fauxing.is_empty()
+    }
+
     /// 校验 BBox、Matrix 与组属性；非法时返回可读原因。
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.bbox.iter().any(|v| !v.is_finite()) {
@@ -236,6 +294,36 @@ impl FormXObject {
             space
                 .validate()
                 .map_err(|message| format!("printer's mark form colorant {name}: {message}"))?;
+        }
+        // Table 367：声明任一条目时 `/PCM` 必填且须为标准过程颜色模型；
+        // 色料名须为合法 name 且唯一；TrapRegion 对象号须为正。
+        if self.has_trap_network_entries() {
+            let pcm = self
+                .pcm
+                .as_ref()
+                .ok_or("trap network form entries require /PCM")?;
+            if let ProcessColorModel::Other(name) = pcm {
+                return Err(format!(
+                    "trap network form /PCM {name} is not a standard process color model"
+                ));
+            }
+            let mut colorants = std::collections::BTreeSet::new();
+            for name in &self.separation_color_names {
+                super::annotation::validate_name_value(
+                    name,
+                    "trap network form separation color name",
+                )?;
+                if !colorants.insert(name.as_str()) {
+                    return Err(format!(
+                        "trap network form separation color name {name} is registered twice"
+                    ));
+                }
+            }
+            if self.trap_regions.iter().any(|(object, _)| *object <= 0) {
+                return Err(
+                    "trap network form /TrapRegions object numbers must be positive".into(),
+                );
+            }
         }
         Ok(())
     }

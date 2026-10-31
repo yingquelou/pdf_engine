@@ -48,6 +48,10 @@ impl FeatureProfile {
 /// - `/Subtype /Markup3D` → ThreeDMarkup（1.7）
 /// - `/Subtype /PrinterMark`，或 `/Subtype /Form` 带 `/MarkStyle` `/Colorants`
 ///   之一 → PrinterMarks（1.4）
+/// - `/Subtype /TrapNet` → TrapNetworks（1.3），带 `/LastModified` 时另记
+///   TrapNetworkModificationDate（1.4）；`/Subtype /Form` 带 `/PCM`
+///   `/SeparationColorNames` `/TrapRegions` `/TrapStyles` `/FontFauxing`
+///   之一 → TrapNetworks（1.3）
 /// - `/Type /Rendition`、`/Type /MediaClip`、`/S /Rendition` → Renditions（1.5）
 /// - 3D 视图字典（`/Type /3DView` 或 `/XN`）的 `/RM` `/LS` `/SA` `/NA`
 ///   `/NR` 任一键 → ThreeDViewExtensions（1.7）
@@ -128,6 +132,29 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
             && (d.0.contains_key("MarkStyle") || d.0.contains_key("Colorants")))
     {
         features.insert(PdfFeature::PrinterMarks);
+    }
+    // 陷印网络（PDF 1.3）：TrapNet 注解 `/Subtype /TrapNet`（14.11.6
+    // Table 366）与陷印网络 Form XObject（Table 367）。跟踪条目
+    // `/LastModified` 为 PDF 1.4 新增（Table 366 注 2），单独登记。
+    // 表单条目只对 `/Subtype /Form` 判断，避免把同名键的其它字典误判。
+    if subtype == Some("TrapNet") {
+        features.insert(PdfFeature::TrapNetworks);
+        if d.0.contains_key("LastModified") {
+            features.insert(PdfFeature::TrapNetworkModificationDate);
+        }
+    }
+    if subtype == Some("Form")
+        && [
+            "PCM",
+            "SeparationColorNames",
+            "TrapRegions",
+            "TrapStyles",
+            "FontFauxing",
+        ]
+        .iter()
+        .any(|key| d.0.contains_key(*key))
+    {
+        features.insert(PdfFeature::TrapNetworks);
     }
     // 多媒体（PDF 1.5）：rendition 对象的 /Type /Rendition（Table 266）、
     // media clip 的 /Type /MediaClip（Table 273）与 Rendition 动作的
