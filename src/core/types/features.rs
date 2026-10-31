@@ -102,6 +102,62 @@ pub(crate) fn scan_dict_features(features: &mut FeatureProfile, d: &Dict) {
     }
 }
 
+/// Layout 标准属性（14.8.5.4 Table 342–346）用于识别 `/O /Layout` 的条目。
+const LAYOUT_KEYS: &[&str] = &[
+    "Placement",
+    "WritingMode",
+    "BackgroundColor",
+    "BorderColor",
+    "BorderStyle",
+    "BorderThickness",
+    "Color",
+    "Padding",
+    "SpaceBefore",
+    "SpaceAfter",
+    "StartIndent",
+    "EndIndent",
+    "TextIndent",
+    "TextAlign",
+    "BBox",
+    "Width",
+    "Height",
+    "BlockAlign",
+    "InlineAlign",
+    "TBorderStyle",
+    "TPadding",
+    "BaselineShift",
+    "LineHeight",
+    "TextDecorationColor",
+    "TextDecorationThickness",
+    "TextDecorationType",
+    "RubyAlign",
+    "RubyPosition",
+    "GlyphOrientationVertical",
+    "ColumnCount",
+    "ColumnGap",
+    "ColumnWidths",
+];
+
+/// Layout 中 PDF 1.5 引入的 Table 343/345 条目。
+const LAYOUT_EXTENDED_KEYS: &[&str] = &[
+    "BackgroundColor",
+    "BorderColor",
+    "BorderStyle",
+    "BorderThickness",
+    "Padding",
+    "Color",
+    "TBorderStyle",
+    "TPadding",
+    "TextDecorationColor",
+    "TextDecorationThickness",
+    "RubyAlign",
+    "RubyPosition",
+    "GlyphOrientationVertical",
+];
+
+/// Layout 中 PDF 1.6 引入的 Table 346 分栏条目。
+const LAYOUT_COLUMN_KEYS: &[&str] = &["ColumnCount", "ColumnGap", "ColumnWidths"];
+
 /// 只检查**单个字典自身**的键（不深入其值），供显式栈遍历调用。
 fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // XRef 流：/Type /XRef
@@ -304,8 +360,10 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 所有者无法与其它 `/O` 属性对象区分，故要求出现该所有者的标准条目：
     // List 需 `/ListNumbering`（Table 347）、PrintField 需 `/Role`
     // `/checked` `/Desc` 之一（Table 348，PDF 1.7）、Table 需 `/RowSpan`
-    // `/ColSpan` `/Headers` `/Scope` `/Summary` 之一（Table 349）。
-    // `/Headers` `/Scope` 为 PDF 1.5、`/Summary` 与 PrintField 为 PDF 1.7。
+    // `/ColSpan` `/Headers` `/Scope` `/Summary` 之一（Table 349）、Layout
+    // 需 Table 342–346 的任一布局条目。
+    // `/Headers` `/Scope` 为 PDF 1.5、`/Summary` 与 PrintField 为 PDF 1.7；
+    // Layout 的 1.5/1.6 条目录入对应子特性。
     match d.get("O").and_then(|v| v.as_name()) {
         Some("List") if d.0.contains_key("ListNumbering") => {
             features.insert(PdfFeature::StandardStructureAttributes);
@@ -329,6 +387,18 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
             }
             if d.0.contains_key("Summary") {
                 features.insert(PdfFeature::TableSummary);
+            }
+        }
+        Some("Layout") if LAYOUT_KEYS.iter().any(|key| d.0.contains_key(*key)) => {
+            features.insert(PdfFeature::StandardStructureAttributes);
+            if LAYOUT_EXTENDED_KEYS
+                .iter()
+                .any(|key| d.0.contains_key(*key))
+            {
+                features.insert(PdfFeature::LayoutExtendedAttributes);
+            }
+            if LAYOUT_COLUMN_KEYS.iter().any(|key| d.0.contains_key(*key)) {
+                features.insert(PdfFeature::LayoutColumnAttributes);
             }
         }
         _ => {}

@@ -1,15 +1,16 @@
-//! 标准结构属性所有者的写端校验（ISO 32000-1 14.8.5.2、14.8.5.5–14.8.5.7）。
+//! 标准结构属性所有者的写端校验（ISO 32000-1 14.8.5.2、14.8.5.4–14.8.5.7）。
 //!
 //! 属性对象仍按 14.7.5 Table 327 表达；本模块在
-//! `builder/navigation/structure.rs` 的展开阶段按 `/O` 复核 List/PrintField/
-//! Table 标准条目的值形态，并在展平完成后核对 `/Headers` 引用的元素 `/ID`
-//! 确实是解析后的 `TH`。元素 `/A` 另做适用性检查：
+//! `builder/navigation/structure.rs` 的展开阶段按 `/O` 复核 Layout/List/
+//! PrintField/Table 标准条目的值形态，并在展平完成后核对 `/Headers`
+//! 引用的元素 `/ID` 确实是解析后的 `TH`。元素 `/A` 另做适用性检查：
 //!
 //! - PrintField 属性只能挂在 `Form`（含经 `/RoleMap` 映射为 `Form`）上；
 //! - Table 的 `/RowSpan` `/ColSpan` `/Headers` 只能用于 `TH`/`TD`，`/Scope`
 //!   只能用于 `TH`，`/Summary` 只能用于 `Table`；
 //! - `/ListNumbering` 可继承（14.8.5.3），允许出现在任意元素上向子孙传播。
 //!
+//! Layout 条目的值形态与适用性由 [`super::structure_layout`] 处理。
 //! `/ClassMap` 的属性对象可能被不同类型的元素复用，因此只做值形态检查，
 //! 不做适用性检查。全部失败返回 [`WriteError::InvalidObject`]；本模块不
 //! 分配对象号，调用方保证在写出任何字节之前完成。
@@ -20,6 +21,7 @@ use crate::core::types::{Dict, FeatureProfile, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
 use super::invalid;
+use super::structure_layout;
 
 /// `/Headers` 单个数组的条目上限（与结构元素子项上限一致）。
 const MAX_TABLE_HEADERS: usize = 65536;
@@ -27,7 +29,7 @@ const MAX_TABLE_HEADERS: usize = 65536;
 /// 结构树使用标准属性的情况，供版本门禁与特性画像使用。
 #[derive(Debug, Default)]
 pub(super) struct StandardUsage {
-    /// 出现 List/PrintField/Table 任一标准所有者的属性对象（PDF 1.4）。
+    /// 出现 Layout/List/PrintField/Table 任一标准所有者的属性对象（PDF 1.4）。
     pub(super) standard_attributes: bool,
     /// 出现 PrintField 所有者（PDF 1.7）。
     pub(super) print_field_attributes: bool,
@@ -35,6 +37,10 @@ pub(super) struct StandardUsage {
     pub(super) table_header_attributes: bool,
     /// 出现 `/Summary`（PDF 1.7）。
     pub(super) table_summary: bool,
+    /// 出现 Table 343/345 中 PDF 1.5 引入的 Layout 条目。
+    pub(super) layout_extended_attributes: bool,
+    /// 出现 Table 346 中 PDF 1.6 引入的分栏 Layout 条目。
+    pub(super) layout_column_attributes: bool,
     /// 待核对的 `/Headers` 引用：上下文 + 表头 `/ID` 列表。
     headers: Vec<(String, Vec<Vec<u8>>)>,
 }
@@ -67,6 +73,20 @@ impl StandardUsage {
                 PdfFeature::TableSummary.min_version()
             )));
         }
+        if self.layout_extended_attributes
+            && !version.supports(PdfFeature::LayoutExtendedAttributes)
+        {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "extended Layout attributes require PDF {}, got {version}",
+                PdfFeature::LayoutExtendedAttributes.min_version()
+            )));
+        }
+        if self.layout_column_attributes && !version.supports(PdfFeature::LayoutColumnAttributes) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "Layout column attributes require PDF {}, got {version}",
+                PdfFeature::LayoutColumnAttributes.min_version()
+            )));
+        }
         Ok(())
     }
 
@@ -83,6 +103,12 @@ impl StandardUsage {
         }
         if self.table_summary {
             features.insert(PdfFeature::TableSummary);
+        }
+        if self.layout_extended_attributes {
+            features.insert(PdfFeature::LayoutExtendedAttributes);
+        }
+        if self.layout_column_attributes {
+            features.insert(PdfFeature::LayoutColumnAttributes);
         }
     }
 
@@ -172,6 +198,10 @@ fn validate_entries(
     usage: &mut StandardUsage,
 ) -> Result<(), WriteError> {
     match owner {
+        "Layout" => {
+            usage.standard_attributes = true;
+            structure_layout::validate_entries(dict, context, resolved, usage)?;
+        }
         "List" => {
             usage.standard_attributes = true;
             if let Some(value) = dict.get("ListNumbering") {

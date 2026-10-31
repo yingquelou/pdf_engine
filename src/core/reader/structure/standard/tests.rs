@@ -9,31 +9,31 @@ use crate::core::types::{Array, Dict, Document, Object, Trailer, Value};
 const CATALOG: i64 = 1;
 const ROOT: i64 = 2;
 
-fn arr(values: Vec<Value>) -> Value {
+pub(super) fn arr(values: Vec<Value>) -> Value {
     Value::Array(Array(values))
 }
 
-fn name(value: &str) -> Value {
+pub(super) fn name(value: &str) -> Value {
     Value::Name(value.to_owned())
 }
 
-fn insert(doc: &Document, num: i64, value: Value) {
+pub(super) fn insert(doc: &Document, num: i64, value: Value) {
     doc.set_object(Object::new(num, 0, value));
 }
 
-fn element(structure_type: &str) -> Dict {
+pub(super) fn element(structure_type: &str) -> Dict {
     Dict::new()
         .insert("Type", name("StructElem"))
         .insert("S", name(structure_type))
         .insert("P", Value::Ref(ROOT, 0))
 }
 
-fn struct_root(entries: Dict) -> Dict {
+pub(super) fn struct_root(entries: Dict) -> Dict {
     entries.insert("Type", name("StructTreeRoot"))
 }
 
 /// Catalog 1 → StructTreeRoot 2，顶层元素按给定对象号引用。
-fn document_with_root(root: Dict) -> Document {
+pub(super) fn document_with_root(root: Dict) -> Document {
     let mut doc = Document::new();
     insert(&doc, ROOT, Value::Dict(root));
     insert(
@@ -52,7 +52,7 @@ fn document_with_root(root: Dict) -> Document {
 }
 
 /// 若干顶层元素：每个 (对象号, 结构元素字典)。
-fn document_with_elements(elements: Vec<(i64, Dict)>) -> Document {
+pub(super) fn document_with_elements(elements: Vec<(i64, Dict)>) -> Document {
     let kids = arr(elements
         .iter()
         .map(|(number, _)| Value::Ref(*number, 0))
@@ -65,11 +65,11 @@ fn document_with_elements(elements: Vec<(i64, Dict)>) -> Document {
 }
 
 /// 单个顶层元素，`/A` 为给定属性对象字典。
-fn attribute_document(attribute: Dict) -> Document {
+pub(super) fn attribute_document(attribute: Dict) -> Document {
     document_with_elements(vec![(5, element("P").insert("A", Value::Dict(attribute)))])
 }
 
-fn assert_malformed(doc: &Document, needle: &str) {
+pub(super) fn assert_malformed(doc: &Document, needle: &str) {
     match doc
         .structure_tree()
         .expect("structure tree")
@@ -414,14 +414,11 @@ fn standard_attributes_merge_class_and_element_objects() {
         ListNumbering::Circle,
         "元素 /A 覆盖 ClassMap 的 /ListNumbering"
     );
-    assert_eq!(standard.other.len(), 1);
-    assert_eq!(standard.other[0].owner, "Layout");
+    let layout = standard.layout.expect("Layout owner");
+    assert_eq!(layout.space_before, Some(12.0), "Layout 对象进入类型化字段");
     assert_eq!(
-        standard.other[0]
-            .value
-            .as_dict()
-            .and_then(|dict| dict.get("SpaceBefore"))
-            .and_then(Value::as_integer),
-        Some(12)
+        layout.dict.get("O").and_then(Value::as_name),
+        Some("Layout")
     );
+    assert!(standard.other.is_empty(), "Layout 不再归入 other");
 }

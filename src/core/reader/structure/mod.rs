@@ -6,9 +6,9 @@
 //! 的页面/对象键映射，以及结构属性对象（14.7.5 Table 327–329，含
 //! `/ClassMap` 属性类与用户属性）。
 //!
-//! 标准属性所有者（14.8.5.2 Table 341）与 List/PrintField/Table 条目
-//! （14.8.5.5–14.8.5.7 Table 347–349）由子模块 [`standard`] 类型化解析；
-//! Layout（14.8.5.4 Table 342–346）与可继承属性的继承链解析留待后续。
+//! 标准属性所有者（14.8.5.2 Table 341）与 Layout/List/PrintField/Table
+//! 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`standard`] 类型化
+//! 解析；可继承属性的继承链解析（14.8.5.3）留待后续。
 //!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
@@ -27,8 +27,11 @@ mod standard;
 mod tests;
 
 pub use standard::{
-    ListAttributes, ListNumbering, PrintFieldAttributes, PrintFieldChecked, PrintFieldRole,
-    StandardAttributeOwner, StandardAttributes, TableAttributes, TableScope,
+    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, GlyphOrientationVertical,
+    InlineAlign, LayoutAttributes, LineHeight, ListAttributes, ListNumbering, NumberOrAuto,
+    NumberOrFour, NumberOrNumbers, Placement, PrintFieldAttributes, PrintFieldChecked,
+    PrintFieldRole, RubyAlign, RubyPosition, StandardAttributeOwner, StandardAttributes,
+    TableAttributes, TableScope, TextAlign, TextDecorationType, WritingMode,
 };
 
 /// 结构树最大嵌套深度（最多 64 层结构元素）。

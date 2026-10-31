@@ -268,9 +268,15 @@ pub enum PdfFeature {
     /// 结构属性对象的用户属性（`/O /UserProperties` 与 `/P`，14.7.5
     /// Table 328/329），PDF 1.6 引入。
     StructureUserProperties,
-    /// 标准结构属性所有者（14.8.5.2 Table 341）的 List/PrintField/Table
-    /// 条目（14.8.5.5–14.8.5.7 Table 347–349），PDF 1.4 引入。
+    /// 标准结构属性所有者（14.8.5.2 Table 341）的 Layout/List/PrintField/
+    /// Table 条目（14.8.5.4–14.8.5.7 Table 342–349），PDF 1.4 引入。
     StandardStructureAttributes,
+    /// Layout 标准属性中 PDF 1.5 引入的条目（14.8.5.4 Table 343/345 的
+    /// 颜色、边框、内边距、文本装饰与 Ruby/竖排字形方向）。
+    LayoutExtendedAttributes,
+    /// Layout 标准属性的分栏条目（14.8.5.4 Table 346 的 `/ColumnCount`
+    /// `/ColumnGap` `/ColumnWidths`），PDF 1.6 引入。
+    LayoutColumnAttributes,
     /// Table 标准属性的表头引用与作用范围（`/Headers` `/Scope`，14.8.5.7
     /// Table 349），PDF 1.5 引入。
     TableHeaderAttributes,
@@ -344,6 +350,7 @@ impl PdfFeature {
             | PdfFeature::TransitionAction
             | PdfFeature::Renditions
             | PdfFeature::TableHeaderAttributes
+            | PdfFeature::LayoutExtendedAttributes
             | PdfFeature::StructureExpandedText => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
@@ -356,6 +363,7 @@ impl PdfFeature {
             | PdfFeature::ThreeDAnnotations
             | PdfFeature::MarkInfoUserProperties
             | PdfFeature::MarkInfoSuspects
+            | PdfFeature::LayoutColumnAttributes
             | PdfFeature::StructureUserProperties => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
@@ -451,6 +459,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::StructureExpandedText => "structure expanded text",
             PdfFeature::StructureUserProperties => "structure user properties",
             PdfFeature::StandardStructureAttributes => "standard structure attributes",
+            PdfFeature::LayoutExtendedAttributes => "extended Layout attributes",
+            PdfFeature::LayoutColumnAttributes => "Layout column attributes",
             PdfFeature::TableHeaderAttributes => "table header attributes",
             PdfFeature::TableSummary => "table summary",
             PdfFeature::PrintFieldAttributes => "PrintField attributes",

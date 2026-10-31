@@ -1,23 +1,32 @@
-//! 标准结构属性所有者的类型化读端（ISO 32000-1 14.8.5.2、14.8.5.5–14.8.5.7）。
+//! 标准结构属性所有者的类型化读端（ISO 32000-1 14.8.5.2、14.8.5.4–14.8.5.7）。
 //!
 //! 属性对象仍由 14.7.5 Table 327 表达（`/O` 必填名字），本模块把同一结构
 //! 元素实际生效的属性对象（已合并 `/ClassMap` 与 `/A`，见
 //! [`StructureTree::resolved_attributes`]）按所有者分类，并解析：
 //!
+//! - Layout（14.8.5.4 Table 342–346）：见子模块 [`layout`]；
 //! - List（Table 347）：`/ListNumbering`；
 //! - PrintField（Table 348）：`/Role`、`/checked`、`/Desc`；
 //! - Table（Table 349）：`/RowSpan`、`/ColSpan`、`/Headers`、`/Scope`、
 //!   `/Summary`。
 //!
-//! Layout（14.8.5.4 Table 342–346）与格式专用所有者的条目不在此建模，
-//! 连同其它未类型化所有者保留在 [`StandardAttributes::other`]。可继承性
-//! 与继承链解析（14.8.5.3）不在本切片内：本模块只报告元素自身（含其
-//! 类）合并后的属性，调用方需要时沿父链自行组合。
+//! 格式专用所有者（`XML-1.00`、`HTML-3.20` 等）的条目不在本模块建模，
+//! 保留在 [`StandardAttributes::other`]。可继承性与继承链解析（14.8.5.3）
+//! 不在本切片内：本模块只报告元素自身（含其类）合并后的属性，调用方
+//! 需要时沿父链自行组合。
 
 use crate::core::reader::content::text_value;
 use crate::core::types::{Dict, Value};
 
 use super::{StructureAttribute, StructureError, StructureTree, malformed};
+
+mod layout;
+
+pub use layout::{
+    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, GlyphOrientationVertical,
+    InlineAlign, LayoutAttributes, LineHeight, NumberOrAuto, NumberOrFour, NumberOrNumbers,
+    Placement, RubyAlign, RubyPosition, TextAlign, TextDecorationType, WritingMode,
+};
 
 /// `/Headers` 数组的条目上限（与结构元素子项上限一致）。
 const MAX_TABLE_HEADERS: usize = 65536;
@@ -25,7 +34,7 @@ const MAX_TABLE_HEADERS: usize = 65536;
 /// 标准属性所有者（14.8.5.2 Table 341）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StandardAttributeOwner {
-    /// `/Layout`：布局属性（Table 342–346，本切片不解析条目）。
+    /// `/Layout`：布局属性（Table 342–346）。
     Layout,
     /// `/List`：列表属性（Table 347）。
     List,
@@ -222,18 +231,20 @@ pub struct TableAttributes {
 /// 一个结构元素生效的全部标准属性。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StandardAttributes {
+    /// Layout 属性（`/O /Layout`）；缺省 `None`。
+    pub layout: Option<LayoutAttributes>,
     /// List 属性（`/O /List`）；缺省 `None`。
     pub list: Option<ListAttributes>,
     /// PrintField 属性（`/O /PrintField`）；缺省 `None`。
     pub print_field: Option<PrintFieldAttributes>,
     /// Table 属性（`/O /Table`）；缺省 `None`。
     pub table: Option<TableAttributes>,
-    /// 未类型化的属性对象（Layout、格式专用所有者等），按合并顺序克隆。
+    /// 未类型化的属性对象（格式专用所有者等），按合并顺序克隆。
     pub other: Vec<StructureAttribute>,
 }
 
 impl StructureTree {
-    /// 结构元素实际生效的标准属性（14.8.5.2、14.8.5.5–14.8.5.7）。
+    /// 结构元素实际生效的标准属性（14.8.5.2、14.8.5.4–14.8.5.7）。
     ///
     /// 基于 [`StructureTree::resolved_attributes`] 的结果（`/ClassMap` 与
     /// `/A` 已按所有者合并），每个标准所有者至多解析出一个字典。越界
@@ -242,6 +253,10 @@ impl StructureTree {
         let mut standard = StandardAttributes::default();
         for attribute in self.resolved_attributes(index) {
             match StandardAttributeOwner::from_name(&attribute.owner) {
+                StandardAttributeOwner::Layout => {
+                    let dict = attribute_dict(&attribute, index, "Layout")?;
+                    standard.layout = Some(layout::parse(dict, index)?);
+                }
                 StandardAttributeOwner::List => {
                     let dict = attribute_dict(&attribute, index, "List")?;
                     standard.list = Some(parse_list(dict, index)?);
@@ -446,5 +461,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod tests;

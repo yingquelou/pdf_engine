@@ -1,11 +1,11 @@
-//! 逻辑结构写端模型（ISO 32000-1 14.7.1–14.7.5、14.8.5.2、14.8.5.5–14.8.5.7）。
+//! 逻辑结构写端模型（ISO 32000-1 14.7.1–14.7.5、14.8.5.2、14.8.5.4–14.8.5.7）。
 //!
 //! 建模写端可写出的条目：目录 `/MarkInfo`（Table 321）、结构树根
 //! `/StructTreeRoot`（Table 322）、结构元素（Table 323）、标记内容引用
 //! MCR（Table 324）与结构属性对象 `/A`（14.7.5 Table 327–329，含用户
-//! 属性）。标准属性所有者（14.8.5.2 Table 341）与 List/PrintField/Table
-//! 条目（14.8.5.5–14.8.5.7 Table 347–349）由子模块 [`standard`] 提供
-//! 类型化构造器；Layout（14.8.5.4 Table 342–346）条目不在本模型内。
+//! 属性）。标准属性所有者（14.8.5.2 Table 341）与 Layout/List/PrintField/
+//! Table 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`layout`] 与
+//! [`standard`] 提供类型化构造器。
 //! 对象引用 OBJR（Table 325）与 `/Stm` `/StmOwn` 同样不在本模型内。
 //!
 //! 结构元素以拥有所有权的树形 `Vec` 表达（`StructureKid::Element` 装箱
@@ -18,7 +18,13 @@ use crate::core::types::{Array, Dict, Value};
 
 use super::text_string_value;
 
+mod layout;
 mod standard;
+pub use layout::{
+    BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, GlyphOrientationVertical,
+    InlineAlign, LayoutAttributes, LineHeight, NumberOrAuto, NumberOrFour, NumberOrNumbers,
+    Placement, RubyAlign, RubyPosition, TextAlign, TextDecorationType, WritingMode,
+};
 pub use standard::{
     ListAttributes, ListNumbering, PrintFieldAttributes, PrintFieldChecked, PrintFieldRole,
     TableAttributes, TableScope,
