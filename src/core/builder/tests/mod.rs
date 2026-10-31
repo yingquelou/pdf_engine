@@ -43,6 +43,7 @@
 //! - `structure_layout`：Layout 标准属性（14.8.5.4 Table 342–346）的往返、缺省省略、形态/适用性校验与 1.4/1.5/1.6 门禁；
 //! - `accessibility`：文档默认语言（目录 `/Lang`）与结构元素 `/Lang` 的写出、RFC 3066 校验与 PDF 1.4 门禁；
 //! - `span`：Span 属性表（`/Alt` `/ActualText` `/E` `/Lang`，14.9.3–14.9.5）的编码、BDC/EMC 写出与 PDF 1.4/1.5 门禁；
+//! - `artifact`：Artifact 属性表（`/Type` `/BBox` `/Attached` `/Subtype`，14.8.2.2.2 Table 330）的编码、校验与 PDF 1.4/1.7 门禁；
 //! - `three_d`：3D artwork 流（13.6 Table 300）与 3D 注解（Table 298）的流对象分配、视图选择、激活条目与 PDF 1.6 门禁；
 //! - `three_d_view_extensions`：3D 视图 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1 Table 304）的版本门禁与 `/NA` → `/NR` 依赖；
 //! - `three_d_payloads`：3D 视图负载字典（渲染模式/光照方案/截面/节点，Table 307–312）的类型化序列化、缺省省略与嵌套校验；
@@ -91,6 +92,7 @@ mod annotation_subtype_table;
 mod annotation_trap_net;
 mod annotation_watermark;
 mod articles;
+mod artifact;
 mod choice_indices;
 mod cid;
 mod cid_cmap_multibyte;

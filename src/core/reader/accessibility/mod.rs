@@ -16,12 +16,16 @@ use std::collections::BTreeSet;
 
 use crate::core::types::Document;
 
+mod artifact;
 mod language;
 mod multi_language;
 mod span;
 #[cfg(test)]
 mod tests;
 
+pub use artifact::{
+    ArtifactAttachment, ArtifactError, ArtifactProperties, ArtifactSubtype, ArtifactType,
+};
 pub use language::{LanguageError, LanguageIdentifier};
 pub use multi_language::{AlternateText, MultiLanguageTextArray};
 pub use span::{MarkedContentLanguageError, SpanProperties};

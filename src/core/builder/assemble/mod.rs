@@ -116,6 +116,65 @@ impl PdfBuilder {
             )));
         }
 
+        // Artifact 属性表（14.8.2.2.2 Table 330）：`/Type` `/BBox`
+        // `/Attached` 自 PDF 1.4、`/Type /Background` 与 `/Subtype` 自
+        // PDF 1.7 引入。条目同样只出现在内容流 BDC 的内联属性表中，写端
+        // 在此自行扫描；原始字典先按 Table 330 校验，校验失败返回
+        // [`WriteError::InvalidObject`]，门禁同样在任何对象号分配与写出
+        // 之前完成，保持零字节失败契约。
+        let mut artifact_property_lists = false;
+        let mut artifact_background = false;
+        let mut artifact_subtype = false;
+        let mut artifact_pdf17 = false;
+        for page in &self.pages {
+            for op in page.content.ops() {
+                let Op::BeginMarkedContentProperties {
+                    tag,
+                    properties: MarkedContentProperties::Dict(dict),
+                } = op
+                else {
+                    continue;
+                };
+                if tag.as_str() != "Artifact" {
+                    continue;
+                }
+                let flags = crate::core::builder::types::artifact::validate_artifact_dict(dict)
+                    .map_err(|message| {
+                        WriteError::InvalidObject(format!("Artifact property list: {message}"))
+                    })?;
+                artifact_property_lists = true;
+                artifact_background = artifact_background || flags.background;
+                artifact_subtype = artifact_subtype || flags.subtype;
+                artifact_pdf17 = artifact_pdf17 || flags.pdf17;
+            }
+        }
+        if artifact_property_lists && !self.version.supports(PdfFeature::ArtifactPropertyLists) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{} require PDF {}, got {}",
+                PdfFeature::ArtifactPropertyLists,
+                PdfFeature::ArtifactPropertyLists.min_version().as_str(),
+                self.version.as_str()
+            )));
+        }
+        if artifact_pdf17 {
+            if artifact_background && !self.version.supports(PdfFeature::ArtifactBackground) {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "{} require PDF {}, got {}",
+                    PdfFeature::ArtifactBackground,
+                    PdfFeature::ArtifactBackground.min_version().as_str(),
+                    self.version.as_str()
+                )));
+            }
+            if artifact_subtype && !self.version.supports(PdfFeature::ArtifactSubtype) {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "{} require PDF {}, got {}",
+                    PdfFeature::ArtifactSubtype,
+                    PdfFeature::ArtifactSubtype.min_version().as_str(),
+                    self.version.as_str()
+                )));
+            }
+        }
+
         // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
         // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
         // 保持零字节契约。AcroForm 自 PDF 1.2 起引入。
@@ -984,6 +1043,23 @@ impl PdfBuilder {
             doc.features
                 .borrow_mut()
                 .insert(PdfFeature::SpanAlternateText);
+        }
+        // Artifact 属性表条目（14.8.2.2.2 Table 330）：内容流扫描结果写入
+        // 特征画像，供版本推导；门禁已在上方完成。
+        if artifact_property_lists {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::ArtifactPropertyLists);
+        }
+        if artifact_background {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::ArtifactBackground);
+        }
+        if artifact_subtype {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::ArtifactSubtype);
         }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &acro_form {

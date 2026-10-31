@@ -3,6 +3,7 @@
 //! 按领域拆分为子模块，并由本模块统一 `pub use`：
 //! - `action`：动作字典（12.6 的 Hide/Set-OCG-State/Transition 与 12.7.5 表单动作）；
 //! - `annotation`：注解字典（12.5 通用条目与常用子类型）；
+//! - `artifact`：Artifact 标记内容属性表（14.8.2.2.2 Table 330）；
 //! - `descriptor`：字体描述符度量；
 //! - `embedded_file`：嵌入文件与文件规格（7.11）；
 //! - `encoding`：简单字体编码配置；
@@ -32,6 +33,7 @@
 
 mod action;
 mod annotation;
+pub(crate) mod artifact;
 mod cid;
 mod descriptor;
 mod embedded_file;
@@ -78,6 +80,7 @@ pub use annotation::{
     LinkHighlightMode, Markup3D, Measure, NumberFormat, NumberFraction, NumberLabelOrder,
     PdfAnnotation, PolygonIntent,
 };
+pub use artifact::{ArtifactAttachment, ArtifactProperties, ArtifactSubtype, ArtifactType};
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};
 pub use descriptor::FontDescriptor;
 pub use embedded_file::{

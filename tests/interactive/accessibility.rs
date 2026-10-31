@@ -116,3 +116,66 @@ fn builder_span_property_lists_roundtrip_through_parser() {
         "ActualText 应替换 Span 内的可见文本；不同 BT/ET 文本块之间由提取器插入换行"
     );
 }
+
+#[test]
+fn builder_artifact_property_lists_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{
+        ArtifactAttachment, ArtifactProperties, ArtifactSubtype, ArtifactType, Font, PageSize,
+        PdfBuilder,
+    };
+    use pdf_engine::core::reader::accessibility::{
+        ArtifactAttachment as ReaderAttachment, ArtifactSubtype as ReaderSubtype,
+        ArtifactType as ReaderType,
+    };
+    use pdf_engine::core::types::{PdfFeature, PdfVersion};
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "Body ");
+    let properties = ArtifactProperties::new(ArtifactType::Pagination)
+        .with_bounding_box([0.0, 0.0, 612.0, 792.0])
+        .with_attachment(ArtifactAttachment::Top)
+        .with_attachment(ArtifactAttachment::Bottom)
+        .with_subtype(ArtifactSubtype::Header);
+    builder.begin_artifact(page, &properties);
+    builder.text(page, &Font::helvetica(9.0), 72.0, 680.0, "Running head");
+    builder.end_artifact(page);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 660.0, " later");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+
+    let sections = doc.page_marked_content(0).expect("marked content");
+    let artifact = sections
+        .iter()
+        .find(|section| section.tag == "Artifact")
+        .expect("Artifact section");
+    let parsed = artifact
+        .artifact_properties()
+        .expect("typed artifact properties")
+        .expect("Artifact property list");
+    assert_eq!(parsed.artifact_type, Some(ReaderType::Pagination));
+    assert_eq!(parsed.bounding_box, Some([0.0, 0.0, 612.0, 792.0]));
+    assert_eq!(
+        parsed.attached,
+        vec![ReaderAttachment::Top, ReaderAttachment::Bottom]
+    );
+    assert_eq!(parsed.subtype, Some(ReaderSubtype::Header));
+
+    assert_eq!(
+        doc.extract_page_text(0).as_deref(),
+        Some("Body \n later"),
+        "Artifact 内的文本不参与提取；不同 BT/ET 文本块之间由提取器插入换行"
+    );
+
+    let features = doc.features.borrow();
+    assert!(
+        features.contains(PdfFeature::ArtifactPropertyLists),
+        "特征画像应登记 Artifact 属性表"
+    );
+    assert!(
+        features.contains(PdfFeature::ArtifactSubtype),
+        "特征画像应登记 Artifact /Subtype"
+    );
+}

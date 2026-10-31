@@ -11,7 +11,7 @@ use std::fmt;
 use super::Op;
 use crate::core::reader::optional_content::membership_visibility;
 use crate::core::reader::page_content::PageContentError;
-use crate::core::types::{Dict, Document, PdfTextString, Value};
+use crate::core::types::{Dict, Document, PdfFeature, PdfTextString, Value};
 
 /// Maximum marked-content nesting depth (`BMC`/`BDC` without `EMC`).
 pub const MAX_MARKED_DEPTH: usize = 64;
@@ -424,6 +424,34 @@ impl Document {
                 .as_ref()
                 .and_then(|props| props.is_visible(object))
         };
-        collect_marked_sections(&ops, &resolve_property_name, &resolve_ocg_name, &is_visible)
+        let sections =
+            collect_marked_sections(&ops, &resolve_property_name, &resolve_ocg_name, &is_visible)?;
+        self.record_marked_content_features(&sections);
+        Ok(sections)
+    }
+
+    /// 把内容流里出现的 Artifact 属性表登记进特性画像（14.8.2.2.2）。
+    ///
+    /// 特性画像的常规扫描只看对象字典，内容流中的 `BDC` 属性表不参与；
+    /// 标记内容被读取时顺带补登记，保证 `ArtifactPropertyLists` 与
+    /// PDF 1.7 的 `ArtifactBackground` / `ArtifactSubtype` 在解析后的
+    /// 文档特性画像中可见。
+    fn record_marked_content_features(&self, sections: &[MarkedSection]) {
+        let mut features = self.features.borrow_mut();
+        for section in sections {
+            if section.tag != "Artifact" {
+                continue;
+            }
+            let Some(properties) = section.properties.as_ref() else {
+                continue;
+            };
+            features.insert(PdfFeature::ArtifactPropertyLists);
+            if properties.get("Type").and_then(Value::as_name) == Some("Background") {
+                features.insert(PdfFeature::ArtifactBackground);
+            }
+            if properties.get("Subtype").is_some() {
+                features.insert(PdfFeature::ArtifactSubtype);
+            }
+        }
     }
 }

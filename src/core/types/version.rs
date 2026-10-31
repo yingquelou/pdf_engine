@@ -273,6 +273,13 @@ pub enum PdfFeature {
     /// Span 属性表的替代描述与替换文本条目（`/Alt` `/ActualText`，
     /// 14.9.3、14.9.4），PDF 1.5 引入。
     SpanAlternateText,
+    /// Artifact 标记内容属性表（14.8.2.2.2 Table 330），PDF 1.4 引入。
+    ArtifactPropertyLists,
+    /// 背景 Artifact（`/Type /Background`，14.8.2.2.2 Table 330），
+    /// PDF 1.7 引入。
+    ArtifactBackground,
+    /// Artifact 的 `/Subtype` 条目（14.8.2.2.2 Table 330），PDF 1.7 引入。
+    ArtifactSubtype,
     /// 结构属性对象的用户属性（`/O /UserProperties` 与 `/P`，14.7.5
     /// Table 328/329），PDF 1.6 引入。
     StructureUserProperties,
@@ -352,6 +359,7 @@ impl PdfFeature {
             | PdfFeature::StructureLanguageText
             | PdfFeature::StandardStructureAttributes
             | PdfFeature::SpanPropertyLists
+            | PdfFeature::ArtifactPropertyLists
             | PdfFeature::MarkInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -391,6 +399,8 @@ impl PdfFeature {
             | PdfFeature::ThreeDViewExtensions
             | PdfFeature::TableSummary
             | PdfFeature::PrintFieldAttributes
+            | PdfFeature::ArtifactBackground
+            | PdfFeature::ArtifactSubtype
             | PdfFeature::ThreeDMarkup => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
@@ -475,6 +485,9 @@ impl fmt::Display for PdfFeature {
             PdfFeature::StructureExpandedText => "structure expanded text",
             PdfFeature::SpanPropertyLists => "span property lists",
             PdfFeature::SpanAlternateText => "span alternate and replacement text",
+            PdfFeature::ArtifactPropertyLists => "artifact property lists",
+            PdfFeature::ArtifactBackground => "background artifacts",
+            PdfFeature::ArtifactSubtype => "artifact subtype",
             PdfFeature::StructureTypeExtensions => "structure type extensions",
             PdfFeature::StructureUserProperties => "structure user properties",
             PdfFeature::StandardStructureAttributes => "standard structure attributes",

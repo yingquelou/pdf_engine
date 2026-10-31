@@ -46,8 +46,9 @@ pub(crate) use types::mesh_component_ranges;
 pub use types::{
     AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,
-    AxialShading, BlockAlign, BorderArray, BorderColor, BorderEffect, BorderEffectStyle,
-    BorderStyle, BorderStyles, BorderThickness, CalGray, CalRGB, CalculatorFunction, CalloutLine,
+    ArtifactAttachment, ArtifactProperties, ArtifactSubtype, ArtifactType, AxialShading,
+    BlockAlign, BorderArray, BorderColor, BorderEffect, BorderEffectStyle, BorderStyle,
+    BorderStyles, BorderThickness, CalGray, CalRGB, CalculatorFunction, CalloutLine,
     CaptionPosition, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics,
     CidWidth, CollectionItem, CollectionItemValue, CollectionSubitem, CollectionSubitemValue,
     ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceColorant, DeviceN, EmbeddedFile,
@@ -856,6 +857,31 @@ impl PdfBuilder {
 
     /// 结束当前 Span 标记内容段（`EMC`）。未知页索引被忽略。
     pub fn end_span(&mut self, page: usize) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.end_marked_content();
+        }
+        self
+    }
+
+    /// 在指定页开始一段 Artifact 标记内容：`/Artifact << ... >> BDC`
+    /// （ISO 32000-1 14.8.2.2.2 与 Table 330）。
+    ///
+    /// 属性表由 `ArtifactProperties::to_dict` 内联写出。Artifact 属性表
+    /// 自 PDF 1.4 引入，`/Type /Background` 与 `/Subtype` 自 PDF 1.7 引入；
+    /// 目标版本不足时构建返回 [`WriteError::UnsupportedVersion`]，且不写出
+    /// 任何字节。必须以 [`PdfBuilder::end_artifact`] 结束；未知页索引被忽略。
+    pub fn begin_artifact(&mut self, page: usize, properties: &ArtifactProperties) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.begin_marked_content_properties(
+                "Artifact",
+                MarkedContentProperties::Dict(properties.to_dict()),
+            );
+        }
+        self
+    }
+
+    /// 结束当前 Artifact 标记内容段（`EMC`）。未知页索引被忽略。
+    pub fn end_artifact(&mut self, page: usize) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.content.end_marked_content();
         }
