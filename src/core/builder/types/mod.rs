@@ -53,6 +53,7 @@ mod rendition;
 mod separation;
 mod shading;
 mod sound;
+mod structure;
 mod three_d;
 mod transition;
 mod type3;
@@ -127,6 +128,7 @@ pub use shading::{
     ShadingPattern, TensorProductPatch, TensorProductPatchShading,
 };
 pub use sound::{Sound, SoundEncoding};
+pub use structure::{StructureElement, StructureKid, StructureMarkInfo, StructureTree};
 pub use three_d::{
     ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,
     ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,

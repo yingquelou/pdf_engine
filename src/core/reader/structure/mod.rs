@@ -21,13 +21,13 @@ mod parse;
 mod tests;
 
 /// 结构树最大嵌套深度（最多 64 层结构元素）。
-const MAX_STRUCTURE_DEPTH: usize = 64;
+pub(crate) const MAX_STRUCTURE_DEPTH: usize = 64;
 /// 结构元素总数上限。
-const MAX_STRUCTURE_ELEMENTS: usize = 4096;
+pub(crate) const MAX_STRUCTURE_ELEMENTS: usize = 4096;
 /// 单个结构元素的 `/K` 子项总数上限。
-const MAX_STRUCTURE_CHILDREN: usize = 65536;
+pub(crate) const MAX_STRUCTURE_CHILDREN: usize = 65536;
 /// 结构树各映射（ID 树、父树、RoleMap、ClassMap）条目上限。
-const MAX_STRUCTURE_MAP_ENTRIES: usize = 4096;
+pub(crate) const MAX_STRUCTURE_MAP_ENTRIES: usize = 4096;
 
 /// 逻辑结构读取的失败原因。
 #[derive(Debug, Clone, PartialEq)]

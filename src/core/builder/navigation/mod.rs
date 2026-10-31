@@ -24,11 +24,14 @@ use super::PdfBuilder;
 use super::types::Action;
 use super::types::ActionRefs;
 use super::types::PageSize;
+use super::types::StructureMarkInfo;
+use super::types::StructureTree;
 use super::types::text_string_value;
 
 mod alternate_presentation;
 mod articles;
 mod collection;
+mod structure;
 mod templates;
 mod validate;
 
@@ -76,6 +79,10 @@ pub(crate) struct NavigationState {
     actions: Vec<Action>,
     article_threads: Vec<ArticleThread>,
     collection: Option<Collection>,
+    /// 逻辑结构树（14.7.2）；None 时目录不写 `/StructTreeRoot`。
+    structure_tree: Option<StructureTree>,
+    /// 目录 `/MarkInfo`（14.7.1 Table 321）；None 时不写出。
+    mark_info: Option<StructureMarkInfo>,
 }
 
 impl NavigationState {
@@ -219,6 +226,28 @@ impl PdfBuilder {
         self
     }
 
+    /// 设置逻辑结构树（14.7.2），写入目录 `/StructTreeRoot`。
+    ///
+    /// 结构树根、全部结构元素与 `/IDTree` 从现有最大对象号之后分配，
+    /// 含 MCR 的页面追加 `/StructParents`。结构类型须为合法非空名字、
+    /// 深度/元素数/子项数/映射条目不得超过读端上限、页索引须在范围内、
+    /// MCID 须非负且同页唯一、`/ID` 须非空且 ASCII 唯一，否则构建返回
+    /// [`WriteError::InvalidObject`]。结构树要求 PDF 1.3、`/Lang` 与
+    /// `/ActualText` 要求 1.4、`/E` 要求 1.5，否则返回
+    /// [`WriteError::UnsupportedVersion`]。两类失败均零字节输出。
+    pub fn set_structure_tree(&mut self, tree: StructureTree) -> &mut Self {
+        self.navigation.structure_tree = Some(tree);
+        self
+    }
+
+    /// 设置目录 `/MarkInfo`（14.7.1 Table 321），要求 PDF 1.4；
+    /// `/UserProperties` 与 `/Suspects` 要求 PDF 1.6，否则构建返回
+    /// [`WriteError::UnsupportedVersion`]。
+    pub fn set_mark_info(&mut self, info: StructureMarkInfo) -> &mut Self {
+        self.navigation.mark_info = Some(info);
+        self
+    }
+
     /// 注册一个动作字典（12.6），返回句柄供大纲条目或注解引用。
     ///
     /// 动作字典作为间接对象写出；大纲条目的 `/A` 条目要求 PDF 1.2+。
@@ -275,6 +304,16 @@ pub(super) fn apply(
             navigation.collection.is_some(),
             PdfVersion::V1_7,
             "collections",
+        ),
+        (
+            navigation.structure_tree.is_some(),
+            PdfVersion::V1_3,
+            "structure trees",
+        ),
+        (
+            navigation.mark_info.is_some(),
+            PdfVersion::V1_4,
+            "mark info",
         ),
     ];
     for (present, minimum, feature) in required {
@@ -410,6 +449,20 @@ pub(super) fn apply(
             Value::Dict(collection::collection_dict(collection)),
         );
         doc.features.borrow_mut().insert(PdfFeature::Collection);
+    }
+
+    let structure = structure::write(
+        doc,
+        version,
+        &page_refs,
+        navigation.structure_tree.as_ref(),
+        navigation.mark_info.as_ref(),
+    )?;
+    if let Some(root) = structure.struct_tree_root {
+        catalog = catalog.insert("StructTreeRoot", root);
+    }
+    if let Some(info) = structure.mark_info {
+        catalog = catalog.insert("MarkInfo", info);
     }
 
     doc.set_object(Object::new(

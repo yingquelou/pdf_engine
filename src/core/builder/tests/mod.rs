@@ -37,6 +37,7 @@
 //! - `collection`：便携集合（12.3.5 Table 155–158）的模式、`/D` `/View` `/Sort` 与 PDF 1.7 门禁；
 //! - `templates`：命名模板页（12.7.6 Table 31）的 `/Names /Templates` 名称树、`/Type /Template` 对象与 PDF 1.3 门禁；
 //! - `alternate_presentation`：备用演示（13.5 Table 297）的幻灯片对象、`/Names /AlternatePresentations` 名称树、嵌入文件引用与 PDF 1.4 门禁；
+//! - `structure`：逻辑结构树（14.7 Table 321–326）的目录条目、父树/`/IDTree`、版本门禁与输入校验；
 //! - `three_d`：3D artwork 流（13.6 Table 300）与 3D 注解（Table 298）的流对象分配、视图选择、激活条目与 PDF 1.6 门禁；
 //! - `three_d_view_extensions`：3D 视图 PDF 1.7 条目（`/RM` `/LS` `/SA` `/NA` `/NR`，13.6.4.1 Table 304）的版本门禁与 `/NA` → `/NR` 依赖；
 //! - `three_d_payloads`：3D 视图负载字典（渲染模式/光照方案/截面/节点，Table 307–312）的类型化序列化、缺省省略与嵌套校验；
@@ -120,6 +121,7 @@ mod rendition;
 mod separation;
 mod shading;
 mod sound;
+mod structure;
 mod support;
 mod templates;
 mod three_d;

@@ -257,6 +257,22 @@ pub enum PdfFeature {
     /// OPI 代理字典（图像与表单 XObject 的 `/OPI`，14.11.7 Table 368–370），
     /// PDF 1.2 引入。
     OpiDictionaries,
+    /// 逻辑结构树（目录 `/StructTreeRoot` 与结构元素，14.7 Table 322/323），
+    /// PDF 1.3 引入。
+    LogicalStructure,
+    /// 结构元素的语言与替换文本条目（`/Lang` `/ActualText`，14.7.2
+    /// Table 323），PDF 1.4 引入。
+    StructureLanguageText,
+    /// 结构元素的缩写展开条目（`/E`，14.7.2 Table 323），PDF 1.5 引入。
+    StructureExpandedText,
+    /// 目录标记信息字典（`/MarkInfo`，14.7.1 Table 321），PDF 1.4 引入。
+    MarkInfo,
+    /// 标记信息的用户属性条目（`/MarkInfo /UserProperties`，Table 321），
+    /// PDF 1.6 引入。
+    MarkInfoUserProperties,
+    /// 标记信息的可疑内容条目（`/MarkInfo /Suspects`，Table 321），
+    /// PDF 1.6 引入。
+    MarkInfoSuspects,
 }
 
 impl PdfFeature {
@@ -288,7 +304,8 @@ impl PdfFeature {
             | PdfFeature::PageTemplates
             | PdfFeature::PageBoundaries
             | PdfFeature::SeparationInfo
-            | PdfFeature::TrapNetworks => PdfVersion::V1_3,
+            | PdfFeature::TrapNetworks
+            | PdfFeature::LogicalStructure => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
@@ -298,7 +315,9 @@ impl PdfFeature {
             | PdfFeature::OutputIntents
             | PdfFeature::PrinterMarks
             | PdfFeature::TrapNetworkModificationDate
-            | PdfFeature::PageBoxColorInfo => PdfVersion::V1_4,
+            | PdfFeature::PageBoxColorInfo
+            | PdfFeature::StructureLanguageText
+            | PdfFeature::MarkInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -307,7 +326,8 @@ impl PdfFeature {
             | PdfFeature::AnnotationRectDifferences
             | PdfFeature::SetOcgState
             | PdfFeature::TransitionAction
-            | PdfFeature::Renditions => PdfVersion::V1_5,
+            | PdfFeature::Renditions
+            | PdfFeature::StructureExpandedText => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
@@ -316,7 +336,9 @@ impl PdfFeature {
             | PdfFeature::PageViewports
             | PdfFeature::EmbeddedGoToAction
             | PdfFeature::GoTo3DViewAction
-            | PdfFeature::ThreeDAnnotations => PdfVersion::V1_6,
+            | PdfFeature::ThreeDAnnotations
+            | PdfFeature::MarkInfoUserProperties
+            | PdfFeature::MarkInfoSuspects => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -404,6 +426,12 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PageBoxColorInfo => "page box color info",
             PdfFeature::SeparationInfo => "separation dictionaries",
             PdfFeature::OpiDictionaries => "OPI dictionaries",
+            PdfFeature::LogicalStructure => "logical structure trees",
+            PdfFeature::StructureLanguageText => "structure language and actual text",
+            PdfFeature::StructureExpandedText => "structure expanded text",
+            PdfFeature::MarkInfo => "mark info",
+            PdfFeature::MarkInfoUserProperties => "mark info user properties",
+            PdfFeature::MarkInfoSuspects => "mark info suspects",
         };
         write!(f, "{name}")
     }

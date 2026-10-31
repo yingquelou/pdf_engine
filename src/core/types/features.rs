@@ -69,6 +69,11 @@ impl FeatureProfile {
 /// - `/Templates` 键存在（名称字典）→ PageTemplates
 /// - `/AlternatePresentations` 键存在（名称字典）→ AlternatePresentations
 /// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
+/// - 目录 `/StructTreeRoot` 或 `/Type /StructTreeRoot`、结构元素字典 →
+///   LogicalStructure（1.3）；结构元素的 `/Lang` `/ActualText` →
+///   StructureLanguageText（1.4）、`/E` → StructureExpandedText（1.5）
+/// - 目录 `/MarkInfo` → MarkInfo（1.4）；其 `/UserProperties` `/Suspects`
+///   → MarkInfoUserProperties / MarkInfoSuspects（1.6）
 /// - 页面字典的 `/BleedBox` `/TrimBox` `/ArtBox` → PageBoundaries（1.3）、
 ///   `/BoxColorInfo` → PageBoxColorInfo（1.4）、`/SeparationInfo` →
 ///   SeparationInfo（1.3，14.11.4 Table 364）
@@ -245,6 +250,41 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 名称字典即命中。
     if d.0.contains_key("AlternatePresentations") {
         features.insert(PdfFeature::AlternatePresentations);
+    }
+    // 逻辑结构（PDF 1.3）：目录 /StructTreeRoot（14.7.2 Table 322）、
+    // 结构树根字典本身与结构元素（Table 323）。结构元素以 /Type
+    // /StructElem 标识；部分生产者省略 /Type，故同时接受 /S 名字 +
+    // /P 引用 + /K 的组合。
+    if d.0.contains_key("StructTreeRoot")
+        || d.get("Type").and_then(|v| v.as_name()) == Some("StructTreeRoot")
+    {
+        features.insert(PdfFeature::LogicalStructure);
+    }
+    let struct_elem = d.get("Type").and_then(|v| v.as_name()) == Some("StructElem")
+        || (d.get("S").and_then(|v| v.as_name()).is_some()
+            && d.get("P").is_some_and(|v| v.as_ref().is_some())
+            && d.0.contains_key("K"));
+    if struct_elem {
+        features.insert(PdfFeature::LogicalStructure);
+        // 语言与替换文本（PDF 1.4）：Table 323 的 /Lang /ActualText。
+        if d.0.contains_key("Lang") || d.0.contains_key("ActualText") {
+            features.insert(PdfFeature::StructureLanguageText);
+        }
+        // 缩写展开（PDF 1.5）：Table 323 的 /E。
+        if d.0.contains_key("E") {
+            features.insert(PdfFeature::StructureExpandedText);
+        }
+    }
+    // 标记信息（PDF 1.4）：目录 /MarkInfo（14.7.1 Table 321）。两个
+    // 子条目自 PDF 1.6 起；写出时仅 true 才物化，故按键存在登记。
+    if let Some(info) = d.get("MarkInfo").and_then(Value::as_dict) {
+        features.insert(PdfFeature::MarkInfo);
+        if info.0.contains_key("UserProperties") {
+            features.insert(PdfFeature::MarkInfoUserProperties);
+        }
+        if info.0.contains_key("Suspects") {
+            features.insert(PdfFeature::MarkInfoSuspects);
+        }
     }
     // 输出意图（PDF 1.4）：目录 /OutputIntents 非空数组（14.11.5 Table
     // 365）。空数组等价于未声明，不登记特性。
