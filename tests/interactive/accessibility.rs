@@ -1,4 +1,5 @@
-//! 文档默认语言与结构元素语言写出 → 解析 → 回读往返（ISO 32000-1 14.9.2）。
+//! 文档默认语言、结构元素语言与 Span 属性表写出 → 解析 → 回读往返
+//! （ISO 32000-1 14.9.2–14.9.5）。
 
 use super::*;
 
@@ -62,4 +63,56 @@ fn builder_document_and_structure_language_roundtrip_through_parser() {
     let features = doc.features.borrow();
     assert!(features.contains(PdfFeature::DocumentLanguage));
     assert!(features.contains(PdfFeature::StructureLanguageText));
+}
+
+#[test]
+fn builder_span_property_lists_roundtrip_through_parser() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder, SpanProperties};
+    use pdf_engine::core::reader::accessibility::LanguageIdentifier;
+    use pdf_engine::core::types::PdfVersion;
+
+    let language = |value: &str| {
+        LanguageIdentifier::parse(value).unwrap_or_else(|error| panic!("{value:?}: {error}"))
+    };
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_5);
+    builder.set_document_language(language("en-US"));
+    let page = builder.page(PageSize::A4);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "See ");
+    let properties = SpanProperties::new()
+        .with_alternate_text("six-point star")
+        .with_actual_text("star")
+        .with_expansion("St.")
+        .with_language(language("es-MX"));
+    builder.begin_span(page, &properties);
+    builder.text(page, &Font::helvetica(12.0), 110.0, 700.0, "A");
+    builder.end_span(page);
+    builder.text(page, &Font::helvetica(12.0), 120.0, 700.0, " later");
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+
+    let sections = doc.page_marked_content(0).expect("marked content");
+    assert_eq!(sections.len(), 1, "{sections:?}");
+    let span = &sections[0];
+    assert_eq!(span.tag, "Span");
+    let parsed = span
+        .span_properties()
+        .expect("typed span properties")
+        .expect("Span property list");
+    assert_eq!(parsed.alternate_text.as_deref(), Some("six-point star"));
+    assert_eq!(parsed.actual_text.as_deref(), Some("star"));
+    assert_eq!(parsed.expansion.as_deref(), Some("St."));
+    assert_eq!(parsed.language, Some(language("es-MX")));
+
+    assert_eq!(
+        doc.page_marked_content_languages(0).expect("languages"),
+        vec![Some(language("es-MX"))]
+    );
+    assert_eq!(
+        doc.extract_page_text(0).as_deref(),
+        Some("See \nstar\n later"),
+        "ActualText 应替换 Span 内的可见文本；不同 BT/ET 文本块之间由提取器插入换行"
+    );
 }

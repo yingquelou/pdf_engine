@@ -77,6 +77,9 @@ pub struct MarkedSection {
     pub end: usize,
     /// `true` for zero-length `MP`/`DP` points.
     pub point: bool,
+    /// Index in the returned [`Vec`] of the nearest enclosing section;
+    /// `None` for top-level sections and points.
+    pub parent: Option<usize>,
 }
 
 impl MarkedSection {
@@ -212,13 +215,19 @@ pub fn collect_marked_sections(
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
     is_visible: &dyn Fn(i64) -> Option<bool>,
 ) -> Result<Vec<MarkedSection>, MarkedContentError> {
-    let mut sections = Vec::new();
-    let mut stack: Vec<MarkedSection> = Vec::new();
+    // 先按「打开顺序」收集节点并记录父节点 id，最后再映射为「关闭顺序」
+    // 的输出下标：points 立即输出，sections 在 EMC 时输出（内层先关）。
+    let mut nodes: Vec<MarkedSection> = Vec::new();
+    let mut parent_ids: Vec<Option<usize>> = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    let mut order: Vec<usize> = Vec::new();
     for (index, op) in ops.iter().enumerate() {
         match op {
             Op::BeginMarkedContent(tag) => {
-                push_section(
-                    &mut stack,
+                open_section(
+                    &mut open,
+                    &mut nodes,
+                    &mut parent_ids,
                     tag.clone(),
                     None,
                     index,
@@ -228,8 +237,10 @@ pub fn collect_marked_sections(
                 )?;
             }
             Op::BeginMarkedContentWithProperties(tag, properties) => {
-                push_section(
-                    &mut stack,
+                open_section(
+                    &mut open,
+                    &mut nodes,
+                    &mut parent_ids,
                     tag.clone(),
                     Some(properties),
                     index,
@@ -239,7 +250,8 @@ pub fn collect_marked_sections(
                 )?;
             }
             Op::MarkedContentPoint(tag) => {
-                sections.push(section_from(
+                let id = nodes.len();
+                nodes.push(section_from(
                     tag.clone(),
                     None,
                     index,
@@ -249,9 +261,12 @@ pub fn collect_marked_sections(
                     resolve_ocg_name,
                     is_visible,
                 ));
+                parent_ids.push(open.last().copied());
+                order.push(id);
             }
             Op::MarkedContentPointWithProperties(tag, properties) => {
-                sections.push(section_from(
+                let id = nodes.len();
+                nodes.push(section_from(
                     tag.clone(),
                     Some(properties),
                     index,
@@ -261,30 +276,45 @@ pub fn collect_marked_sections(
                     resolve_ocg_name,
                     is_visible,
                 ));
+                parent_ids.push(open.last().copied());
+                order.push(id);
             }
             Op::EndMarkedContent => {
-                let Some(section) = stack.pop() else {
+                let Some(id) = open.pop() else {
                     return Err(MarkedContentError::UnmatchedEnd { index });
                 };
-                let mut closed = section;
-                closed.end = index + 1;
-                sections.push(closed);
+                nodes[id].end = index + 1;
+                order.push(id);
             }
             _ => {}
         }
     }
-    if let Some(outermost) = stack.first() {
+    if let Some(&outermost) = open.first() {
         return Err(MarkedContentError::UnclosedSection {
-            tag: outermost.tag.clone(),
-            start: outermost.start,
+            tag: nodes[outermost].tag.clone(),
+            start: nodes[outermost].start,
         });
+    }
+    // 关闭顺序 → 输出下标。父节点关闭得比子节点晚，因此只能等收集
+    // 完成后才能把父 id 映射为它在返回 Vec 中的位置。
+    let mut positions = vec![0usize; nodes.len()];
+    for (position, &id) in order.iter().enumerate() {
+        positions[id] = position;
+    }
+    let mut sections = Vec::with_capacity(order.len());
+    for &id in &order {
+        let mut section = nodes[id].clone();
+        section.parent = parent_ids[id].map(|parent| positions[parent]);
+        sections.push(section);
     }
     Ok(sections)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_section(
-    stack: &mut Vec<MarkedSection>,
+fn open_section(
+    open: &mut Vec<usize>,
+    nodes: &mut Vec<MarkedSection>,
+    parent_ids: &mut Vec<Option<usize>>,
     tag: String,
     properties_operand: Option<&Value>,
     index: usize,
@@ -292,7 +322,7 @@ fn push_section(
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
     is_visible: &dyn Fn(i64) -> Option<bool>,
 ) -> Result<(), MarkedContentError> {
-    if stack.len() >= MAX_MARKED_DEPTH {
+    if open.len() >= MAX_MARKED_DEPTH {
         return Err(MarkedContentError::DepthExceeded { index });
     }
     let section = section_from(
@@ -305,7 +335,10 @@ fn push_section(
         resolve_ocg_name,
         is_visible,
     );
-    stack.push(section);
+    let id = nodes.len();
+    nodes.push(section);
+    parent_ids.push(open.last().copied());
+    open.push(id);
     Ok(())
 }
 
@@ -341,6 +374,7 @@ fn section_from(
         start,
         end,
         point,
+        parent: None,
     }
 }
 

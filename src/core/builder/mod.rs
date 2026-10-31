@@ -72,19 +72,19 @@ pub use types::{
     Rendition, RenditionAction, RenditionOperation, RubyAlign, RubyPosition, SampledFunction,
     SelectorRendition, Separation, SeparationInfo, SetOcgStateAction, Shading, ShadingOptions,
     ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction,
-    SoundEncoding, StitchingFunction, StructureAttribute, StructureElement, StructureKid,
-    StructureMarkInfo, StructureTree, TableAttributes, TableScope, TemporaryFilePermission,
-    TensorProductPatch, TensorProductPatchShading, TextAlign, TextDecorationType, ThreadAction,
-    ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,
-    ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,
-    ThreeDColor, ThreeDCrossSection, ThreeDDeactivationPolicy, ThreeDFaceColor,
-    ThreeDLightingScheme, ThreeDLightingSchemeType, ThreeDMatrixSource, ThreeDNode,
-    ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
-    ThreeDRenderMode, ThreeDRenderModeType, ThreeDStreamFormat, ThreeDView, ThreeDViewSelection,
-    TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
-    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
-    UserProperty, Viewport, WritingMode, XmpListItem, XmpListKind, XmpPacket, XmpPacketError,
-    XmpValue,
+    SoundEncoding, SpanProperties, StitchingFunction, StructureAttribute, StructureElement,
+    StructureKid, StructureMarkInfo, StructureTree, TableAttributes, TableScope,
+    TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading, TextAlign,
+    TextDecorationType, ThreadAction, ThreeDActivation, ThreeDActivationPolicy,
+    ThreeDAnimationStyle, ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState,
+    ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDColor, ThreeDCrossSection,
+    ThreeDDeactivationPolicy, ThreeDFaceColor, ThreeDLightingScheme, ThreeDLightingSchemeType,
+    ThreeDMatrixSource, ThreeDNode, ThreeDProjection, ThreeDProjectionBinding,
+    ThreeDProjectionScale, ThreeDProjectionType, ThreeDRenderMode, ThreeDRenderModeType,
+    ThreeDStreamFormat, ThreeDView, ThreeDViewSelection, TilingPattern, TilingType, Transition,
+    TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle, Type1Halftone,
+    Type2Halftone, Type3Font, Type3Glyph, UserProperty, Viewport, WritingMode, XmpListItem,
+    XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -831,6 +831,31 @@ impl PdfBuilder {
 
     /// 结束当前可选内容段（`EMC`）。未知页索引被忽略。
     pub fn end_optional_content(&mut self, page: usize) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.end_marked_content();
+        }
+        self
+    }
+
+    /// 在指定页开始一段 Span 标记内容：`/Span << ... >> BDC`
+    /// （ISO 32000-1 14.9.3–14.9.5）。
+    ///
+    /// 属性表由 [`SpanProperties::to_dict`] 内联写出。`/Lang` 与 `/E` 自
+    /// PDF 1.4、`/Alt` 与 `/ActualText` 自 PDF 1.5 引入，目标版本不足时
+    /// 构建返回 [`WriteError::UnsupportedVersion`]，且不写出任何字节。
+    /// 必须以 [`PdfBuilder::end_span`] 结束；未知页索引被忽略。
+    pub fn begin_span(&mut self, page: usize, properties: &SpanProperties) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.begin_marked_content_properties(
+                "Span",
+                MarkedContentProperties::Dict(properties.to_dict()),
+            );
+        }
+        self
+    }
+
+    /// 结束当前 Span 标记内容段（`EMC`）。未知页索引被忽略。
+    pub fn end_span(&mut self, page: usize) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.content.end_marked_content();
         }

@@ -47,6 +47,31 @@ fn nests_sections_and_closes_inner_first() {
     assert_eq!(sections[1].tag, "Art");
     assert_eq!(sections[1].start, 0);
     assert_eq!(sections[1].end, 4);
+    assert_eq!(sections[0].parent, Some(1));
+    assert_eq!(sections[1].parent, None);
+}
+
+#[test]
+fn parent_links_follow_nesting_and_points() {
+    let ops = vec![
+        Op::BeginMarkedContent("Outer".into()),
+        Op::MarkedContentPoint("P".into()),
+        Op::BeginMarkedContent("Inner".into()),
+        Op::MarkedContentPointWithProperties("Q".into(), Value::Dict(Dict::new())),
+        Op::EndMarkedContent,
+        Op::EndMarkedContent,
+    ];
+    let sections = collect(&ops).expect("balanced");
+    // 关闭顺序：P、Q、Inner、Outer；父下标指向返回 Vec 中的位置。
+    let tags: Vec<&str> = sections
+        .iter()
+        .map(|section| section.tag.as_str())
+        .collect();
+    assert_eq!(tags, ["P", "Q", "Inner", "Outer"]);
+    assert_eq!(sections[0].parent, Some(3), "point P 的父区段是 Outer");
+    assert_eq!(sections[1].parent, Some(2), "point Q 的父区段是 Inner");
+    assert_eq!(sections[2].parent, Some(3));
+    assert_eq!(sections[3].parent, None);
 }
 
 #[test]
@@ -171,6 +196,7 @@ fn text_entries_decode_literal_and_hex_strings() {
         start: 0,
         end: 1,
         point: false,
+        parent: None,
     };
     assert_eq!(section.actual_text().as_deref(), Some("A"));
     assert_eq!(section.alternate_text().as_deref(), Some("plain"));

@@ -18,11 +18,13 @@ use crate::core::types::Document;
 
 mod language;
 mod multi_language;
+mod span;
 #[cfg(test)]
 mod tests;
 
 pub use language::{LanguageError, LanguageIdentifier};
 pub use multi_language::{AlternateText, MultiLanguageTextArray};
+pub use span::{MarkedContentLanguageError, SpanProperties};
 
 use language::malformed;
 

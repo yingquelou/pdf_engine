@@ -320,14 +320,24 @@ impl TextState {
         if self.marked_hidden() {
             return;
         }
-        if let Some(frame) = self.marked.last_mut()
-            && frame.actual_text.is_some()
+        // 已经输出过 ActualText 的区段覆盖当前 show（包括它内部的所有
+        // 嵌套区段），同一替换只发出一次。
+        if self.marked.iter().any(|frame| frame.actual_emitted) {
+            return;
+        }
+        // 最内层带 /ActualText 的区段是胜者；外层 ActualText 覆盖内部
+        // 没有自己替换文本的嵌套区段。
+        if let Some(winner) = self
+            .marked
+            .iter()
+            .rposition(|frame| frame.actual_text.is_some())
         {
-            if frame.actual_emitted {
-                return;
+            let replacement = self.marked[winner].actual_text.clone().unwrap_or_default();
+            for frame in &mut self.marked {
+                if frame.actual_text.is_some() {
+                    frame.actual_emitted = true;
+                }
             }
-            frame.actual_emitted = true;
-            let replacement = frame.actual_text.clone().unwrap_or_default();
             if !replacement.is_empty() {
                 self.flush_fragment();
                 let (x, y) = self.position();

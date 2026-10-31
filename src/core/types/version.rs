@@ -267,6 +267,12 @@ pub enum PdfFeature {
     StructureLanguageText,
     /// 结构元素的缩写展开条目（`/E`，14.7.2 Table 323），PDF 1.5 引入。
     StructureExpandedText,
+    /// Span 属性表的自然语言与缩写展开条目（`/Lang` `/E`，14.9.2.1、
+    /// 14.9.5），PDF 1.4 引入。
+    SpanPropertyLists,
+    /// Span 属性表的替代描述与替换文本条目（`/Alt` `/ActualText`，
+    /// 14.9.3、14.9.4），PDF 1.5 引入。
+    SpanAlternateText,
     /// 结构属性对象的用户属性（`/O /UserProperties` 与 `/P`，14.7.5
     /// Table 328/329），PDF 1.6 引入。
     StructureUserProperties,
@@ -345,6 +351,7 @@ impl PdfFeature {
             | PdfFeature::DocumentLanguage
             | PdfFeature::StructureLanguageText
             | PdfFeature::StandardStructureAttributes
+            | PdfFeature::SpanPropertyLists
             | PdfFeature::MarkInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -358,7 +365,8 @@ impl PdfFeature {
             | PdfFeature::TableHeaderAttributes
             | PdfFeature::LayoutExtendedAttributes
             | PdfFeature::StructureTypeExtensions
-            | PdfFeature::StructureExpandedText => PdfVersion::V1_5,
+            | PdfFeature::StructureExpandedText
+            | PdfFeature::SpanAlternateText => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
@@ -465,6 +473,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::DocumentLanguage => "document language",
             PdfFeature::StructureLanguageText => "structure language and actual text",
             PdfFeature::StructureExpandedText => "structure expanded text",
+            PdfFeature::SpanPropertyLists => "span property lists",
+            PdfFeature::SpanAlternateText => "span alternate and replacement text",
             PdfFeature::StructureTypeExtensions => "structure type extensions",
             PdfFeature::StructureUserProperties => "structure user properties",
             PdfFeature::StandardStructureAttributes => "standard structure attributes",

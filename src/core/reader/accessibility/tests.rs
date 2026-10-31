@@ -3,14 +3,20 @@
 use std::collections::HashSet;
 
 use crate::core::reader::accessibility::{
-    AlternateText, LanguageError, LanguageIdentifier, MultiLanguageTextArray,
+    AlternateText, LanguageError, LanguageIdentifier, MultiLanguageTextArray, SpanProperties,
     first_declared_language,
 };
+use crate::core::reader::content::MarkedSection;
 use crate::core::reader::rendition::{MediaClip, MediaClipDataSource};
-use crate::core::types::{Array, Dict, Document, Object, Trailer, Value};
+use crate::core::types::{Array, Dict, Document, Object, StreamData, Trailer, Value};
+
+use super::span::resolve_section_language;
 
 const CATALOG: i64 = 1;
 const ROOT: i64 = 2;
+const PAGES: i64 = 3;
+const PAGE: i64 = 4;
+const ELEMENT: i64 = 5;
 
 fn name(value: &str) -> Value {
     Value::Name(value.to_owned())
@@ -30,6 +36,18 @@ fn insert(doc: &Document, num: i64, value: Value) {
 
 fn language(value: &str) -> LanguageIdentifier {
     LanguageIdentifier::parse(value).unwrap_or_else(|error| panic!("{value:?}: {error}"))
+}
+
+fn marked_section(tag: &str, properties: Option<Dict>, parent: Option<usize>) -> MarkedSection {
+    MarkedSection {
+        tag: tag.to_owned(),
+        properties,
+        visibility: None,
+        start: 0,
+        end: 0,
+        point: false,
+        parent,
+    }
 }
 
 /// 多语言文本数组：按 `(identifier, text)` 顺序展开。
@@ -77,6 +95,52 @@ fn document_with_catalog(entries: Dict) -> Document {
         &doc,
         CATALOG,
         Value::Dict(entries.insert("Type", name("Catalog"))),
+    );
+    doc.trailer = Trailer {
+        dict: Dict::new().insert("Root", Value::Ref(CATALOG, 0)),
+    };
+    doc
+}
+
+/// 单页文档：目录 `/Lang`、结构树根、一个带 `/StructParents` 的页面。
+fn structured_page_document(content: &[u8], root: Dict, element: Dict) -> Document {
+    let mut doc = Document::new();
+    insert(&doc, ROOT, Value::Dict(root));
+    insert(&doc, ELEMENT, Value::Dict(element));
+    insert(
+        &doc,
+        PAGES,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Pages"))
+                .insert("Kids", arr(vec![Value::Ref(PAGE, 0)]))
+                .insert("Count", Value::Integer(1)),
+        ),
+    );
+    insert(
+        &doc,
+        PAGE,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Page"))
+                .insert("Parent", Value::Ref(PAGES, 0))
+                .insert("StructParents", Value::Integer(0))
+                .insert(
+                    "Contents",
+                    Value::Stream(Dict::new(), StreamData::Owned(content.to_vec())),
+                ),
+        ),
+    );
+    insert(
+        &doc,
+        CATALOG,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Catalog"))
+                .insert("Pages", Value::Ref(PAGES, 0))
+                .insert("StructTreeRoot", Value::Ref(ROOT, 0))
+                .insert("Lang", text("en-US")),
+        ),
     );
     doc.trailer = Trailer {
         dict: Dict::new().insert("Root", Value::Ref(CATALOG, 0)),
@@ -529,4 +593,192 @@ fn invalid_language_entries_are_typed_errors() {
         panic!("expected media clip data");
     };
     assert_malformed(data.alternate_text(), "alternate text");
+}
+
+#[test]
+fn span_properties_parse_text_entries_and_language() {
+    let properties = Dict::new()
+        .insert("Alt", text("plain alt"))
+        .insert("ActualText", Value::HexString("FEFF4E2D".into()))
+        .insert("E", text("expanded"))
+        .insert("Lang", text(""));
+    let parsed = SpanProperties::parse("Span", Some(&properties))
+        .expect("typed span")
+        .expect("span properties");
+    assert_eq!(parsed.alternate_text.as_deref(), Some("plain alt"));
+    assert_eq!(
+        parsed.actual_text.as_deref(),
+        Some("中"),
+        "UTF-16BE 十六进制串"
+    );
+    assert_eq!(parsed.expansion.as_deref(), Some("expanded"));
+    let language = parsed.language.as_ref().expect("/Lang declared");
+    assert!(language.is_unknown());
+    assert_eq!(language.as_str(), "");
+
+    let section = marked_section("Span", Some(properties), None);
+    assert_eq!(
+        section.span_properties().expect("section span"),
+        Some(parsed)
+    );
+}
+
+#[test]
+fn span_properties_require_span_tag_and_text_strings() {
+    let properties = Dict::new().insert("Alt", text("alt"));
+    assert_eq!(
+        SpanProperties::parse("P", Some(&properties)).expect("non-Span tag"),
+        None
+    );
+    assert_eq!(
+        SpanProperties::parse("span", Some(&properties)).expect("tag is case-sensitive"),
+        None
+    );
+    assert_eq!(
+        SpanProperties::parse("Span", None).expect("missing properties"),
+        None
+    );
+    assert_eq!(
+        SpanProperties::parse("Span", Some(&Dict::new())).expect("empty properties"),
+        Some(SpanProperties {
+            alternate_text: None,
+            actual_text: None,
+            expansion: None,
+            language: None,
+        })
+    );
+
+    let invalid_alt = Dict::new().insert("Alt", Value::Integer(1));
+    match SpanProperties::parse("Span", Some(&invalid_alt)) {
+        Err(LanguageError::Malformed(message)) => {
+            assert!(message.contains("Alt"), "{message}");
+            assert!(message.contains("integer"), "{message}");
+        }
+        other => panic!("expected malformed /Alt, got {other:?}"),
+    }
+    let invalid_lang = Dict::new().insert("Lang", name("en"));
+    assert_malformed(SpanProperties::parse("Span", Some(&invalid_lang)), "Lang");
+}
+
+#[test]
+fn resolve_section_language_prefers_structure_and_document_default() {
+    let document_language = language("en-US");
+    let sections = vec![
+        // 0：外层 Span 声明 de-DE。
+        marked_section(
+            "Span",
+            Some(Dict::new().insert("Lang", text("de-DE"))),
+            None,
+        ),
+        // 1：无语言的嵌套标记内容，应继承外层 Span。
+        marked_section("P", None, Some(0)),
+        // 2：自己的 Span /Lang 覆盖外层。
+        marked_section(
+            "Span",
+            Some(Dict::new().insert("Lang", text("ja"))),
+            Some(0),
+        ),
+        // 3：空串表示显式未知并终止继承。
+        marked_section("Span", Some(Dict::new().insert("Lang", text(""))), Some(0)),
+        // 4：结构内容，结构语言优先于外层 Span。
+        marked_section(
+            "P",
+            Some(Dict::new().insert("MCID", Value::Integer(0))),
+            Some(0),
+        ),
+        // 5：结构语言取不到时回退目录语言，而不是外层 Span。
+        marked_section(
+            "P",
+            Some(Dict::new().insert("MCID", Value::Integer(1))),
+            Some(0),
+        ),
+        // 6：整条链都没有声明。
+        marked_section("P", None, None),
+        // 7：内容流内联数字解析为 Float，整数值仍按 MCID 处理。
+        marked_section(
+            "P",
+            Some(Dict::new().insert("MCID", Value::Float(0.0))),
+            Some(0),
+        ),
+    ];
+    let structured_language = |properties: &Dict| -> Option<LanguageIdentifier> {
+        match properties.get("MCID").and_then(Value::as_integer) {
+            Some(0) => Some(language("fr-FR")),
+            _ => None,
+        }
+    };
+    let resolve = |index: usize| {
+        resolve_section_language(
+            &sections,
+            index,
+            &structured_language,
+            Some(&document_language),
+        )
+        .expect("language")
+    };
+
+    assert_eq!(
+        resolve(1),
+        Some(language("de-DE")),
+        "外层 Span 覆盖无语言的内层标记内容"
+    );
+    assert_eq!(resolve(2), Some(language("ja")), "内层 Span 覆盖外层");
+    let unknown = resolve(3).expect("explicit unknown");
+    assert!(unknown.is_unknown(), "空串终止继承");
+    assert_eq!(resolve(4), Some(language("fr-FR")), "MCID 优先结构语言");
+    assert_eq!(
+        resolve(5),
+        Some(document_language.clone()),
+        "结构语言缺失时回退目录语言，不得继续外层 Span"
+    );
+    assert_eq!(
+        resolve(6),
+        Some(document_language.clone()),
+        "无声明时回退目录语言"
+    );
+    assert_eq!(
+        resolve(7),
+        Some(language("fr-FR")),
+        "内联字典的 Float 整数值按 MCID 处理"
+    );
+    assert_eq!(
+        resolve_section_language(&sections, 6, &structured_language, None)
+            .expect("no document language"),
+        None
+    );
+}
+
+#[test]
+fn page_marked_content_languages_resolves_spans_structure_and_catalog() {
+    let content = b"/Span <</Lang (de-DE)>> BDC \
+                      /P <</MCID 0>> BDC /Span BMC (one) Tj EMC EMC EMC \
+                    /Span <</MCID 0>> BDC (two) Tj EMC \
+                    /Span <</Lang (de-DE)>> BDC (three) Tj EMC \
+                    /Span BMC (four) Tj EMC";
+    let root = struct_root(Dict::new())
+        .insert("K", arr(vec![Value::Ref(ELEMENT, 0)]))
+        .insert(
+            "ParentTree",
+            Value::Dict(Dict::new().insert(
+                "Nums",
+                arr(vec![Value::Integer(0), arr(vec![Value::Ref(ELEMENT, 0)])]),
+            )),
+        );
+    let element = element("Document", ROOT).insert("Lang", text("fr-FR"));
+    let doc = structured_page_document(content, root, element);
+
+    let languages = doc
+        .page_marked_content_languages(0)
+        .expect("page languages");
+    assert_eq!(
+        languages,
+        vec![
+            Some(language("fr-FR")),
+            Some(language("fr-FR")),
+            Some(language("de-DE")),
+            Some(language("fr-FR")),
+            Some(language("de-DE")),
+            Some(language("en-US")),
+        ]
+    );
 }

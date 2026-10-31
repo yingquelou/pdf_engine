@@ -44,6 +44,7 @@ use super::{
     PdfBuilder, same_font,
 };
 use crate::core::builder::types::{AnnotationKind, ThreeDViewSelection, text_string_value};
+use crate::core::content::{MarkedContentProperties, Op};
 use crate::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Trailer, Value,
 };
@@ -71,6 +72,47 @@ impl PdfBuilder {
                 "document language (/Lang) requires PDF {}, got {}",
                 PdfFeature::DocumentLanguage.min_version(),
                 self.version
+            )));
+        }
+
+        // Span 属性表（14.9.2.1、14.9.3–14.9.5）：`/Lang` 与 `/E` 自
+        // PDF 1.4、`/Alt` 与 `/ActualText` 自 PDF 1.5 引入。这些条目只
+        // 出现在内容流 BDC 的内联属性表中，读端特性画像不扫描内容流，
+        // 故写端在此自行扫描；门禁同样在任何对象号分配与写出之前完成，
+        // 保持零字节失败契约。
+        let mut span_property_lists = false;
+        let mut span_alternate_text = false;
+        for page in &self.pages {
+            for op in page.content.ops() {
+                let Op::BeginMarkedContentProperties {
+                    tag,
+                    properties: MarkedContentProperties::Dict(dict),
+                } = op
+                else {
+                    continue;
+                };
+                if tag.as_str() != "Span" {
+                    continue;
+                }
+                span_property_lists |= dict.get("Lang").is_some() || dict.get("E").is_some();
+                span_alternate_text |=
+                    dict.get("Alt").is_some() || dict.get("ActualText").is_some();
+            }
+        }
+        if span_property_lists && !self.version.supports(PdfFeature::SpanPropertyLists) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{} require PDF {}, got {}",
+                PdfFeature::SpanPropertyLists,
+                PdfFeature::SpanPropertyLists.min_version().as_str(),
+                self.version.as_str()
+            )));
+        }
+        if span_alternate_text && !self.version.supports(PdfFeature::SpanAlternateText) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{} require PDF {}, got {}",
+                PdfFeature::SpanAlternateText,
+                PdfFeature::SpanAlternateText.min_version().as_str(),
+                self.version.as_str()
             )));
         }
 
@@ -930,6 +972,18 @@ impl PdfBuilder {
             doc.features
                 .borrow_mut()
                 .insert(PdfFeature::ThreeDViewExtensions);
+        }
+        // Span 属性表条目（14.9.2.1、14.9.3–14.9.5）：内容流扫描结果写入
+        // 特征画像，供版本推导；门禁已在上方完成。
+        if span_property_lists {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::SpanPropertyLists);
+        }
+        if span_alternate_text {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::SpanAlternateText);
         }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &acro_form {

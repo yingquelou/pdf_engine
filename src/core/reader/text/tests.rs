@@ -946,6 +946,28 @@ fn actual_text_replaces_all_shows_in_section() {
 }
 
 #[test]
+fn actual_text_applies_across_nested_sections() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf /Span <</ActualText (outer)>> BDC (a) Tj \
+                    /Nested BMC (b) Tj /Deeper BMC (c) Tj EMC EMC EMC \
+                    (tail) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "outertail");
+}
+
+#[test]
+fn nested_actual_text_winner_emits_once_before_outer() {
+    let document = Document::new();
+    let resources = resources_with_font("F1", winansi_type1_font());
+    let content = b"BT /F1 12 Tf /Outer <</ActualText (outer)>> BDC \
+                    /Inner <</ActualText (inner)>> BDC (b) Tj (c) Tj EMC \
+                    (d) Tj EMC (tail) Tj ET";
+
+    assert_eq!(document.extract_text(content, &resources), "innertail");
+}
+
+#[test]
 fn actual_text_decodes_hex_string_property() {
     let document = Document::new();
     let resources = resources_with_font("F1", winansi_type1_font());
