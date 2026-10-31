@@ -11,15 +11,18 @@
 //!   `/Summary`。
 //!
 //! 格式专用所有者（`XML-1.00`、`HTML-3.20` 等）的条目不在本模块建模，
-//! 保留在 [`StandardAttributes::other`]。可继承性与继承链解析（14.8.5.3）
-//! 不在本切片内：本模块只报告元素自身（含其类）合并后的属性，调用方
-//! 需要时沿父链自行组合。
+//! 保留在 [`StandardAttributes::other`]。
+//!
+//! [`StructureTree::standard_attributes`] 只报告元素自身（含其类）的合并
+//! 结果；14.8.5.3 的继承链解析（祖先可继承条目）由子模块 [`inherit`] 的
+//! [`StructureTree::effective_standard_attributes`] 提供。
 
 use crate::core::reader::content::text_value;
 use crate::core::types::{Dict, Value};
 
 use super::{StructureAttribute, StructureError, StructureTree, malformed};
 
+mod inherit;
 mod layout;
 
 pub use layout::{
@@ -244,36 +247,52 @@ pub struct StandardAttributes {
 }
 
 impl StructureTree {
-    /// 结构元素实际生效的标准属性（14.8.5.2、14.8.5.4–14.8.5.7）。
+    /// 结构元素自身（含 `/ClassMap` 合并后）的标准属性
+    /// （14.8.5.2、14.8.5.4–14.8.5.7）。
     ///
     /// 基于 [`StructureTree::resolved_attributes`] 的结果（`/ClassMap` 与
     /// `/A` 已按所有者合并），每个标准所有者至多解析出一个字典。越界
     /// 下标返回全空 [`StandardAttributes`]。
+    ///
+    /// 本方法**不**应用 14.8.5.3 的继承：需要祖先可继承条目的调用方应使用
+    /// [`StructureTree::effective_standard_attributes`]。
     pub fn standard_attributes(&self, index: usize) -> Result<StandardAttributes, StructureError> {
-        let mut standard = StandardAttributes::default();
-        for attribute in self.resolved_attributes(index) {
-            match StandardAttributeOwner::from_name(&attribute.owner) {
-                StandardAttributeOwner::Layout => {
-                    let dict = attribute_dict(&attribute, index, "Layout")?;
-                    standard.layout = Some(layout::parse(dict, index)?);
-                }
-                StandardAttributeOwner::List => {
-                    let dict = attribute_dict(&attribute, index, "List")?;
-                    standard.list = Some(parse_list(dict, index)?);
-                }
-                StandardAttributeOwner::PrintField => {
-                    let dict = attribute_dict(&attribute, index, "PrintField")?;
-                    standard.print_field = Some(parse_print_field(dict, index)?);
-                }
-                StandardAttributeOwner::Table => {
-                    let dict = attribute_dict(&attribute, index, "Table")?;
-                    standard.table = Some(parse_table(dict, index)?);
-                }
-                _ => standard.other.push(attribute),
-            }
-        }
-        Ok(standard)
+        parse_attributes(&self.resolved_attributes(index), index)
     }
+}
+
+/// 把一组已合并的属性对象解析为类型化标准属性。
+///
+/// 供 [`StructureTree::standard_attributes`]（元素自身）与
+/// [`StructureTree::effective_standard_attributes`]（含 14.8.5.3 继承）
+/// 共用；错误消息只取决于 `index`，与调用方无关。
+pub(super) fn parse_attributes(
+    attributes: &[StructureAttribute],
+    index: usize,
+) -> Result<StandardAttributes, StructureError> {
+    let mut standard = StandardAttributes::default();
+    for attribute in attributes {
+        match StandardAttributeOwner::from_name(&attribute.owner) {
+            StandardAttributeOwner::Layout => {
+                let dict = attribute_dict(attribute, index, "Layout")?;
+                standard.layout = Some(layout::parse(dict, index)?);
+            }
+            StandardAttributeOwner::List => {
+                let dict = attribute_dict(attribute, index, "List")?;
+                standard.list = Some(parse_list(dict, index)?);
+            }
+            StandardAttributeOwner::PrintField => {
+                let dict = attribute_dict(attribute, index, "PrintField")?;
+                standard.print_field = Some(parse_print_field(dict, index)?);
+            }
+            StandardAttributeOwner::Table => {
+                let dict = attribute_dict(attribute, index, "Table")?;
+                standard.table = Some(parse_table(dict, index)?);
+            }
+            _ => standard.other.push(attribute.clone()),
+        }
+    }
+    Ok(standard)
 }
 
 /// 属性对象的值必须是字典或流（Table 327 已保证，这里防御性复核）。
@@ -461,6 +480,8 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
+mod inherit_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]

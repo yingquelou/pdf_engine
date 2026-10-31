@@ -8,7 +8,9 @@
 //!
 //! 标准属性所有者（14.8.5.2 Table 341）与 Layout/List/PrintField/Table
 //! 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`standard`] 类型化
-//! 解析；可继承属性的继承链解析（14.8.5.3）留待后续。
+//! 解析；可继承属性的继承链解析（14.8.5.3）由
+//! [`StructureTree::effective_attributes`] 与
+//! [`StructureTree::effective_standard_attributes`] 提供。
 //!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
