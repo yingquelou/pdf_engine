@@ -32,6 +32,7 @@ mod alternate_presentation;
 mod articles;
 mod collection;
 mod structure;
+pub(super) mod structure_content;
 mod structure_layout;
 mod structure_standard;
 mod templates;
@@ -99,6 +100,12 @@ impl NavigationState {
     /// 集合配置；供嵌入文件写端交叉校验模式与初始文档。
     pub(super) fn collection(&self) -> Option<&Collection> {
         self.collection.as_ref()
+    }
+
+    /// 逻辑结构树；供 assemble 阶段在任何对象号分配之前交叉校验页面
+    /// `/MCID` 与结构树 MCR 的一致性。
+    pub(super) fn structure_tree(&self) -> Option<&StructureTree> {
+        self.structure_tree.as_ref()
     }
 
     /// 大纲条目实际引用到的动作，按写出顺序（子项先于父项），同一动作

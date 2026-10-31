@@ -90,7 +90,7 @@ pub use types::{
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
-use crate::core::types::PdfVersion;
+use crate::core::types::{Dict, PdfVersion, Value};
 use crate::core::writer::{DocumentWriter, StreamCompression, WriteError};
 use std::cell::Cell;
 use std::io::Write;
@@ -883,6 +883,44 @@ impl PdfBuilder {
 
     /// 结束当前 Artifact 标记内容段（`EMC`）。未知页索引被忽略。
     pub fn end_artifact(&mut self, page: usize) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.end_marked_content();
+        }
+        self
+    }
+
+    /// 在指定页开始一段结构内容：`/<tag> << /MCID n >> BDC`
+    /// （ISO 32000-1 14.8.2）。
+    ///
+    /// `mcid` 必须与结构树里 [`StructureElement::with_marked_content`] 对同一
+    /// 页使用的标识符一致：`/ParentTree` 只按结构树的 MCR 生成，页面标记
+    /// 内容靠 `/MCID` 与之配对，两者不一致时读端无法定位结构元素。
+    /// [`SpanProperties`] 与 [`ArtifactProperties`] 刻意不带 `/MCID`：
+    /// 14.8.2.3.1 规定 artifact 不得被赋予结构身份，Span 属性表只描述文本
+    /// 呈现，需要结构身份时用本方法。
+    ///
+    /// 构建时逐页交叉校验页面 `/MCID` 与结构树 MCR：非整数 `/MCID`、同页
+    /// 重复、有 `/MCID` 却没有结构树、页面与结构树不一致、标签为
+    /// `Artifact` 的标记内容带 `/MCID`，均返回
+    /// [`WriteError::InvalidObject`]，且不写出任何字节。未知页索引被忽略。
+    /// 必须以 [`PdfBuilder::end_structure_content`] 结束。
+    pub fn begin_structure_content(
+        &mut self,
+        page: usize,
+        tag: impl Into<String>,
+        mcid: i64,
+    ) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.begin_marked_content_properties(
+                tag,
+                MarkedContentProperties::Dict(Dict::new().insert("MCID", Value::Integer(mcid))),
+            );
+        }
+        self
+    }
+
+    /// 结束当前结构内容段（`EMC`）。未知页索引被忽略。
+    pub fn end_structure_content(&mut self, page: usize) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.content.end_marked_content();
         }

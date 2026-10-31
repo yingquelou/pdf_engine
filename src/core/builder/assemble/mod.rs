@@ -38,6 +38,7 @@ mod sound;
 mod three_d;
 mod type3;
 
+use super::navigation::structure_content;
 use super::{
     Action, CidFont, ColorSpace, Font, Function, GoTo3DViewSelection, GraphicsState,
     GraphicsStateFunctions, GroupXObject, ImageData, ImageMask, OptionalContentGroup, Pattern,
@@ -50,6 +51,7 @@ use crate::core::types::{
 };
 use crate::core::writer::WriteError;
 use shading::{pattern_dict, shading_object_value, tiling_pattern_stream};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 impl PdfBuilder {
@@ -174,6 +176,44 @@ impl PdfBuilder {
                 )));
             }
         }
+
+        // 结构标记内容（14.8.2）：页面 BDC 内联属性表里的 `/MCID` 必须与
+        // 结构树的 MCR 子项逐页一致。原始字典只接受整数值——写端一律写
+        // `Value::Integer`，非整数说明调用方手工拼了属性表。`Artifact` 带
+        // `/MCID` 直接拒绝：14.8.2.3.1 规定 artifact 只进页面内容顺序、不得
+        // 被赋予结构身份。门禁同样在任何对象号分配与写出之前完成，保持
+        // 零字节失败契约。
+        let mut structure_page_mcids: BTreeMap<usize, Vec<i64>> = BTreeMap::new();
+        for (page, page_build) in self.pages.iter().enumerate() {
+            for op in page_build.content.ops() {
+                let Op::BeginMarkedContentProperties {
+                    tag,
+                    properties: MarkedContentProperties::Dict(dict),
+                } = op
+                else {
+                    continue;
+                };
+                let Some(value) = dict.get("MCID") else {
+                    continue;
+                };
+                if tag.as_str() == "Artifact" {
+                    return Err(WriteError::InvalidObject(format!(
+                        "structure marked content: page {page} Artifact must not carry /MCID (14.8.2.3.1)"
+                    )));
+                }
+                let Value::Integer(mcid) = value else {
+                    return Err(WriteError::InvalidObject(format!(
+                        "structure marked content: page {page} /MCID must be an integer, got {}",
+                        value.type_name()
+                    )));
+                };
+                structure_page_mcids.entry(page).or_default().push(*mcid);
+            }
+        }
+        structure_content::validate(&structure_page_mcids, self.navigation.structure_tree())
+            .map_err(|message| {
+                WriteError::InvalidObject(format!("structure marked content: {message}"))
+            })?;
 
         // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
         // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
