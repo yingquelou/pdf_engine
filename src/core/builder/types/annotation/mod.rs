@@ -16,7 +16,8 @@
 //! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
 //! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
 //! 字典 `/FixedPrint`（Table 190/191）；`exdata` 覆盖 3D 标记注解的外部数据
-//! 字典 `/ExData`（13.6.6 Table 313），子类型归属守卫集中在 `guard`。
+//! 字典 `/ExData`（13.6.6 Table 313）；`printer_mark` 覆盖 Printer's mark
+//! 注解的 `/MN` 与 `/F`/外观契约（14.11.3 Table 362），子类型归属守卫集中在 `guard`。
 
 mod border;
 mod exdata;
@@ -28,6 +29,7 @@ mod link;
 mod measure;
 mod mk;
 mod movie;
+mod printer_mark;
 mod redact;
 mod sound;
 mod subtype;
@@ -45,6 +47,7 @@ use link::LinkEntries;
 pub use link::LinkHighlightMode;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 pub use mk::{AppearanceCharacteristics, IconFit, IconScaleWhen, IconScaling};
+use printer_mark::PrinterMarkEntries;
 use redact::RedactEntries;
 use subtype::LineEntries;
 pub(crate) use subtype::validate_name_value;
@@ -102,6 +105,7 @@ pub struct PdfAnnotation {
     contents: Option<String>,
     title: Option<String>,
     name: Option<String>,
+    printer_mark: Option<PrinterMarkEntries>,
     modified_date: Option<String>,
     creation_date: Option<String>,
     color: Option<Vec<f64>>,
@@ -161,6 +165,7 @@ impl PdfAnnotation {
             contents: None,
             title: None,
             name: None,
+            printer_mark: None,
             modified_date: None,
             creation_date: None,
             color: None,
@@ -640,6 +645,7 @@ impl PdfAnnotation {
             markup.validate()?;
         }
         self.validate_subtype_entries()?;
+        printer_mark::validate(self)?;
         Ok(())
     }
 }

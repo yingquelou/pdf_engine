@@ -399,6 +399,19 @@ fn table_169_rows_map_to_names_versions_and_markup_flags() {
                 ),
             );
         }
+        // Printer's mark 注解（14.11.3 Table 362）要求 `/F` 与 `/AP /N` 表单。
+        if name == "PrinterMark" {
+            dict = dict.insert("F", Value::Integer(68)).insert(
+                "AP",
+                Value::Dict(Dict::new().insert(
+                    "N",
+                    Value::Stream(
+                        Dict::new().insert("Subtype", Value::Name("Form".into())),
+                        StreamData::Owned(Vec::new()),
+                    ),
+                )),
+            );
+        }
         let annotation = parse_annotation(&doc(vec![]), 0, None, &dict).expect("subtype");
         assert!(
             !matches!(annotation.subtype, AnnotationSubtype::Unknown(_)),

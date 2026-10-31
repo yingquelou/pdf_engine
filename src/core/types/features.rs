@@ -46,6 +46,8 @@ impl FeatureProfile {
 /// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
 /// - `/Subtype /Movie`、`/S /Movie` → MovieObjects（1.2）
 /// - `/Subtype /Markup3D` → ThreeDMarkup（1.7）
+/// - `/Subtype /PrinterMark`，或 `/Subtype /Form` 带 `/MarkStyle` `/Colorants`
+///   之一 → PrinterMarks（1.4）
 /// - `/Type /Rendition`、`/Type /MediaClip`、`/S /Rendition` → Renditions（1.5）
 /// - 3D 视图字典（`/Type /3DView` 或 `/XN`）的 `/RM` `/LS` `/SA` `/NA`
 ///   `/NR` 任一键 → ThreeDViewExtensions（1.7）
@@ -114,6 +116,17 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // ExData、ISO 示例写作 Markup3D，写法不唯一，故只按 `/Subtype` 命中。
     if d.get("Subtype").and_then(|v| v.as_name()) == Some("Markup3D") {
         features.insert(PdfFeature::ThreeDMarkup);
+    }
+    // 打印机标记（PDF 1.4）：PrinterMark 注解 `/Subtype /PrinterMark`
+    // （14.11.3 Table 362），以及带 `/MarkStyle` 或 `/Colorants` 的 Form
+    // XObject（Table 363）。`/Colorants` 也出现在 NChannel ICCBased 配置
+    // 流中，故表单条目必须先确认 `/Subtype /Form`。
+    let subtype = d.get("Subtype").and_then(|v| v.as_name());
+    if subtype == Some("PrinterMark")
+        || (subtype == Some("Form")
+            && (d.0.contains_key("MarkStyle") || d.0.contains_key("Colorants")))
+    {
+        features.insert(PdfFeature::PrinterMarks);
     }
     // 多媒体（PDF 1.5）：rendition 对象的 /Type /Rendition（Table 266）、
     // media clip 的 /Type /MediaClip（Table 273）与 Rendition 动作的

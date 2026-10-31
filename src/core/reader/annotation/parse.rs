@@ -10,7 +10,7 @@ use super::entries::{
 };
 use super::{
     Annotation, AnnotationError, AnnotationFlags, AnnotationSubtype, Result, exdata, malformed,
-    measure, mk, movie, redact, sound, subtype, watermark,
+    measure, mk, movie, printer_mark, redact, sound, subtype, watermark,
 };
 use crate::core::reader::three_d::ThreeDError;
 use crate::core::types::{Dict, Document, Value};
@@ -51,6 +51,7 @@ pub(super) fn parse_annotation(
     let fixed_print = watermark::parse_fixed_print(document, dict)?;
     let sound = sound::parse_sound_entries(dict, &subtype)?;
     let movie = movie::parse_movie_entries(document, dict, &subtype)?;
+    let printer_mark = printer_mark::parse_printer_mark(document, dict, &subtype)?;
     let three_d = crate::core::reader::three_d::parse_three_d_entries(document, dict, &subtype)
         .map_err(|error| match error {
             ThreeDError::Malformed(message) => malformed(format!("3D annotation: {message}")),
@@ -82,6 +83,7 @@ pub(super) fn parse_annotation(
                 None => Err(malformed("annotation /AS must be a name")),
             })
             .transpose()?,
+        printer_mark,
         quad_points: parse_number_array(dict, "QuadPoints", true)?,
         icon_name: entries.icon_name,
         sound,

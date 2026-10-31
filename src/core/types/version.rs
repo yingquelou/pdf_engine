@@ -239,6 +239,9 @@ pub enum PdfFeature {
     ThreeDMarkup,
     /// 目录 `/OutputIntents` 输出意图数组（14.11.5 Table 365），PDF 1.4 引入。
     OutputIntents,
+    /// 打印机标记（14.11.3）：PrinterMark 注解（Table 362）与表单条目标
+    /// 记（Table 363），PDF 1.4 引入。
+    PrinterMarks,
     /// 页面处理框（`/BleedBox` `/TrimBox` `/ArtBox`，14.11.2 Table 30），
     /// PDF 1.3 引入。
     PageBoundaries,
@@ -280,6 +283,7 @@ impl PdfFeature {
             | PdfFeature::FormChoiceIndices
             | PdfFeature::AlternatePresentations
             | PdfFeature::OutputIntents
+            | PdfFeature::PrinterMarks
             | PdfFeature::PageBoxColorInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -379,6 +383,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::GoTo3DViewAction => "go-to-3D-view actions",
             PdfFeature::ThreeDMarkup => "3D markup annotations",
             PdfFeature::OutputIntents => "output intents",
+            PdfFeature::PrinterMarks => "printer's marks",
             PdfFeature::PageBoundaries => "page boundaries",
             PdfFeature::PageBoxColorInfo => "page box color info",
         };

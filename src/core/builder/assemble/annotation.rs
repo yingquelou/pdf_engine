@@ -82,8 +82,11 @@ pub(super) fn annotation_dict(
         .insert("Type", Value::Name("Annot".into()))
         .insert("Subtype", Value::Name(annot.kind().name().into()))
         .insert("Rect", real_array(&annot.rect()));
-    if annot.flags() != 0 {
-        dict = dict.insert("F", Value::Integer(i64::from(annot.flags())));
+    // Printer's mark 的 `/F` 恒为 Print|ReadOnly（68，14.11.3），即使调用方
+    // 未显式设置标志位也必须写出。
+    let flags = annot.written_flags();
+    if flags != 0 {
+        dict = dict.insert("F", Value::Integer(i64::from(flags)));
     }
     if let Some(contents) = annot.contents() {
         dict = dict.insert("Contents", text_string_value(contents));
@@ -93,6 +96,12 @@ pub(super) fn annotation_dict(
     }
     if let Some(name) = annot.name() {
         dict = dict.insert("NM", text_string_value(name));
+    }
+    // `/MN` 是 Printer's mark 的标记名称（Table 362，name 而非文本串）。
+    if let Some(mark) = annot.printer_mark()
+        && let Some(name) = mark.mark_name()
+    {
+        dict = dict.insert("MN", Value::Name(name.into()));
     }
     if let Some(date) = annot.modified_date() {
         dict = dict.insert("M", text_string_value(date));

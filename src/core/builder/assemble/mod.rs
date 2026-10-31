@@ -837,6 +837,10 @@ impl PdfBuilder {
             if entry.annot.kind() == AnnotationKind::Movie {
                 doc.features.borrow_mut().insert(PdfFeature::MovieObjects);
             }
+            // Printer's mark 注解（14.11.3 Table 362）自 PDF 1.4 引入。
+            if entry.annot.kind() == AnnotationKind::PrinterMark {
+                doc.features.borrow_mut().insert(PdfFeature::PrinterMarks);
+            }
         }
         // 表单数据动作与字段名条目（12.7.5.2–12.7.5.4），写入特征画像。
         for feature in &action_features {
@@ -1249,6 +1253,15 @@ impl PdfBuilder {
         // Form XObject 流对象：BBox 必填，Matrix 仅在提供时写出。
         for &handle in &used_forms {
             let form = &mut self.forms[handle];
+            // Printer's mark 表单条目（14.11.3 Table 363）自 PDF 1.4 引入，
+            // 版本门禁先于条目校验，保证低版本一律报 UnsupportedVersion。
+            if form.has_printer_mark_entries() && self.version < PdfVersion::V1_4 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "printer's mark form entries require PDF {}, got {}",
+                    PdfVersion::V1_4.as_str(),
+                    self.version.as_str()
+                )));
+            }
             form.validate()
                 .map_err(|message| WriteError::InvalidObject(format!("form XObject: {message}")))?;
             let content_bytes = form.content.to_bytes();
@@ -1299,6 +1312,22 @@ impl PdfBuilder {
                 doc.features
                     .borrow_mut()
                     .insert(PdfFeature::OptionalContent);
+            }
+            // Printer's mark 表单条目（14.11.3 Table 363，PDF 1.4）：
+            // `/MarkStyle` 为文本串，`/Colorants` 为色料名 → Separation 空间。
+            if form.has_printer_mark_entries() {
+                if let Some(mark_style) = &form.mark_style {
+                    dict = dict.insert("MarkStyle", text_string_value(mark_style));
+                }
+                if !form.colorants.is_empty() {
+                    let mut colorants = Dict::new();
+                    for (name, space) in &form.colorants {
+                        colorants = colorants
+                            .insert(name.as_str(), color_space_value(space, &mut doc, &mut num)?);
+                    }
+                    dict = dict.insert("Colorants", Value::Dict(colorants));
+                }
+                doc.features.borrow_mut().insert(PdfFeature::PrinterMarks);
             }
             doc.set_object(Object::new(
                 form_nums[handle],

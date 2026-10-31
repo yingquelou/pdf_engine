@@ -127,6 +127,10 @@ pub struct FormXObject {
     pub resources: Option<FormResources>,
     /// 表单级可选内容组句柄（`/OC`，PDF 1.5）；整张表单在组隐藏时不绘制。
     pub optional_content: Option<usize>,
+    /// Printer's mark 表单的 `/MarkStyle`（14.11.3 Table 363，PDF 1.4）。
+    pub mark_style: Option<String>,
+    /// Printer's mark 表单的 `/Colorants`（Table 363）：色料名 → Separation 空间。
+    pub colorants: Vec<(String, ColorSpace)>,
     /// 表单内容流。
     pub content: ContentStream,
 }
@@ -140,6 +144,8 @@ impl FormXObject {
             group: None,
             resources: None,
             optional_content: None,
+            mark_style: None,
+            colorants: Vec::new(),
             content,
         }
     }
@@ -168,6 +174,26 @@ impl FormXObject {
         self
     }
 
+    /// 设置 Printer's mark 表单描述 `/MarkStyle`（Table 363，PDF 1.4）。
+    pub fn with_mark_style(mut self, mark_style: impl Into<String>) -> Self {
+        self.mark_style = Some(mark_style.into());
+        self
+    }
+
+    /// 追加一项 Printer's mark 色料定义 `/Colorants`（Table 363，PDF 1.4）。
+    ///
+    /// 键须与 `space` 中 Separation 颜色空间的色料名一致；校验在
+    /// [`PdfBuilder::build`](crate::core::builder::PdfBuilder::build) 阶段进行。
+    pub fn with_colorant(mut self, name: impl Into<String>, space: ColorSpace) -> Self {
+        self.colorants.push((name.into(), space));
+        self
+    }
+
+    /// 是否声明了 Table 363 的 Printer's mark 表单条目。
+    pub(crate) fn has_printer_mark_entries(&self) -> bool {
+        self.mark_style.is_some() || !self.colorants.is_empty()
+    }
+
     /// 校验 BBox、Matrix 与组属性；非法时返回可读原因。
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.bbox.iter().any(|v| !v.is_finite()) {
@@ -185,6 +211,31 @@ impl FormXObject {
             group
                 .validate()
                 .map_err(|message| format!("group: {message}"))?;
+        }
+        // Table 363 `/Colorants`：键为合法 PDF name，值与 Separation 颜色
+        // 空间的色料名一致、不得重复，并复用颜色空间自身的校验。
+        let mut seen = std::collections::BTreeSet::new();
+        for (name, space) in &self.colorants {
+            super::annotation::validate_name_value(name, "printer's mark form colorant name")?;
+            let ColorSpace::Separation(separation) = space else {
+                return Err(format!(
+                    "printer's mark form colorant {name} must be a Separation color space"
+                ));
+            };
+            if separation.colorant != *name {
+                return Err(format!(
+                    "printer's mark form colorant {name} does not match its Separation colorant {}",
+                    separation.colorant
+                ));
+            }
+            if !seen.insert(name.as_str()) {
+                return Err(format!(
+                    "printer's mark form colorant {name} is registered twice"
+                ));
+            }
+            space
+                .validate()
+                .map_err(|message| format!("printer's mark form colorant {name}: {message}"))?;
         }
         Ok(())
     }

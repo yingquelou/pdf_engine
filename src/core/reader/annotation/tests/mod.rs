@@ -7,6 +7,7 @@
 //! `measure` 覆盖 12.9 的 measure 字典（Table 261–263），
 //! `exdata` 覆盖 3D 标记的 `/ExData` 外部数据字典（13.6.6 Table 313），
 //! `watermark` 覆盖 Watermark 的固定打印字典 `/FixedPrint`（Table 190/191），
+//! `printer_mark` 覆盖 Printer's mark 注解的 `/MN` 与表单项（Table 362/363），
 //! `dates` 覆盖 `/M` `/CreationDate` 的 PDF 日期解析（7.9.4），
 //! `three_d` 覆盖 3D 注解与 13.6 的 3D 流/视图/投影/背景字典（Table 298–306）。
 
@@ -18,6 +19,7 @@ mod link;
 mod measure;
 mod mk;
 mod movie;
+mod printer_mark;
 mod redact;
 mod sound;
 mod subtype;
