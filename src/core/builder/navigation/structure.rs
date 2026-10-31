@@ -27,8 +27,12 @@
 //! 终点、或 `/RoleMap` 任一目标为这些名字时要求 ≥1.5（`/RoleMap` 目标
 //! 即使未被元素使用也计入，避免写出带 1.5 类型名的 1.3/1.4 文件）。
 //!
-//! 本切片的范围限制：`/K` 只写出子元素引用与 MCR 字典（带显式 `/Pg` 与
-//! `/MCID`），不写 OBJR、整数 MCID 与 `/Stm` `/StmOwn`。
+//! 本切片的范围限制：`/K` 写出子元素引用、MCR 字典（带显式 `/Pg` 与
+//! `/MCID`）与 OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`，引用
+//! 已注册注解的对象号），不写整数 MCID 与 `/Stm` `/StmOwn`。OBJR 内容项
+//! 的父树条目是裸结构元素引用（14.7.4.4），写端同时给注解字典追加
+//! `/StructParent`（Table 326）；父树键先页面后 OBJR 连续分配，同一注解
+//! 句柄被两个元素声称、句柄或所在页越界一律返回 [`WriteError::InvalidObject`]。
 
 use std::collections::BTreeMap;
 
@@ -86,6 +90,16 @@ enum PlannedKid {
     Element(usize),
     /// MCR：页索引 + MCID。
     MarkedContent { page: usize, mcid: i64 },
+    /// OBJR（Table 325）：注解文档级句柄。
+    ObjectReference { annotation: usize },
+}
+
+/// 父树条目的两种形态（14.7.4.4）。
+enum ParentEntry {
+    /// 页面数组：按 MCID 作零基下标，空位 `None`。
+    Page(Vec<Option<usize>>),
+    /// OBJR 内容项对象的单元条目：父元素 arena 下标（写出为裸引用）。
+    Object(usize),
 }
 
 /// 校验并展开后的写出计划（不含对象号，尚未分配任何对象）。
@@ -93,8 +107,10 @@ struct Plan<'a> {
     flat: Vec<Flat<'a>>,
     /// 页面索引 → 父树键（按页升序 0..n-1）。
     page_keys: BTreeMap<usize, i64>,
-    /// 父树键 → 按 MCID 索引的父元素 arena 下标（空位 `None`）。
-    parents: BTreeMap<i64, Vec<Option<usize>>>,
+    /// 父树键 → 页面 MCID 数组或 OBJR 单元引用（空位 `None`）。
+    parents: BTreeMap<i64, ParentEntry>,
+    /// OBJR 注解句柄 → 父树键（页面键之后按句柄升序连续分配）。
+    objr_keys: BTreeMap<usize, i64>,
     /// `/ID` 原始字节 → 元素 arena 下标（按字节升序）。
     ids: BTreeMap<Vec<u8>, usize>,
     /// 是否使用 `/Lang` 或 `/ActualText`（PDF 1.4）。
@@ -111,11 +127,16 @@ struct Plan<'a> {
 
 /// 把结构树与标记信息写入已组装的 `Document`，返回目录条目。
 ///
-/// 所有校验在任何对象号分配之前完成。
+/// `annotation_nums` 与 `annotation_pages` 是注解句柄 → 对象号/0 基页索引
+/// 的映射，供 OBJR 子项（Table 325）解析 `/Obj` 与 `/Pg`。
+///
+/// 所有句柄与页索引校验在任何对象号分配之前完成。
 pub(super) fn write(
     doc: &mut Document,
     version: PdfVersion,
     page_refs: &[(i64, i64)],
+    annotation_nums: &[i64],
+    annotation_pages: &[usize],
     tree: Option<&StructureTree>,
     mark_info: Option<&StructureMarkInfo>,
 ) -> Result<CatalogEntries, WriteError> {
@@ -143,7 +164,13 @@ pub(super) fn write(
         return Ok(entries);
     };
 
-    let plan = plan(tree, version, page_refs.len())?;
+    let plan = plan(
+        tree,
+        version,
+        page_refs.len(),
+        annotation_nums,
+        annotation_pages,
+    )?;
 
     // 14.7.5.4：含用户属性的文档必须在 `/MarkInfo` 声明 `/UserProperties
     // true`。读端已在结构树之前校验过标记信息，这里只做交叉检查，仍在
@@ -209,8 +236,11 @@ pub(super) fn write(
         &element_attributes,
         root_num,
         page_refs,
+        annotation_nums,
+        annotation_pages,
     );
     write_page_parents(doc, &plan, page_refs)?;
+    write_annotation_parents(doc, &plan, annotation_nums)?;
 
     let mut features = doc.features.borrow_mut();
     features.insert(PdfFeature::LogicalStructure);
@@ -231,16 +261,24 @@ pub(super) fn write(
 }
 
 /// 校验结构树并展开为前序计划；版本门禁先于结构校验之后执行。
+///
+/// OBJR 子项按 `annotation_nums`/`annotation_pages` 校验句柄与所在页；
+/// 这些检查与页面/MCID 检查一样先于任何对象号分配。
 fn plan<'a>(
     tree: &'a StructureTree,
     version: PdfVersion,
     page_count: usize,
+    annotation_nums: &'a [i64],
+    annotation_pages: &'a [usize],
 ) -> Result<Plan<'a>, WriteError> {
     let mut flattener = Flattener {
         flat: Vec::new(),
         ids: BTreeMap::new(),
         mcids: BTreeMap::new(),
+        objrs: BTreeMap::new(),
         page_count,
+        annotation_nums,
+        annotation_pages,
         role_map: &tree.role_map,
         standard: StandardUsage::default(),
         uses_language: false,
@@ -327,13 +365,23 @@ fn plan<'a>(
         for (mcid, index) in entries {
             array[*mcid as usize] = Some(*index);
         }
-        parents.insert(key, array);
+        parents.insert(key, ParentEntry::Page(array));
+    }
+    // 14.7.4.4：OBJR 内容项的父树条目是单元引用，键接在页面键之后按
+    // 注解句柄升序连续分配，保证 0..n-1 无空洞。
+    let mut objr_keys = BTreeMap::new();
+    let first_objr_key = flattener.mcids.len() as i64;
+    for (offset, (handle, index)) in flattener.objrs.iter().enumerate() {
+        let key = first_objr_key + offset as i64;
+        parents.insert(key, ParentEntry::Object(*index));
+        objr_keys.insert(*handle, key);
     }
 
     Ok(Plan {
         flat: flattener.flat,
         page_keys,
         parents,
+        objr_keys,
         ids: flattener.ids,
         uses_language: flattener.uses_language,
         uses_expanded: flattener.uses_expanded,
@@ -502,7 +550,13 @@ struct Flattener<'a> {
     ids: BTreeMap<Vec<u8>, usize>,
     /// 页面索引 → MCID → 父元素 arena 下标（同页 MCID 唯一）。
     mcids: BTreeMap<usize, BTreeMap<i64, usize>>,
+    /// 注解句柄 → 父元素 arena 下标（同一注解至多被一个元素声称）。
+    objrs: BTreeMap<usize, usize>,
     page_count: usize,
+    /// 注解句柄 → 注解对象号；长度即句柄上界。
+    annotation_nums: &'a [i64],
+    /// 注解句柄 → 注解绑定的 0 基页索引（OBJR `/Pg` 与越界校验用）。
+    annotation_pages: &'a [usize],
     /// 结构类型 → 标准类型的角色映射（元素适用性判定用）。
     role_map: &'a BTreeMap<String, String>,
     /// 标准属性使用情况与待核对的 `/Headers` 引用。
@@ -648,6 +702,34 @@ impl<'a> Flattener<'a> {
                         mcid: *mcid,
                     });
                 }
+                StructureKid::ObjectReference { annotation } => {
+                    if *annotation >= self.annotation_nums.len() {
+                        return Err(invalid(format!(
+                            "structure OBJR annotation handle {annotation} is out of range (count {})",
+                            self.annotation_nums.len()
+                        )));
+                    }
+                    let Some(&page) = self.annotation_pages.get(*annotation) else {
+                        return Err(invalid(format!(
+                            "structure OBJR annotation handle {annotation} is out of range (count {})",
+                            self.annotation_pages.len()
+                        )));
+                    };
+                    if page >= self.page_count {
+                        return Err(invalid(format!(
+                            "structure OBJR annotation handle {annotation} is attached to page {page} out of range (page count {})",
+                            self.page_count
+                        )));
+                    }
+                    if self.objrs.insert(*annotation, index).is_some() {
+                        return Err(invalid(format!(
+                            "structure OBJR annotation handle {annotation} is claimed by more than one structure element"
+                        )));
+                    }
+                    kids.push(PlannedKid::ObjectReference {
+                        annotation: *annotation,
+                    });
+                }
             }
         }
         self.flat[index].kids = kids;
@@ -669,16 +751,22 @@ fn root_dict(
         }
     }
     let mut nums = Array::new();
-    for (key, array) in &plan.parents {
+    for (key, entry) in &plan.parents {
         nums = nums.push(Value::Integer(*key));
-        let mut values = Array::new();
-        for slot in array {
-            values = values.push(match slot {
-                Some(index) => Value::Ref(element_nums[*index], 0),
-                None => Value::Null,
-            });
-        }
-        nums = nums.push(Value::Array(values));
+        nums = nums.push(match entry {
+            // OBJR 单元条目：裸间接引用（14.7.4.4），不是数组。
+            ParentEntry::Object(index) => Value::Ref(element_nums[*index], 0),
+            ParentEntry::Page(slots) => {
+                let mut values = Array::new();
+                for slot in slots {
+                    values = values.push(match slot {
+                        Some(index) => Value::Ref(element_nums[*index], 0),
+                        None => Value::Null,
+                    });
+                }
+                Value::Array(values)
+            }
+        });
     }
     let mut dict = Dict::new()
         .insert("Type", Value::Name("StructTreeRoot".into()))
@@ -720,7 +808,8 @@ fn root_dict(
     dict
 }
 
-/// 写出全部结构元素对象；`/K` 混合子元素引用与 MCR 字典。
+/// 写出全部结构元素对象；`/K` 混合子元素引用、MCR 字典与 OBJR 字典。
+#[allow(clippy::too_many_arguments)]
 fn write_elements(
     doc: &mut Document,
     plan: &Plan<'_>,
@@ -728,6 +817,8 @@ fn write_elements(
     element_attributes: &[Vec<StructureAttribute>],
     root_num: i64,
     page_refs: &[(i64, i64)],
+    annotation_nums: &[i64],
+    annotation_pages: &[usize],
 ) {
     for (index, flat) in plan.flat.iter().enumerate() {
         let element = flat.element;
@@ -775,6 +866,17 @@ fn write_elements(
                             .insert("Type", Value::Name("MCR".into()))
                             .insert("Pg", Value::Ref(page_num, generation))
                             .insert("MCID", Value::Integer(*mcid)),
+                    )
+                }
+                PlannedKid::ObjectReference { annotation } => {
+                    // Table 325：`/Pg` 与 `/Obj` 均为间接引用；页取注解
+                    // 自身绑定的页，不依赖元素（写端元素不携带 `/Pg`）。
+                    let (page_num, generation) = page_refs[annotation_pages[*annotation]];
+                    Value::Dict(
+                        Dict::new()
+                            .insert("Type", Value::Name("OBJR".into()))
+                            .insert("Pg", Value::Ref(page_num, generation))
+                            .insert("Obj", Value::Ref(annotation_nums[*annotation], 0)),
                     )
                 }
             });
@@ -835,6 +937,34 @@ fn write_page_parents(
         })?;
         dict = dict.insert("StructParents", Value::Integer(*key));
         doc.set_object(Object::new(num, generation, Value::Dict(dict)));
+    }
+    Ok(())
+}
+
+/// 注解字典追加 `/StructParent`（Table 326；14.7.4.4 的对象引用子项）。
+fn write_annotation_parents(
+    doc: &mut Document,
+    plan: &Plan<'_>,
+    annotation_nums: &[i64],
+) -> Result<(), WriteError> {
+    for (handle, key) in &plan.objr_keys {
+        let num = annotation_nums[*handle];
+        let objects = doc.objects_for_write();
+        let object = objects
+            .iter()
+            .find(|object| object.num == num && object.generation == 0)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "structure OBJR annotation object {num} 0 is missing"
+                ))
+            })?;
+        let mut dict = object.value.as_dict().cloned().ok_or_else(|| {
+            invalid(format!(
+                "structure OBJR annotation object {num} 0 is not a dictionary"
+            ))
+        })?;
+        dict = dict.insert("StructParent", Value::Integer(*key));
+        doc.set_object(Object::new(num, 0, Value::Dict(dict)));
     }
     Ok(())
 }

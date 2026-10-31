@@ -55,11 +55,14 @@ pub use thread::ThreadAction;
 /// Hide 的 `/T`、GoTo3DView 的 `/TA` 与 Rendition 的 `/AN` 用注解映射，
 /// Set-OCG-State 的 `/State` 用可选内容组映射，Sound 的 `/Sound` 用声音
 /// 对象映射，Rendition 的 media clip `/D` 用嵌入文件、Form XObject 与
-/// section 链对象号映射；未涉及的类别传空切片。
+/// section 链对象号映射；未涉及的类别传空切片。结构树 OBJR 子项另用
+/// `annotation_pages`（句柄 → 0 基页索引）解析 `/Pg`。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ActionRefs<'a> {
     /// 注解句柄 → 注解对象号。
     pub(crate) annotation_nums: &'a [i64],
+    /// 注解句柄 → 注解绑定的 0 基页索引（与 `annotation_nums` 同长）。
+    pub(crate) annotation_pages: &'a [usize],
     /// 可选内容组句柄 → 组对象号。
     pub(crate) ocg_nums: &'a [i64],
     /// 声音句柄 → 声音流对象号。

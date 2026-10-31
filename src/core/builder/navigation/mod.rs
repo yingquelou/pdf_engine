@@ -471,6 +471,8 @@ pub(super) fn apply(
         doc,
         version,
         &page_refs,
+        action_refs.annotation_nums,
+        action_refs.annotation_pages,
         navigation.structure_tree.as_ref(),
         navigation.mark_info.as_ref(),
     )?;

@@ -79,6 +79,7 @@ fn outline_hide_action_resolves_annotation_targets() {
         &b.navigation,
         crate::core::builder::types::ActionRefs {
             annotation_nums: &b.annotation_nums,
+            annotation_pages: &b.annotation_pages,
             ocg_nums: &b.ocg_nums,
             sound_nums: &b.sound_nums,
             form_nums: &b.form_nums,

@@ -202,6 +202,9 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 分配的注解对象号（下标即注解句柄）；供大纲
     /// `/A` 解析 Hide 动作的注解目标。
     annotation_nums: Vec<i64>,
+    /// 最近一次 assemble 记录的注解绑定页索引（下标即注解句柄）；供
+    /// 结构树 OBJR 子项解析 `/Pg`。
+    annotation_pages: Vec<usize>,
     /// 最近一次 assemble 分配的可选内容组对象号（下标即组句柄）；供大纲
     /// `/A` 解析 Set-OCG-State 动作的组目标。
     ocg_nums: Vec<i64>,
@@ -269,6 +272,7 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
+            annotation_pages: Vec::new(),
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
@@ -305,6 +309,7 @@ impl PdfBuilder {
             color_spaces: Vec::new(),
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
+            annotation_pages: Vec::new(),
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
@@ -975,6 +980,7 @@ impl PdfBuilder {
             &self.navigation,
             types::ActionRefs {
                 annotation_nums: &self.annotation_nums,
+                annotation_pages: &self.annotation_pages,
                 ocg_nums: &self.ocg_nums,
                 sound_nums: &self.sound_nums,
                 form_nums: &self.form_nums,

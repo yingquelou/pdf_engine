@@ -822,6 +822,7 @@ impl PdfBuilder {
                 .collect::<Vec<_>>(),
         )?;
         let mut annotation_nums = vec![0i64; self.annotations.len()];
+        let mut annotation_pages = vec![0usize; self.annotations.len()];
         let mut page_annotation_handles: Vec<Vec<usize>> = vec![Vec::new(); self.pages.len()];
         let mut page_trap_net_counts: Vec<usize> = vec![0; self.pages.len()];
         for (handle, entry) in self.annotations.iter().enumerate() {
@@ -911,6 +912,7 @@ impl PdfBuilder {
             }
             page_annotation_handles[entry.page].push(handle);
             annotation_nums[handle] = num;
+            annotation_pages[handle] = entry.page;
             num += 1;
         }
 
@@ -1493,6 +1495,7 @@ impl PdfBuilder {
         // 导航层随后写大纲 `/A`；Hide 与 Set-OCG-State 动作的目标句柄
         // 在此解析为对象号。
         self.annotation_nums = annotation_nums.clone();
+        self.annotation_pages = annotation_pages.clone();
         self.ocg_nums = ocg_nums.clone();
         self.sound_nums = sound_nums.clone();
         self.form_nums = form_nums.clone();

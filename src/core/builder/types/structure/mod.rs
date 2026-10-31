@@ -6,7 +6,8 @@
 //! 属性）。标准属性所有者（14.8.5.2 Table 341）与 Layout/List/PrintField/
 //! Table 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`layout`]、
 //! [`standard`] 与 [`format_specific`] 提供类型化构造器。
-//! 对象引用 OBJR（Table 325）与 `/Stm` `/StmOwn` 同样不在本模型内。
+//! 对象引用 OBJR（Table 325）以 [`StructureKid::ObjectReference`] 建模，
+//! 引用的对象是已注册的注解；`/Stm` `/StmOwn` 不在本模型内。
 //!
 //! 结构元素以拥有所有权的树形 `Vec` 表达（`StructureKid::Element` 装箱
 //! 子元素），与读端的 arena 前序模型不同：写端在 `PdfBuilder::build`
@@ -301,6 +302,15 @@ impl StructureElement {
     pub fn with_marked_content(self, page: usize, mcid: i64) -> Self {
         self.with_kid(StructureKid::marked_content(page, mcid))
     }
+
+    /// 追加一个对象引用内容项（OBJR，Table 325）。
+    ///
+    /// `annotation` 为 [`PdfBuilder::add_annotation`](crate::core::builder::PdfBuilder::add_annotation)
+    /// 返回的注解句柄：写出时该注解字典整体作为结构内容项，经 `/Obj`
+    /// 间接引用进入 `/K`，注解字典同时追加 `/StructParent` 父树键。
+    pub fn with_object_reference(self, annotation: usize) -> Self {
+        self.with_kid(StructureKid::object_reference(annotation))
+    }
 }
 
 /// 结构元素的 `/K` 子项。
@@ -315,6 +325,11 @@ pub enum StructureKid {
         /// 标记内容标识符（非负）。
         mcid: i64,
     },
+    /// 对象引用 OBJR（Table 325）：整个 PDF 对象作为内容项。
+    ObjectReference {
+        /// 注解文档级句柄（[`PdfBuilder::add_annotation`](crate::core::builder::PdfBuilder::add_annotation)）。
+        annotation: usize,
+    },
 }
 
 impl StructureKid {
@@ -326,6 +341,11 @@ impl StructureKid {
     /// 以 MCR 构造内容项子项。
     pub fn marked_content(page: usize, mcid: i64) -> Self {
         Self::MarkedContent { page, mcid }
+    }
+
+    /// 以 OBJR 注解引用构造内容项子项。
+    pub fn object_reference(annotation: usize) -> Self {
+        Self::ObjectReference { annotation }
     }
 }
 
