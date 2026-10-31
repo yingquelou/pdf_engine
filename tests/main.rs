@@ -2115,6 +2115,7 @@ fn builder_cmyk_image_roundtrips_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -2210,6 +2211,7 @@ fn builder_soft_mask_image_roundtrips_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let pixels = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
     let img = ImageData {
@@ -2226,6 +2228,7 @@ fn builder_soft_mask_image_roundtrips_through_parser() {
         smask: Some(Box::new(mask)),
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -2366,6 +2369,7 @@ fn builder_image_masks_roundtrip_through_parser() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     let explicit_mask_pixels = vec![0b1010_1010, 0b0101_0101];
     let explicit_mask = ImageData {
@@ -2382,6 +2386,7 @@ fn builder_image_masks_roundtrip_through_parser() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     let base_pixels = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     let explicit = ImageData {
@@ -2398,6 +2403,7 @@ fn builder_image_masks_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: Some(ImageMask::explicit(explicit_mask)),
+        opi: None,
     };
     let keyed = ImageData {
         intent: None,
@@ -2413,6 +2419,7 @@ fn builder_image_masks_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: Some(ImageMask::color_key(vec![0, 10, 20, 30, 40, 50])),
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -2602,6 +2609,7 @@ fn builder_cie_color_spaces_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let profile: Vec<u8> = (0..128).map(|v| v as u8).collect();
@@ -2630,6 +2638,7 @@ fn builder_cie_color_spaces_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -2765,6 +2774,7 @@ fn builder_indexed_image_roundtrips_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -2870,6 +2880,7 @@ fn builder_separation_and_devicen_images_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let devicen = ImageData {
         intent: None,
@@ -2895,6 +2906,7 @@ fn builder_separation_and_devicen_images_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -6924,6 +6936,7 @@ fn builder_flate_stream_compression_roundtrips_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let build = |compress: bool| -> Vec<u8> {
@@ -7073,6 +7086,7 @@ fn reader_color_space_model_decodes_builder_images() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let separation = ImageData {
         intent: None,
@@ -7096,6 +7110,7 @@ fn reader_color_space_model_decodes_builder_images() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let devicen = ImageData {
         intent: None,
@@ -7121,6 +7136,7 @@ fn reader_color_space_model_decodes_builder_images() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let profile: Vec<u8> = (0..64u32).map(|v| v as u8).collect();
     let icc = ImageData {
@@ -7142,6 +7158,7 @@ fn reader_color_space_model_decodes_builder_images() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -7527,6 +7544,7 @@ fn builder_images_roundtrip_through_image_model() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let alpha = ImageData {
         intent: None,
@@ -7542,6 +7560,7 @@ fn builder_images_roundtrip_through_image_model() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let soft = ImageData {
         intent: None,
@@ -7557,6 +7576,7 @@ fn builder_images_roundtrip_through_image_model() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
     .with_smask(alpha);
     let stencil = ImageData {
@@ -7573,6 +7593,7 @@ fn builder_images_roundtrip_through_image_model() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     let explicit = ImageData {
         intent: None,
@@ -7588,6 +7609,7 @@ fn builder_images_roundtrip_through_image_model() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
     .with_mask(ImageMask::explicit(stencil));
     let keyed = ImageData {
@@ -7604,6 +7626,7 @@ fn builder_images_roundtrip_through_image_model() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
     .with_mask(ImageMask::color_key(vec![0, 10, 20, 30, 40, 50]));
 
@@ -7701,6 +7724,7 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let alpha = ImageData {
         width: 2,
@@ -7716,6 +7740,7 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let img = ImageData {
         width: 2,
@@ -7731,6 +7756,7 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
         smask: Some(Box::new(alpha)),
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::new();
@@ -7797,6 +7823,7 @@ fn builder_form_own_resources_roundtrip_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut inner = ContentStream::new();
     inner

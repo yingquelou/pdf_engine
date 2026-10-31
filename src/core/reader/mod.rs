@@ -83,6 +83,7 @@ pub mod metadata;
 pub mod movie;
 pub mod navigation;
 mod object;
+pub mod opi;
 pub mod optional_content;
 pub mod output_intent;
 pub mod page_box;

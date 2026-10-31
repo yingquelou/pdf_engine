@@ -420,7 +420,7 @@ fn named_action(name: &str) -> NamedAction {
     }
 }
 
-fn parse_file_spec(document: &Document, value: &Value) -> Result<FileSpec, ActionError> {
+pub(crate) fn parse_file_spec(document: &Document, value: &Value) -> Result<FileSpec, ActionError> {
     let value = resolve(document, value)?;
     match &value {
         Value::String(_) | Value::HexString(_) => text_value(&value)

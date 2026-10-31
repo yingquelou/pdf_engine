@@ -1,5 +1,6 @@
 //! Form XObject：可复用的自包含内容流。
 
+use super::opi::OpiProxy;
 use super::{ColorSpace, Font, ImageData};
 use crate::core::content::ContentStream;
 use crate::core::reader::annotation::ProcessColorModel;
@@ -143,6 +144,8 @@ pub struct FormXObject {
     pub trap_styles: Option<String>,
     /// Trap 网络表单的 `/FontFauxing`（Table 367）：字体字典数组。
     pub font_fauxing: Vec<Dict>,
+    /// `/OPI`（§14.11.7 Table 368，PDF 1.2）：OPI 代理字典。
+    pub opi: Option<OpiProxy>,
     /// 表单内容流。
     pub content: ContentStream,
 }
@@ -163,6 +166,7 @@ impl FormXObject {
             trap_regions: Vec::new(),
             trap_styles: None,
             font_fauxing: Vec::new(),
+            opi: None,
             content,
         }
     }
@@ -240,6 +244,14 @@ impl FormXObject {
     /// 追加一个 `/FontFauxing` 字体字典（Table 367，原样写出）。
     pub fn with_font_fauxing(mut self, font: Dict) -> Self {
         self.font_fauxing.push(font);
+        self
+    }
+
+    /// 设置 `/OPI` 代理字典（§14.11.7 Table 368，PDF 1.2）。
+    ///
+    /// 目标版本低于 1.2 时构建失败（`WriteError::UnsupportedVersion`）。
+    pub fn with_opi(mut self, opi: OpiProxy) -> Self {
+        self.opi = Some(opi);
         self
     }
 

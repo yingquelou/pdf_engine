@@ -26,6 +26,7 @@ use crate::core::types::{Array, Dict, Document, Value};
 use super::ParseError;
 use super::color_space::{ColorSpaceError, ColorSpaceModel};
 use super::content::InlineImage;
+use super::opi::{OpiProxy, parse_opi_entry};
 use super::page_content::PageContentError;
 
 #[cfg(test)]
@@ -37,7 +38,7 @@ type Result<T> = std::result::Result<T, ImageError>;
 const MAX_IMAGE_DEPTH: usize = 8;
 
 /// 已建模的图像字典键；其余键进入 [`ImageModel::other`]。
-const IMAGE_ENTRIES: [&str; 21] = [
+const IMAGE_ENTRIES: [&str; 22] = [
     "Type",
     "Subtype",
     "Width",
@@ -59,6 +60,7 @@ const IMAGE_ENTRIES: [&str; 21] = [
     "Metadata",
     "OC",
     "Matte",
+    "OPI",
 ];
 
 /// 图像解析或样本读取的失败原因。
@@ -165,6 +167,8 @@ pub struct ImageModel {
     pub smask_in_data: Option<u8>,
     /// `/Alternates`：交替图像列表。
     pub alternates: Vec<ImageModel>,
+    /// `/OPI`：OPI 代理版本字典（§14.11.7 Table 368–370，PDF 1.2）。
+    pub opi: Option<OpiProxy>,
     /// 已应用的过滤器规范名（`FlateDecode` 等），供样本读取判定。
     pub filters: Vec<String>,
     /// 未建模的其余字典条目。
@@ -709,6 +713,7 @@ impl Document {
         };
 
         let filters = self.image_filters(dict)?;
+        let opi = parse_opi_entry(self, dict).map_err(|error| invalid(format!("/OPI: {error}")))?;
         let mut other = BTreeMap::new();
         for (key, value) in &dict.0 {
             if !IMAGE_ENTRIES.contains(&key.as_str()) {
@@ -730,6 +735,7 @@ impl Document {
             smask,
             smask_in_data,
             alternates,
+            opi,
             filters,
             other,
             data,

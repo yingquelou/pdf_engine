@@ -26,6 +26,7 @@ fn builder_page_thumbnail_roundtrips_through_parser() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);

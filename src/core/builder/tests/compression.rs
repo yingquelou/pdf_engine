@@ -27,6 +27,7 @@ fn compressible_image() -> ImageData {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
 }
 

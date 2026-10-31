@@ -17,6 +17,7 @@
 //! - `graphics_state`：图形状态参数（ExtGState）；
 //! - `halftone`：半色调字典（Type 1/2 与包装字典）；
 //! - `optional_content`：可选内容组（OCG）；
+//! - `opi`：OPI 代理字典（14.11.7 Table 368–370）；
 //! - `output_intent`：输出意图（14.11.5 Table 365）；
 //! - `separation`：分色字典（14.11.4 Table 364）；
 //! - `page_box`：页面边界与框颜色信息（14.11.2 Table 30/360/361）；
@@ -42,6 +43,7 @@ mod graphics_state;
 mod halftone;
 mod image;
 mod movie;
+mod opi;
 mod optional_content;
 mod output_intent;
 mod page_box;
@@ -97,6 +99,10 @@ pub use image::{
     Lab, Separation,
 };
 pub use movie::{Movie, MovieActivation, MoviePlayback};
+pub use opi::{
+    Opi13Dictionary, Opi20Dictionary, OpiColor, OpiColorType, OpiInks, OpiProxy, OpiTagText,
+    OpiVersion,
+};
 pub use optional_content::OptionalContentGroup;
 pub(crate) use optional_content::text_string_value;
 pub use output_intent::{OutputIntent, OutputIntentProfile};

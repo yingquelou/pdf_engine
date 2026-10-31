@@ -18,6 +18,7 @@ fn rgb(width: u32, height: u32, fill: u8) -> ImageData {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn gray(width: u32, height: u32, fill: u8) -> ImageData {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
 }
 
@@ -54,6 +56,7 @@ fn stencil() -> ImageData {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     }
 }
 

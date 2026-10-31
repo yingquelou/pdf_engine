@@ -31,6 +31,7 @@
 //! - `page_presentation`：页面 `/Dur` 与 `/Trans`（12.4.4 Table 30）的写出、PDF 1.1 门禁与 1.5 样式条目门禁；
 //! - `page_box`：页面边界（14.11.2 Table 30）与框颜色信息（Table 360/361）的写出、PDF 1.3/1.4 门禁与取值契约；
 //! - `separation`：分色字典（14.11.4 Table 364）的组共享 `/Pages`、色料与颜色空间写出、组契约与 PDF 1.3 门禁；
+//! - `opi`：图像与表单 XObject 的 `/OPI` 代理字典（14.11.7 Table 368–370）写出、PDF 1.2 门禁与取值契约；
 //! - `thumbnail`：页面缩略图 `/Thumb`（12.3.4 Table 30）的图像引用、去重与颜色空间契约；
 //! - `articles`：文章线（12.4.3 Table 160/161）的线程/bead 对象、`/B` 与 PDF 1.1 门禁；
 //! - `collection`：便携集合（12.3.5 Table 155–158）的模式、`/D` `/View` `/Sort` 与 PDF 1.7 门禁；
@@ -108,6 +109,7 @@ mod image_entries;
 mod metadata;
 mod movie;
 mod navigation;
+mod opi;
 mod optional_content;
 mod output_intent;
 mod page_box;
@@ -433,6 +435,7 @@ fn image_xobject_emitted() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::Letter);
@@ -470,6 +473,7 @@ fn cmyk_image_xobject_emitted() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::Letter);
@@ -498,6 +502,7 @@ fn cmyk_image_data_length_mismatch_is_invalid_object() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::Letter);
@@ -531,6 +536,7 @@ fn image_with_unsupported_bits_is_invalid_object() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::Letter);
@@ -564,6 +570,7 @@ fn image_writes_decode_and_interpolate_entries() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -602,6 +609,7 @@ fn invalid_image_decode_fails_the_build() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     assert_image_rejected(
         base().with_decode(vec![0.0, 1.0]),
@@ -629,6 +637,7 @@ fn image_with_smask_writes_soft_mask_object_and_reference() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let img = ImageData {
         intent: None,
@@ -644,6 +653,7 @@ fn image_with_smask_writes_soft_mask_object_and_reference() {
         smask: Some(Box::new(mask)),
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -692,6 +702,7 @@ fn invalid_smask_parameters_fail_the_build() {
             smask: None,
             image_mask: false,
             mask: None,
+            opi: None,
         }
     }
     fn base_with(mask: ImageData) -> ImageData {
@@ -709,6 +720,7 @@ fn invalid_smask_parameters_fail_the_build() {
             smask: Some(Box::new(mask)),
             image_mask: false,
             mask: None,
+            opi: None,
         }
     }
 
@@ -731,6 +743,7 @@ fn invalid_smask_parameters_fail_the_build() {
             smask: None,
             image_mask: false,
             mask: None,
+            opi: None,
         }),
         "SMask color space must be DeviceGray",
     );
@@ -760,6 +773,7 @@ fn smask_requires_pdf_1_4() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let img = ImageData {
         intent: None,
@@ -775,6 +789,7 @@ fn smask_requires_pdf_1_4() {
         smask: Some(Box::new(mask)),
         image_mask: false,
         mask: None,
+        opi: None,
     };
 
     let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
@@ -816,6 +831,7 @@ fn stencil_image_mask_writes_image_mask_and_omits_color_space() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -846,6 +862,7 @@ fn explicit_mask_writes_mask_reference_and_stencil_object() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     let img = ImageData {
         intent: None,
@@ -861,6 +878,7 @@ fn explicit_mask_writes_mask_reference_and_stencil_object() {
         smask: None,
         image_mask: false,
         mask: Some(ImageMask::explicit(mask)),
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -900,6 +918,7 @@ fn colour_key_mask_writes_integer_ranges() {
         smask: None,
         image_mask: false,
         mask: Some(ImageMask::color_key(vec![0, 10, 20, 30, 40, 50])),
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -925,6 +944,7 @@ fn invalid_image_mask_parameters_fail_the_build() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     assert_image_rejected(
         ImageData {
@@ -965,6 +985,7 @@ fn invalid_image_mask_parameters_fail_the_build() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     assert_image_rejected(
         ImageData {
@@ -1004,6 +1025,7 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let plain_gray = ImageData {
         intent: None,
@@ -1019,6 +1041,7 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     assert_image_rejected(
         base().with_mask(ImageMask::explicit(plain_gray)),
@@ -1038,6 +1061,7 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     assert_image_rejected(
         base().with_mask(ImageMask::explicit(broken_mask)),
@@ -1073,6 +1097,7 @@ fn image_mask_entry_requires_pdf_1_3() {
         smask: None,
         image_mask: false,
         mask: Some(ImageMask::color_key(vec![0, 255, 0, 255, 0, 255])),
+        opi: None,
     };
     let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
     let p = b.page(PageSize::A4);
@@ -1111,6 +1136,7 @@ fn image_mask_entry_requires_pdf_1_3() {
         smask: None,
         image_mask: true,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
     let p = b.page(PageSize::A4);
@@ -1140,6 +1166,7 @@ fn cal_gray_image_writes_white_black_and_gamma() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1173,6 +1200,7 @@ fn cal_rgb_image_writes_gamma_and_matrix() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1208,6 +1236,7 @@ fn lab_image_writes_range() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1241,6 +1270,7 @@ fn icc_based_image_writes_profile_stream_and_alternative() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1275,6 +1305,7 @@ fn indexed_image_writes_base_hival_and_lookup_hex() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1312,6 +1343,7 @@ fn indexed_image_embeds_cie_base_definition() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1347,6 +1379,7 @@ fn separation_image_writes_colorant_alternate_and_tint_transform() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1389,6 +1422,7 @@ fn device_n_image_writes_names_and_sampled_tint_transform() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1431,6 +1465,7 @@ fn device_n_allows_repeated_none_colorant() {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);
@@ -1490,6 +1525,7 @@ fn assert_color_space_rejected(color_space: ColorSpace, expected: &str) {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     };
     let mut b = PdfBuilder::new();
     let p = b.page(PageSize::A4);

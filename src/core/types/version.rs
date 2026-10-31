@@ -254,6 +254,9 @@ pub enum PdfFeature {
     PageBoxColorInfo,
     /// 分色字典（页面 `/SeparationInfo`，14.11.4 Table 364），PDF 1.3 引入。
     SeparationInfo,
+    /// OPI 代理字典（图像与表单 XObject 的 `/OPI`，14.11.7 Table 368–370），
+    /// PDF 1.2 引入。
+    OpiDictionaries,
 }
 
 impl PdfFeature {
@@ -270,7 +273,8 @@ impl PdfFeature {
             | PdfFeature::HideAction
             | PdfFeature::FormDataActions
             | PdfFeature::SoundObjects
-            | PdfFeature::MovieObjects => PdfVersion::V1_2,
+            | PdfFeature::MovieObjects
+            | PdfFeature::OpiDictionaries => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
@@ -399,6 +403,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PageBoundaries => "page boundaries",
             PdfFeature::PageBoxColorInfo => "page box color info",
             PdfFeature::SeparationInfo => "separation dictionaries",
+            PdfFeature::OpiDictionaries => "OPI dictionaries",
         };
         write!(f, "{name}")
     }

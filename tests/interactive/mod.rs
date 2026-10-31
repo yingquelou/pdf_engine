@@ -12,7 +12,7 @@
 //! `annotation_trap_net`、
 //! `annotation_watermark`、
 //! `alternate_presentation`、`form`、`embedded`、`metadata`、`page_box`、`page_presentation`、
-//! `page_thumbnail`、`rendition`、`sound`、`three_d`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
+//! `page_thumbnail`、`opi`、`rendition`、`sound`、`three_d`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
 //! （子模块经 `use super::*;` 取用）。
 
 #[path = "../support/mod.rs"]
@@ -44,6 +44,7 @@ mod incremental;
 mod metadata;
 mod movie;
 mod navigation;
+mod opi;
 mod outline_action;
 mod output_intent;
 mod page_box;

@@ -52,6 +52,7 @@ impl FeatureProfile {
 ///   TrapNetworkModificationDate（1.4）；`/Subtype /Form` 带 `/PCM`
 ///   `/SeparationColorNames` `/TrapRegions` `/TrapStyles` `/FontFauxing`
 ///   之一 → TrapNetworks（1.3）
+/// - 图像或表单 XObject 的 `/OPI` → OpiDictionaries（1.2，14.11.7 Table 368）
 /// - `/Type /Rendition`、`/Type /MediaClip`、`/S /Rendition` → Renditions（1.5）
 /// - 3D 视图字典（`/Type /3DView` 或 `/XN`）的 `/RM` `/LS` `/SA` `/NA`
 ///   `/NR` 任一键 → ThreeDViewExtensions（1.7）
@@ -155,6 +156,12 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         .any(|key| d.0.contains_key(*key))
     {
         features.insert(PdfFeature::TrapNetworks);
+    }
+    // OPI 代理字典（PDF 1.2）：图像与表单 XObject 的 `/OPI`（14.11.7
+    // Table 368–370）。仅对 XObject 子类型判断，避免把同名键的其它
+    // 字典误判为 OPI。
+    if matches!(subtype, Some("Image") | Some("Form")) && d.0.contains_key("OPI") {
+        features.insert(PdfFeature::OpiDictionaries);
     }
     // 多媒体（PDF 1.5）：rendition 对象的 /Type /Rendition（Table 266）、
     // media clip 的 /Type /MediaClip（Table 273）与 Rendition 动作的

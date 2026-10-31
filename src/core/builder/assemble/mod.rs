@@ -15,6 +15,7 @@
 //! - `three_d`：3D artwork 流（13.6 Table 300）、引用字典（Table 303）与 `/OnInstantiate` 流的分配、写出与注解 `/3DD` 等条目；
 //! - `rendition`：media clip section 链（13.2.6 Table 277）的对象分配与写出；
 //! - `separation`：页面 `/SeparationInfo` 分色字典（14.11.4 Table 364）的校验与写出；
+//! - `opi`：图像与表单 XObject 的 `/OPI` 代理字典（14.11.7 Table 368–370）校验与写出；
 //! - `output_intent`：目录 `/OutputIntents` 输出意图（14.11.5 Table 365）的校验、配置文件流分配与写出。
 
 mod acro_form;
@@ -28,6 +29,7 @@ mod cmap;
 mod embedded_file;
 mod fonts;
 mod form_field;
+mod opi;
 mod output_intent;
 mod rendition;
 mod separation;
@@ -104,6 +106,16 @@ impl PdfBuilder {
         // 输出意图（14.11.5 Table 365）：Table 365 条目契约与 PDF 1.4 门禁
         // 同样在任何对象写出前完成。
         output_intent::validate_registration(&self.output_intents, self.version)?;
+        // OPI 代理字典（14.11.7 Table 368–370）：图像（含软蒙版、显式蒙版、
+        // 替代图像与页面缩略图）与表单的条目契约与 PDF 1.2 门禁在任何对象号
+        // 分配前完成。
+        opi::validate_images(
+            self.pages
+                .iter()
+                .flat_map(|page| page.images.iter().chain(page.thumbnail.iter())),
+            self.version,
+        )?;
+        opi::validate_forms(&self.forms, self.version)?;
         // 分色字典（14.11.4 Table 364）：组契约与 PDF 1.3 门禁在任何对象
         // 写出前完成；返回的页映射供页写出循环挂 `/SeparationInfo`。
         let separation_page_map =
@@ -1458,6 +1470,9 @@ impl PdfBuilder {
                 }
                 doc.features.borrow_mut().insert(PdfFeature::TrapNetworks);
             }
+            // OPI 代理字典（14.11.7 Table 368，PDF 1.2）：内联版本字典，
+            // 不分配额外对象；门禁与条目契约已在对象号分配前完成。
+            dict = opi::insert_opi(&mut doc, dict, &form.opi);
             doc.set_object(Object::new(
                 form_nums[handle],
                 0,
@@ -1799,6 +1814,7 @@ fn write_image(
         }
         dict
     };
+    stream_dict = opi::insert_opi(doc, stream_dict, &img.opi);
     if let Some(smask_num) = nums.smask {
         stream_dict = stream_dict.insert("SMask", Value::Ref(smask_num, 0));
     }
@@ -1841,6 +1857,7 @@ fn write_image(
             mask_dict = mask_dict.insert("Matte", real_array(matte));
             doc.features.borrow_mut().insert(PdfFeature::SoftMaskMatte);
         }
+        mask_dict = opi::insert_opi(doc, mask_dict, &smask.opi);
         doc.set_object(Object::new(
             smask_num,
             0,
@@ -1850,10 +1867,11 @@ fn write_image(
     }
 
     if let (Some(mask_num), Some(ImageMask::Explicit(mask))) = (nums.mask, &img.mask) {
+        let mask_dict = opi::insert_opi(doc, image_mask_dict(mask), &mask.opi);
         doc.set_object(Object::new(
             mask_num,
             0,
-            Value::Stream(image_mask_dict(mask), StreamData::Owned(mask.data.clone())),
+            Value::Stream(mask_dict, StreamData::Owned(mask.data.clone())),
         ));
     }
 

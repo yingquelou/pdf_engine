@@ -1,6 +1,7 @@
 //! 原始像素图片数据与色彩空间。
 
 use super::function::Function;
+use super::opi::OpiProxy;
 
 /// 图片色彩空间。
 ///
@@ -530,6 +531,9 @@ pub struct ImageData {
     pub image_mask: bool,
     /// `/Mask`（PDF 1.3）：显式蒙版图像或颜色键范围。
     pub mask: Option<ImageMask>,
+    /// `/OPI`（§14.11.7 Table 368，PDF 1.2）：OPI 代理字典，指向
+    /// 印刷工作流中的高分辨率原图。
+    pub opi: Option<OpiProxy>,
 }
 
 /// 图像 `/Mask` 条目（Table 89，PDF 1.3）。
@@ -604,6 +608,14 @@ impl ImageData {
     /// 附加 `/Mask` 条目（显式蒙版或颜色键蒙版）。
     pub fn with_mask(mut self, mask: ImageMask) -> Self {
         self.mask = Some(mask);
+        self
+    }
+
+    /// 设置 `/OPI` 代理字典（§14.11.7，PDF 1.2）。
+    ///
+    /// 目标版本低于 1.2 时构建失败（`WriteError::UnsupportedVersion`）。
+    pub fn with_opi(mut self, opi: OpiProxy) -> Self {
+        self.opi = Some(opi);
         self
     }
 

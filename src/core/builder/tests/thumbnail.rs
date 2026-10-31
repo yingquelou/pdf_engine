@@ -28,6 +28,7 @@ fn rgb(width: u32, height: u32, fill: u8) -> ImageData {
         smask: None,
         image_mask: false,
         mask: None,
+        opi: None,
     }
 }
 
