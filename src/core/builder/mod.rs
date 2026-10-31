@@ -40,6 +40,7 @@ pub use navigation::{
 pub(crate) use types::GraphicsStateFunctions;
 pub(crate) use types::OpenTypeFlavor;
 pub(crate) use types::Pattern;
+pub(crate) use types::SeparationGroup;
 pub(crate) use types::mesh_component_ranges;
 pub use types::{
     AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
@@ -48,8 +49,8 @@ pub use types::{
     CalculatorFunction, CalloutLine, CaptionPosition, CidEncoding, CidFont, CidFontSubtype,
     CidSystemInfo, CidVerticalMetrics, CidWidth, CollectionItem, CollectionItemValue,
     CollectionSubitem, CollectionSubitemValue, ColorSpace, CoonsPatch, CoonsPatchShading,
-    DashPattern, DeviceN, EmbeddedFile, ExponentialFunction, FieldActionEvent, FieldValue,
-    FixedPrint, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths, FormField,
+    DashPattern, DeviceColorant, DeviceN, EmbeddedFile, ExponentialFunction, FieldActionEvent,
+    FieldValue, FixedPrint, Font, FontDescriptor, FontEncoding, FontProgram, FontWidths, FormField,
     FormFieldType, FormOption, FormResources, FormXObject, FreeFormMeshShading, FreeTextIntent,
     Function, FunctionShading, GoTo3DViewAction, GoTo3DViewSelection, GoToEAction, GoToETarget,
     GoToETargetAnnotation, GoToETargetPage, GoToETargetRelation, GraphicsState, GraphicsStateFont,
@@ -63,19 +64,19 @@ pub use types::{
     MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder, OcgStateOperation,
     OcgStateSequence, OptionalContentGroup, OutputIntent, OutputIntentProfile, PageBoundaries,
     PageSize, PaintType, PdfAnnotation, PolygonIntent, RadialShading, Rendition, RenditionAction,
-    RenditionOperation, SampledFunction, SelectorRendition, Separation, SetOcgStateAction, Shading,
-    ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound,
-    SoundAction, SoundEncoding, StitchingFunction, TemporaryFilePermission, TensorProductPatch,
-    TensorProductPatchShading, ThreadAction, ThreeDActivation, ThreeDActivationPolicy,
-    ThreeDAnimationStyle, ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState,
-    ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDColor, ThreeDCrossSection,
-    ThreeDDeactivationPolicy, ThreeDFaceColor, ThreeDLightingScheme, ThreeDLightingSchemeType,
-    ThreeDMatrixSource, ThreeDNode, ThreeDProjection, ThreeDProjectionBinding,
-    ThreeDProjectionScale, ThreeDProjectionType, ThreeDRenderMode, ThreeDRenderModeType,
-    ThreeDStreamFormat, ThreeDView, ThreeDViewSelection, TilingPattern, TilingType, Transition,
-    TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle, Type1Halftone,
-    Type2Halftone, Type3Font, Type3Glyph, Viewport, XmpListItem, XmpListKind, XmpPacket,
-    XmpPacketError, XmpValue,
+    RenditionOperation, SampledFunction, SelectorRendition, Separation, SeparationInfo,
+    SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
+    SoftwareIdentifier, Sound, SoundAction, SoundEncoding, StitchingFunction,
+    TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading, ThreadAction,
+    ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,
+    ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,
+    ThreeDColor, ThreeDCrossSection, ThreeDDeactivationPolicy, ThreeDFaceColor,
+    ThreeDLightingScheme, ThreeDLightingSchemeType, ThreeDMatrixSource, ThreeDNode,
+    ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
+    ThreeDRenderMode, ThreeDRenderModeType, ThreeDStreamFormat, ThreeDView, ThreeDViewSelection,
+    TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
+    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
+    Viewport, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
@@ -175,6 +176,8 @@ pub struct PdfBuilder {
     optional_content_groups: Vec<OptionalContentGroup>,
     /// 目录 `/OutputIntents` 输出意图数组（14.11.5 Table 365）。
     output_intents: Vec<OutputIntent>,
+    /// 页面 `/SeparationInfo` 分色页组（14.11.4 Table 364）。
+    separation_groups: Vec<SeparationGroup>,
     /// 文档级函数池；`PdfBuilder::function` 返回其索引。
     functions: Vec<Function>,
     /// 文档级渐变池；`PdfBuilder::shading` 返回其索引。
@@ -247,6 +250,7 @@ impl PdfBuilder {
             forms: Vec::new(),
             optional_content_groups: Vec::new(),
             output_intents: Vec::new(),
+            separation_groups: Vec::new(),
             functions: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
@@ -281,6 +285,7 @@ impl PdfBuilder {
             forms: Vec::new(),
             optional_content_groups: Vec::new(),
             output_intents: Vec::new(),
+            separation_groups: Vec::new(),
             functions: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
@@ -377,6 +382,26 @@ impl PdfBuilder {
     /// 低于 1.4 返回 [`WriteError::UnsupportedVersion`]，均零字节输出。
     pub fn add_output_intent(&mut self, intent: OutputIntent) -> &mut Self {
         self.output_intents.push(intent);
+        self
+    }
+
+    /// 为一组分色页设置共享的分色字典（14.11.4 Table 364）。
+    ///
+    /// `pages` 为 0 基页号；同组各页写出完全相同的 `/SeparationInfo`
+    /// （相同 `/Pages` 数组），`/DeviceColorant` 为名字或文本串色料，
+    /// 可选 `/ColorSpace` 只接受 Separation 与 DeviceN 颜色空间。
+    ///
+    /// 本方法只收集，不做校验；[`build`](Self::build) 在写出任何字节前
+    /// 要求：组非空、页号在范围内、组内页号不重复、组间不重叠、
+    /// `/DeviceColorant` 为合法 PDF 名字或非空文本串、`/ColorSpace`
+    /// 为合法 Separation/DeviceN。违反者返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.3（PDF 1.3 引入）
+    /// 返回 [`WriteError::UnsupportedVersion`]，两者均零字节输出。
+    pub fn add_separation_group(&mut self, pages: &[usize], info: SeparationInfo) -> &mut Self {
+        self.separation_groups.push(SeparationGroup {
+            pages: pages.to_vec(),
+            info,
+        });
         self
     }
 

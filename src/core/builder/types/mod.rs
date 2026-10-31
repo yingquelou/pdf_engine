@@ -18,6 +18,7 @@
 //! - `halftone`：半色调字典（Type 1/2 与包装字典）；
 //! - `optional_content`：可选内容组（OCG）；
 //! - `output_intent`：输出意图（14.11.5 Table 365）；
+//! - `separation`：分色字典（14.11.4 Table 364）；
 //! - `page_box`：页面边界与框颜色信息（14.11.2 Table 30/360/361）；
 //! - `shading`：渐变（Shading Type 1–5）与着色图案（Shading Pattern）；
 //! - `pattern`：平铺图案（Tiling Pattern）与统一图案池；
@@ -47,6 +48,7 @@ mod page_box;
 mod pattern;
 mod program;
 mod rendition;
+mod separation;
 mod shading;
 mod sound;
 mod three_d;
@@ -110,6 +112,8 @@ pub use rendition::{
     MediaPlayers, MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan,
     MediaWindow, Rendition, SelectorRendition, SoftwareIdentifier, TemporaryFilePermission,
 };
+pub(crate) use separation::SeparationGroup;
+pub use separation::{DeviceColorant, SeparationInfo};
 pub(crate) use shading::mesh_component_ranges;
 pub use shading::{
     AxialShading, CoonsPatch, CoonsPatchShading, FreeFormMeshShading, FunctionShading,

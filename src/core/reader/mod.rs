@@ -91,6 +91,7 @@ pub mod page_presentation;
 mod parser;
 pub mod rendition;
 mod security;
+pub mod separation;
 pub mod shading;
 pub mod signature;
 pub mod sound;

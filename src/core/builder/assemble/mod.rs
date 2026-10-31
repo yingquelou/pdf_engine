@@ -14,6 +14,7 @@
 //! - `sound`：声音对象流（13.3 Table 294）的分配、写出与注解 `/Sound` 引用；
 //! - `three_d`：3D artwork 流（13.6 Table 300）、引用字典（Table 303）与 `/OnInstantiate` 流的分配、写出与注解 `/3DD` 等条目；
 //! - `rendition`：media clip section 链（13.2.6 Table 277）的对象分配与写出；
+//! - `separation`：页面 `/SeparationInfo` 分色字典（14.11.4 Table 364）的校验与写出；
 //! - `output_intent`：目录 `/OutputIntents` 输出意图（14.11.5 Table 365）的校验、配置文件流分配与写出。
 
 mod acro_form;
@@ -29,6 +30,7 @@ mod fonts;
 mod form_field;
 mod output_intent;
 mod rendition;
+mod separation;
 mod shading;
 mod sound;
 mod three_d;
@@ -102,6 +104,10 @@ impl PdfBuilder {
         // 输出意图（14.11.5 Table 365）：Table 365 条目契约与 PDF 1.4 门禁
         // 同样在任何对象写出前完成。
         output_intent::validate_registration(&self.output_intents, self.version)?;
+        // 分色字典（14.11.4 Table 364）：组契约与 PDF 1.3 门禁在任何对象
+        // 写出前完成；返回的页映射供页写出循环挂 `/SeparationInfo`。
+        let separation_page_map =
+            separation::validate_groups(&self.separation_groups, self.pages.len(), self.version)?;
         // 页面边界（14.11.2 Table 30）与框颜色信息（Table 360/361）：矩形
         // 取值、框样式条目契约与 PDF 1.3/1.4 门禁同样在任何对象写出前完成。
         for (index, page) in self.pages.iter().enumerate() {
@@ -995,6 +1001,9 @@ impl PdfBuilder {
         // 每页 Page 字典 + 内容流
         let color_spaces = &self.color_spaces;
         let mut color_space_values: Vec<Option<Value>> = vec![None; color_spaces.len()];
+        let separation_groups = &self.separation_groups;
+        let mut separation_color_space_values: Vec<Option<Value>> =
+            vec![None; separation_groups.len()];
         for (i, p) in self.pages.iter_mut().enumerate() {
             let (page_num, content_num) = page_slots[i];
             // 页面边界（14.11.2）：显式设置时以其 `/MediaBox` 取代页尺寸；
@@ -1102,6 +1111,26 @@ impl PdfBuilder {
                 for feature in boundaries.features() {
                     features.insert(feature);
                 }
+            }
+            // 分色字典（14.11.4 Table 364）：同组各页写出相同的 `/Pages`；
+            // 组的颜色空间只序列化一次，多页共享同一批流对象引用。
+            if let Some(group_index) = separation_page_map[i] {
+                let group = &separation_groups[group_index];
+                if let Some(space) = &group.info.color_space
+                    && separation_color_space_values[group_index].is_none()
+                {
+                    separation_color_space_values[group_index] =
+                        Some(color_space_value(space, &mut doc, &mut num)?);
+                }
+                page_dict = page_dict.insert(
+                    "SeparationInfo",
+                    Value::Dict(separation::info_dict(
+                        group,
+                        &page_slots,
+                        separation_color_space_values[group_index].clone(),
+                    )),
+                );
+                doc.features.borrow_mut().insert(PdfFeature::SeparationInfo);
             }
             if let Some(group) = &p.group {
                 group.validate().map_err(|message| {

@@ -247,6 +247,8 @@ pub enum PdfFeature {
     PageBoundaries,
     /// 页面 `/BoxColorInfo` 框颜色信息（14.11.2 Table 360/361），PDF 1.4 引入。
     PageBoxColorInfo,
+    /// 分色字典（页面 `/SeparationInfo`，14.11.4 Table 364），PDF 1.3 引入。
+    SeparationInfo,
 }
 
 impl PdfFeature {
@@ -275,7 +277,8 @@ impl PdfFeature {
             | PdfFeature::FormCalculationOrder
             | PdfFeature::FormActionFieldNames
             | PdfFeature::PageTemplates
-            | PdfFeature::PageBoundaries => PdfVersion::V1_3,
+            | PdfFeature::PageBoundaries
+            | PdfFeature::SeparationInfo => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
@@ -386,6 +389,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::PrinterMarks => "printer's marks",
             PdfFeature::PageBoundaries => "page boundaries",
             PdfFeature::PageBoxColorInfo => "page box color info",
+            PdfFeature::SeparationInfo => "separation dictionaries",
         };
         write!(f, "{name}")
     }

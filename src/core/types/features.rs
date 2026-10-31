@@ -65,7 +65,8 @@ impl FeatureProfile {
 /// - `/AlternatePresentations` 键存在（名称字典）→ AlternatePresentations
 /// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
 /// - 页面字典的 `/BleedBox` `/TrimBox` `/ArtBox` → PageBoundaries（1.3）、
-///   `/BoxColorInfo` → PageBoxColorInfo（1.4）
+///   `/BoxColorInfo` → PageBoxColorInfo（1.4）、`/SeparationInfo` →
+///   SeparationInfo（1.3，14.11.4 Table 364）
 /// - `/Encrypt` 键存在 → EncryptionRC4
 pub(crate) fn scan_dict_features(features: &mut FeatureProfile, d: &Dict) {
     inspect_dict_features(features, d);
@@ -220,13 +221,13 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     }
     // 页面处理框（PDF 1.3）：14.11.2 Table 30 的 /BleedBox /TrimBox
     // /ArtBox。三键也出现在 /BoxColorInfo 的子字典中（Table 360），故须
-    // 先确认页面字典：/Type /Page，或同时带 /MediaBox 与处理框（部分
-    // 生产者的页面字典省略 /Type）。
+    // 先确认页面字典：/Type /Page，或同时带 /MediaBox 与处理框/分色
+    // 字典（部分生产者的页面字典省略 /Type）。
     let processing_box = ["BleedBox", "TrimBox", "ArtBox"]
         .iter()
         .any(|key| d.0.contains_key(*key));
     let page_dict = d.get("Type").and_then(|v| v.as_name()) == Some("Page")
-        || (d.0.contains_key("MediaBox") && processing_box);
+        || (d.0.contains_key("MediaBox") && (processing_box || d.0.contains_key("SeparationInfo")));
     if page_dict {
         if processing_box {
             features.insert(PdfFeature::PageBoundaries);
@@ -234,6 +235,10 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         // 框颜色信息（PDF 1.4）：页面 /BoxColorInfo（Table 360）。
         if d.0.contains_key("BoxColorInfo") {
             features.insert(PdfFeature::PageBoxColorInfo);
+        }
+        // 分色字典（PDF 1.3）：页面 /SeparationInfo（14.11.4 Table 364）。
+        if d.0.contains_key("SeparationInfo") {
+            features.insert(PdfFeature::SeparationInfo);
         }
     }
     // 加密：trailer /Encrypt（标准安全处理器自 PDF 1.1 引入）

@@ -131,6 +131,18 @@ impl Document {
     /// Locate the `page_index`th (0-based) page node through the catalog's
     /// `/Pages` tree. Shared by page-scoped reader APIs.
     pub(crate) fn locate_page_node(&self, page_index: usize) -> Result<Value> {
+        self.locate_page_node_with_ref(page_index)
+            .map(|(value, _)| value)
+    }
+
+    /// Like [`Document::locate_page_node`], but also returns the page node's
+    /// original indirect reference `(object number, generation)` when the node
+    /// was reached through a `/Kids` entry (or through the catalog's `/Pages`
+    /// reference when the page is the tree root).
+    pub(crate) fn locate_page_node_with_ref(
+        &self,
+        page_index: usize,
+    ) -> Result<(Value, Option<(i64, i64)>)> {
         let root = self
             .trailer
             .dict
@@ -166,20 +178,23 @@ fn resolve_value(document: &Document, value: &Value) -> Option<Value> {
 }
 
 /// Find the `index`th page with an iterative depth-first traversal.
+///
+/// Returns the page dictionary together with the node's original reference
+/// from the `/Kids` array (root pages use the catalog's `/Pages` reference).
 fn find_page_node(
     document: &Document,
     pages: &Dict,
     pages_ref: Option<(i64, i64)>,
     index: usize,
-) -> Option<Value> {
+) -> Option<(Value, Option<(i64, i64)>)> {
     let mut visited: HashSet<(i64, i64)> = HashSet::new();
     if let Some(key) = pages_ref {
         visited.insert(key);
     }
 
-    let mut stack = vec![(Value::Dict(pages.clone()), 0usize)];
+    let mut stack = vec![(Value::Dict(pages.clone()), pages_ref, 0usize)];
     let mut page_number = 0usize;
-    while let Some((node_value, depth)) = stack.pop() {
+    while let Some((node_value, node_ref, depth)) = stack.pop() {
         if depth > MAX_PAGE_TREE_DEPTH {
             continue;
         }
@@ -192,7 +207,7 @@ fn find_page_node(
         match node.get("Type").and_then(Value::as_name).unwrap_or("") {
             "Page" => {
                 if page_number == index {
-                    return Some(Value::Dict(node.clone()));
+                    return Some((Value::Dict(node.clone()), node_ref));
                 }
                 page_number += 1;
             }
@@ -212,7 +227,7 @@ fn find_page_node(
                     {
                         continue;
                     }
-                    stack.push((kid.clone(), depth + 1));
+                    stack.push((kid.clone(), kid.as_ref(), depth + 1));
                 }
             }
             _ => {}

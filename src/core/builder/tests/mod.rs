@@ -29,6 +29,7 @@
 //! - `rendition`：多媒体 rendition 与 media clip（13.2 Table 266–278）、Rendition 动作（Table 214）的写出、Screen 目标校验与 PDF 1.5 门禁；
 //! - `page_presentation`：页面 `/Dur` 与 `/Trans`（12.4.4 Table 30）的写出、PDF 1.1 门禁与 1.5 样式条目门禁；
 //! - `page_box`：页面边界（14.11.2 Table 30）与框颜色信息（Table 360/361）的写出、PDF 1.3/1.4 门禁与取值契约；
+//! - `separation`：分色字典（14.11.4 Table 364）的组共享 `/Pages`、色料与颜色空间写出、组契约与 PDF 1.3 门禁；
 //! - `thumbnail`：页面缩略图 `/Thumb`（12.3.4 Table 30）的图像引用、去重与颜色空间契约；
 //! - `articles`：文章线（12.4.3 Table 160/161）的线程/bead 对象、`/B` 与 PDF 1.1 门禁；
 //! - `collection`：便携集合（12.3.5 Table 155–158）的模式、`/D` `/View` `/Sort` 与 PDF 1.7 门禁；
@@ -112,6 +113,7 @@ mod page_group;
 mod page_presentation;
 mod pattern;
 mod rendition;
+mod separation;
 mod shading;
 mod sound;
 mod support;

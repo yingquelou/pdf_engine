@@ -48,6 +48,7 @@ mod page_box;
 mod page_presentation;
 mod page_thumbnail;
 mod rendition;
+mod separation;
 mod signature;
 mod sound;
 mod templates;
