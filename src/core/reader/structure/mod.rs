@@ -4,8 +4,11 @@
 //! （14.7.2 Table 322）、结构元素（Table 323）、标记内容引用 MCR
 //! （Table 324）与对象引用 OBJR（Table 325）、父树（14.7.4.4 Table 326）
 //! 的页面/对象键映射，以及结构属性对象（14.7.5 Table 327–329，含
-//! `/ClassMap` 属性类与用户属性）。Layout/List/PrintField 等标准属性
-//! 条目属于 14.8.5，不在本模型内。
+//! `/ClassMap` 属性类与用户属性）。
+//!
+//! 标准属性所有者（14.8.5.2 Table 341）与 List/PrintField/Table 条目
+//! （14.8.5.5–14.8.5.7 Table 347–349）由子模块 [`standard`] 类型化解析；
+//! Layout（14.8.5.4 Table 342–346）与可继承属性的继承链解析留待后续。
 //!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
@@ -19,8 +22,14 @@ use crate::core::types::{Dict, Document, Value};
 
 mod entries;
 mod parse;
+mod standard;
 #[cfg(test)]
 mod tests;
+
+pub use standard::{
+    ListAttributes, ListNumbering, PrintFieldAttributes, PrintFieldChecked, PrintFieldRole,
+    StandardAttributeOwner, StandardAttributes, TableAttributes, TableScope,
+};
 
 /// 结构树最大嵌套深度（最多 64 层结构元素）。
 pub(crate) const MAX_STRUCTURE_DEPTH: usize = 64;

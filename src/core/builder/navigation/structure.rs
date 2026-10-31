@@ -1,4 +1,5 @@
-//! 逻辑结构写端（ISO 32000-1 14.7.1–14.7.5、Table 321–329）。
+//! 逻辑结构写端（ISO 32000-1 14.7.1–14.7.5、14.8.5.2、14.8.5.5–14.8.5.7、
+//! Table 321–329、341、347–349）。
 //!
 //! 目录 `/StructTreeRoot`（Table 322）与 `/MarkInfo`（Table 321）、结构
 //! 元素（Table 323）、MCR 内容项（Table 324）、父树（14.7.4.4）与
@@ -6,18 +7,23 @@
 //! 页面字典追加 `/StructParents`（Table 326）。结构属性对象 `/A` 与
 //! `/ClassMap`（14.7.5）按 Table 327–329 写出，属性流提升为间接对象。
 //!
+//! 标准属性所有者（14.8.5.2 Table 341）与 List/PrintField/Table 条目
+//! （14.8.5.5–14.8.5.7 Table 347–349）由
+//! [`structure_standard`] 做值形态、元素适用性与 `/Headers` ID 交叉校验；
+//! Layout（14.8.5.4 Table 342–346）条目暂不校验或建模。
+//!
 //! 校验先于任何对象号分配：深度、元素数、单元素子项数与映射条目上限
 //! 直接复用读端常量；页索引越界、负 MCID、同页 MCID 重复、空结构类型、
 //! 空角色映射键/目标、类映射/属性对象取值非字典/流或 `/O` 非法、空类名、
 //! ID 为空/重复/非 ASCII 一律返回 [`WriteError::InvalidObject`]。版本门禁：
 //! 结构树 ≥1.3、`/Lang` `/ActualText` ≥1.4、`/E` ≥1.5、`/MarkInfo` ≥1.4、
-//! `/UserProperties` `/Suspects` ≥1.6、结构属性用户属性 ≥1.6，不满足返回
-//! [`WriteError::UnsupportedVersion`]。使用用户属性时还要求
+//! `/UserProperties` `/Suspects` ≥1.6、结构属性用户属性 ≥1.6、标准属性
+//! 所有者 ≥1.4、`/Headers` `/Scope` ≥1.5、PrintField 与 `/Summary` ≥1.7，
+//! 不满足返回 [`WriteError::UnsupportedVersion`]。使用用户属性时还要求
 //! `/MarkInfo /UserProperties true`（14.7.5.4）。两类失败均不写出任何字节。
 //!
 //! 本切片的范围限制：`/K` 只写出子元素引用与 MCR 字典（带显式 `/Pg` 与
-//! `/MCID`），不写 OBJR、整数 MCID 与 `/Stm` `/StmOwn`；Layout/List/
-//! PrintField 等标准属性条目（14.8.5）不在此处校验或建模。
+//! `/MCID`），不写 OBJR、整数 MCID 与 `/Stm` `/StmOwn`。
 
 use std::collections::BTreeMap;
 
@@ -32,6 +38,7 @@ use super::super::types::{
     text_string_value,
 };
 use super::invalid;
+use super::structure_standard::{self, StandardUsage};
 
 /// 写端 MCID 上限：父树数组按 MCID 作零基下标，与读端单元素子项上限
 /// 取同值，避免单页父树数组无界膨胀（65535 为最大可用 MCID）。
@@ -79,6 +86,8 @@ struct Plan<'a> {
     uses_expanded: bool,
     /// 是否使用用户属性属性对象（PDF 1.6，14.7.5.3）。
     uses_user_properties: bool,
+    /// 标准属性使用情况（14.8.5 的版本门禁与特性画像）。
+    standard: StandardUsage,
 }
 
 /// 把结构树与标记信息写入已组装的 `Document`，返回目录条目。
@@ -195,6 +204,7 @@ pub(super) fn write(
     if plan.uses_user_properties {
         features.insert(PdfFeature::StructureUserProperties);
     }
+    plan.standard.apply_features(&mut features);
     Ok(entries)
 }
 
@@ -209,6 +219,8 @@ fn plan<'a>(
         ids: BTreeMap::new(),
         mcids: BTreeMap::new(),
         page_count,
+        role_map: &tree.role_map,
+        standard: StandardUsage::default(),
         uses_language: false,
         uses_expanded: false,
         uses_user_properties: false,
@@ -231,11 +243,26 @@ fn plan<'a>(
     }
     for (key, value) in &tree.class_map {
         validate_name(key, "structure class map key")?;
-        validate_class_attributes(value, key, &mut flattener.uses_user_properties)?;
+        validate_class_attributes(
+            value,
+            key,
+            &mut flattener.uses_user_properties,
+            &mut flattener.standard,
+        )?;
     }
     for element in &tree.elements {
         flattener.add(element, None, 0)?;
     }
+    // `/Headers` 引用在全部元素展开后才能与 `/ID` 对照；仍在对象号分配前。
+    let mut id_types = BTreeMap::new();
+    for (id, index) in &flattener.ids {
+        let structure_type = &flattener.flat[*index].element.structure_type;
+        id_types.insert(
+            id.clone(),
+            structure_standard::resolved_type(&tree.role_map, structure_type),
+        );
+    }
+    flattener.standard.validate_header_ids(&id_types)?;
     if flattener.uses_language && !version.supports(PdfFeature::StructureLanguageText) {
         return Err(WriteError::UnsupportedVersion(format!(
             "structure element /Lang and /ActualText require PDF {}, got {version}",
@@ -254,6 +281,7 @@ fn plan<'a>(
             PdfFeature::StructureUserProperties.min_version()
         )));
     }
+    flattener.standard.check_version(version)?;
 
     let mut page_keys = BTreeMap::new();
     let mut parents = BTreeMap::new();
@@ -276,14 +304,19 @@ fn plan<'a>(
         uses_language: flattener.uses_language,
         uses_expanded: flattener.uses_expanded,
         uses_user_properties: flattener.uses_user_properties,
+        standard: flattener.standard,
     })
 }
 
 /// `/ClassMap` 的单个值：属性对象或属性对象数组（14.7.5.2）。
+///
+/// 类属性可能被不同类型的元素复用，标准条目只做值形态检查，不做元素
+/// 适用性检查（适用性只对元素 `/A`）。
 fn validate_class_attributes(
     value: &Value,
     key: &str,
     uses_user_properties: &mut bool,
+    standard: &mut StandardUsage,
 ) -> Result<(), WriteError> {
     let context = format!("structure class map /{key}");
     match value {
@@ -296,9 +329,13 @@ fn validate_class_attributes(
             }
             for item in &items.0 {
                 validate_attribute_object(item, &context, uses_user_properties)?;
+                structure_standard::validate_class_attribute(item, &context, standard)?;
             }
         }
-        single => validate_attribute_object(single, &context, uses_user_properties)?,
+        single => {
+            validate_attribute_object(single, &context, uses_user_properties)?;
+            structure_standard::validate_class_attribute(single, &context, standard)?;
+        }
     }
     Ok(())
 }
@@ -431,6 +468,10 @@ struct Flattener<'a> {
     /// 页面索引 → MCID → 父元素 arena 下标（同页 MCID 唯一）。
     mcids: BTreeMap<usize, BTreeMap<i64, usize>>,
     page_count: usize,
+    /// 结构类型 → 标准类型的角色映射（元素适用性判定用）。
+    role_map: &'a BTreeMap<String, String>,
+    /// 标准属性使用情况与待核对的 `/Headers` 引用。
+    standard: StandardUsage,
     uses_language: bool,
     uses_expanded: bool,
     uses_user_properties: bool,
@@ -486,10 +527,14 @@ impl<'a> Flattener<'a> {
             )));
         }
         for (index, attribute) in element.attributes.iter().enumerate() {
-            validate_attribute_object(
+            let context = format!("structure element /A attribute {index}");
+            validate_attribute_object(&attribute.value, &context, &mut self.uses_user_properties)?;
+            structure_standard::validate_element_attribute(
                 &attribute.value,
-                &format!("structure element /A attribute {index}"),
-                &mut self.uses_user_properties,
+                &context,
+                &element.structure_type,
+                self.role_map,
+                &mut self.standard,
             )?;
         }
         if element.lang.is_some() || element.actual_text.is_some() {

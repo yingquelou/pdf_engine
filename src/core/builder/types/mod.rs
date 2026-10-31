@@ -129,8 +129,9 @@ pub use shading::{
 };
 pub use sound::{Sound, SoundEncoding};
 pub use structure::{
+    ListAttributes, ListNumbering, PrintFieldAttributes, PrintFieldChecked, PrintFieldRole,
     StructureAttribute, StructureElement, StructureKid, StructureMarkInfo, StructureTree,
-    UserProperty,
+    TableAttributes, TableScope, UserProperty,
 };
 pub use three_d::{
     ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,

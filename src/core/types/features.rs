@@ -74,6 +74,12 @@ impl FeatureProfile {
 ///   StructureLanguageText（1.4）、`/E` → StructureExpandedText（1.5）
 /// - 结构属性对象带 `/O /UserProperties` 与 `/P` → StructureUserProperties
 ///   （1.6，14.7.5.3 Table 328；子属性字典只有 `/N` `/V`，无 `/O`）
+/// - 标准结构属性（14.8.5.2 Table 341）：`/O /List` 带 `/ListNumbering`、
+///   `/O /PrintField` 带 `/Role` `/checked` `/Desc` 之一、`/O /Table` 带
+///   `/RowSpan` `/ColSpan` `/Headers` `/Scope` `/Summary` 之一 →
+///   StandardStructureAttributes（1.4）；PrintField → PrintFieldAttributes
+///   （1.7）、Table 的 `/Headers` `/Scope` → TableHeaderAttributes（1.5）、
+///   `/Summary` → TableSummary（1.7）
 /// - 目录 `/MarkInfo` → MarkInfo（1.4）；其 `/UserProperties` `/Suspects`
 ///   → MarkInfoUserProperties / MarkInfoSuspects（1.6）
 /// - 页面字典的 `/BleedBox` `/TrimBox` `/ArtBox` → PageBoundaries（1.3）、
@@ -293,6 +299,39 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // `/N` `/V`（Table 329）、没有 `/O`，故不会重复命中。
     if d.get("O").and_then(|v| v.as_name()) == Some("UserProperties") && d.0.contains_key("P") {
         features.insert(PdfFeature::StructureUserProperties);
+    }
+    // 标准结构属性（PDF 1.4）：14.8.5.2 Table 341 的所有者标记。仅按
+    // 所有者无法与其它 `/O` 属性对象区分，故要求出现该所有者的标准条目：
+    // List 需 `/ListNumbering`（Table 347）、PrintField 需 `/Role`
+    // `/checked` `/Desc` 之一（Table 348，PDF 1.7）、Table 需 `/RowSpan`
+    // `/ColSpan` `/Headers` `/Scope` `/Summary` 之一（Table 349）。
+    // `/Headers` `/Scope` 为 PDF 1.5、`/Summary` 与 PrintField 为 PDF 1.7。
+    match d.get("O").and_then(|v| v.as_name()) {
+        Some("List") if d.0.contains_key("ListNumbering") => {
+            features.insert(PdfFeature::StandardStructureAttributes);
+        }
+        Some("PrintField")
+            if ["Role", "checked", "Desc"]
+                .iter()
+                .any(|key| d.0.contains_key(*key)) =>
+        {
+            features.insert(PdfFeature::StandardStructureAttributes);
+            features.insert(PdfFeature::PrintFieldAttributes);
+        }
+        Some("Table")
+            if ["RowSpan", "ColSpan", "Headers", "Scope", "Summary"]
+                .iter()
+                .any(|key| d.0.contains_key(*key)) =>
+        {
+            features.insert(PdfFeature::StandardStructureAttributes);
+            if d.0.contains_key("Headers") || d.0.contains_key("Scope") {
+                features.insert(PdfFeature::TableHeaderAttributes);
+            }
+            if d.0.contains_key("Summary") {
+                features.insert(PdfFeature::TableSummary);
+            }
+        }
+        _ => {}
     }
     // 输出意图（PDF 1.4）：目录 /OutputIntents 非空数组（14.11.5 Table
     // 365）。空数组等价于未声明，不登记特性。

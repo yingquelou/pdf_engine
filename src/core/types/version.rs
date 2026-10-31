@@ -268,6 +268,18 @@ pub enum PdfFeature {
     /// 结构属性对象的用户属性（`/O /UserProperties` 与 `/P`，14.7.5
     /// Table 328/329），PDF 1.6 引入。
     StructureUserProperties,
+    /// 标准结构属性所有者（14.8.5.2 Table 341）的 List/PrintField/Table
+    /// 条目（14.8.5.5–14.8.5.7 Table 347–349），PDF 1.4 引入。
+    StandardStructureAttributes,
+    /// Table 标准属性的表头引用与作用范围（`/Headers` `/Scope`，14.8.5.7
+    /// Table 349），PDF 1.5 引入。
+    TableHeaderAttributes,
+    /// Table 标准属性的摘要条目（`/Summary`，14.8.5.7 Table 349），
+    /// PDF 1.7 引入。
+    TableSummary,
+    /// PrintField 标准属性（`/O /PrintField`，14.8.5.6 Table 348），
+    /// PDF 1.7 引入。
+    PrintFieldAttributes,
     /// 目录标记信息字典（`/MarkInfo`，14.7.1 Table 321），PDF 1.4 引入。
     MarkInfo,
     /// 标记信息的用户属性条目（`/MarkInfo /UserProperties`，Table 321），
@@ -320,6 +332,7 @@ impl PdfFeature {
             | PdfFeature::TrapNetworkModificationDate
             | PdfFeature::PageBoxColorInfo
             | PdfFeature::StructureLanguageText
+            | PdfFeature::StandardStructureAttributes
             | PdfFeature::MarkInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -330,6 +343,7 @@ impl PdfFeature {
             | PdfFeature::SetOcgState
             | PdfFeature::TransitionAction
             | PdfFeature::Renditions
+            | PdfFeature::TableHeaderAttributes
             | PdfFeature::StructureExpandedText => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
@@ -352,6 +366,8 @@ impl PdfFeature {
             | PdfFeature::CollectionItem
             | PdfFeature::ThreeDAnimationStyle
             | PdfFeature::ThreeDViewExtensions
+            | PdfFeature::TableSummary
+            | PdfFeature::PrintFieldAttributes
             | PdfFeature::ThreeDMarkup => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
@@ -434,6 +450,10 @@ impl fmt::Display for PdfFeature {
             PdfFeature::StructureLanguageText => "structure language and actual text",
             PdfFeature::StructureExpandedText => "structure expanded text",
             PdfFeature::StructureUserProperties => "structure user properties",
+            PdfFeature::StandardStructureAttributes => "standard structure attributes",
+            PdfFeature::TableHeaderAttributes => "table header attributes",
+            PdfFeature::TableSummary => "table summary",
+            PdfFeature::PrintFieldAttributes => "PrintField attributes",
             PdfFeature::MarkInfo => "mark info",
             PdfFeature::MarkInfoUserProperties => "mark info user properties",
             PdfFeature::MarkInfoSuspects => "mark info suspects",

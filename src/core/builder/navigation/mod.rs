@@ -32,6 +32,7 @@ mod alternate_presentation;
 mod articles;
 mod collection;
 mod structure;
+mod structure_standard;
 mod templates;
 mod validate;
 
