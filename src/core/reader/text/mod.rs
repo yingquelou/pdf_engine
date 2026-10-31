@@ -17,7 +17,7 @@
 //! their property lists (inline dictionary or `/Properties` name), a section
 //! whose optional-content group (8.11.2) is off by the default configuration
 //! is not extracted, `/ActualText` replaces the section's shown text, and
-//! `/Artifact` sections (14.8.2.6.2) are skipped entirely. Unbalanced `EMC` is
+//! `/Artifact` sections (14.8.2.2.1) are skipped entirely. Unbalanced `EMC` is
 //! ignored.
 //!
 //! [`Document::try_extract_page_text_fragments`] returns the same text split
@@ -567,7 +567,7 @@ impl<'a> ExtractionContext<'a> {
     /// (inline dictionary or `/Properties` resource name).
     ///
     /// `/Artifact` sections are pagination or layout decorations and are
-    /// excluded from extracted text (ISO 32000-1 14.8.2.6.2), as are sections
+    /// excluded from extracted text (ISO 32000-1 14.8.2.2.1), as are sections
     /// whose optional-content group is off in the default configuration.
     fn open_marked(
         &mut self,

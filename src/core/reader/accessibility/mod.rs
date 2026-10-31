@@ -11,12 +11,19 @@
 //! 层级语义：元素自身 `/Lang` 优先，否则沿父链取最近的声明；空串是
 //! 「显式未知」，会终止继承。都没有时调用方回退到
 //! [`Document::document_language`]。
+//!
+//! 另覆盖内容流标记层面的读写模型：Artifact 属性表（14.8.2.2.2 Table 330）、
+//! Span 属性表（14.9.3–14.9.5），以及 artifact 与逻辑结构的归属诊断
+//! [`Document::artifact_attribution_violations`]（14.8.2.2.1、14.8.2.3.1）。
 
 use std::collections::BTreeSet;
 
 use crate::core::types::Document;
 
 mod artifact;
+mod artifact_attribution;
+#[cfg(test)]
+mod artifact_attribution_tests;
 mod language;
 mod multi_language;
 mod span;
@@ -25,6 +32,9 @@ mod tests;
 
 pub use artifact::{
     ArtifactAttachment, ArtifactError, ArtifactProperties, ArtifactSubtype, ArtifactType,
+};
+pub use artifact_attribution::{
+    ArtifactAttributionError, ArtifactAttributionRule, ArtifactAttributionViolation,
 };
 pub use language::{LanguageError, LanguageIdentifier};
 pub use multi_language::{AlternateText, MultiLanguageTextArray};

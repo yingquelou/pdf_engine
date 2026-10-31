@@ -146,7 +146,7 @@ fn language_entry(properties: &Dict) -> Result<Option<LanguageIdentifier>, Langu
 /// 内容流的加载器把内联字典中的数字统一解析为 [`Value::Float`]，因此
 /// 除 [`Value::Integer`] 外也接受值为整数的浮点数；`1.5` 之类的非整数
 /// 不算合法的 `/MCID`。
-fn mcid_value(properties: &Dict) -> Option<i64> {
+pub(super) fn mcid_value(properties: &Dict) -> Option<i64> {
     match properties.get("MCID") {
         Some(Value::Integer(mcid)) => Some(*mcid),
         Some(Value::Float(value))
