@@ -18,6 +18,12 @@
 //! [`StructureTree::standard_type`] 按 `/RoleMap` 解析给出元素生效的
 //! 标准类型。
 //!
+//! 14.8.4 的内容模型层级（Table 333/336/337/339/340）由子模块
+//! [`content_model`] 诊断：[`StructureTree::content_model_violations`]
+//! 返回 [`ContentModelViolation`] 列表，以
+//! [`ContentModelRule::is_mandatory`] 区分规范强制项与表格建议项；读取
+//! 阶段不因内容模型问题报错（14.8.4.3.5 不强制严格顺序与嵌套）。
+//!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
 //! [`crate::core::reader::navigation::resolve`] 解引用并按对象号取最新
@@ -28,6 +34,9 @@ use std::fmt;
 
 use crate::core::types::{Dict, Document, Value};
 
+mod content_model;
+#[cfg(test)]
+mod content_model_tests;
 mod entries;
 mod parse;
 mod standard;
@@ -37,6 +46,7 @@ mod standard_types_tests;
 #[cfg(test)]
 mod tests;
 
+pub use content_model::{ChildModel, ContentModelRule, ContentModelViolation};
 pub use standard::{
     BlockAlign, BorderColor, BorderStyle, BorderStyles, BorderThickness, FormatSpecificAttributes,
     FormatSpecificOwner, GlyphOrientationVertical, InlineAlign, LayoutAttributes, LineHeight,

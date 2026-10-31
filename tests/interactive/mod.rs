@@ -12,7 +12,8 @@
 //! `annotation_trap_net`、
 //! `annotation_watermark`、
 //! `alternate_presentation`、`form`、`embedded`、`metadata`、`page_box`、`page_presentation`、
-//! `page_thumbnail`、`opi`、`rendition`、`sound`、`structure`、`structure_standard`、
+//! `page_thumbnail`、`opi`、`rendition`、`sound`、`structure`、`structure_content_model`、
+//! `structure_standard`、
 //! `three_d`、`incremental`、`signature`；根模块只保留主题文档、子模块声明与共享导入
 //! （子模块经 `use super::*;` 取用）。
 
@@ -57,6 +58,7 @@ mod separation;
 mod signature;
 mod sound;
 mod structure;
+mod structure_content_model;
 mod structure_standard;
 mod templates;
 mod three_d;
