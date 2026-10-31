@@ -15,6 +15,11 @@
 //! `/StructParent`（Table 326）与父树的单元型条目；回读后 `/Obj` 指向该
 //! 注解对象、`/Pg` 与 MCR 同页、`/ParentTreeNextKey` 覆盖页面键 + OBJR 键，
 //! 页面 MCID 归属与文本提取不受影响。
+//!
+//! 第四条起覆盖 14.8.2.2.1 的注解归属条件（14.7.4.3 与 14.7.4.4）：
+//! 带 `/AP /N` 常态外观的可见注解被 OBJR 正确声称时七条诊断为空；
+//! 去掉声称恰好命中 `VisibleAnnotationNotInStructure`；置 Hidden 位
+//! 的注解即使带外观流也不要求入结构。文本提取在三条往返中不变。
 
 use super::*;
 
@@ -320,5 +325,144 @@ fn builder_object_reference_roundtrip_links_struct_parent() {
         doc.extract_page_text(page).as_deref(),
         Some("Tagged line"),
         "OBJR 内容项不影响页文本提取"
+    );
+}
+
+/// 带标记内容与一条 `/AP /N` 可见 Text 注解的整页写出。
+///
+/// `claim` 为真时 P 元素同时以 OBJR 声称该注解（写端会追加
+/// `/StructParent` 与父树单元条目）；`hidden` 为真时注解 `/F` 置
+/// Hidden 位（Table 165 bit 1）。返回写出的 PDF 字节。
+fn build_annotation_appearance_page(claim: bool, hidden: bool) -> Vec<u8> {
+    use pdf_engine::core::builder::{
+        AnnotationKind, Font, FormXObject, PageSize, PdfAnnotation, PdfBuilder, StructureElement,
+        StructureMarkInfo, StructureTree,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let page = builder.page(PageSize::A4);
+    builder.begin_structure_content(page, "P", 0);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "Tagged line");
+    builder.end_structure_content(page);
+    let appearance = builder.form_xobject(&FormXObject::new(
+        [72.0, 660.0, 92.0, 680.0],
+        ContentStream::new(),
+    ));
+    let mut annotation = PdfAnnotation::new(AnnotationKind::Text, [72.0, 660.0, 92.0, 680.0])
+        .with_contents("Figure note")
+        .with_appearance(appearance);
+    if hidden {
+        annotation = annotation.with_flags(2);
+    }
+    let handle = builder.add_annotation(page, annotation);
+    let mut paragraph = StructureElement::new("P").with_marked_content(page, 0);
+    if claim {
+        paragraph = paragraph.with_object_reference(handle);
+    }
+    builder.set_structure_tree(
+        StructureTree::new()
+            .with_element(StructureElement::new("Document").with_element(paragraph)),
+    );
+    builder.set_mark_info(StructureMarkInfo::new().with_marked(true));
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build tagged page with appearance-stream annotation");
+    buf
+}
+
+/// 可见注解被 OBJR 正确声称的往返：14.8.2.2.1 的三条件齐备
+/// （`/AP /N`、未置 Hidden、纳入逻辑结构），回读后归属诊断整体为空，
+/// 既有标记内容与文本提取不受影响。
+#[test]
+fn builder_visible_annotation_object_reference_roundtrip_keeps_document_conforming() {
+    let buf = build_annotation_appearance_page(true, false);
+    let doc = parse_buf(&buf);
+
+    let annotations = doc.page_annotations(0).expect("page annotations");
+    assert_eq!(annotations.len(), 1, "页上唯一注解");
+    assert!(
+        annotations[0]
+            .appearance
+            .as_ref()
+            .is_some_and(|streams| streams.normal.is_some()),
+        "回读注解应带常态 (N) 外观流"
+    );
+    assert!(!annotations[0].flags.hidden(), "/F 未置 Hidden 位");
+    assert_eq!(
+        doc.artifact_attribution_violations(0)
+            .expect("diagnose writer produced page"),
+        vec![],
+        "可见注解经 OBJR + /StructParent + 父树单元条目正确声称，七条归属诊断应为空"
+    );
+    assert_eq!(
+        doc.extract_page_text(0).as_deref(),
+        Some("Tagged line"),
+        "注解外观与 OBJR 声称不影响页文本提取"
+    );
+}
+
+/// 去掉 OBJR 声称的同一文档：可见注解不满足 14.8.2.2.1 第三个条件，
+/// 回读后应恰好命中一条 `VisibleAnnotationNotInStructure`（should 级），
+/// 其余规则保持干净。
+#[test]
+fn builder_visible_annotation_without_object_reference_roundtrip_reports_missing_structure() {
+    use pdf_engine::core::reader::accessibility::{
+        ArtifactAttributionRule, ArtifactAttributionViolation,
+    };
+
+    let buf = build_annotation_appearance_page(false, false);
+    let doc = parse_buf(&buf);
+
+    let found = doc
+        .artifact_attribution_violations(0)
+        .expect("diagnose writer produced page");
+    assert_eq!(
+        found,
+        vec![ArtifactAttributionViolation {
+            page: 0,
+            section: None,
+            element: None,
+            kid: None,
+            annotation: Some(0),
+            rule: ArtifactAttributionRule::VisibleAnnotationNotInStructure,
+        }],
+        "未被逻辑结构纳入的可见注解应只记一条规则 6 发现，annotation 为 /Annots 下标"
+    );
+    assert!(
+        !found[0].rule.is_mandatory(),
+        "14.8.2.2.1 的注解条件派生自定义式表述，应为 should 级"
+    );
+    assert_eq!(
+        doc.extract_page_text(0).as_deref(),
+        Some("Tagged line"),
+        "文本提取不受归属诊断影响"
+    );
+}
+
+/// Hidden 注解即使带 `/AP /N` 也不属于真实内容（14.8.2.2.1 第二条件
+/// 不成立）：不声称、不置结构，回读后也没有注解归属发现。
+#[test]
+fn builder_hidden_annotation_appearance_roundtrip_reports_no_annotation_finding() {
+    let buf = build_annotation_appearance_page(false, true);
+    let doc = parse_buf(&buf);
+
+    let annotations = doc.page_annotations(0).expect("page annotations");
+    assert!(annotations[0].flags.hidden(), "回读注解应带 Hidden 位");
+    assert!(
+        annotations[0]
+            .appearance
+            .as_ref()
+            .is_some_and(|streams| streams.normal.is_some()),
+        "外观流仍在，只是可见性条件不成立"
+    );
+    assert_eq!(
+        doc.artifact_attribution_violations(0)
+            .expect("diagnose writer produced page"),
+        vec![],
+        "Hidden 注解不要求进入逻辑结构，归属诊断应为空"
     );
 }

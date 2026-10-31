@@ -93,6 +93,7 @@ fn builder_artifact_attribution_roundtrip_through_parser() {
             section: Some(span_index),
             element: None,
             kid: None,
+            annotation: None,
             rule: ArtifactAttributionRule::RealContentNotInStructure,
         }],
         "没有 /MCID 且祖先也不是结构内容的 Span 应被记为真实内容未入结构"
