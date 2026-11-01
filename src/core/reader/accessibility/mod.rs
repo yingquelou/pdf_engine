@@ -25,6 +25,15 @@
 //! 中的位置，返回 [`ContentOrderItem`] 序列，以
 //! [`AnnotationOrderBasis`] 区分 `Annot`/`Link`/`Form` 元素的显式关联、
 //! 14.8.2.3.2 的邻接（在前/在后）与无从判定三档。
+//!
+//! 14.9.3–14.9.5 的语义落地由三个模块补齐：
+//! [`language_escape`] 按 7.9.2.2 解析文本串里的 Unicode 语言转义，给出
+//! 「转义覆盖 prevailing Lang」与去转义文本（[`SemanticText`]）；
+//! [`word_break`] 把 `/Alt` 词/短语替换与 `/ActualText` 字符替换、`/E`
+//! 展开的词边界三条 shall 做成可查询判定
+//! （[`Document::page_marked_content_word_breaks`]）；[`description_source`]
+//! 按 14.9.3 与 12.5.6.2 给出注解 `/Contents` 的来源优先级
+//! （[`Annotation::alternate_description`]）。
 
 use std::collections::BTreeSet;
 
@@ -41,7 +50,11 @@ mod character_properties;
 mod character_properties_derive;
 #[cfg(test)]
 mod character_properties_tests;
+mod description_source;
 mod language;
+mod language_escape;
+#[cfg(test)]
+mod language_escape_tests;
 mod multi_language;
 mod reversed_chars;
 #[cfg(test)]
@@ -49,6 +62,9 @@ mod reversed_chars_tests;
 mod span;
 #[cfg(test)]
 mod tests;
+mod word_break;
+#[cfg(test)]
+mod word_break_tests;
 
 pub use annotation_ordering::{
     AnnotationOrderBasis, AnnotationOrderingError, AnnotationPosition, ContentOrderItem,
@@ -64,10 +80,18 @@ pub use character_properties::{
     CharacterProperties, CharacterPropertiesError, FontStyle, FontVariant, GenericFontFamily,
     NameDerivedAttribute,
 };
+pub use description_source::{
+    AnnotationDescription, AnnotationDescriptionSource, annotation_description_source,
+};
 pub use language::{LanguageError, LanguageIdentifier};
+pub use language_escape::{LANGUAGE_ESCAPE, LanguageTextSegment, SemanticText, SemanticTextEntry};
 pub use multi_language::{AlternateText, MultiLanguageTextArray};
 pub use reversed_chars::{REVERSED_CHARS_TAG, ReversedCharsDiagnostic, ReversedCharsSequence};
 pub use span::{MarkedContentLanguageError, SpanProperties};
+pub use word_break::{
+    MarkedContentWordBreak, SubstitutionDeclaration, WordBreak, WordBreakDecision, WordBreakRule,
+    word_break_between,
+};
 
 use language::malformed;
 
