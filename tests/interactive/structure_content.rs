@@ -15,6 +15,16 @@
 //! `/StructParent`（Table 326）与父树的单元型条目；回读后 `/Obj` 指向该
 //! 注解对象、`/Pg` 与 MCR 同页、`/ParentTreeNextKey` 覆盖页面键 + OBJR 键，
 //! 页面 MCID 归属与文本提取不受影响。
+//!
+//! 第四条起覆盖 14.8.2.2.1 的注解归属条件（14.7.4.3 与 14.7.4.4）：
+//! 带 `/AP /N` 常态外观的可见注解被 OBJR 正确声称时七条诊断为空；
+//! 去掉声称恰好命中 `VisibleAnnotationNotInStructure`；置 Hidden 位
+//! 的注解即使带外观流也不要求入结构。文本提取在三条往返中不变。
+//!
+//! 第五条往返覆盖 14.7.4.4 NOTE 的自动 MCID 编号通道
+//! （`begin_auto_structure_content`）：按页从 0 稠密递增、跳过显式已占用
+//! 值，回读后每页父树数组无 `null` 空洞并与结构树 MCR 对齐，
+//! `/ParentTreeNextKey` 严格大于全部在用父树键。
 
 use super::*;
 
@@ -320,5 +330,271 @@ fn builder_object_reference_roundtrip_links_struct_parent() {
         doc.extract_page_text(page).as_deref(),
         Some("Tagged line"),
         "OBJR 内容项不影响页文本提取"
+    );
+}
+
+/// 带标记内容与一条 `/AP /N` 可见 Text 注解的整页写出。
+///
+/// `claim` 为真时 P 元素同时以 OBJR 声称该注解（写端会追加
+/// `/StructParent` 与父树单元条目）；`hidden` 为真时注解 `/F` 置
+/// Hidden 位（Table 165 bit 1）。返回写出的 PDF 字节。
+fn build_annotation_appearance_page(claim: bool, hidden: bool) -> Vec<u8> {
+    use pdf_engine::core::builder::{
+        AnnotationKind, Font, FormXObject, PageSize, PdfAnnotation, PdfBuilder, StructureElement,
+        StructureMarkInfo, StructureTree,
+    };
+    use pdf_engine::core::content::ContentStream;
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let page = builder.page(PageSize::A4);
+    builder.begin_structure_content(page, "P", 0);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "Tagged line");
+    builder.end_structure_content(page);
+    let appearance = builder.form_xobject(&FormXObject::new(
+        [72.0, 660.0, 92.0, 680.0],
+        ContentStream::new(),
+    ));
+    let mut annotation = PdfAnnotation::new(AnnotationKind::Text, [72.0, 660.0, 92.0, 680.0])
+        .with_contents("Figure note")
+        .with_appearance(appearance);
+    if hidden {
+        annotation = annotation.with_flags(2);
+    }
+    let handle = builder.add_annotation(page, annotation);
+    let mut paragraph = StructureElement::new("P").with_marked_content(page, 0);
+    if claim {
+        paragraph = paragraph.with_object_reference(handle);
+    }
+    builder.set_structure_tree(
+        StructureTree::new()
+            .with_element(StructureElement::new("Document").with_element(paragraph)),
+    );
+    builder.set_mark_info(StructureMarkInfo::new().with_marked(true));
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build tagged page with appearance-stream annotation");
+    buf
+}
+
+/// 可见注解被 OBJR 正确声称的往返：14.8.2.2.1 的三条件齐备
+/// （`/AP /N`、未置 Hidden、纳入逻辑结构），回读后归属诊断整体为空，
+/// 既有标记内容与文本提取不受影响。
+#[test]
+fn builder_visible_annotation_object_reference_roundtrip_keeps_document_conforming() {
+    let buf = build_annotation_appearance_page(true, false);
+    let doc = parse_buf(&buf);
+
+    let annotations = doc.page_annotations(0).expect("page annotations");
+    assert_eq!(annotations.len(), 1, "页上唯一注解");
+    assert!(
+        annotations[0]
+            .appearance
+            .as_ref()
+            .is_some_and(|streams| streams.normal.is_some()),
+        "回读注解应带常态 (N) 外观流"
+    );
+    assert!(!annotations[0].flags.hidden(), "/F 未置 Hidden 位");
+    assert_eq!(
+        doc.artifact_attribution_violations(0)
+            .expect("diagnose writer produced page"),
+        vec![],
+        "可见注解经 OBJR + /StructParent + 父树单元条目正确声称，七条归属诊断应为空"
+    );
+    assert_eq!(
+        doc.extract_page_text(0).as_deref(),
+        Some("Tagged line"),
+        "注解外观与 OBJR 声称不影响页文本提取"
+    );
+}
+
+/// 去掉 OBJR 声称的同一文档：可见注解不满足 14.8.2.2.1 第三个条件，
+/// 回读后应恰好命中一条 `VisibleAnnotationNotInStructure`（should 级），
+/// 其余规则保持干净。
+#[test]
+fn builder_visible_annotation_without_object_reference_roundtrip_reports_missing_structure() {
+    use pdf_engine::core::reader::accessibility::{
+        ArtifactAttributionRule, ArtifactAttributionViolation,
+    };
+
+    let buf = build_annotation_appearance_page(false, false);
+    let doc = parse_buf(&buf);
+
+    let found = doc
+        .artifact_attribution_violations(0)
+        .expect("diagnose writer produced page");
+    assert_eq!(
+        found,
+        vec![ArtifactAttributionViolation {
+            page: 0,
+            section: None,
+            element: None,
+            kid: None,
+            annotation: Some(0),
+            rule: ArtifactAttributionRule::VisibleAnnotationNotInStructure,
+        }],
+        "未被逻辑结构纳入的可见注解应只记一条规则 6 发现，annotation 为 /Annots 下标"
+    );
+    assert!(
+        !found[0].rule.is_mandatory(),
+        "14.8.2.2.1 的注解条件派生自定义式表述，应为 should 级"
+    );
+    assert_eq!(
+        doc.extract_page_text(0).as_deref(),
+        Some("Tagged line"),
+        "文本提取不受归属诊断影响"
+    );
+}
+
+/// Hidden 注解即使带 `/AP /N` 也不属于真实内容（14.8.2.2.1 第二条件
+/// 不成立）：不声称、不置结构，回读后也没有注解归属发现。
+#[test]
+fn builder_hidden_annotation_appearance_roundtrip_reports_no_annotation_finding() {
+    let buf = build_annotation_appearance_page(false, true);
+    let doc = parse_buf(&buf);
+
+    let annotations = doc.page_annotations(0).expect("page annotations");
+    assert!(annotations[0].flags.hidden(), "回读注解应带 Hidden 位");
+    assert!(
+        annotations[0]
+            .appearance
+            .as_ref()
+            .is_some_and(|streams| streams.normal.is_some()),
+        "外观流仍在，只是可见性条件不成立"
+    );
+    assert_eq!(
+        doc.artifact_attribution_violations(0)
+            .expect("diagnose writer produced page"),
+        vec![],
+        "Hidden 注解不要求进入逻辑结构，归属诊断应为空"
+    );
+}
+
+/// 自动编号通道往返（14.7.4.4 NOTE：标识符应尽可能小）：两页用
+/// `begin_auto_structure_content` 取回自动分配的 MCID 写进结构树 MCR，
+/// 页 1 混用一次显式 MCID 0 后自动分配跳过取 1。解析后每页父树数组
+/// `0..n-1` 全部 Some 无 `null` 空洞、与结构树 MCR 逐项对齐，
+/// `/ParentTreeNextKey` 严格大于全部在用键，文本提取不受标记影响。
+#[test]
+fn builder_auto_structure_content_roundtrip_keeps_parent_tree_dense_and_next_key_ahead() {
+    use pdf_engine::core::builder::{
+        Font, PageSize, PdfBuilder, StructureElement, StructureMarkInfo, StructureTree,
+    };
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let first = builder.page(PageSize::A4);
+    let second = builder.page(PageSize::A4);
+    let a0 = builder
+        .begin_auto_structure_content(first, "P")
+        .expect("first page auto MCID");
+    builder.text(first, &Font::helvetica(12.0), 72.0, 700.0, "First line");
+    builder.end_structure_content(first);
+    let a1 = builder
+        .begin_auto_structure_content(first, "Span")
+        .expect("second auto MCID on first page");
+    builder.text(first, &Font::helvetica(12.0), 72.0, 680.0, "Second line");
+    builder.end_structure_content(first);
+    // 显式占用 0 后，自动编号取「显式 ∪ 已分配」之外的最小整数 1。
+    builder.begin_structure_content(second, "P", 0);
+    builder.text(second, &Font::helvetica(12.0), 72.0, 700.0, "Explicit line");
+    builder.end_structure_content(second);
+    let b1 = builder
+        .begin_auto_structure_content(second, "Span")
+        .expect("auto MCID skips the explicit 0");
+    builder.text(second, &Font::helvetica(12.0), 72.0, 680.0, "Auto line");
+    builder.end_structure_content(second);
+    assert_eq!(
+        (a0, a1, b1),
+        (0, 1, 1),
+        "自动编号按页从 0 稠密递增且跳过显式值"
+    );
+
+    builder.set_structure_tree(
+        StructureTree::new().with_element(
+            StructureElement::new("Document")
+                .with_element(StructureElement::new("P").with_marked_content(first, a0))
+                .with_element(StructureElement::new("Span").with_marked_content(first, a1))
+                .with_element(StructureElement::new("P").with_marked_content(second, 0))
+                .with_element(StructureElement::new("Span").with_marked_content(second, b1)),
+        ),
+    );
+    builder.set_mark_info(StructureMarkInfo::new().with_marked(true));
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build pages with auto-numbered structure content");
+    let raw = String::from_utf8_lossy(&buf).into_owned();
+    for entry in [
+        "/P << /MCID 0 >> BDC",
+        "/Span << /MCID 1 >> BDC",
+        "/StructParents 0",
+        "/StructParents 1",
+        "/ParentTreeNextKey 2",
+    ] {
+        assert!(raw.contains(entry), "缺少 {entry}: {raw}");
+    }
+    let doc = parse_buf(&buf);
+
+    let tree = doc
+        .structure_tree()
+        .expect("structure tree")
+        .expect("structure tree present");
+    // arena 前序：0 = Document、1 = P、2 = Span（页 0）；3 = P、4 = Span（页 1）。
+    // 自动编号使两页父树数组 0..n-1 全部命中，无任何 null 空洞。
+    let first_parents = doc
+        .page_struct_parents(first)
+        .expect("first page parents")
+        .expect("/StructParents");
+    assert_eq!(first_parents.key, 0, "页序首个带标记内容的页面得键 0");
+    assert_eq!(first_parents.parents, vec![Some(1), Some(2)]);
+    assert!(
+        first_parents.parents.iter().all(|slot| slot.is_some()),
+        "自动编号页面数组不应有 null 空洞: {:?}",
+        first_parents.parents
+    );
+    let second_parents = doc
+        .page_struct_parents(second)
+        .expect("second page parents")
+        .expect("/StructParents");
+    assert_eq!(second_parents.key, 1, "第二页得键 1");
+    assert_eq!(second_parents.parents, vec![Some(3), Some(4)]);
+    assert!(
+        second_parents.parents.iter().all(|slot| slot.is_some()),
+        "显式 0 + 自动 1 混用页同样稠密: {:?}",
+        second_parents.parents
+    );
+    assert_eq!(tree.mcid_parent(0, 0), Some(1));
+    assert_eq!(tree.mcid_parent(0, 1), Some(2));
+    assert_eq!(tree.mcid_parent(1, 0), Some(3));
+    assert_eq!(tree.mcid_parent(1, 1), Some(4));
+    assert_eq!(tree.mcid_parent(0, 2), None, "稠密区间之外无条目");
+
+    // shall：NextKey 严格大于全部在用父树键，且等于「新条目取当前键再自增」
+    // 后的下一个可用值。
+    let next_key = tree
+        .root()
+        .parent_tree_next_key
+        .expect("/ParentTreeNextKey present");
+    assert_eq!(next_key, 2);
+    for key in tree.root().parent_tree.keys() {
+        assert!(
+            *key < next_key,
+            "在用父树键 {key} 必须小于 /ParentTreeNextKey {next_key}"
+        );
+    }
+
+    assert_eq!(
+        doc.extract_page_text(first).as_deref(),
+        Some("First line\nSecond line"),
+        "自动编号标记段内的文本照常提取"
+    );
+    assert_eq!(
+        doc.extract_page_text(second).as_deref(),
+        Some("Explicit line\nAuto line"),
+        "混用页文本照常提取"
     );
 }

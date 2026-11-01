@@ -84,6 +84,36 @@ fn unnamed_widgets_merge_into_the_named_field_group() {
     assert!(form.logical_field("other").is_none());
 }
 
+/// Table 220 `/TU`：合并视图按前序首个表示暴露替代名，各表示自身的
+/// `/TU` 经 `representations` 逐节点访问（12.7.3.2 仅要求 `/FT` `/V`
+/// `/DV` 一致，替代名不在强约束之列）。
+#[test]
+fn logical_field_exposes_first_representation_alternate_name() {
+    let parent = radio_group(vec![
+        Value::Dict(widget(rect(0)).insert("TU", text("Visa"))),
+        Value::Dict(widget(rect(30)).insert("TU", text("Mastercard"))),
+    ])
+    .insert("TU", text("I agree"));
+    let form = form_of(Value::Dict(
+        Dict::new().insert("Fields", arr(vec![Value::Dict(parent)])),
+    ));
+    let group = form.logical_field("agree").expect("group present");
+    assert_eq!(
+        group.alternate_name,
+        Some("I agree"),
+        "the first representation's /TU is the merged alternate name"
+    );
+    assert_eq!(
+        group
+            .representations
+            .iter()
+            .map(|node| node.alternate_name.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("I agree"), Some("Visa"), Some("Mastercard")],
+        "each representation keeps its own /TU"
+    );
+}
+
 #[test]
 fn named_children_are_their_own_logical_fields() {
     let form = form_of(Value::Dict(Dict::new().insert(

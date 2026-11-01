@@ -87,9 +87,21 @@ pub(crate) struct NavigationState {
     structure_tree: Option<StructureTree>,
     /// 目录 `/MarkInfo`（14.7.1 Table 321）；None 时不写出。
     mark_info: Option<StructureMarkInfo>,
+    /// 结构标记内容 MCID 登记：自动编号分配与自动/显式撞号检测
+    /// （14.7.4.4），`build` 在对象号分配之前消费撞号信息。
+    structure_mcids: structure_content::McidRegistry,
 }
 
 impl NavigationState {
+    /// 结构标记内容 MCID 登记的可变借用；供 `begin_structure_content` /
+    /// `begin_auto_structure_content` 登记来源，`build` 在对象号分配之前
+    /// 取出撞号信息，失败保持零字节契约。
+    pub(in crate::core::builder) fn structure_mcids_mut(
+        &mut self,
+    ) -> &mut structure_content::McidRegistry {
+        &mut self.structure_mcids
+    }
+
     /// 各文章线的 bead 数，按注册顺序；供 Thread 动作索引校验。
     pub(super) fn article_thread_bead_counts(&self) -> Vec<usize> {
         self.article_threads

@@ -7,7 +7,9 @@
 //! - 字段属性按 12.7.3 继承：`/FT`、`/Ff`、`/V`、`/DV`、`/DA`、`/Q`、
 //!   `/MaxLen` 取最近祖先提供的值，子节点可覆盖；`/Opt` 类型化为
 //!   [`FormOption`]（Table 227 按钮字段可继承、Table 231 选择字段不继承）；
-//!   全限定名由 `/T` 链以 `.` 连接。
+//!   全限定名由 `/T` 链以 `.` 连接；替代字段名 `/TU`（Table 220，PDF 1.3，
+//!   14.9.3）不可继承，仅在声明该条目的节点上类型化为
+//!   [`Field::alternate_name`]。
 //! - Widget 节点（`/Subtype /Widget`）建模 `/Rect`、`/AP`、`/AS` 与 `/P`；
 //!   外观流内容求值归渲染，动作 `/A` 语义归 E3。
 //! - 字段 `/AA` 附加动作（`/K` `/F` `/V` `/C`，Table 196）经动作模型
@@ -138,6 +140,8 @@ pub struct Field {
     pub reference: Option<(i64, i64)>,
     /// `/T` 部分名（解码后）。
     pub partial_name: Option<String>,
+    /// `/TU` 替代字段名（Table 220，PDF 1.3；解码后，不可继承）。
+    pub alternate_name: Option<String>,
     /// 全限定名（`/T` 链以 `.` 连接；无名的 Widget 继承父名）。
     pub fully_qualified_name: String,
     /// `/FT`（含继承）。
@@ -289,6 +293,8 @@ impl FieldReader<'_> {
         self.nodes += 1;
 
         let partial_name = parse_partial_name(dict)?;
+        // `/TU` 非继承条目（Table 220 未标注 inheritable），只读本节点。
+        let alternate_name = parse_alternate_name(dict)?;
         let fully_qualified_name = match partial_name.as_deref() {
             Some(name) if !name.is_empty() => {
                 if parent_fqn.is_empty() {
@@ -418,6 +424,7 @@ impl FieldReader<'_> {
         Ok(Field {
             reference,
             partial_name,
+            alternate_name,
             fully_qualified_name,
             field_type,
             flags,
@@ -448,6 +455,15 @@ fn parse_partial_name(dict: &Dict) -> Result<Option<String>> {
         Some(value) => text_value(value)
             .map(Some)
             .ok_or_else(|| malformed("form field /T is not a text string")),
+    }
+}
+
+fn parse_alternate_name(dict: &Dict) -> Result<Option<String>> {
+    match dict.get("TU") {
+        None => Ok(None),
+        Some(value) => text_value(value)
+            .map(Some)
+            .ok_or_else(|| malformed("form field /TU is not a text string")),
     }
 }
 

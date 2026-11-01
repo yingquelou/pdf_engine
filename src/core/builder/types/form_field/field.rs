@@ -124,7 +124,7 @@ pub struct FormField {
     options: Vec<FormOption>,
     top_index: Option<u32>,
     alternate_indices: Vec<u32>,
-    tooltip: Option<String>,
+    alternate_name: Option<String>,
     rect: Option<[f64; 4]>,
     annotation_flags: u32,
     appearance_normal: Option<usize>,
@@ -195,7 +195,7 @@ impl FormField {
             options: Vec::new(),
             top_index: None,
             alternate_indices: Vec::new(),
-            tooltip: None,
+            alternate_name: None,
             rect,
             annotation_flags: 0,
             appearance_normal: None,
@@ -348,10 +348,18 @@ impl FormField {
         self
     }
 
-    /// 工具提示 `/TU`。
-    pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
-        self.tooltip = Some(tooltip.into());
+    /// 替代字段名 `/TU`（Table 220，PDF 1.3；14.9.3）：阅读器在用户界面
+    /// 标识该字段时以本条目取代实际字段名，亦供无障碍朗读与内容抽取使用；
+    /// 文本串按 PDFDocEncoding 或 Unicode 编码写出。
+    pub fn with_alternate_name(mut self, name: impl Into<String>) -> Self {
+        self.alternate_name = Some(name.into());
         self
+    }
+
+    /// [`FormField::with_alternate_name`] 的别名（阅读器界面惯例把 `/TU`
+    /// 显示为工具提示）。
+    pub fn with_tooltip(self, tooltip: impl Into<String>) -> Self {
+        self.with_alternate_name(tooltip)
     }
 
     /// Widget 注解标志位（`/F`，Table 165；如 4=打印）。
@@ -460,8 +468,8 @@ impl FormField {
         &self.alternate_indices
     }
 
-    pub(crate) fn tooltip(&self) -> Option<&str> {
-        self.tooltip.as_deref()
+    pub(crate) fn alternate_name(&self) -> Option<&str> {
+        self.alternate_name.as_deref()
     }
 
     pub(crate) fn rect(&self) -> Option<[f64; 4]> {

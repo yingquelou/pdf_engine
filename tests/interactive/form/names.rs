@@ -160,3 +160,55 @@ fn builder_shared_field_representations_roundtrip_through_parser() {
         "each representation keeps its own appearance entries"
     );
 }
+
+/// 写入 → 重新解析：`with_alternate_name` 写出的字段替代名 `/TU`
+/// （Table 220，14.9.3；含 UTF-16BE 非 ASCII）经解析类型化回读，缺省
+/// 不物化，合并视图按前序首个表示暴露（12.7.3.2）。
+#[test]
+fn builder_field_alternate_name_roundtrips_through_parser() {
+    use pdf_engine::core::builder::{AcroForm, FormField, PageSize, PdfBuilder};
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let mut form = AcroForm::new();
+    form.add_field(
+        page,
+        FormField::radio_group("cardbrand")
+            .with_alternate_name("Payment card brand")
+            .with_child(
+                FormField::widget([72.0, 560.0, 92.0, 580.0]).with_alternate_name("Visa 卡"),
+            ),
+    );
+    form.add_field(
+        page,
+        FormField::text("name", [72.0, 700.0, 300.0, 720.0]).with_alternate_name("Full name"),
+    );
+    form.add_field(page, FormField::text("plain", [72.0, 660.0, 300.0, 680.0]));
+    builder.set_acro_form(form);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let doc = parse_buf(&buf);
+    let form = doc.acro_form().expect("parse form").expect("form present");
+    assert_eq!(
+        form.fields[0].alternate_name.as_deref(),
+        Some("Payment card brand"),
+        "named parent keeps its own /TU"
+    );
+    assert_eq!(
+        form.fields[0].kids[0].alternate_name.as_deref(),
+        Some("Visa 卡"),
+        "widget representation /TU decodes from UTF-16BE"
+    );
+    assert_eq!(form.fields[1].alternate_name.as_deref(), Some("Full name"));
+    assert_eq!(
+        form.fields[2].alternate_name, None,
+        "absent /TU must not materialize"
+    );
+    let group = form.logical_field("cardbrand").expect("logical group");
+    assert_eq!(
+        group.alternate_name,
+        Some("Payment card brand"),
+        "merged view exposes the first representation's /TU"
+    );
+}
