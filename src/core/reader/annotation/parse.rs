@@ -5,8 +5,8 @@
 //! 父模块中，本模块只负责按表组装字段。
 
 use super::entries::{
-    parse_appearance, parse_border, parse_number_array, parse_opacity, parse_rect,
-    parse_text_string,
+    parse_appearance, parse_border, parse_number_array, parse_opacity, parse_quad_points,
+    parse_rect, parse_text_string,
 };
 use super::{
     Annotation, AnnotationError, AnnotationFlags, AnnotationSubtype, Result, exdata, malformed,
@@ -86,7 +86,7 @@ pub(super) fn parse_annotation(
             .transpose()?,
         printer_mark,
         trap_network,
-        quad_points: parse_number_array(dict, "QuadPoints", true)?,
+        quad_points: parse_quad_points(dict)?,
         icon_name: entries.icon_name,
         sound,
         is_open: entries.is_open,

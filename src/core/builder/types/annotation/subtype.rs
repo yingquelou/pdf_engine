@@ -3,6 +3,10 @@
 //! 字段本身声明在 [`PdfAnnotation`]（父模块），Line 专有条目按 [`LineEntries`]
 //! 成组；子类型归属与取值面的约束集中在本文件，
 //! 非法一律 `InvalidObject`，且全部校验发生在分配对象号之前。
+//! Stamp 图标名 `/Name`（Table 181）经 [`StampIcon`] 类型化，非标准名仍由
+//! [`PdfAnnotation::with_icon_name`] 原样写入；文本标记四型（Table 179）
+//! 必填 `/QuadPoints` 的校验也在此（空数组视同缺失，属库对 Required 条目的
+//! 解释；`/Rect` 包含关系规范未作 shall/should，写端不校验）。
 
 use super::{AnnotationKind, PdfAnnotation};
 use crate::core::types::PdfVersion;
@@ -93,6 +97,67 @@ impl CaptionPosition {
         match self {
             Self::Inline => "Inline",
             Self::Top => "Top",
+        }
+    }
+}
+
+/// Rubber Stamp 注解标准图标名（`/Name`，Table 181，全 14 个）。
+///
+/// Table 181 允许查看器支持额外名字；非标准名请经
+/// [`PdfAnnotation::with_icon_name`] 以原文写入（与 [`Self`] 写出形态相同，
+/// 均为 PDF 名字）。`/Name` 缺省为 `Draft`，写出不代填缺省值；
+/// `/AP` 存在时外观流优先（Table 181 原文）。`/Name` 条目本身
+/// 在 Table 181 无 PDF 版本标注，随 Stamp 子类型自 PDF 1.3 起可用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampIcon {
+    /// `/Approved`。
+    Approved,
+    /// `/Experimental`。
+    Experimental,
+    /// `/NotApproved`。
+    NotApproved,
+    /// `/AsIs`。
+    AsIs,
+    /// `/Expired`。
+    Expired,
+    /// `/NotForPublicRelease`。
+    NotForPublicRelease,
+    /// `/Confidential`。
+    Confidential,
+    /// `/Final`。
+    Final,
+    /// `/Sold`。
+    Sold,
+    /// `/Departmental`。
+    Departmental,
+    /// `/ForComment`。
+    ForComment,
+    /// `/TopSecret`。
+    TopSecret,
+    /// `/Draft`（Table 181 缺省）。
+    Draft,
+    /// `/ForPublicRelease`。
+    ForPublicRelease,
+}
+
+impl StampIcon {
+    /// 图标名（`/Name` 值）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Approved => "Approved",
+            Self::Experimental => "Experimental",
+            Self::NotApproved => "NotApproved",
+            Self::AsIs => "AsIs",
+            Self::Expired => "Expired",
+            Self::NotForPublicRelease => "NotForPublicRelease",
+            Self::Confidential => "Confidential",
+            Self::Final => "Final",
+            Self::Sold => "Sold",
+            Self::Departmental => "Departmental",
+            Self::ForComment => "ForComment",
+            Self::TopSecret => "TopSecret",
+            Self::Draft => "Draft",
+            Self::ForPublicRelease => "ForPublicRelease",
         }
     }
 }
@@ -241,9 +306,19 @@ impl LineEntries {
 }
 
 impl PdfAnnotation {
-    /// Text 注解图标名 `/Name`（仅 Text 子类型；取值由查看器定义，写成名字）。
+    /// Text/Sound/Stamp 注解图标名 `/Name`（写成 PDF 名字；Text 取值由查看器
+    /// 定义，Sound 标准值 `Speaker`/`Mic`，Stamp 标准值见 [`StampIcon`]，
+    /// 非标准图章名同样经此原样保留）。
     pub fn with_icon_name(mut self, name: impl Into<String>) -> Self {
         self.icon_name = Some(name.into());
+        self
+    }
+
+    /// Rubber Stamp 注解标准图标名 `/Name`（Table 181，14 个标准名之一；
+    /// 等价于 [`Self::with_icon_name`] 写入 [`StampIcon::name`]，
+    /// 缺省 `Draft` 不代填）。
+    pub fn with_stamp_icon(mut self, icon: StampIcon) -> Self {
+        self.icon_name = Some(icon.name().to_string());
         self
     }
 
@@ -371,7 +446,11 @@ impl PdfAnnotation {
     pub(super) fn validate_subtype_entries(&self) -> Result<(), String> {
         if self.icon_name.is_some() {
             self.require_kind_in(
-                &[AnnotationKind::Text, AnnotationKind::Sound],
+                &[
+                    AnnotationKind::Text,
+                    AnnotationKind::Sound,
+                    AnnotationKind::Stamp,
+                ],
                 "annotation /Name",
             )?;
         }

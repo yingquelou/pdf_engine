@@ -17,6 +17,11 @@
 //!   （Table 174 + Table 167，`/RC` 属标记类通用条目）；
 //!   Square/Circle `/BE`、`/RD`（Table 177，与 FreeText 共用键）；
 //!   Polygon/PolyLine `/Vertices`、`/LE`、`/BE`、`/IT`（Table 178）；
+//!   Highlight/Underline/Squiggly/StrikeOut 经
+//!   [`Annotation::text_markup_quad_groups`] 按 8 数一组类型化 `/QuadPoints`
+//!   （Table 179，四型共用；分组访问统一走 [`Annotation::quad_groups`]）；
+//!   Stamp `/Name` 图章图标名类型化为 [`StampIcon`]（Table 181，14 个标准名，
+//!   未知名原样保留于 `StampIcon::Other` 且可判别，缺省 `Draft`）；
 //!   Link `/H` 高亮模式与 `/PA` 按下 URI 动作（Table 173，`/PA` 经
 //!   `Document::annotation_pressed_action` 解析为 12.6 动作模型）。
 //! - Sound（Table 185）：`/Sound` 声音流引用经 `Document::annotation_sound`
@@ -87,7 +92,7 @@ use parse::parse_annotation;
 pub use printer_mark::{PrinterMark, PrinterMarkForm};
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
-    LineIntent, PolygonIntent,
+    LineIntent, PolygonIntent, StampIcon,
 };
 pub use trap_net::{ProcessColorModel, TrapNetwork, TrapNetworkForm};
 pub use watermark::FixedPrint;
@@ -228,7 +233,9 @@ pub struct Annotation {
     pub printer_mark: Option<PrinterMark>,
     /// 陷印网络注解的 Table 366 跟踪条目与 Table 367 外观表单（14.11.6）。
     pub trap_network: Option<TrapNetwork>,
-    /// `/QuadPoints`（标记类注解，长度为 8 的倍数）。
+    /// `/QuadPoints`（文本标记 Table 179、Link Table 173、Redact Table 192
+    /// 共用）：8 个数一组、至少一组、坐标有限；类型化分组见
+    /// [`Annotation::quad_groups`] 与 [`Annotation::text_markup_quad_groups`]。
     pub quad_points: Option<Vec<f64>>,
     /// `/Name` 图标名（Text 注解专有条目；名字或文本串，取值由查看器定义）。
     pub icon_name: Option<String>,

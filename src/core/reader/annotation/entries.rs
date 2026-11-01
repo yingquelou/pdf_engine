@@ -67,6 +67,25 @@ pub(super) fn parse_number_array(
     Ok(Some(out))
 }
 
+/// `/QuadPoints`（Table 179/173/192 共用键）：8 个数字一组、组数 ≥1 的
+/// 有限数值数组。
+///
+/// 「须为 8 的倍数、坐标为 default user space 数值」是 Table 179 的
+/// shall；「至少一组」规范未用 shall 明言（8 × n 中的 n 可为 0 属退化
+/// 形态），此处按库自定策略拒绝空数组并返回类型化错误，与写端
+/// 「空 `/QuadPoints` 视同缺失」的契约保持同一口径。
+pub(super) fn parse_quad_points(dict: &Dict) -> Result<Option<Vec<f64>>> {
+    let Some(values) = parse_number_array(dict, "QuadPoints", true)? else {
+        return Ok(None);
+    };
+    if values.is_empty() {
+        return Err(malformed(
+            "annotation /QuadPoints must hold at least one quadrilateral of eight numbers",
+        ));
+    }
+    Ok(Some(values))
+}
+
 pub(super) fn parse_opacity(dict: &Dict) -> Result<Option<f64>> {
     let Some(value) = dict.get("CA") else {
         return Ok(None);

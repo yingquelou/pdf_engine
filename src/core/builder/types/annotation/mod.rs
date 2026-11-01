@@ -54,7 +54,7 @@ use printer_mark::PrinterMarkEntries;
 use redact::RedactEntries;
 use subtype::LineEntries;
 pub(crate) use subtype::validate_name_value;
-pub use subtype::{CaptionPosition, LineEndStyle, LineIntent};
+pub use subtype::{CaptionPosition, LineEndStyle, LineIntent, StampIcon};
 use trap_net::TrapNetworkEntries;
 pub use watermark::FixedPrint;
 
@@ -307,6 +307,13 @@ impl PdfAnnotation {
     /// 高亮区域四边形 `/QuadPoints`；每四边形 8 个数，总长须为 8 的倍数。
     pub fn with_quad_points(mut self, quad_points: Vec<f64>) -> Self {
         self.quad_points = Some(quad_points);
+        self
+    }
+
+    /// 按四边形分组的 `/QuadPoints`（每四边形 8 个数、逆时针四点，
+    /// Table 179/173/192）；展平后写入，与非分组方法互斥（后调用者生效）。
+    pub fn with_quad_point_groups(mut self, quads: Vec<[f64; 8]>) -> Self {
+        self.quad_points = Some(quads.concat());
         self
     }
 

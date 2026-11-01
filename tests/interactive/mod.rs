@@ -41,6 +41,7 @@ mod annotation_popup;
 mod annotation_printer_mark;
 mod annotation_redact;
 mod annotation_subtype_table;
+mod annotation_text_markup;
 mod annotation_trap_net;
 mod annotation_watermark;
 mod articles;

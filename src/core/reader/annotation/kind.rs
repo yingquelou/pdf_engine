@@ -174,6 +174,15 @@ impl AnnotationSubtype {
             .map(|(_, version, _)| *version)
     }
 
+    /// 是否为文本标记注解（12.5.6.10，Table 179：`/Highlight`、`/Underline`、
+    /// `/Squiggly`、`/StrikeOut` 四型共用 `/QuadPoints` 专有条目）。
+    pub fn is_text_markup(&self) -> bool {
+        matches!(
+            self,
+            Self::Highlight | Self::Underline | Self::Squiggly | Self::StrikeOut
+        )
+    }
+
     /// 是否为标记类注解（Table 169 的 `Markup` 列；标记类可携带 `/QuadPoints`
     /// 与 12.5.6.2 的公共条目）。
     pub fn is_markup(&self) -> bool {
