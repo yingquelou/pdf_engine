@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use crate::core::builder::navigation::{structure_content, tag_suspect};
 use crate::core::builder::types::ThreeDViewSelection;
 use crate::core::builder::types::reversed_chars;
+use crate::core::builder::types::viewer_preferences;
 use crate::core::builder::{Action, GoTo3DViewSelection, PdfBuilder};
 use crate::core::content::{MarkedContentProperties, Op};
 use crate::core::types::{PdfFeature, PdfVersion, Value};
@@ -346,6 +347,16 @@ impl PdfBuilder {
                 }
             }
         }
+        // 查看器首选项（12.2 Table 150）：取值契约（打印页码子区间与份数
+        // 边界为库策略，见模块文档）与逐档位版本门禁在任何对象号分配与
+        // 写出之前完成，失败保持零字节契约；确认后的特性档位由特征画像
+        // 登记。
+        let viewer_pref_features = self
+            .viewer_preferences
+            .as_ref()
+            .map(|prefs| viewer_preferences::validate(prefs, self.version))
+            .transpose()?;
+        let viewer_pref_features = viewer_pref_features.unwrap_or_default();
         Ok(Preflight {
             acro_form,
             action_features,
@@ -358,6 +369,7 @@ impl PdfBuilder {
             artifact_subtype,
             tag_suspects,
             reversed_characters,
+            viewer_pref_features,
         })
     }
 }

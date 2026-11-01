@@ -24,6 +24,9 @@ mod page_tree;
 mod templates;
 #[cfg(test)]
 mod tests;
+mod viewer_preferences;
+#[cfg(test)]
+mod viewer_preferences_tests;
 
 pub use alternate_presentation::Slideshow;
 pub(crate) use articles::MAX_ARTICLE_BEADS;
@@ -37,6 +40,10 @@ pub use outline::{Outline, OutlineDestination, OutlineItem};
 pub use page_labels::{PageLabelRange, PageLabelStyle, PageLabels};
 pub(crate) use page_tree::{PageTreeIndex, page_tree_index};
 pub use templates::TemplatePage;
+pub use viewer_preferences::{
+    Duplex, NonFullScreenPageMode, PageBoundaryName, PrintScaling, ReadingDirection,
+    ViewerPreferences,
+};
 
 /// 导航结构读取中的类型化错误。
 #[derive(Debug, Clone, PartialEq)]

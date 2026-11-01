@@ -30,6 +30,7 @@
 //! - `reversed_chars`：反序显示串标记内容（14.8.2.3.3）的写出与构建期门禁；
 //! - `three_d`：3D artwork、视图、投影、背景与激活字典（13.6）；
 //! - `transition`：过渡字典（12.4.4 Table 162 与 Transition 动作 12.6.4.14）；
+//! - `viewer_preferences`：查看器首选项字典（12.2 Table 150）的写出与构建期门禁；
 //! - `xmp`：类型化 XMP 包（14.3.2）的构造与 RDF/XML 序列化。
 
 mod action;
@@ -63,6 +64,7 @@ mod structure;
 mod three_d;
 mod transition;
 mod type3;
+pub(crate) mod viewer_preferences;
 mod viewport;
 mod xmp;
 
@@ -156,6 +158,10 @@ pub use transition::{
     Transition, TransitionDimension, TransitionDirection, TransitionMotion, TransitionStyle,
 };
 pub use type3::{Type3Font, Type3Glyph};
+pub use viewer_preferences::{
+    Duplex, NonFullScreenPageMode, PageBoundaryName, PrintScaling, ReadingDirection,
+    ViewerPreferences,
+};
 pub use viewport::Viewport;
 pub use xmp::{XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue};
 

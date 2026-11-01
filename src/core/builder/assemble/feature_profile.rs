@@ -176,6 +176,11 @@ impl PdfBuilder {
                 .borrow_mut()
                 .insert(PdfFeature::ReversedCharacters);
         }
+        // 查看器首选项（12.2 Table 150）：preflight 门禁确认的条目档位
+        // 写入特征画像，供版本推导与读端画像比对。
+        for feature in &preflight.viewer_pref_features {
+            doc.features.borrow_mut().insert(*feature);
+        }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &preflight.acro_form {
             if form_field::has_additional_actions(form) {

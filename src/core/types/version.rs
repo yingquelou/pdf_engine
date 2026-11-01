@@ -324,6 +324,29 @@ pub enum PdfFeature {
     /// 扩展字典（目录 `/Extensions` 与各前缀开发者扩展字典，7.12 与
     /// Table 50），随 ISO 32000-1（PDF 1.7）引入。
     ExtensionsDictionary,
+    /// 查看器首选项字典（目录 `/ViewerPreferences`，12.2 Table 150 的
+    /// 1.2 档位条目：五个界面开关布尔与 `/NonFullScreenPageMode`），
+    /// PDF 1.2 引入。
+    ViewerPreferences,
+    /// 查看器首选项的阅读顺序条目（`/Direction`，12.2 Table 150），
+    /// PDF 1.3 引入。
+    ViewerReadingDirection,
+    /// 查看器首选项的标题栏条目（`/DisplayDocTitle`，12.2 Table 150），
+    /// PDF 1.4 引入。
+    ViewerDisplayDocTitle,
+    /// 查看器首选项的页面边界条目（`/ViewArea` `/ViewClip` `/PrintArea`
+    /// `/PrintClip`，12.2 Table 150），PDF 1.4 引入。
+    ViewerPageBoundaryNames,
+    /// 查看器首选项的打印缩放条目（`/PrintScaling`，12.2 Table 150），
+    /// PDF 1.6 引入。
+    ViewerPrintScaling,
+    /// 查看器首选项的打印对话框条目（`/Duplex` `/PickTrayByPDFSize`
+    /// `/PrintPageRange` `/NumCopies`，12.2 Table 150），PDF 1.7 引入。
+    ViewerPrintDialogPreferences,
+    /// 查看器首选项的强制执行条目（`/Enforce`，名数组）。ISO 32000-1
+    /// 的 Table 150 无此条目，系 PDF 2.0（ISO 32000-2）追加；最低版本
+    /// 记为 2.0。
+    ViewerEnforcement,
 }
 
 impl PdfFeature {
@@ -341,7 +364,8 @@ impl PdfFeature {
             | PdfFeature::FormDataActions
             | PdfFeature::SoundObjects
             | PdfFeature::MovieObjects
-            | PdfFeature::OpiDictionaries => PdfVersion::V1_2,
+            | PdfFeature::OpiDictionaries
+            | PdfFeature::ViewerPreferences => PdfVersion::V1_2,
             PdfFeature::ImageMaskEntry
             | PdfFeature::AlternateImages
             | PdfFeature::Shading
@@ -357,7 +381,8 @@ impl PdfFeature {
             | PdfFeature::PageBoundaries
             | PdfFeature::SeparationInfo
             | PdfFeature::TrapNetworks
-            | PdfFeature::LogicalStructure => PdfVersion::V1_3,
+            | PdfFeature::LogicalStructure
+            | PdfFeature::ViewerReadingDirection => PdfVersion::V1_3,
             PdfFeature::JBIG2Decode
             | PdfFeature::Transparency
             | PdfFeature::ImageIntent
@@ -374,7 +399,9 @@ impl PdfFeature {
             | PdfFeature::SpanPropertyLists
             | PdfFeature::ArtifactPropertyLists
             | PdfFeature::ReversedCharacters
-            | PdfFeature::MarkInfo => PdfVersion::V1_4,
+            | PdfFeature::MarkInfo
+            | PdfFeature::ViewerDisplayDocTitle
+            | PdfFeature::ViewerPageBoundaryNames => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
             | PdfFeature::JPXDecode
@@ -402,7 +429,8 @@ impl PdfFeature {
             | PdfFeature::MarkInfoSuspects
             | PdfFeature::TagSuspects
             | PdfFeature::LayoutColumnAttributes
-            | PdfFeature::StructureUserProperties => PdfVersion::V1_6,
+            | PdfFeature::StructureUserProperties
+            | PdfFeature::ViewerPrintScaling => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -416,8 +444,10 @@ impl PdfFeature {
             | PdfFeature::PrintFieldAttributes
             | PdfFeature::ArtifactBackground
             | PdfFeature::ArtifactSubtype
-            | PdfFeature::ThreeDMarkup => PdfVersion::V1_7,
-            PdfFeature::ExtensionsDictionary => PdfVersion::V1_7,
+            | PdfFeature::ThreeDMarkup
+            | PdfFeature::ExtensionsDictionary
+            | PdfFeature::ViewerPrintDialogPreferences => PdfVersion::V1_7,
+            PdfFeature::ViewerEnforcement => PdfVersion::V2_0,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -519,6 +549,13 @@ impl fmt::Display for PdfFeature {
             PdfFeature::TagSuspects => "tag suspects",
             PdfFeature::ReversedCharacters => "reversed show strings",
             PdfFeature::ExtensionsDictionary => "extensions dictionary",
+            PdfFeature::ViewerPreferences => "viewer preferences dictionary",
+            PdfFeature::ViewerReadingDirection => "viewer preferences reading direction",
+            PdfFeature::ViewerDisplayDocTitle => "viewer preferences display doc title",
+            PdfFeature::ViewerPageBoundaryNames => "viewer preferences page boundary entries",
+            PdfFeature::ViewerPrintScaling => "viewer preferences print scaling",
+            PdfFeature::ViewerPrintDialogPreferences => "viewer preferences print dialog entries",
+            PdfFeature::ViewerEnforcement => "viewer preferences enforce array",
         };
         write!(f, "{name}")
     }

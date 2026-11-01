@@ -88,6 +88,10 @@ pub use types::{
     Type2Halftone, Type3Font, Type3Glyph, UserProperty, Viewport, WritingMode, XmpListItem,
     XmpListKind, XmpPacket, XmpPacketError, XmpValue,
 };
+pub use types::{
+    Duplex, NonFullScreenPageMode, PageBoundaryName, PrintScaling, ReadingDirection,
+    ViewerPreferences,
+};
 
 use crate::core::content::{ContentStream, MarkedContentProperties};
 use crate::core::types::{Dict, PdfVersion, Value};
@@ -248,6 +252,9 @@ pub struct PdfBuilder {
     xmp_metadata: Option<Vec<u8>>,
     /// 类型化 XMP 包（14.3.2）；与 `xmp_metadata` 互斥。
     xmp_packet: Option<XmpPacket>,
+    /// 目录 `/ViewerPreferences` 查看器首选项（12.2，Table 150）；
+    /// `None`（默认）时不写出。
+    viewer_preferences: Option<ViewerPreferences>,
 }
 
 impl Default for PdfBuilder {
@@ -291,6 +298,7 @@ impl PdfBuilder {
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
+            viewer_preferences: None,
         }
     }
 
@@ -328,6 +336,7 @@ impl PdfBuilder {
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
+            viewer_preferences: None,
         }
     }
 

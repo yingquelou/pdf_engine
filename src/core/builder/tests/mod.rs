@@ -155,6 +155,7 @@ mod three_d_view_extensions;
 mod thumbnail;
 mod to_unicode;
 mod type3;
+mod viewer_preferences;
 mod viewport;
 mod widths;
 

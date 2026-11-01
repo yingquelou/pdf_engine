@@ -67,6 +67,8 @@ impl FeatureProfile {
 /// - `/Threads` 键存在（目录）→ ArticleThreads
 /// - `/Collection` 键存在（目录）→ Collection
 /// - `/Extensions` 键存在（目录）→ ExtensionsDictionary
+/// - `/ViewerPreferences` 键存在（目录）→ ViewerPreferences 基档（1.2），并按键
+///   登记 1.3–1.7 各档；`/Enforce` 为 PDF 2.0 扩展档（32000-1 无此条目）
 /// - `/Templates` 键存在（名称字典）→ PageTemplates
 /// - `/AlternatePresentations` 键存在（名称字典）→ AlternatePresentations
 /// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
@@ -324,6 +326,37 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 扩展字典（ISO 32000-1，即 PDF 1.7）：目录 /Extensions（7.12）。
     if d.0.contains_key("Extensions") {
         features.insert(PdfFeature::ExtensionsDictionary);
+    }
+    // 查看器首选项（12.2 Table 150）：/ViewerPreferences 按 1.2 基档登记，
+    // 条目按键登记各自引入档位。
+    if d.0.contains_key("ViewerPreferences") {
+        features.insert(PdfFeature::ViewerPreferences);
+        if let Some(p) = d.get("ViewerPreferences").and_then(Value::as_dict) {
+            if p.0.contains_key("Direction") {
+                features.insert(PdfFeature::ViewerReadingDirection);
+            }
+            if p.0.contains_key("DisplayDocTitle") {
+                features.insert(PdfFeature::ViewerDisplayDocTitle);
+            }
+            if ["ViewArea", "ViewClip", "PrintArea", "PrintClip"]
+                .iter()
+                .any(|k| p.0.contains_key(*k))
+            {
+                features.insert(PdfFeature::ViewerPageBoundaryNames);
+            }
+            if p.0.contains_key("PrintScaling") {
+                features.insert(PdfFeature::ViewerPrintScaling);
+            }
+            if ["Duplex", "PickTrayByPDFSize", "PrintPageRange", "NumCopies"]
+                .iter()
+                .any(|k| p.0.contains_key(*k))
+            {
+                features.insert(PdfFeature::ViewerPrintDialogPreferences);
+            }
+            if p.0.contains_key("Enforce") {
+                features.insert(PdfFeature::ViewerEnforcement);
+            }
+        }
     }
     // 命名页面模板（PDF 1.3）：目录 /Names /Templates 名称树。`Templates`
     // 键只出现在名称字典中（Table 31），扫描到名称字典即命中。

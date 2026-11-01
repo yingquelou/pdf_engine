@@ -4,6 +4,7 @@
 use crate::core::builder::OptionalContentGroup;
 use crate::core::builder::PdfBuilder;
 use crate::core::builder::types::text_string_value;
+use crate::core::builder::types::viewer_preferences;
 use crate::core::types::{
     Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Value,
 };
@@ -46,6 +47,15 @@ impl PdfBuilder {
             catalog_dict =
                 catalog_dict.insert("OutputIntents", Value::Array(Array(output_intent_values)));
             doc.features.borrow_mut().insert(PdfFeature::OutputIntents);
+        }
+        // 查看器首选项字典（12.2，Table 150）：目录 `/ViewerPreferences`
+        // 直接内联；取值与逐档位版本门禁已在 preflight 完成，此处只物化
+        // 已声明（非缺省）条目。
+        if let Some(preferences) = &self.viewer_preferences {
+            catalog_dict = catalog_dict.insert(
+                "ViewerPreferences",
+                Value::Dict(viewer_preferences::to_dict(preferences)),
+            );
         }
         if !groups.used_ocgs.is_empty() {
             catalog_dict = catalog_dict.insert(

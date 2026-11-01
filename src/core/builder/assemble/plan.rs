@@ -39,6 +39,9 @@ pub(super) struct Preflight {
     pub(super) tag_suspects: bool,
     /// 反序显示串（14.8.2.3.3）扫描结果。
     pub(super) reversed_characters: bool,
+    /// 查看器首选项（12.2 Table 150）门禁确认后需登记的特性档位；
+    /// 未声明首选项时为空。
+    pub(super) viewer_pref_features: Vec<PdfFeature>,
 }
 
 /// 页面与文档级资源去重池的对象号分配结果。
