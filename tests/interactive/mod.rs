@@ -35,6 +35,7 @@ mod annotation_geometry;
 mod annotation_link;
 mod annotation_measure;
 mod annotation_mk;
+mod annotation_ordering;
 mod annotation_popup;
 mod annotation_printer_mark;
 mod annotation_redact;

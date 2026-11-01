@@ -19,11 +19,20 @@
 //!
 //! 字体特征推导 [`Document::font_character_properties`]
 //! （14.8.2.4.3 Table 331/Table 332，见 `character_properties` 模块文档）。
+//!
+//! 14.8.2.3.2 的注解排序读端由 [`annotation_ordering`] 提供：
+//! [`Document::annotation_content_order`] 从逻辑结构导出注解在页面内容序列
+//! 中的位置，返回 [`ContentOrderItem`] 序列，以
+//! [`AnnotationOrderBasis`] 区分 `Annot`/`Link`/`Form` 元素的显式关联、
+//! 14.8.2.3.2 的邻接（在前/在后）与无从判定三档。
 
 use std::collections::BTreeSet;
 
 use crate::core::types::Document;
 
+mod annotation_ordering;
+#[cfg(test)]
+mod annotation_ordering_tests;
 mod artifact;
 mod artifact_attribution;
 #[cfg(test)]
@@ -41,6 +50,10 @@ mod span;
 #[cfg(test)]
 mod tests;
 
+pub use annotation_ordering::{
+    AnnotationOrderBasis, AnnotationOrderingError, AnnotationPosition, ContentOrderItem,
+    MarkedContentPosition,
+};
 pub use artifact::{
     ArtifactAttachment, ArtifactError, ArtifactProperties, ArtifactSubtype, ArtifactType,
 };
