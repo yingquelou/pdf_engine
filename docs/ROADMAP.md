@@ -388,7 +388,8 @@
   - 剩余缺口：`/RF` 关联文件只读（相对路径不解析、不写）；`/DOS`/`/Mac`/`/Unix` 规范声明弃用、写端有意不写，`/FS`/`/ID`/`/V` 面向外部引用仅读；Sound/Screen/Movie 注解与 Launch/GoToR 的 Filespec 参数未联动；写端 `/EF` 仅载体字典单流（嵌套/数组载体不写）；无真实附件 fixture。
 - [ ] **E7 增量更新写出**（7.5.6 Writer）：`/Prev` 链、新/自由 xref 条目、trailer 合并、`/ID` 更新；复用 E5 的 `/ID` API，不另造生成/校验逻辑；为 F1 数字签名提供基础。
   - 进度（2026-10-28 写端切片，证据见矩阵 7.5.6）：新增 `writer/incremental.rs` + `incremental/tests.rs`，公开 `DocumentWriter::build_incremental(&Document, &mut dyn Write)`。契约：宿主必须是从文件解析的 `Document`（保留源字节，经 `Document::read_at` 分块复制）；目标版本必须等于源文件头版本（文件头不可改写，否则 `UnsupportedVersion`）；加密文档拒绝；缓冲后一次性写出（失败零字节）。增量段：变更对象以新对象号/代数 +1 顶层写出（`revision_generation`），删除对象经新增 `Document::delete_object`/`deleted_objects()` API 写自由条目遮蔽旧版本；交叉引用按源版本能力选择经典全量表（合并历史条目 + 占位自由行）或 XRef 流局部 `/Index` 段（含自身行 `(1, xref_offset, 0)`）；trailer 合并非结构键（跳过 `Type/Size/W/Index/Length/Prev/Root/ID` 后重建，`/Prev` 仅在 >0 时写）；`/ID` 更新链复用 E5 `FileIdentifier::generate`（永久串保留、更新串 = FNV-1a(永久串‖旧更新串‖新文件长度)，`permanent_matches` 可校验）。读端配套修复：`load_all_objects` 跳过已缓存对象，历史段对象流条目不再覆盖最新版本缓存；全量重写不再把源 trailer `/Prev` 带入自包含输出；引用解析改为按对象号取最新修订（容忍代数）——见下条 F1 切片三说明。测试 8 单元：`incremental_stream_section_chains_prev_and_keeps_history`、`incremental_overrides_object_with_bumped_generation`、`incremental_free_entry_hides_deleted_object`、`incremental_classic_table_merges_history_entries`、`incremental_updates_file_identifier_permanent_kept`、`incremental_requires_file_backed_document`、`incremental_rejects_header_version_change`、`incremental_rejects_modify_and_delete_conflict` + 集成 `builder_incremental_update_appends_second_page`（builder 单页→对象手术追加第二页→增量写出：原字节为前缀、`/Prev` 指向原 `startxref`、两页文本均可提取）、`builder_incremental_update_deletes_annotation_and_supports_full_rewrite`（删注解→自由条目遮蔽→回读仅剩保留项→再全量重写自包含且无告警）。
-  - 剩余缺口：增量段全部顶层写出，不做对象流重打包/历史垃圾回收（垃圾字节随版本累积）；文件头版本不可改（升级需目录 `/Version`，未实现）；无源字节（内存构造的 `Document`）无法增量；`/ID` 缺失时保持缺失；`/XRefStm` 混合引用文件写出未做（见「未分配条目」）；Linearize 属后续（签名 ByteRange 已随 F1 切片三落地）。
+  - 剩余缺口：增量段全部顶层写出，不做对象流重打包/历史垃圾回收（垃圾字节随版本累积）；文件头版本不可改（升级需目录 `/Version`，未实现）；无源字节（内存构造的 `Document`）无法增量；`/ID` 缺失时保持缺失；`/XRefStm` 混合引用文件写出已落地（见下一条进度行）；Linearize 属后续（签名 ByteRange 已随 F1 切片三落地）。
+  - 进度（2026-11-01 混合引用文件写出切片，证据见矩阵 7.5.8.4）：`src/core/writer/hybrid.rs` + `DocumentWriter::hybrid_reference(policy)` / `build_hybrid` 产出规范 EXAMPLE 2 形态——主经典表（`0..Size-1` 全条目，隐藏号登记 65535 自由条目并串自由链）+ 主 trailer（不含 /XRefStm）→ 对象流 → 补充 `/Type /XRef` 流（type 1/2，无 /Prev）→ 空更新段 `xref 0 0` + trailer（/Prev、/XRefStm）；`PdfFeature::HybridReferenceFiles` ≥1.5、加密拒绝、零字节契约；隐藏集只覆盖目录白名单键（StructTreeRoot/Outlines/PageLabels/Threads，可显式指定）指向的**非流**对象闭包，从 /Root 与 trailer 其余键可见的对象永不隐藏；不做线性化顺序约束；读端 /XRefStm 优先级本就正确，仅追加固化测试。
 
 **依赖**：E1/E3/E5 只依赖 A；E2 依赖 D0 的 Form XObject 写端；E4 依赖 E1/E3 与 D0；E6 依赖 E1（`/Names`）；E7 依赖 E5（`/ID`）与 A（xref 读写），可与 E2/E4 并行。F1 依赖 E7。
 
@@ -488,7 +489,7 @@
 | 条目 | 矩阵行 | 优先级 | 待决策点 |
 |---|---|---|---|
 | ASCII85 字符串扩展 `<~ ~>`（非 ISO 32000-1） | 7.3.4（扩展） | P3 | 读端无解析路径、写端类型为死代码；补读端、保留或删除需决策 |
-| 混合引用文件写出（trailer `/XRefStm`） | 7.5.8.4 | P3 | 读端已支持；是否需要写出「经典表 + xref 流」的混合引用文件未定（E7 仅覆盖增量更新） |
+| 混合引用文件写出（trailer `/XRefStm`） | 7.5.8.4 | P3 | 已于 2026-11-01 落地（`writer/hybrid.rs` + `build_hybrid`，见 E7 进度行与矩阵 7.5.8.4）；剩余缺口是隐藏能力范围（非流对象 + 白名单键 + 无线性化顺序约束），非规范符合性缺口 |
 | Multiple Master 字体（MMType1） | 9.6.2.3 | P3 | 现有编码路径接受 MMType1（9.6.6），但字体程序/实例语义未建模，是否值得投入 |
 | FDF（Forms Data Format） | 12.7.7 | P3 | 与 AcroForm（E4）的数据交换场景是否在范围内 |
 | Measurement Properties | 12.9 | P3 | 与预印/工程文档场景绑定，等 F3 需求明确 |
