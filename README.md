@@ -176,7 +176,7 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 
 ## 版本特性速查表
 
-`min_version` 取自 `PdfFeature::min_version`（唯一事实源）。reader 支持按实际内容解析（宽进），writer 输出上限为 1.7。
+`min_version` 取自 `PdfFeature::min_version`（唯一事实源）。reader 支持按实际内容解析（宽进），writer 输出上限为 1.7。本表只列影响跨版本兼容决策的关键特性；Tagged PDF、多媒体、注解与动作等条目数量众多，完整门禁清单见 `docs/FEATURE_MATRIX.md` 与 `src/core/types/version.rs`。
 
 | 特性 | PDF 最低版本 | reader | writer ≥min | writer <min 时行为 |
 |------|:---:|:---:|:---:|------|
