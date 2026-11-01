@@ -52,8 +52,6 @@ mod standard_types;
 mod standard_types_tests;
 mod stream_mcr;
 #[cfg(test)]
-mod stream_mcr_tests;
-#[cfg(test)]
 mod tests;
 
 pub use content_model::{ChildModel, ContentModelRule, ContentModelViolation};
