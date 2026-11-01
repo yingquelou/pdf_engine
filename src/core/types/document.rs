@@ -19,6 +19,17 @@ pub(crate) trait ObjectSecurity: Send + Sync + std::fmt::Debug {
         dict: &super::value::Dict,
         bytes: &[u8],
     ) -> Result<Vec<u8>, String>;
+
+    /// 加密字典 `/P` 的有符号原值与处理器 revision（`/R`），供读端
+    /// 权限模型解释（7.6.3.2、Table 22；解码见
+    /// `crate::core::reader::security::Permissions`）。
+    ///
+    /// 默认 `None`：该处理器不公开 `/P` 视图（公钥安全处理器 7.6.4
+    /// 未实现）。这里只回传原始整数而不引入 reader 侧类型，以保持
+    /// `types` 层的对象模型纯度（库策略）。
+    fn permission_entry(&self) -> Option<(i32, u8)> {
+        None
+    }
 }
 
 /// 完整 PDF 文件在内存中的表示：源字节 + xref + trailer + startxref

@@ -26,6 +26,11 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 fn encrypt_r2_fixture() -> Vec<u8> {
+    encrypt_r2_fixture_with_permissions(-4)
+}
+
+/// R2 加密样本，`/P` 由调用方指定（同一值既进密钥派生也写进字典）。
+fn encrypt_r2_fixture_with_permissions(permissions: i32) -> Vec<u8> {
     const PADDING: [u8; 32] = [
         0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01,
         0x08, 0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53,
@@ -41,7 +46,6 @@ fn encrypt_r2_fixture() -> Vec<u8> {
     let owner_pad = pad(b"owner-password");
     let owner_key = Md5::digest(&owner_pad);
     let owner_entry = rc4_5(&owner_key[..5], &user_pad);
-    let permissions = -4i32;
     let mut key_material = user_pad;
     key_material.extend_from_slice(&owner_entry);
     key_material.extend_from_slice(&permissions.to_le_bytes());
@@ -135,6 +139,62 @@ fn standard_security_r2_decrypts_strings_and_streams() {
         "trailer /Encrypt 应记录 EncryptionRC4"
     );
     drop(feats);
+}
+
+/// 7.6.3.2 / Table 22：以用户密码认证打开的 R2 文档把 `/P` 作为类型化的
+/// 用户访问权限暴露给调用方（`/P` = -4：位 3–6 全置位，未加密位照原样保留）。
+#[test]
+fn standard_security_r2_publishes_user_access_permissions() {
+    let buf = encrypt_r2_fixture();
+    let doc = parse_buf_with_password(&buf, b"user-password");
+    let permissions = doc.permissions().expect("已认证的标准安全处理器应给出 /P");
+    assert_eq!(permissions.p_value(), -4);
+    assert_eq!(permissions.flags(), 0xFFFF_FFFC);
+    assert_eq!(permissions.revision(), 2);
+    assert!(permissions.can_print());
+    assert!(permissions.can_modify());
+    assert!(permissions.can_copy());
+    assert!(permissions.can_annotate());
+    // R2 未定义位 9–12（`is_defined` 报 false），三个 R3+ 专属操作按本库
+    // 的回落策略分别落在位 6、5、4。
+    assert!(!permissions.is_defined(9));
+    assert!(permissions.can_fill_forms());
+    assert!(permissions.can_extract_for_accessibility());
+    assert!(permissions.can_assemble_document());
+
+    // 同一 `/P` 的权限视图与用哪个密码认证无关（所有者密码的完全访问不写在
+    // `/P` 里，见 permissions.rs 的库策略清单）。
+    let owner_doc = parse_buf_with_password(&buf, b"owner-password");
+    assert_eq!(owner_doc.permissions(), Some(permissions));
+}
+
+/// `/P` 同时是文件密钥的输入：restrictive 的 -44（打印 + 复制）样本仍能正常
+/// 解密，读端权限视图给出的正是密钥派食用的那 32 个位（Algorithm 2 d）。
+#[test]
+fn restrictive_permission_fixture_still_decrypts_with_the_same_flag_word() {
+    let buf = encrypt_r2_fixture_with_permissions(-44);
+    let doc = parse_buf_with_password(&buf, b"user-password");
+    let stream = doc.get_object(2).unwrap().unwrap();
+    assert_eq!(
+        doc.try_stream_bytes(&stream.value).unwrap(),
+        b"decrypted stream"
+    );
+
+    let permissions = doc.permissions().expect("已认证文档应给出 /P");
+    assert_eq!(permissions.p_value(), -44);
+    assert!(permissions.can_print());
+    assert!(permissions.can_copy());
+    assert!(!permissions.can_modify());
+    assert!(!permissions.can_annotate());
+    assert!(!permissions.can_create_form_fields());
+    // R2 回落：位 6 清 → 不可填写表单；位 4 清 → 不可组装；位 5 已置位，
+    // R2 的位 5 表述含无障碍抽取，故仍允许。
+    assert!(!permissions.can_fill_forms());
+    assert!(!permissions.can_assemble_document());
+    assert!(permissions.can_extract_for_accessibility());
+
+    // 未加密的文档没有权限视图。
+    assert!(Document::new().permissions().is_none());
 }
 
 #[test]
