@@ -41,3 +41,8 @@ jpeg-encoder = "0.7.1"
 [[test]]
 name = "interactive"
 path = "tests/interactive/mod.rs"
+
+# 基础往返/API 契约集成测试按主题分文件（`tests/main/`），同上需显式声明路径。
+[[test]]
+name = "main"
+path = "tests/main/mod.rs"
