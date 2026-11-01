@@ -65,6 +65,7 @@ mod reversed_chars;
 mod separation;
 mod signature;
 mod sound;
+mod stream_mcr;
 mod structure;
 mod structure_artifact;
 mod structure_content;

@@ -24,6 +24,13 @@
 //! [`ContentModelRule::is_mandatory`] 区分规范强制项与表格建议项；读取
 //! 阶段不因内容模型问题报错（14.8.4.3.5 不强制严格顺序与嵌套）。
 //!
+//! 14.7.4.2 流形态标记内容引用（Table 324 `/Stm` `/StmOwn`）的父树定位与
+//! 14.7.4.4/Table 326 的容器层互斥校验由子模块 [`stream_mcr`] 诊断：
+//! [`Document::marked_content_parent`] 给出单个 MCR 的容器、`/StructParents`
+//! 键与父元素，[`Document::stream_mcr_diagnostic`] 返回
+//! [`StreamMcrDiagnostic`] 列表，以 [`StreamMcrRule::is_mandatory`] 区分
+//! 规范 shall 与库自定策略；读取阶段不因这些发现报错。
+//!
 //! 结构元素按前序展开到 arena：元素之间用 arena 下标互相引用，父树与
 //! ID 树在遍历完成后按对象号解析为 arena 下标。所有引用经
 //! [`crate::core::reader::navigation::resolve`] 解引用并按对象号取最新
@@ -43,6 +50,9 @@ mod standard;
 mod standard_types;
 #[cfg(test)]
 mod standard_types_tests;
+mod stream_mcr;
+#[cfg(test)]
+mod stream_mcr_tests;
 #[cfg(test)]
 mod tests;
 
@@ -56,6 +66,9 @@ pub use standard::{
     TextDecorationType, WritingMode,
 };
 pub use standard_types::{StandardStructureType, StructureTypeCategory};
+pub use stream_mcr::{
+    MarkedContentContainer, MarkedContentParent, StreamMcrDiagnostic, StreamMcrRule,
+};
 
 /// 结构树最大嵌套深度（最多 64 层结构元素）。
 pub(crate) const MAX_STRUCTURE_DEPTH: usize = 64;
@@ -454,5 +467,39 @@ impl Document {
         page_index: usize,
     ) -> Result<Option<PageStructureParents>, StructureError> {
         entries::page_struct_parents(self, page_index)
+    }
+
+    /// 定位 `element`（arena 下标）的 `/K` 子项 `kid`（MCR，Table 324）所属
+    /// 标记内容序列的父元素（14.7.4.2、14.7.4.4）。
+    ///
+    /// 解析顺序见 [`stream_mcr`] 模块文档：`/Stm` 给出时容器是 `/StmOwn`
+    /// 所有者（缺省所有者时为 `/Stm` 流自身），父树键取自该容器的
+    /// `/StructParents`；`/Stm` 缺省时回落生效页（MCR `/Pg` 覆盖元素 `/Pg`）
+    /// 的 `/StructParents`。定位不到键或父元素**不报错**：结果里的
+    /// `parents_key`/`parent` 为 `None`，原因记入 `diagnostics`。
+    ///
+    /// 元素或子项下标越界返回 [`StructureError::Malformed`]；子项不是 MCR
+    /// （整数 MCID、子元素或 OBJR）时返回 `Ok(None)`；目录没有结构树同样
+    /// 返回 `Ok(None)`。
+    pub fn marked_content_parent(
+        &self,
+        element: usize,
+        kid: usize,
+    ) -> Result<Option<MarkedContentParent>, StructureError> {
+        let Some(tree) = parse::structure_tree(self)? else {
+            return Ok(None);
+        };
+        stream_mcr::marked_content_parent(self, &tree, element, kid)
+    }
+
+    /// 全树扫描流形态 MCR 与 Table 326 容器层互斥，返回全部发现。
+    ///
+    /// 覆盖 [`stream_mcr`] 模块文档列出的规则：先按「元素 arena 下标、`/K`
+    /// 子项位置」升序给出 `/Stm`、`/StmOwn` 序列的定位诊断，再按对象号升序
+    /// 给出 `/Stm`、`/StmOwn`、OBJR `/Obj` 所指对象的 Table 326 互斥诊断。
+    /// 目录没有结构树时返回空列表；结构树损坏仍报
+    /// [`StructureError::Malformed`]（与 [`Document::structure_tree`] 一致）。
+    pub fn stream_mcr_diagnostic(&self) -> Result<Vec<StreamMcrDiagnostic>, StructureError> {
+        stream_mcr::diagnostics(self)
     }
 }
