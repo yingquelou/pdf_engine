@@ -90,6 +90,9 @@ impl FeatureProfile {
 ///   `/Summary` → TableSummary（1.7）
 /// - 目录 `/MarkInfo` → MarkInfo（1.4）；其 `/UserProperties` `/Suspects`
 ///   → MarkInfoUserProperties / MarkInfoSuspects（1.6）
+/// - `/Type /FontDescriptor` 带 `/FontFamily` `/FontStretch` `/FontWeight`
+///   任一键 → FontSelectorAttributes（1.5，Table 122 条目，14.8.2.4.3
+///   Table 332 属性的文件语法来源）
 /// - 页面字典的 `/BleedBox` `/TrimBox` `/ArtBox` → PageBoundaries（1.3）、
 ///   `/BoxColorInfo` → PageBoxColorInfo（1.4）、`/SeparationInfo` →
 ///   SeparationInfo（1.3，14.11.4 Table 364）
@@ -421,6 +424,16 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
         if info.0.contains_key("Suspects") {
             features.insert(PdfFeature::MarkInfoSuspects);
         }
+    }
+    // 字体选择器属性（PDF 1.5）：Table 122 的字体描述符 /FontFamily
+    // /FontStretch /FontWeight 条目，是 14.8.2.4.3 Table 332 属性的文件
+    // 语法来源；按键存在登记（值形态错误由读端派生时另行报错）。
+    if d.get("Type").and_then(Value::as_name) == Some("FontDescriptor")
+        && (d.0.contains_key("FontFamily")
+            || d.0.contains_key("FontStretch")
+            || d.0.contains_key("FontWeight"))
+    {
+        features.insert(PdfFeature::FontSelectorAttributes);
     }
     // 用户属性（PDF 1.6）：14.7.5.3 的用户属性属性对象以 `/O
     // /UserProperties` 与 `/P` 数组标识（Table 328）。子属性字典只有

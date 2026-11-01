@@ -16,6 +16,9 @@
 //! Span 属性表（14.9.3–14.9.5）、反序显示串 [`Document::page_reversed_chars`]
 //! （14.8.2.3.3），以及 artifact 与逻辑结构的归属诊断
 //! [`Document::artifact_attribution_violations`]（14.8.2.2.1、14.8.2.3.1）。
+//!
+//! 字体特征推导 [`Document::font_character_properties`]
+//! （14.8.2.4.3 Table 331/Table 332，见 `character_properties` 模块文档）。
 
 use std::collections::BTreeSet;
 
@@ -25,6 +28,10 @@ mod artifact;
 mod artifact_attribution;
 #[cfg(test)]
 mod artifact_attribution_tests;
+mod character_properties;
+mod character_properties_derive;
+#[cfg(test)]
+mod character_properties_tests;
 mod language;
 mod multi_language;
 mod reversed_chars;
@@ -39,6 +46,10 @@ pub use artifact::{
 };
 pub use artifact_attribution::{
     ArtifactAttributionError, ArtifactAttributionRule, ArtifactAttributionViolation,
+};
+pub use character_properties::{
+    CharacterProperties, CharacterPropertiesError, FontStyle, FontVariant, GenericFontFamily,
+    NameDerivedAttribute,
 };
 pub use language::{LanguageError, LanguageIdentifier};
 pub use multi_language::{AlternateText, MultiLanguageTextArray};

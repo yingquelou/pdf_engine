@@ -42,6 +42,7 @@ mod annotation_subtype_table;
 mod annotation_trap_net;
 mod annotation_watermark;
 mod articles;
+mod character_properties;
 mod collection;
 mod embedded;
 mod extensions;

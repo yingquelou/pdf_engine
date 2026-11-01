@@ -347,6 +347,13 @@ pub enum PdfFeature {
     /// 的 Table 150 无此条目，系 PDF 2.0（ISO 32000-2）追加；最低版本
     /// 记为 2.0。
     ViewerEnforcement,
+    /// 字体特征推导（14.8.2.4.3 Table 331 的 Serifed/Proportional/Italic/
+    /// Smallcap，由 FontDescriptor `/Flags` 派生），随 Tagged PDF 自
+    /// PDF 1.4 起可用。
+    FontCharacteristics,
+    /// 字体选择器属性（14.8.2.4.3 Table 332 的 FontFamily/GenericFontFamily/
+    /// FontWeight/FontStretch 等；描述符条目见 Table 122），PDF 1.5 引入。
+    FontSelectorAttributes,
 }
 
 impl PdfFeature {
@@ -451,6 +458,8 @@ impl PdfFeature {
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
+            PdfFeature::FontCharacteristics => PdfVersion::V1_4,
+            PdfFeature::FontSelectorAttributes => PdfVersion::V1_5,
         }
     }
 }
@@ -556,6 +565,8 @@ impl fmt::Display for PdfFeature {
             PdfFeature::ViewerPrintScaling => "viewer preferences print scaling",
             PdfFeature::ViewerPrintDialogPreferences => "viewer preferences print dialog entries",
             PdfFeature::ViewerEnforcement => "viewer preferences enforce array",
+            PdfFeature::FontCharacteristics => "font characteristics",
+            PdfFeature::FontSelectorAttributes => "font selector attributes",
         };
         write!(f, "{name}")
     }
