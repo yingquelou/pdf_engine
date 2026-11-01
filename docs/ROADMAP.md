@@ -86,6 +86,7 @@
 - [x] `tests/interactive/annotation.rs` 主题拆分（2026-10-29 E2 Popup 自动成对切片）：636→454 行，拆出 `annotation_popup.rs`（93 行，Popup 关联双向往返）与 `annotation_subtype_table.rs`（113 行，Table 169 子类型集往返），注解级 `/AP` 外观流往返并入既有 `annotation_appearance.rs`（61→118 行）；3 项测试名零改动，cargo 路径改为 `annotation_popup::*`、`annotation_subtype_table::*`、`annotation_appearance::*`；新增 `builder/assemble/annotation_popup.rs`（111 行）与 `builder/tests/annotation_popup.rs`（173 行）而非继续扩写超限的 `builder/assemble/mod.rs`
 - [x] `builder/tests` 注解夹具：`tests/support.rs`（42 行，`annot_object`/`annot_object_with_num`/`assert_text_entry` 由 `annotation.rs` 抽出供 `annotation.rs` 与新增 `annotation_line.rs` 共用）
 - [x] `builder/navigation` 与 `builder/types/structure` 未再超限：整数 MCID 简写切片（2026-11-01）扩写 `navigation/structure.rs`（约 1030 行，超约定 #5 阈值）与 `types/structure/mod.rs`，见下方 14.7 进度条目；后续结构增量触及前须先按「校验/展开/写出」拆分 `navigation/structure.rs`
+- [x] `builder/navigation/structure.rs` 目录化（2026-11-01，工程债车道，提交 `f859935`）：1689 行按主题拆为 `navigation/structure/{mod,limits,plan,element,attributes,objr,stream_mcr,flatten,write}.rs`（76/52/235/231/163/306/185/367/165 行），`mod.rs` 仅编排与 re-export，原 142 行 `//!` 规范引文逐行搬运零缺失；`navigation/mod.rs` 与全仓 9 处 `navigation::structure::` 引用零改动，全量测试逐项相等（lib 2128 + cli 3 + fixtures 14 + interactive 117 + main 86 + syntax 38 = 2389，doctest 3 通过/1 ignored），改动目录 clippy 零告警。下一个超阈值候选：`builder/navigation/mod.rs`（848 行），不在本车道写集内。
 
 **2026-10-26 实测仍超限、后续增量触及前必须先拆分或同步拆分的模块**（按行数降序；阈值见工程约定 #5：>600 行或 >25 KiB）：
 
