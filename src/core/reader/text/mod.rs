@@ -15,10 +15,11 @@
 //!
 //! Marked content (14.6) affects the output: `BMC`/`BDC` sections resolve
 //! their property lists (inline dictionary or `/Properties` name), a section
-//! whose optional-content group (8.11.2) is off by the default configuration
-//! is not extracted, `/ActualText` replaces the section's shown text, and
-//! `/Artifact` sections (14.8.2.2.1) are skipped entirely. Unbalanced `EMC` is
-//! ignored.
+//! whose optional-content group (8.11) is off by the default configuration
+//! is not extracted, `/ActualText` replaces the section's shown text, a
+//! `/ReversedChars` section (14.8.2.3.3) has each shown string's characters
+//! reversed back to natural order, and `/Artifact` sections (14.8.2.2.1) are
+//! skipped entirely. Unbalanced `EMC` is ignored.
 //!
 //! [`Document::try_extract_page_text_fragments`] returns the same text split
 //! into positioned runs ([`TextFragment`]), tracking the text matrix and the
@@ -184,6 +185,10 @@ struct MarkedFrame {
     /// belongs to an optional-content group that the default configuration
     /// turns off.
     hidden: bool,
+    /// `true` when this section (or an enclosing one) carries the
+    /// `/ReversedChars` tag (14.8.2.3.3): each shown string's characters
+    /// are in reverse page-content order and are restored on output.
+    reversed: bool,
     /// `/ActualText` replacing the section's rendered text, when present.
     actual_text: Option<String>,
     /// `true` once `actual_text` has been emitted (later shows in the
@@ -241,10 +246,12 @@ impl TextState {
         }
     }
 
-    fn begin_marked(&mut self, hidden: bool, actual_text: Option<String>) {
+    fn begin_marked(&mut self, hidden: bool, reversed: bool, actual_text: Option<String>) {
         let parent_hidden = self.marked.last().is_some_and(|frame| frame.hidden);
+        let parent_reversed = self.marked.last().is_some_and(|frame| frame.reversed);
         self.marked.push(MarkedFrame {
             hidden: parent_hidden || hidden,
+            reversed: parent_reversed || reversed,
             actual_text,
             actual_emitted: false,
         });
@@ -350,9 +357,14 @@ impl TextState {
             }
             return;
         }
-        let text = self.decode_text(bytes);
+        let mut text = self.decode_text(bytes);
         if text.is_empty() {
             return;
+        }
+        // 14.8.2.3.3：`ReversedChars` 序列内的显示串按字符反序存储，
+        // 逐串反转回自然顺序；串与串之间的自然顺序不变。
+        if self.marked.last().is_some_and(|frame| frame.reversed) {
+            text = text.chars().rev().collect();
         }
         self.output.push_str(&text);
         let (x, y) = self.position();
@@ -585,8 +597,11 @@ impl<'a> ExtractionContext<'a> {
             .as_ref()
             .and_then(|dict| dict.get("ActualText"))
             .and_then(text_value);
-        self.state
-            .begin_marked(hidden || tag == Some("Artifact"), actual_text);
+        self.state.begin_marked(
+            hidden || tag == Some("Artifact"),
+            tag == Some("ReversedChars"),
+            actual_text,
+        );
     }
 
     /// Resolve the optional-content visibility of a `BDC`/`DP` property

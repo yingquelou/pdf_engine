@@ -169,6 +169,13 @@ impl PdfBuilder {
         if preflight.tag_suspects {
             doc.features.borrow_mut().insert(PdfFeature::TagSuspects);
         }
+        // 反序显示串（14.8.2.3.3）：内容流扫描结果写入特征画像，供版本
+        // 推导；门禁已在上方完成。
+        if preflight.reversed_characters {
+            doc.features
+                .borrow_mut()
+                .insert(PdfFeature::ReversedCharacters);
+        }
         // 表单附加动作与计算顺序自 PDF 1.3 引入，写入特征画像供版本推导。
         if let Some(form) = &preflight.acro_form {
             if form_field::has_additional_actions(form) {

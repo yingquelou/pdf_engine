@@ -13,7 +13,8 @@
 //! [`Document::document_language`]。
 //!
 //! 另覆盖内容流标记层面的读写模型：Artifact 属性表（14.8.2.2.2 Table 330）、
-//! Span 属性表（14.9.3–14.9.5），以及 artifact 与逻辑结构的归属诊断
+//! Span 属性表（14.9.3–14.9.5）、反序显示串 [`Document::page_reversed_chars`]
+//! （14.8.2.3.3），以及 artifact 与逻辑结构的归属诊断
 //! [`Document::artifact_attribution_violations`]（14.8.2.2.1、14.8.2.3.1）。
 
 use std::collections::BTreeSet;
@@ -26,6 +27,9 @@ mod artifact_attribution;
 mod artifact_attribution_tests;
 mod language;
 mod multi_language;
+mod reversed_chars;
+#[cfg(test)]
+mod reversed_chars_tests;
 mod span;
 #[cfg(test)]
 mod tests;
@@ -38,6 +42,7 @@ pub use artifact_attribution::{
 };
 pub use language::{LanguageError, LanguageIdentifier};
 pub use multi_language::{AlternateText, MultiLanguageTextArray};
+pub use reversed_chars::{REVERSED_CHARS_TAG, ReversedCharsDiagnostic, ReversedCharsSequence};
 pub use span::{MarkedContentLanguageError, SpanProperties};
 
 use language::malformed;

@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::core::builder::navigation::{structure_content, tag_suspect};
 use crate::core::builder::types::ThreeDViewSelection;
+use crate::core::builder::types::reversed_chars;
 use crate::core::builder::{Action, GoTo3DViewSelection, PdfBuilder};
 use crate::core::content::{MarkedContentProperties, Op};
 use crate::core::types::{PdfFeature, PdfVersion, Value};
@@ -175,6 +176,12 @@ impl PdfBuilder {
         // 在任何对象号分配与写出之前完成，保持零字节失败契约。
         let tag_suspects =
             tag_suspect::validate(&self.pages, self.navigation.mark_info(), self.version)?;
+
+        // 反序显示串（14.8.2.3.3）：标签为 `ReversedChars` 的标记内容里，
+        // 每个显示串必须非空、纯可打印 ASCII、首尾之外无 U+0020 空格，
+        // 区段必须有显示串且在内容流内以 EMC 闭合；目标版本不低于 PDF 1.4。
+        // 门禁同样在任何对象号分配与写出之前完成，保持零字节失败契约。
+        let reversed_characters = reversed_chars::validate(&self.pages, self.version)?;
 
         // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
         // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
@@ -350,6 +357,7 @@ impl PdfBuilder {
             artifact_background,
             artifact_subtype,
             tag_suspects,
+            reversed_characters,
         })
     }
 }

@@ -435,10 +435,15 @@ impl Document {
     /// 特性画像的常规扫描只看对象字典，内容流中的 `BDC` 属性表不参与；
     /// 标记内容被读取时顺带补登记，保证 `ArtifactPropertyLists` 与
     /// PDF 1.7 的 `ArtifactBackground` / `ArtifactSubtype` 在解析后的
-    /// 文档特性画像中可见。
+    /// 文档特性画像中可见。标签为 `ReversedChars` 的区段同样补登记
+    /// `ReversedCharacters`（14.8.2.3.3）。
     fn record_marked_content_features(&self, sections: &[MarkedSection]) {
         let mut features = self.features.borrow_mut();
         for section in sections {
+            if section.tag == "ReversedChars" {
+                features.insert(PdfFeature::ReversedCharacters);
+                continue;
+            }
             if section.tag != "Artifact" {
                 continue;
             }

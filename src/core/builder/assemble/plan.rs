@@ -37,6 +37,8 @@ pub(super) struct Preflight {
     pub(super) artifact_subtype: bool,
     /// Tag suspects（14.8.2.3.1）扫描结果。
     pub(super) tag_suspects: bool,
+    /// 反序显示串（14.8.2.3.3）扫描结果。
+    pub(super) reversed_characters: bool,
 }
 
 /// 页面与文档级资源去重池的对象号分配结果。

@@ -315,6 +315,9 @@ pub enum PdfFeature {
     /// 页内容中的 tag suspects（标签为 `TagSuspect` 的标记内容，
     /// 14.8.2.3.1），PDF 1.6 引入。
     TagSuspects,
+    /// 反序显示串（标签为 `ReversedChars` 的标记内容，14.8.2.3.3），
+    /// PDF 1.4 引入。
+    ReversedCharacters,
     /// 标准结构类型的 PDF 1.5 扩展（14.8.4 的 THead/TBody/TFoot/Annot/
     /// Ruby/RB/RT/RP/Warichu/WT/WP），PDF 1.5 引入。
     StructureTypeExtensions,
@@ -367,6 +370,7 @@ impl PdfFeature {
             | PdfFeature::StandardStructureAttributes
             | PdfFeature::SpanPropertyLists
             | PdfFeature::ArtifactPropertyLists
+            | PdfFeature::ReversedCharacters
             | PdfFeature::MarkInfo => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
@@ -509,6 +513,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MarkInfoUserProperties => "mark info user properties",
             PdfFeature::MarkInfoSuspects => "mark info suspects",
             PdfFeature::TagSuspects => "tag suspects",
+            PdfFeature::ReversedCharacters => "reversed show strings",
         };
         write!(f, "{name}")
     }
