@@ -216,7 +216,8 @@ fn collect(element: &StructureElement, claimed: &mut BTreeMap<usize, BTreeSet<i6
     for kid in &element.kids {
         match kid {
             StructureKid::Element(child) => collect(child, claimed),
-            StructureKid::MarkedContent { page, mcid } => {
+            StructureKid::MarkedContent { page, mcid }
+            | StructureKid::InlineMarkedContent { page, mcid } => {
                 claimed.entry(*page).or_default().insert(*mcid);
             }
             // OBJR 内容项不占用 MCID（14.7.4.3，Table 325）。

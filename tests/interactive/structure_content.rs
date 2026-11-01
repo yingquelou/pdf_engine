@@ -21,6 +21,10 @@
 //! 去掉声称恰好命中 `VisibleAnnotationNotInStructure`；置 Hidden 位
 //! 的注解即使带外观流也不要求入结构。文本提取在三条往返中不变。
 //!
+//! 第六条往返覆盖 14.7.4.2 的整数 MCID 简写：结构元素写出 `/Pg`，内容项
+//! 写成 `/K` 里的裸整数（无 `/Type /MCR`），回读后与页面 `/StructParents`
+//! 数组、归属诊断空结果与文本提取同时对齐。
+//!
 //! 第五条往返覆盖 14.7.4.4 NOTE 的自动 MCID 编号通道
 //! （`begin_auto_structure_content`）：按页从 0 稠密递增、跳过显式已占用
 //! 值，回读后每页父树数组无 `null` 空洞并与结构树 MCR 对齐，
@@ -596,5 +600,109 @@ fn builder_auto_structure_content_roundtrip_keeps_parent_tree_dense_and_next_key
         doc.extract_page_text(second).as_deref(),
         Some("Explicit line\nAuto line"),
         "混用页文本照常提取"
+    );
+}
+
+/// 第六条往返覆盖 14.7.4.2 的整数 MCID 简写：两页各标记一个 MCID 0 的
+/// 真实文本，结构元素以 `/Pg` + 裸整数子项声称同一标记内容。写出零个
+/// `/Type /MCR` 字典、回读为 `StructureKid::Mcid`，元素 `/Pg` 与页面
+/// `/StructParents` 父树数组对齐，14.8.2.2.1 归属诊断在简写形态下仍为空，
+/// 两页文本提取不受影响。
+#[test]
+fn builder_inline_mcid_shorthand_roundtrip_links_element_page_and_parent_tree() {
+    use pdf_engine::core::builder::{Font, PageSize, PdfBuilder, StructureElement, StructureTree};
+    use pdf_engine::core::reader::structure::StructureKid;
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let first = builder.page(PageSize::A4);
+    let second = builder.page(PageSize::A4);
+    builder.begin_structure_content(first, "P", 0);
+    builder.text(first, &Font::helvetica(12.0), 72.0, 700.0, "Inline first");
+    builder.end_structure_content(first);
+    builder.begin_structure_content(second, "P", 0);
+    builder.text(second, &Font::helvetica(12.0), 72.0, 700.0, "Inline second");
+    builder.end_structure_content(second);
+    builder.set_structure_tree(
+        StructureTree::new().with_element(
+            StructureElement::new("Document")
+                .with_element(
+                    StructureElement::new("P")
+                        .with_page(first)
+                        .with_inline_marked_content(first, 0),
+                )
+                .with_element(
+                    StructureElement::new("Span")
+                        .with_page(second)
+                        .with_inline_marked_content(second, 0),
+                ),
+        ),
+    );
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build element /Pg with integer MCID kids");
+    let raw = String::from_utf8_lossy(&buf).into_owned();
+    assert!(
+        raw.contains("/P << /MCID 0 >> BDC"),
+        "页上仍是带 /MCID 属性表的标记内容: {raw}"
+    );
+    assert!(
+        !raw.contains("/Type /MCR"),
+        "整数简写不应写出任何 MCR 字典: {raw}"
+    );
+    assert!(raw.contains("/StructParents 0"), "{raw}");
+    assert!(raw.contains("/StructParents 1"), "{raw}");
+    let doc = parse_buf(&buf);
+
+    let tree = doc
+        .structure_tree()
+        .expect("structure tree")
+        .expect("structure tree present");
+    for (index, structure_type) in [(1, "P"), (2, "Span")] {
+        let element = &tree.elements()[index];
+        assert_eq!(element.structure_type, structure_type);
+        assert!(
+            matches!(element.kids[..], [StructureKid::Mcid(0)]),
+            "元素 {index} 应只有一个整数简写子项，实际 {:?}",
+            element.kids
+        );
+        let page_ref = element.page.expect("元素 /Pg 已写出并可回读");
+        assert!(
+            doc.get_object(page_ref.0)
+                .expect("page lookup")
+                .expect("page exists")
+                .value
+                .as_dict()
+                .is_some_and(
+                    |dict| dict.get("Type").and_then(|value| value.as_name()) == Some("Page")
+                ),
+            "元素 /Pg 必须指向页对象"
+        );
+        assert_eq!(tree.mcid_parent(index as i64 - 1, 0), Some(index));
+    }
+    for page in [first, second] {
+        let parents = doc
+            .page_struct_parents(page)
+            .expect("page parents")
+            .expect("/StructParents");
+        assert_eq!(parents.key, page as i64);
+        assert_eq!(parents.parents, vec![Some(page as usize + 1)]);
+    }
+    assert_eq!(
+        doc.artifact_attribution_violations(first)
+            .expect("diagnostics"),
+        Vec::new(),
+        "整数简写形态下 14.8.2.2.1 与 14.8.2.3.1 诊断应为空"
+    );
+    assert_eq!(
+        doc.extract_page_text(first).as_deref(),
+        Some("Inline first"),
+        "简写标记段内的文本照常提取"
+    );
+    assert_eq!(
+        doc.extract_page_text(second).as_deref(),
+        Some("Inline second")
     );
 }

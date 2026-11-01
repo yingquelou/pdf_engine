@@ -15,7 +15,9 @@
 //! 校验先于任何对象号分配：深度、元素数、单元素子项数与映射条目上限
 //! 直接复用读端常量；页索引越界、负 MCID、同页 MCID 重复、空结构类型、
 //! 空角色映射键/目标、类映射/属性对象取值非字典/流或 `/O` 非法、空类名、
-//! ID 为空/重复/非 ASCII 一律返回 [`WriteError::InvalidObject`]。版本门禁：
+//! ID 为空/重复/非 ASCII 一律返回 [`WriteError::InvalidObject`]；元素
+//! `/Pg` 页索引越界、整数简写 MCID 缺元素 `/Pg` 或与 `/Pg` 页不一致
+//! （14.7.4.2）同样拒绝。版本门禁：
 //! 结构树 ≥1.3、`/Lang` `/ActualText` ≥1.4、`/E` ≥1.5、`/MarkInfo` ≥1.4、
 //! `/UserProperties` `/Suspects` ≥1.6、结构属性用户属性 ≥1.6、标准属性
 //! 所有者 ≥1.4、`/Headers` `/Scope` ≥1.5、PrintField 与 `/Summary` ≥1.7，
@@ -28,8 +30,11 @@
 //! 即使未被元素使用也计入，避免写出带 1.5 类型名的 1.3/1.4 文件）。
 //!
 //! 本切片的范围限制：`/K` 写出子元素引用、MCR 字典（带显式 `/Pg` 与
-//! `/MCID`）与 OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`，引用
-//! 已注册注解的对象号），不写整数 MCID 与 `/Stm` `/StmOwn`。OBJR 内容项
+//! `/MCID`）、14.7.4.2 的整数 MCID 简写（[`StructureKid::InlineMarkedContent`]：
+//! 仅当元素自身以 `with_page` 携带同页 `/Pg` 时合法，写出为 `/K` 里的
+//! 裸整数）与 OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`，引用
+//! 已注册注解的对象号），不写 `/Stm` `/StmOwn`。元素 `/Pg`（Table 323）
+//! 写出为页对象的间接引用，页索引越界拒绝。OBJR 内容项
 //! 的父树条目是裸结构元素引用（14.7.4.4），写端同时给注解字典追加
 //! `/StructParent`（Table 326）；父树键先页面后 OBJR 连续分配，同一注解
 //! 句柄被两个元素声称、句柄或所在页越界一律返回 [`WriteError::InvalidObject`]。
@@ -96,6 +101,8 @@ enum PlannedKid {
     Element(usize),
     /// MCR：页索引 + MCID。
     MarkedContent { page: usize, mcid: i64 },
+    /// 14.7.4.2 整数简写：页即元素 `/Pg`，写出为 `/K` 里的裸 MCID。
+    InlineMarkedContent { mcid: i64 },
     /// OBJR（Table 325）：注解文档级句柄。
     ObjectReference { annotation: usize },
 }
@@ -606,6 +613,16 @@ impl<'a> Flattener<'a> {
             )));
         }
         validate_name(&element.structure_type, "structure element /S")?;
+        // Table 323 `/Pg`（可选间接页引用）：越界在对象号分配之前拒绝；
+        // 它同时是整数简写 MCID（14.7.4.2）的定位页。
+        if let Some(page) = element.page
+            && page >= self.page_count
+        {
+            return Err(invalid(format!(
+                "structure element /Pg page {page} is out of range (page count {}) (Table 323, 14.7.4.2)",
+                self.page_count
+            )));
+        }
         // 14.8.4.1：/S 先沿 /RoleMap 一或多级解析，终点为 PDF 1.5 扩展
         // 标准类型时置位；版本门禁在 plan 末尾统一执行（仍在对象号分配前）。
         let resolved = structure_standard::resolved_type(self.role_map, &element.structure_type);
@@ -683,37 +700,32 @@ impl<'a> Flattener<'a> {
                     kids.push(PlannedKid::Element(child_index));
                 }
                 StructureKid::MarkedContent { page, mcid } => {
-                    if *page >= self.page_count {
-                        return Err(invalid(format!(
-                            "structure MCR page {page} is out of range (page count {})",
-                            self.page_count
-                        )));
-                    }
-                    if *mcid < 0 {
-                        return Err(invalid(format!(
-                            "structure MCR MCID must be non-negative, got {mcid}"
-                        )));
-                    }
-                    if *mcid > MAX_STRUCTURE_MCID {
-                        return Err(invalid(format!(
-                            "structure MCR MCID {mcid} exceeds the limit {MAX_STRUCTURE_MCID}"
-                        )));
-                    }
-                    if self
-                        .mcids
-                        .entry(*page)
-                        .or_default()
-                        .insert(*mcid, index)
-                        .is_some()
-                    {
-                        return Err(invalid(format!(
-                            "page {page} MCID {mcid} is claimed by more than one structure element"
-                        )));
-                    }
+                    self.note_mcid(*page, *mcid, index)?;
                     kids.push(PlannedKid::MarkedContent {
                         page: *page,
                         mcid: *mcid,
                     });
+                }
+                StructureKid::InlineMarkedContent { page, mcid } => {
+                    // 14.7.4.2：整数简写只在「序列位于元素 `/Pg` 指定页
+                    // 的内容流」这一常见场景合法——元素必须自带 `/Pg`
+                    // 且与简写的页一致；MCR 字典的 `/Pg` 才允许覆盖元素
+                    // `/Pg`（Table 324），简写没有可覆盖的对象。
+                    match element.page {
+                        None => {
+                            return Err(invalid(format!(
+                                "structure integer MCID {mcid} needs the element /Pg to name page {page} (14.7.4.2)"
+                            )));
+                        }
+                        Some(pg) if pg != *page => {
+                            return Err(invalid(format!(
+                                "structure integer MCID {mcid} names page {page} but the element /Pg is page {pg} (14.7.4.2)"
+                            )));
+                        }
+                        Some(_) => {}
+                    }
+                    self.note_mcid(*page, *mcid, index)?;
+                    kids.push(PlannedKid::InlineMarkedContent { mcid: *mcid });
                 }
                 StructureKid::ObjectReference { annotation } => {
                     if *annotation >= self.annotation_nums.len() {
@@ -746,6 +758,41 @@ impl<'a> Flattener<'a> {
             }
         }
         self.flat[index].kids = kids;
+        Ok(())
+    }
+
+    /// 校验并登记一个标记内容标识符：MCR 字典与 14.7.4.2 整数简写共用
+    /// 同一通道——页越界、负 MCID、超 `MAX_STRUCTURE_MCID` 上限、同页
+    /// MCID 被多个元素声称均在对象号分配之前拒绝；成功后该页父树数组
+    /// 的对应 MCID 槽位归属 `index` 元素。
+    fn note_mcid(&mut self, page: usize, mcid: i64, index: usize) -> Result<(), WriteError> {
+        if page >= self.page_count {
+            return Err(invalid(format!(
+                "structure MCR page {page} is out of range (page count {})",
+                self.page_count
+            )));
+        }
+        if mcid < 0 {
+            return Err(invalid(format!(
+                "structure MCR MCID must be non-negative, got {mcid}"
+            )));
+        }
+        if mcid > MAX_STRUCTURE_MCID {
+            return Err(invalid(format!(
+                "structure MCR MCID {mcid} exceeds the limit {MAX_STRUCTURE_MCID}"
+            )));
+        }
+        if self
+            .mcids
+            .entry(page)
+            .or_default()
+            .insert(mcid, index)
+            .is_some()
+        {
+            return Err(invalid(format!(
+                "page {page} MCID {mcid} is claimed by more than one structure element"
+            )));
+        }
         Ok(())
     }
 }
@@ -840,6 +887,11 @@ fn write_elements(
             .insert("Type", Value::Name("StructElem".into()))
             .insert("S", Value::Name(element.structure_type.clone()))
             .insert("P", Value::Ref(parent_num, 0));
+        // Table 323 `/Pg`：可选间接页引用；已校验页索引在文档页表内。
+        if let Some(page) = element.page {
+            let (page_num, generation) = page_refs[page];
+            dict = dict.insert("Pg", Value::Ref(page_num, generation));
+        }
         if let Some(id) = &element.id {
             dict = dict.insert("ID", Value::HexString(hex_encode(id)));
         }
@@ -881,9 +933,14 @@ fn write_elements(
                             .insert("MCID", Value::Integer(*mcid)),
                     )
                 }
+                PlannedKid::InlineMarkedContent { mcid, .. } => {
+                    // 14.7.4.2：整数值即 MCID，所在页由元素 `/Pg` 指定；
+                    // 页一致性已在 `Flattener::add` 校验。
+                    Value::Integer(*mcid)
+                }
                 PlannedKid::ObjectReference { annotation } => {
                     // Table 325：`/Pg` 与 `/Obj` 均为间接引用；页取注解
-                    // 自身绑定的页，不依赖元素（写端元素不携带 `/Pg`）。
+                    // 自身绑定的页，独立于元素 `/Pg`。
                     let (page_num, generation) = page_refs[annotation_pages[*annotation]];
                     Value::Dict(
                         Dict::new()

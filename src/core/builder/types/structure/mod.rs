@@ -7,7 +7,10 @@
 //! Table 条目（14.8.5.4–14.8.5.7 Table 342–349）由子模块 [`layout`]、
 //! [`standard`] 与 [`format_specific`] 提供类型化构造器。
 //! 对象引用 OBJR（Table 325）以 [`StructureKid::ObjectReference`] 建模，
-//! 引用的对象是已注册的注解；`/Stm` `/StmOwn` 不在本模型内。
+//! 引用的对象是已注册的注解；标记内容序列以 MCR 字典
+//! （[`StructureKid::MarkedContent`]）或 14.7.4.2 的整数简写
+//! （[`StructureKid::InlineMarkedContent`]，须配合元素 `/Pg`）两式建模，
+//! `/Stm` `/StmOwn` 不在本模型内。
 //!
 //! 结构元素以拥有所有权的树形 `Vec` 表达（`StructureKid::Element` 装箱
 //! 子元素），与读端的 arena 前序模型不同：写端在 `PdfBuilder::build`
@@ -174,13 +177,18 @@ impl UserProperty {
 
 /// 结构元素（14.7.2 Table 323）。
 ///
-/// `/Pg` 不建模也不写出：内容项一律以带显式 `/Pg` 的 MCR 字典表达，
-/// 不存在父页继承。`/A` 属性对象（14.7.5）以 [`StructureAttribute`]
-/// 按声明顺序写出；`/Stm` `/StmOwn` 不在本切片内。
+/// `/Pg`（Table 323，可选、须为页对象的间接引用）以 [`Self::with_page`]
+/// 建模并写出；它同时是 `/K` 整数简写内容项的定位页（14.7.4.2：整数
+/// MCID 只在序列位于元素 `/Pg` 页面流时合法，见
+/// [`Self::with_inline_marked_content`]）。MCR 字典自带的 `/Pg` 覆盖
+/// 元素 `/Pg`（Table 324）。`/A` 属性对象（14.7.5）以
+/// [`StructureAttribute`] 按声明顺序写出；`/Stm` `/StmOwn` 不在本切片内。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructureElement {
     /// `/S`：结构类型（非空 PDF 名字）。
     pub structure_type: String,
+    /// `/Pg`：内容项所在页的 0 基页索引；写出为页对象的间接引用。
+    pub page: Option<usize>,
     /// `/ID`：元素标识（非空、唯一的 ASCII 字节串）。
     pub id: Option<Vec<u8>>,
     /// `/T`：人类可读标题。
@@ -208,6 +216,7 @@ impl StructureElement {
     pub fn new(structure_type: impl Into<String>) -> Self {
         Self {
             structure_type: structure_type.into(),
+            page: None,
             id: None,
             title: None,
             lang: None,
@@ -299,8 +308,31 @@ impl StructureElement {
     }
 
     /// 追加一个标记内容引用（页面 0 基索引 + MCID）。
+    ///
+    /// 写出为带显式 `/Pg` 的 MCR 字典（14.7.4.2 Table 324），与元素是否
+    /// 携带 `/Pg` 无关；整数简写见 [`Self::with_inline_marked_content`]。
     pub fn with_marked_content(self, page: usize, mcid: i64) -> Self {
         self.with_kid(StructureKid::marked_content(page, mcid))
+    }
+
+    /// 追加一个整数简写的标记内容标识符（14.7.4.2）。
+    ///
+    /// 写出为 `/K` 里的裸整数 MCID。规范只允许「序列所在页即元素
+    /// `/Pg` 指定页」这一常见场景使用简写，因此本元素必须以
+    /// [`Self::with_page`] 携带同一个 `page`；`/Pg` 缺失或页码不一致时
+    /// `build` 在任何对象号分配之前返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError)，
+    /// 零字节输出。
+    pub fn with_inline_marked_content(self, page: usize, mcid: i64) -> Self {
+        self.with_kid(StructureKid::inline_marked_content(page, mcid))
+    }
+
+    /// 设置 `/Pg`（Table 323）：内容项所在页的 0 基页索引，写出为
+    /// 页对象的间接引用。它是 [`Self::with_inline_marked_content`]
+    /// 简写项的定位页；页索引越界在 `build` 的对象号分配之前拒绝。
+    pub fn with_page(mut self, page: usize) -> Self {
+        self.page = Some(page);
+        self
     }
 
     /// 追加一个对象引用内容项（OBJR，Table 325）。
@@ -325,6 +357,14 @@ pub enum StructureKid {
         /// 标记内容标识符（非负）。
         mcid: i64,
     },
+    /// 整数简写的标记内容标识符（14.7.4.2）：写出为 `/K` 里的裸整数，
+    /// 仅当页面等于元素的 `/Pg`（[`StructureElement::with_page`]）时合法。
+    InlineMarkedContent {
+        /// 0 基页索引（必须与元素 `/Pg` 一致）。
+        page: usize,
+        /// 标记内容标识符（非负）。
+        mcid: i64,
+    },
     /// 对象引用 OBJR（Table 325）：整个 PDF 对象作为内容项。
     ObjectReference {
         /// 注解文档级句柄（[`PdfBuilder::add_annotation`](crate::core::builder::PdfBuilder::add_annotation)）。
@@ -341,6 +381,12 @@ impl StructureKid {
     /// 以 MCR 构造内容项子项。
     pub fn marked_content(page: usize, mcid: i64) -> Self {
         Self::MarkedContent { page, mcid }
+    }
+
+    /// 以整数简写 MCID 构造内容项子项（14.7.4.2，见
+    /// [`StructureKid::InlineMarkedContent`]）。
+    pub fn inline_marked_content(page: usize, mcid: i64) -> Self {
+        Self::InlineMarkedContent { page, mcid }
     }
 
     /// 以 OBJR 注解引用构造内容项子项。
