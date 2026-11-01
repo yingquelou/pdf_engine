@@ -257,6 +257,7 @@
 - [x] 8.7 Shading Type 1–7、着色图案与彩色/无色平铺图案；
 - [x] 8.9/8.9.6 图像字典常用条目、图像蒙版、软蒙版图像；
 - [x] 8.10.1–8.10.3 Form/Group XObject；11.3.5/11.6.4/11.4/11.6.5/11.6.6 透明度写端；
+  - 状态校准（2026-11-01，证据见矩阵 11.3.5/11.6.4）：透明度写端条目对应的**读端其实也已存在**，矩阵的 Reader 列此前误标 ⬜，现改为 🟡：`reader/graphics_state/mod.rs` 类型化 `/BM`（含回退数组）、`/CA` `/ca`（0.0–1.0 校验）、`/AIS` `/TK` 与 `SoftMask`（`/G` `/BC` `/TR` `/SMaskInData` `/Matte`），证据测试 `parses_scalar_graphics_state_parameters`、`parses_soft_mask_transfer_function_smask_in_data_and_matte` 等；仍不是 ✅ 的原因是不校验 Table 136 标准混合模式名、`/G` `/TR` 保持原值不解析、AIS 决定的形状/不透明解释只报告不应用（库不做合成渲染）。
 - [x] 14.6 标记内容操作符；8.11 可选内容（OCG/OCProperties/Properties/BDC）。
 - 说明：8.8.2 PostScript XObject、8.10.4 Reference XObject 不在基线内。
 
