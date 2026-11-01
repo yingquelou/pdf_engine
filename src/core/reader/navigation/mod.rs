@@ -1,5 +1,5 @@
 //! 文档级导航读取：名称树、显式/命名目标、大纲、页面标签、命名页面、
-//! 命名模板页、文章线、便携集合与备用演示。
+//! 命名模板页、文章线、便携集合、备用演示与扩展字典。
 //!
 //! 覆盖 ISO 32000-1 7.7.4（名称字典）、12.3（Destinations、Outline、
 //! Collections）、12.4.2（Page Labels）、12.4.3（Articles）、12.7.6
@@ -15,6 +15,7 @@ mod alternate_presentation;
 mod articles;
 mod collection;
 pub mod destination;
+mod extensions;
 mod name_tree;
 pub(crate) use name_tree::{name_tree_entries, number_tree_entries};
 mod outline;
@@ -31,6 +32,7 @@ pub use collection::{
     Collection, CollectionField, CollectionFieldType, CollectionSort, CollectionView,
 };
 pub use destination::Destination;
+pub use extensions::{DeveloperExtension, ExtensionsDictionary};
 pub use outline::{Outline, OutlineDestination, OutlineItem};
 pub use page_labels::{PageLabelRange, PageLabelStyle, PageLabels};
 pub(crate) use page_tree::{PageTreeIndex, page_tree_index};

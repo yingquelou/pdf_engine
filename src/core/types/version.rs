@@ -321,6 +321,9 @@ pub enum PdfFeature {
     /// 标准结构类型的 PDF 1.5 扩展（14.8.4 的 THead/TBody/TFoot/Annot/
     /// Ruby/RB/RT/RP/Warichu/WT/WP），PDF 1.5 引入。
     StructureTypeExtensions,
+    /// 扩展字典（目录 `/Extensions` 与各前缀开发者扩展字典，7.12 与
+    /// Table 50），随 ISO 32000-1（PDF 1.7）引入。
+    ExtensionsDictionary,
 }
 
 impl PdfFeature {
@@ -414,6 +417,7 @@ impl PdfFeature {
             | PdfFeature::ArtifactBackground
             | PdfFeature::ArtifactSubtype
             | PdfFeature::ThreeDMarkup => PdfVersion::V1_7,
+            PdfFeature::ExtensionsDictionary => PdfVersion::V1_7,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,
             PdfFeature::FreeTextRichContent => PdfVersion::V1_5,
             PdfFeature::FreeTextCallout => PdfVersion::V1_6,
@@ -514,6 +518,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MarkInfoSuspects => "mark info suspects",
             PdfFeature::TagSuspects => "tag suspects",
             PdfFeature::ReversedCharacters => "reversed show strings",
+            PdfFeature::ExtensionsDictionary => "extensions dictionary",
         };
         write!(f, "{name}")
     }

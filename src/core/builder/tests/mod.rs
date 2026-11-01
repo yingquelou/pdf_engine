@@ -61,6 +61,7 @@
 //! - `acro_form`：AcroForm 字段树、Widget 与 `/AP` 外观流；
 //! - `acro_form_resources`：AcroForm `/DR` 非字体默认资源（ExtGState/ColorSpace/ProcSet）；
 //! - `embedded_file`：嵌入文件流、文件规格与 `/EmbeddedFiles` 名称树；
+//! - `extensions`：扩展字典（7.12、Table 50）的目录 `/Extensions` 直接对象写出、前缀/级别校验与 PDF 1.7 门禁；
 //! - `form`：Form XObject 字典与资源；
 //! - `page_group`：页字典组属性（`/Group`）；
 //! - `optional_content`：可选内容组（`/OCG`）与目录 `/OCProperties`；
@@ -107,6 +108,7 @@ mod color_space;
 mod compression;
 mod embedded_file;
 mod encoding;
+mod extensions;
 mod font;
 mod font_cff;
 mod font_program;

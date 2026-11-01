@@ -66,6 +66,7 @@ impl FeatureProfile {
 /// - `/OCProperties` 键存在 → OptionalContent
 /// - `/Threads` 键存在（目录）→ ArticleThreads
 /// - `/Collection` 键存在（目录）→ Collection
+/// - `/Extensions` 键存在（目录）→ ExtensionsDictionary
 /// - `/Templates` 键存在（名称字典）→ PageTemplates
 /// - `/AlternatePresentations` 键存在（名称字典）→ AlternatePresentations
 /// - 目录 `/OutputIntents` 非空数组 → OutputIntents（1.4）
@@ -319,6 +320,10 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // 便携集合（PDF 1.7）：目录 /Collection
     if d.0.contains_key("Collection") {
         features.insert(PdfFeature::Collection);
+    }
+    // 扩展字典（ISO 32000-1，即 PDF 1.7）：目录 /Extensions（7.12）。
+    if d.0.contains_key("Extensions") {
+        features.insert(PdfFeature::ExtensionsDictionary);
     }
     // 命名页面模板（PDF 1.3）：目录 /Names /Templates 名称树。`Templates`
     // 键只出现在名称字典中（Table 31），扫描到名称字典即命中。

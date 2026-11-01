@@ -1,6 +1,6 @@
 //! 文档级导航写端：页面标签、命名目标、命名页面、命名模板页、大纲、
-//! 文章线、便携集合与备用演示（ISO 32000-1 12.3、12.4.2、12.4.3、12.7.6、
-//! 13.5）。
+//! 文章线、便携集合、备用演示与扩展字典（ISO 32000-1 12.3、12.4.2、
+//! 12.4.3、12.7.6、13.5、7.12）。
 //!
 //! 这些结构都挂在目录（catalog）上。构建器在 [`PdfBuilder::build`] 完成
 //! 对象组装后统一写入：目录字典被覆盖写回，大纲条目、模板页对象、文章线
@@ -8,7 +8,7 @@
 //!
 //! 版本门控（构建期返回 [`WriteError::UnsupportedVersion`]，零字节输出）：
 //! 大纲自 PDF 1.1 起、命名目标自 1.2 起、页面标签、命名页面与命名模板页
-//! 自 1.3 起、备用演示自 1.4 起。输入非法（页码越界、名称重复、标签起点
+//! 自 1.3 起、备用演示自 1.4 起、扩展字典（目录 `/Extensions`）自 1.7 起。输入非法（页码越界、名称重复、标签起点
 //! 乱序、颜色越界、未知嵌入文件等）返回 [`WriteError::InvalidObject`]，
 //! 同样零字节输出。
 
@@ -31,6 +31,7 @@ use super::types::text_string_value;
 mod alternate_presentation;
 mod articles;
 mod collection;
+mod extensions;
 mod structure;
 pub(super) mod structure_content;
 mod structure_layout;
@@ -83,6 +84,8 @@ pub(crate) struct NavigationState {
     actions: Vec<Action>,
     article_threads: Vec<ArticleThread>,
     collection: Option<Collection>,
+    /// 扩展字典条目（7.12 `/Extensions`）：前缀 + BaseVersion + ExtensionLevel。
+    extensions: Vec<extensions::RegisteredExtension>,
     /// 逻辑结构树（14.7.2）；None 时目录不写 `/StructTreeRoot`。
     structure_tree: Option<StructureTree>,
     /// 目录 `/MarkInfo`（14.7.1 Table 321）；None 时不写出。
@@ -254,6 +257,28 @@ impl PdfBuilder {
         self
     }
 
+    /// 注册一个开发者扩展（7.12），写入目录 `/Extensions` 扩展字典。
+    ///
+    /// 每个前缀写一个直接对象开发者扩展字典（Table 50）：
+    /// `/Type /DeveloperExtensions`、`/BaseVersion` 为 `base_version`
+    /// 的版本名、`/ExtensionLevel` 为 `extension_level`。前缀须为
+    /// Annex E 的 4 字节字母数字注册前缀形态且互不重复、
+    /// `extension_level` 须为正整数、`base_version` 不得超过目标文档
+    /// 版本（7.12.3），否则构建返回 [`WriteError::InvalidObject`]；
+    /// 目标版本低于 1.7 返回 [`WriteError::UnsupportedVersion`]，
+    /// 均零字节输出。全部内容嵌套在目录内，不分配间接对象号。
+    pub fn add_extension(
+        &mut self,
+        prefix: impl Into<String>,
+        base_version: PdfVersion,
+        extension_level: i64,
+    ) -> &mut Self {
+        self.navigation
+            .extensions
+            .push((prefix.into(), base_version, extension_level));
+        self
+    }
+
     /// 设置逻辑结构树（14.7.2），写入目录 `/StructTreeRoot`。
     ///
     /// 结构树根、全部结构元素与 `/IDTree` 从现有最大对象号之后分配，
@@ -334,6 +359,11 @@ pub(super) fn apply(
             "collections",
         ),
         (
+            !navigation.extensions.is_empty(),
+            PdfVersion::V1_7,
+            "extensions dictionaries (catalog /Extensions)",
+        ),
+        (
             navigation.structure_tree.is_some(),
             PdfVersion::V1_3,
             "structure trees",
@@ -365,6 +395,7 @@ pub(super) fn apply(
     if let Some(collection) = &navigation.collection {
         collection::validate(collection)?;
     }
+    extensions::validate(&navigation.extensions, version)?;
 
     let (catalog_num, catalog_generation, mut catalog) = catalog_dict(doc)?;
     let page_refs = page_refs(doc, &catalog)?;
@@ -477,6 +508,17 @@ pub(super) fn apply(
             Value::Dict(collection::collection_dict(collection)),
         );
         doc.features.borrow_mut().insert(PdfFeature::Collection);
+    }
+
+    if !navigation.extensions.is_empty() {
+        // 7.12.1：扩展字典全部为直接对象，嵌套写入目录，不分配对象号。
+        catalog = catalog.insert(
+            "Extensions",
+            Value::Dict(extensions::extensions_dict(&navigation.extensions)),
+        );
+        doc.features
+            .borrow_mut()
+            .insert(PdfFeature::ExtensionsDictionary);
     }
 
     let structure = structure::write(

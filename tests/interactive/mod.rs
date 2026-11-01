@@ -4,7 +4,7 @@
 //! 标识（E5）、嵌入文件（E6）、增量更新（E7）与数字签名（F1）的
 //! 写入 → 解析 → 回读往返；共享辅助见 `tests/support/mod.rs`。
 //!
-//! 按特性分文件：`accessibility`、`navigation`、`articles`、`collection`、`templates`、`action`、`action_goto3d`、
+//! 按特性分文件：`accessibility`、`navigation`、`articles`、`collection`、`templates`、`extensions`、`action`、`action_goto3d`、
 //! `action_gotoe`、`action_ocg`、`action_thread`、`annotation`、
 //! `annotation_appearance`、`annotation_geometry`、`annotation_link`、
 //! `annotation_measure`、`annotation_mk`、`annotation_popup`、
@@ -44,6 +44,7 @@ mod annotation_watermark;
 mod articles;
 mod collection;
 mod embedded;
+mod extensions;
 mod form;
 mod incremental;
 mod metadata;
