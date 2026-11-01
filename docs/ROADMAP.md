@@ -89,6 +89,8 @@
 
 **2026-10-26 实测仍超限、后续增量触及前必须先拆分或同步拆分的模块**（按行数降序；阈值见工程约定 #5：>600 行或 >25 KiB）：
 
+- [ ] `tests/main.rs`（2026-11-01 复测 7984 行 / 280 KiB，全仓最大违例；集成目标 `main` 计 81 项测试，其中 `builder*` 前缀 61 项。新增集成测试前须按 `tests/interactive` 先例目录化：`tests/main/mod.rs` 以 `#[path = "../support/mod.rs"] mod support;` 复用夹具，主题文件按字体/加密/构建器内容分组，测试名与数量零改动）
+
 - [ ] `reader/font/truetype/cmap.rs`（1537 行 / 69.2 KiB；任何 cmap 增量前拆分）
 - [ ] `builder/tests/mod.rs`（1644 行 / 53.1 KiB；新增 builder 测试前按主题拆分；导航测试已独立为 `builder/tests/navigation.rs`，注解夹具已抽出 `tests/support.rs`，Line 注解测试独立为 `tests/annotation_line.rs`，FreeText 注解测试独立为 `tests/annotation_free_text.rs`，几何注解测试独立为 `tests/annotation_geometry.rs`，Link 注解测试独立为 `tests/annotation_link.rs`，子类型表一致性测试独立为 `tests/annotation_subtype_table.rs`，旧式边框测试独立为 `tests/annotation_border.rs`，Popup 关联测试独立为 `tests/annotation_popup.rs`、Redact 注解测试独立为 `tests/annotation_redact.rs`、外观特性 `/MK` 测试独立为 `tests/annotation_mk.rs`、Watermark `/FixedPrint` 测试独立为 `tests/annotation_watermark.rs`（2026-10-29）；本文件仍余 33 项对象布局/渲染辅助测试）
 - [ ] `builder/tests/cid.rs`（1217 行 / 39.4 KiB；新增 CID 写端测试前拆分）
