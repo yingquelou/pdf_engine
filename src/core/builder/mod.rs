@@ -75,8 +75,8 @@ pub use types::{
     SelectorRendition, Separation, SeparationInfo, SetOcgStateAction, Shading, ShadingOptions,
     ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction,
     SoundEncoding, SpanProperties, StitchingFunction, StructureAttribute, StructureElement,
-    StructureKid, StructureMarkInfo, StructureTree, TableAttributes, TableScope,
-    TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading, TextAlign,
+    StructureKid, StructureMarkInfo, StructureObjectReference, StructureTree, TableAttributes,
+    TableScope, TemporaryFilePermission, TensorProductPatch, TensorProductPatchShading, TextAlign,
     TextDecorationType, ThreadAction, ThreeDActivation, ThreeDActivationPolicy,
     ThreeDAnimationStyle, ThreeDAnimationStyleType, ThreeDArtwork, ThreeDArtworkState,
     ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDColor, ThreeDCrossSection,
@@ -209,6 +209,9 @@ pub struct PdfBuilder {
     /// 最近一次 assemble 记录的注解绑定页索引（下标即注解句柄）；供
     /// 结构树 OBJR 子项解析 `/Pg`。
     annotation_pages: Vec<usize>,
+    /// 最近一次 assemble 分配的图像 XObject 对象号（页 → 该页图像资源
+    /// 序号）；供结构树 OBJR 子项（14.7.4.3 Table 325）解析 `/Obj`。
+    image_nums: Vec<Vec<i64>>,
     /// 最近一次 assemble 分配的可选内容组对象号（下标即组句柄）；供大纲
     /// `/A` 解析 Set-OCG-State 动作的组目标。
     ocg_nums: Vec<i64>,
@@ -280,6 +283,7 @@ impl PdfBuilder {
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
             annotation_pages: Vec::new(),
+            image_nums: Vec::new(),
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
@@ -318,6 +322,7 @@ impl PdfBuilder {
             annotations: Vec::new(),
             annotation_nums: Vec::new(),
             annotation_pages: Vec::new(),
+            image_nums: Vec::new(),
             ocg_nums: Vec::new(),
             sounds: Vec::new(),
             sound_nums: Vec::new(),
@@ -1023,6 +1028,21 @@ impl PdfBuilder {
         self
     }
 
+    /// 每个 Form XObject 句柄在哪些页上被绘制（页资源 `/Fm<n>` 登记表）；
+    /// 供结构树 OBJR 的 Form 目标复核 `/Pg` 是否谎报渲染页（14.7.4.3）。
+    fn form_render_pages(&self) -> Vec<Vec<usize>> {
+        (0..self.forms.len())
+            .map(|handle| {
+                self.pages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, page)| page.forms.contains(&handle))
+                    .map(|(page, _)| page)
+                    .collect()
+            })
+            .collect()
+    }
+
     /// 序列化为 PDF 字节流。
     ///
     /// 内部按固定顺序分配对象号、构造底层 `Document`，再交给
@@ -1042,6 +1062,9 @@ impl PdfBuilder {
             )));
         }
         let mut doc = self.assemble_document()?;
+        // OBJR 内容项（14.7.4.3 Table 325）的目标解析表：三档句柄都在
+        // 对象号分配之后才有对象号，故随导航阶段一并交给结构树写出。
+        let form_render_pages = self.form_render_pages();
         navigation::apply(
             &mut doc,
             self.version,
@@ -1049,13 +1072,19 @@ impl PdfBuilder {
             &self.navigation,
             types::ActionRefs {
                 annotation_nums: &self.annotation_nums,
-                annotation_pages: &self.annotation_pages,
                 ocg_nums: &self.ocg_nums,
                 sound_nums: &self.sound_nums,
                 form_nums: &self.form_nums,
                 embedded_nums: &self.embedded_nums,
                 rendition_nums: &self.rendition_nums,
                 rendition_cursor: Some(&self.rendition_cursor),
+            },
+            navigation::structure::StructureTargets {
+                annotation_nums: &self.annotation_nums,
+                annotation_pages: &self.annotation_pages,
+                form_nums: &self.form_nums,
+                form_pages: &form_render_pages,
+                image_nums: &self.image_nums,
             },
         )?;
         // 内联 section 的消费游标必须覆盖全部首级目标：遗漏说明注解/大纲

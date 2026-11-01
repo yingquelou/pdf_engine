@@ -143,8 +143,9 @@ pub use structure::{
     FormatSpecificOwner, GlyphOrientationVertical, InlineAlign, LayoutAttributes, LineHeight,
     ListAttributes, ListNumbering, NumberOrAuto, NumberOrFour, NumberOrNumbers, Placement,
     PrintFieldAttributes, PrintFieldChecked, PrintFieldRole, RubyAlign, RubyPosition,
-    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo, StructureTree,
-    TableAttributes, TableScope, TextAlign, TextDecorationType, UserProperty, WritingMode,
+    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo,
+    StructureObjectReference, StructureTree, TableAttributes, TableScope, TextAlign,
+    TextDecorationType, UserProperty, WritingMode,
 };
 pub use three_d::{
     ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,

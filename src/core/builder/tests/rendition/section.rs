@@ -329,7 +329,6 @@ fn rendition_clip_section_annotations_and_outline_share_cursor() {
         &b.navigation,
         crate::core::builder::types::ActionRefs {
             annotation_nums: &b.annotation_nums,
-            annotation_pages: &b.annotation_pages,
             ocg_nums: &b.ocg_nums,
             sound_nums: &b.sound_nums,
             form_nums: &b.form_nums,
@@ -337,6 +336,7 @@ fn rendition_clip_section_annotations_and_outline_share_cursor() {
             rendition_nums: &b.rendition_nums,
             rendition_cursor: Some(&b.rendition_cursor),
         },
+        crate::core::builder::navigation::structure::StructureTargets::default(),
     )
     .expect("apply outline");
     assert_eq!(

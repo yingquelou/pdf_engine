@@ -56,8 +56,6 @@ impl AnnotationRefs<'_> {
     fn action_refs(&self) -> ActionRefs<'_> {
         ActionRefs {
             annotation_nums: self.annotation_nums,
-            // 注解动作不触及结构 OBJR：页索引映射传空即可。
-            annotation_pages: &[],
             ocg_nums: self.ocg_nums,
             sound_nums: self.sound_nums,
             form_nums: self.form_nums,

@@ -127,7 +127,6 @@ fn outline_set_ocg_state_action_resolves_group_objects() {
         &b.navigation,
         crate::core::builder::types::ActionRefs {
             annotation_nums: &b.annotation_nums,
-            annotation_pages: &b.annotation_pages,
             ocg_nums: &b.ocg_nums,
             sound_nums: &b.sound_nums,
             form_nums: &b.form_nums,
@@ -135,6 +134,7 @@ fn outline_set_ocg_state_action_resolves_group_objects() {
             rendition_nums: &b.rendition_nums,
             rendition_cursor: Some(&b.rendition_cursor),
         },
+        navigation::structure::StructureTargets::default(),
     )
     .expect("apply");
     assert!(b.ocg_nums[group] > 0, "大纲动作引用的组有对象号");

@@ -92,6 +92,9 @@ impl PdfBuilder {
         // 写前门禁与对象号分配（顺序与拆分前完全一致）。
         let preflight = self.assemble_preflight()?;
         let mut pools = self.allocate_pool_objects(&mut num)?;
+        // 图像对象号表回填：结构树 OBJR 的图像 XObject 目标（14.7.4.3）以
+        // 「页索引 + 该页图像资源序号」定位，导航阶段据此解析 `/Obj`。
+        self.image_nums = pools.page_image_nums.clone();
         let forms = self.allocate_form_objects(&preflight, &mut pools, &mut num)?;
         let groups = self.allocate_group_objects(&forms, &mut num)?;
         let annot_plan = self.allocate_annotation_objects(&preflight, &mut num)?;

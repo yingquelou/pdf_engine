@@ -27,12 +27,13 @@ use super::types::PageSize;
 use super::types::StructureMarkInfo;
 use super::types::StructureTree;
 use super::types::text_string_value;
+use structure::StructureTargets;
 
 mod alternate_presentation;
 mod articles;
 mod collection;
 mod extensions;
-mod structure;
+pub(in crate::core::builder) mod structure;
 pub(super) mod structure_content;
 mod structure_layout;
 mod structure_standard;
@@ -312,12 +313,17 @@ impl PdfBuilder {
 }
 
 /// 把导航配置写入已组装的 `Document` 目录；；无配置时不产生任何对象。
+///
+/// `structure_targets` 是 OBJR 内容项（14.7.4.3 Table 325）的句柄解析表：
+/// 注解/Form XObject 句柄与页内图像序号 → 对象号与所在页，只在结构树
+/// 带对象引用子项时被消费。
 pub(super) fn apply(
     doc: &mut Document,
     version: PdfVersion,
     page_count: usize,
     navigation: &NavigationState,
     action_refs: ActionRefs<'_>,
+    structure_targets: StructureTargets<'_>,
 ) -> Result<(), WriteError> {
     let has_actions = outline_has_actions(&navigation.outline);
     let required = [
@@ -525,8 +531,7 @@ pub(super) fn apply(
         doc,
         version,
         &page_refs,
-        action_refs.annotation_nums,
-        action_refs.annotation_pages,
+        &structure_targets,
         navigation.structure_tree.as_ref(),
         navigation.mark_info.as_ref(),
     )?;

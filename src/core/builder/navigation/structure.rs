@@ -32,19 +32,66 @@
 //! 本切片的范围限制：`/K` 写出子元素引用、MCR 字典（带显式 `/Pg` 与
 //! `/MCID`）、14.7.4.2 的整数 MCID 简写（[`StructureKid::InlineMarkedContent`]：
 //! 仅当元素自身以 `with_page` 携带同页 `/Pg` 时合法，写出为 `/K` 里的
-//! 裸整数）与 OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`，引用
-//! 已注册注解的对象号），不写 `/Stm` `/StmOwn`。元素 `/Pg`（Table 323）
-//! 写出为页对象的间接引用，页索引越界拒绝。OBJR 内容项
-//! 的父树条目是裸结构元素引用（14.7.4.4），写端同时给注解字典追加
-//! `/StructParent`（Table 326）；父树键先页面后 OBJR 连续分配，同一注解
-//! 句柄被两个元素声称、句柄或所在页越界一律返回 [`WriteError::InvalidObject`]。
+//! 裸整数）与 OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`）。
+//! 元素 `/Pg`（Table 323）写出为页对象的间接引用，页索引越界拒绝。
+//!
+//! OBJR 的 `/Obj` 目标按 14.7.4.3 扩展到 XObject。规范原文（14.7.4.3，
+//! raw 文本 29609–29612 行）是 shall：「When a structure element's content
+//! includes an entire PDF object, such as an XObject or an annotation, that
+//! is associated with a page but not directly included in the page's content
+//! stream, the object shall be identified in the structure element's K entry
+//! by an object reference dictionary」，故目标不限于注解：
+//! [`StructureObjectReference`] 给出三档——注解字典、文档级 Form XObject、
+//! 页面 XObject 资源里的图像 XObject。
+//!
+//! 父树键归属（shall）：14.7.4.4 说承载键的条目「may appear in the page
+//! object of a page containing marked-content sequences, in the stream
+//! dictionary of a form or image XObject, in an annotation dictionary」（raw
+//! 29656–29660 行），且 Table 326 第一行 `/StructParent`「Required for all
+//! objects that are structural content items」（raw 29692 行）——三种目标
+//! 都在自身字典（Form/图像是流字典）追加 `/StructParent`，与规范 Example 1
+//! 的 Form XObject `/StructParent 6`（raw 29706 行）一致；父树条目是裸结构
+//! 元素引用（14.7.4.4「the value shall be an indirect reference to the
+//! parent structure element」）。`/StructParents` 只属于「content stream
+//! containing marked-content sequences」（raw 29694 行），本写端只有页字典
+//! 走该通道（流形态 MCR 的 `/Stm` `/StmOwn` 另有条目承接，不在此实现）。
+//! 互斥校验按 Table 326 的 shall「At most one of these two entries shall be
+//! present in a given object. An object may be either a content item in its
+//! entirety or a container for marked-content sequences that are content
+//! items, but not both」（raw 29697–29699 行）与 Table 95 对 Form XObject
+//! 的同款 shall（raw 12142–12145 行）执行。
+//!
+//! 库策略（规范未强制，比 shall 更严或更窄，理由写在括号里）：
+//! - 目标可寻址范围限于「写端能确定渲染页」的对象：Form 只能是
+//!   [`PdfBuilder::draw_form`](crate::core::builder::PdfBuilder::draw_form)
+//!   登记进页资源 `/Fm<n>` 的表单，图像只能是页资源 `/Im<n+1>` 里的图像；
+//!   只作为注解 `/AP`、`/MK` 图标或表单内嵌资源出现的 XObject 暂不可作
+//!   OBJR 目标（写端无法为它们确定 `/Pg`）。
+//! - 所声称的 `/Pg`（引用给出或沿用元素 `/Pg`）必须真的绘制该表单，否则
+//!   拒绝（Table 325 `/Pg`「the page on which the object shall be
+//!   rendered」，raw 29642–29645 行）。
+//! - 判重按**解析后的对象号**，故同一图像跨页去重共享同一对象时，第二次
+//!   声称算重复声称（Table 322「Each integer key in the parent tree shall
+//!   correspond to a single page of the document or to an individual object
+//!   …」+ 14.7.4.4 的单元条目只能指向一个父元素）。
+//! - 同一 Form/图像 XObject 在**多页**绘制时只允许一个元素声称它：14.7.4.3
+//!   NOTE 2（raw 29616 行）要求每次渲染各用一个对象引用，而本写端每个表单
+//!   句柄、每页每个图像资源序号只出一个对象号，无法为第二次渲染另出对象，
+//!   故宁可拒绝也不写出「一个 `/StructParent` 指向两个父元素」的产物；同一页
+//!   多次绘制同一表单只需一次声称（NOTE 2 后一句），不额外要求。
+//!
+//! 校验先于对象号分配：句柄/页/资源序号越界、两路都取不到 `/Pg`、目标不是
+//! 所声称类别的字典或流字典（注解不得是流、Form/图像必须带对应
+//! `/Subtype`）、目标字典已带 `/StructParent` 或 `/StructParents`、目标落在
+//! 将写 `/StructParents` 的页对象号上、同一对象被两个元素声称，一律返回
+//! [`WriteError::InvalidObject`]，零字节。
 //!
 //! 父树键策略（14.7.4.4 shall）：新条目以当前 `/ParentTreeNextKey` 作键、
-//! 随后自增——页面键按页升序 `0..p-1`、OBJR 键接在其后，NextKey 写出为
-//! 条目总数；结构对象号分配之前由 `structure_content::validate_next_key`
-//! 复核 NextKey 严格大于全部在用键。
+//! 随后自增——页面键按页升序 `0..p-1`、OBJR 键按目标对象号升序接在其后，
+//! NextKey 写出为条目总数；结构对象号分配之前由
+//! `structure_content::validate_next_key` 复核 NextKey 严格大于全部在用键。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::reader::accessibility::LanguageIdentifier;
 use crate::core::reader::structure::{
@@ -54,8 +101,8 @@ use crate::core::types::{Array, Dict, Document, Object, PdfFeature, PdfVersion, 
 use crate::core::writer::WriteError;
 
 use super::super::types::{
-    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo, StructureTree,
-    text_string_value,
+    StructureAttribute, StructureElement, StructureKid, StructureMarkInfo,
+    StructureObjectReference, StructureTree, text_string_value,
 };
 use super::invalid;
 use super::structure_content;
@@ -103,8 +150,26 @@ enum PlannedKid {
     MarkedContent { page: usize, mcid: i64 },
     /// 14.7.4.2 整数简写：页即元素 `/Pg`，写出为 `/K` 里的裸 MCID。
     InlineMarkedContent { mcid: i64 },
-    /// OBJR（Table 325）：注解文档级句柄。
-    ObjectReference { annotation: usize },
+    /// OBJR（Table 325）：已解析的目标对象号 + `/Pg` 页索引。
+    ObjectReference { object_num: i64, page: usize },
+}
+
+/// OBJR 目标（14.7.4.3 [`StructureObjectReference`]）的解析表。
+///
+/// 句柄 → 对象号/页索引的映射由 `PdfBuilder::build` 在对象号分配之后
+/// 传入；全部字段为空切片时只接受不带 OBJR 子项的结构树。
+#[derive(Debug, Default, Clone, Copy)]
+pub(in crate::core::builder) struct StructureTargets<'a> {
+    /// 注解句柄 → 注解对象号（长度即注解句柄上界）。
+    pub(in crate::core::builder) annotation_nums: &'a [i64],
+    /// 注解句柄 → 注解绑定的 0 基页索引（与 `annotation_nums` 同长）。
+    pub(in crate::core::builder) annotation_pages: &'a [usize],
+    /// Form XObject 句柄 → 表单流对象号。
+    pub(in crate::core::builder) form_nums: &'a [i64],
+    /// Form XObject 句柄 → 绘制它的页索引（升序，去重后）。
+    pub(in crate::core::builder) form_pages: &'a [Vec<usize>],
+    /// 页索引 → 该页图像 XObject 对象号（序号即 `/Im<序号+1>` 的 0 基序号）。
+    pub(in crate::core::builder) image_nums: &'a [Vec<i64>],
 }
 
 /// 父树条目的两种形态（14.7.4.4）。
@@ -122,8 +187,10 @@ struct Plan<'a> {
     page_keys: BTreeMap<usize, i64>,
     /// 父树键 → 页面 MCID 数组或 OBJR 单元引用（空位 `None`）。
     parents: BTreeMap<i64, ParentEntry>,
-    /// OBJR 注解句柄 → 父树键（页面键之后按句柄升序连续分配）。
-    objr_keys: BTreeMap<usize, i64>,
+    /// OBJR 目标对象号 → 父树键（页面键之后按对象号升序连续分配）。
+    objr_keys: BTreeMap<i64, i64>,
+    /// OBJR 目标对象号 → 声称它的元素 arena 下标（判重与错误信息用）。
+    objrs: BTreeMap<i64, (usize, StructureObjectReference)>,
     /// `/ID` 原始字节 → 元素 arena 下标（按字节升序）。
     ids: BTreeMap<Vec<u8>, usize>,
     /// 是否使用 `/Lang` 或 `/ActualText`（PDF 1.4）。
@@ -140,16 +207,15 @@ struct Plan<'a> {
 
 /// 把结构树与标记信息写入已组装的 `Document`，返回目录条目。
 ///
-/// `annotation_nums` 与 `annotation_pages` 是注解句柄 → 对象号/0 基页索引
-/// 的映射，供 OBJR 子项（Table 325）解析 `/Obj` 与 `/Pg`。
+/// `targets` 是 OBJR 目标的解析表（注解/Form XObject 句柄与页内图像序号 →
+/// 对象号、所在页），供 Table 325 解析 `/Obj` 与 `/Pg`。
 ///
 /// 所有句柄与页索引校验在任何对象号分配之前完成。
 pub(super) fn write(
     doc: &mut Document,
     version: PdfVersion,
     page_refs: &[(i64, i64)],
-    annotation_nums: &[i64],
-    annotation_pages: &[usize],
+    targets: &StructureTargets<'_>,
     tree: Option<&StructureTree>,
     mark_info: Option<&StructureMarkInfo>,
 ) -> Result<CatalogEntries, WriteError> {
@@ -177,13 +243,10 @@ pub(super) fn write(
         return Ok(entries);
     };
 
-    let plan = plan(
-        tree,
-        version,
-        page_refs.len(),
-        annotation_nums,
-        annotation_pages,
-    )?;
+    let plan = plan(tree, version, page_refs, targets)?;
+    // 目标对象本身（注解字典 / XObject 流字典）的形态与 Table 326 的互斥
+    // 条目在此核对：仍在结构对象号分配之前，失败即零字节。
+    validate_objr_targets(doc, &plan, page_refs)?;
 
     // 14.7.5.4：含用户属性的文档必须在 `/MarkInfo` 声明 `/UserProperties
     // true`。读端已在结构树之前校验过标记信息，这里只做交叉检查，仍在
@@ -249,11 +312,9 @@ pub(super) fn write(
         &element_attributes,
         root_num,
         page_refs,
-        annotation_nums,
-        annotation_pages,
     );
     write_page_parents(doc, &plan, page_refs)?;
-    write_annotation_parents(doc, &plan, annotation_nums)?;
+    write_object_parents(doc, &plan)?;
 
     let mut features = doc.features.borrow_mut();
     features.insert(PdfFeature::LogicalStructure);
@@ -275,23 +336,22 @@ pub(super) fn write(
 
 /// 校验结构树并展开为前序计划；版本门禁先于结构校验之后执行。
 ///
-/// OBJR 子项按 `annotation_nums`/`annotation_pages` 校验句柄与所在页；
+/// OBJR 子项按 `targets` 解析目标对象号与所在页，并对照 `page_refs` 的
+/// 页对象号复核 Table 326 的 `/StructParent` ↔ `/StructParents` 互斥；
 /// 这些检查与页面/MCID 检查一样先于任何对象号分配。
 fn plan<'a>(
     tree: &'a StructureTree,
     version: PdfVersion,
-    page_count: usize,
-    annotation_nums: &'a [i64],
-    annotation_pages: &'a [usize],
+    page_refs: &[(i64, i64)],
+    targets: &StructureTargets<'a>,
 ) -> Result<Plan<'a>, WriteError> {
     let mut flattener = Flattener {
         flat: Vec::new(),
         ids: BTreeMap::new(),
         mcids: BTreeMap::new(),
         objrs: BTreeMap::new(),
-        page_count,
-        annotation_nums,
-        annotation_pages,
+        page_count: page_refs.len(),
+        targets: *targets,
         role_map: &tree.role_map,
         standard: StandardUsage::default(),
         uses_language: false,
@@ -380,14 +440,14 @@ fn plan<'a>(
         }
         parents.insert(key, ParentEntry::Page(array));
     }
-    // 14.7.4.4：OBJR 内容项的父树条目是单元引用，键接在页面键之后按
-    // 注解句柄升序连续分配，保证 0..n-1 无空洞。
+    // 14.7.4.4：OBJR 内容项的父树条目是单元引用，键接在页面键之后按目标
+    // 对象号升序连续分配，保证 0..n-1 无空洞。
     let mut objr_keys = BTreeMap::new();
     let first_objr_key = flattener.mcids.len() as i64;
-    for (offset, (handle, index)) in flattener.objrs.iter().enumerate() {
+    for (offset, (object_num, (index, _))) in flattener.objrs.iter().enumerate() {
         let key = first_objr_key + offset as i64;
         parents.insert(key, ParentEntry::Object(*index));
-        objr_keys.insert(*handle, key);
+        objr_keys.insert(*object_num, key);
     }
     // 14.7.4.4 shall：`/ParentTreeNextKey` 必须严格大于全部在用父树键。
     // 键按「新条目取当前 NextKey、随后自增」连续分配（页面键 0..p-1，
@@ -397,11 +457,13 @@ fn plan<'a>(
     let used_keys: Vec<i64> = parents.keys().copied().collect();
     structure_content::validate_next_key(&used_keys, next_key).map_err(invalid)?;
 
+    let objrs = std::mem::take(&mut flattener.objrs);
     Ok(Plan {
         flat: flattener.flat,
         page_keys,
         parents,
         objr_keys,
+        objrs,
         ids: flattener.ids,
         uses_language: flattener.uses_language,
         uses_expanded: flattener.uses_expanded,
@@ -570,13 +632,13 @@ struct Flattener<'a> {
     ids: BTreeMap<Vec<u8>, usize>,
     /// 页面索引 → MCID → 父元素 arena 下标（同页 MCID 唯一）。
     mcids: BTreeMap<usize, BTreeMap<i64, usize>>,
-    /// 注解句柄 → 父元素 arena 下标（同一注解至多被一个元素声称）。
-    objrs: BTreeMap<usize, usize>,
+    /// OBJR 目标对象号 → 声称它的元素 arena 下标 + 目标声明（同一对象
+    /// 至多被一个元素声称；按解析后的对象号判重，故跨页去重共享的同一
+    /// 图像 XObject 也算重复声称）。
+    objrs: BTreeMap<i64, (usize, StructureObjectReference)>,
     page_count: usize,
-    /// 注解句柄 → 注解对象号；长度即句柄上界。
-    annotation_nums: &'a [i64],
-    /// 注解句柄 → 注解绑定的 0 基页索引（OBJR `/Pg` 与越界校验用）。
-    annotation_pages: &'a [usize],
+    /// OBJR 目标的句柄 → 对象号/页解析表。
+    targets: StructureTargets<'a>,
     /// 结构类型 → 标准类型的角色映射（元素适用性判定用）。
     role_map: &'a BTreeMap<String, String>,
     /// 标准属性使用情况与待核对的 `/Headers` 引用。
@@ -727,38 +789,118 @@ impl<'a> Flattener<'a> {
                     self.note_mcid(*page, *mcid, index)?;
                     kids.push(PlannedKid::InlineMarkedContent { mcid: *mcid });
                 }
-                StructureKid::ObjectReference { annotation } => {
-                    if *annotation >= self.annotation_nums.len() {
+                StructureKid::ObjectReference { object } => {
+                    // 14.7.4.3：`/Obj` 可以是注解、Form XObject 或图像
+                    // XObject；目标句柄、绘制页与资源序号的越界检查同样
+                    // 先于对象号分配。
+                    let (object_num, page) = self.resolve_objr(object, element.page)?;
+                    if self.objrs.insert(object_num, (index, *object)).is_some() {
                         return Err(invalid(format!(
-                            "structure OBJR annotation handle {annotation} is out of range (count {})",
-                            self.annotation_nums.len()
+                            "structure OBJR {} is claimed by more than one structure element (object number {object_num})",
+                            describe_objr_target(object)
                         )));
                     }
-                    let Some(&page) = self.annotation_pages.get(*annotation) else {
-                        return Err(invalid(format!(
-                            "structure OBJR annotation handle {annotation} is out of range (count {})",
-                            self.annotation_pages.len()
-                        )));
-                    };
-                    if page >= self.page_count {
-                        return Err(invalid(format!(
-                            "structure OBJR annotation handle {annotation} is attached to page {page} out of range (page count {})",
-                            self.page_count
-                        )));
-                    }
-                    if self.objrs.insert(*annotation, index).is_some() {
-                        return Err(invalid(format!(
-                            "structure OBJR annotation handle {annotation} is claimed by more than one structure element"
-                        )));
-                    }
-                    kids.push(PlannedKid::ObjectReference {
-                        annotation: *annotation,
-                    });
+                    kids.push(PlannedKid::ObjectReference { object_num, page });
                 }
             }
         }
         self.flat[index].kids = kids;
         Ok(())
+    }
+
+    /// 把一个 OBJR 目标（Table 325）解析为「目标对象号 + `/Pg` 页索引」。
+    ///
+    /// 三档目标的定位方式不同：注解句柄带自己的绑定页；Form XObject 是
+    /// 文档级句柄，绘制页由引用给出或沿用元素 `/Pg`（Table 325 的 `/Pg`
+    /// 「overrides any Pg entry in the structure element containing the
+    /// object reference; it shall be used if the structure element has no
+    /// such entry」）；图像 XObject 以「页 + 页内资源序号」定位，该页即
+    /// 渲染页。句柄/页/序号越界、两路都取不到页、以及所声称的页并没有
+    /// 绘制该表单（页资源 `/Fm<n>` 登记表里没有它）一律拒绝——Table 325
+    /// 的 `/Pg` 是「the page on which the object shall be rendered」，
+    /// 谎报渲染页的引用写出后读端与归属诊断都会误判。
+    fn resolve_objr(
+        &self,
+        object: &StructureObjectReference,
+        element_page: Option<usize>,
+    ) -> Result<(i64, usize), WriteError> {
+        match object {
+            StructureObjectReference::Annotation(handle) => {
+                if *handle >= self.targets.annotation_nums.len() {
+                    return Err(invalid(format!(
+                        "structure OBJR annotation handle {handle} is out of range (count {})",
+                        self.targets.annotation_nums.len()
+                    )));
+                }
+                let Some(&page) = self.targets.annotation_pages.get(*handle) else {
+                    return Err(invalid(format!(
+                        "structure OBJR annotation handle {handle} is out of range (count {})",
+                        self.targets.annotation_pages.len()
+                    )));
+                };
+                if page >= self.page_count {
+                    return Err(invalid(format!(
+                        "structure OBJR annotation handle {handle} is attached to page {page} out of range (page count {})",
+                        self.page_count
+                    )));
+                }
+                Ok((self.targets.annotation_nums[*handle], page))
+            }
+            StructureObjectReference::FormXObject { handle, page } => {
+                let Some(&num) = self.targets.form_nums.get(*handle) else {
+                    return Err(invalid(format!(
+                        "structure OBJR form XObject handle {handle} is out of range (count {})",
+                        self.targets.form_nums.len()
+                    )));
+                };
+                let page = match page {
+                    Some(page) => {
+                        if *page >= self.page_count {
+                            return Err(invalid(format!(
+                                "structure OBJR form XObject handle {handle} names page {page} out of range (page count {})",
+                                self.page_count
+                            )));
+                        }
+                        *page
+                    }
+                    // 未显式给页：沿用元素的 `/Pg`（已在 `Flattener::add`
+                    // 校验过页范围），两路都没有就无从写出 `/Pg`。
+                    None => element_page.ok_or_else(|| {
+                        invalid(format!(
+                            "structure OBJR form XObject handle {handle} needs a page: the reference gives no /Pg and the element has no /Pg (Table 325)"
+                        ))
+                    })?,
+                };
+                // 无论页来自哪一路，都必须是真正绘制该表单的页：该页的
+                // `/Fm<n>` 资源里没有它，`/Pg` 就是在谎报渲染页。
+                let drawn = self
+                    .targets
+                    .form_pages
+                    .get(*handle)
+                    .is_some_and(|pages| pages.contains(&page));
+                if !drawn {
+                    return Err(invalid(format!(
+                        "structure OBJR form XObject handle {handle} is not drawn on page {page} (Table 325: /Pg is the page on which the object is rendered)"
+                    )));
+                }
+                Ok((num, page))
+            }
+            StructureObjectReference::ImageXObject { page, index } => {
+                let Some(nums) = self.targets.image_nums.get(*page) else {
+                    return Err(invalid(format!(
+                        "structure OBJR image XObject page {page} is out of range (page count {})",
+                        self.page_count
+                    )));
+                };
+                let Some(&num) = nums.get(*index) else {
+                    return Err(invalid(format!(
+                        "structure OBJR image XObject index {index} on page {page} is out of range (count {})",
+                        nums.len()
+                    )));
+                };
+                Ok((num, *page))
+            }
+        }
     }
 
     /// 校验并登记一个标记内容标识符：MCR 字典与 14.7.4.2 整数简写共用
@@ -877,8 +1019,6 @@ fn write_elements(
     element_attributes: &[Vec<StructureAttribute>],
     root_num: i64,
     page_refs: &[(i64, i64)],
-    annotation_nums: &[i64],
-    annotation_pages: &[usize],
 ) {
     for (index, flat) in plan.flat.iter().enumerate() {
         let element = flat.element;
@@ -938,15 +1078,15 @@ fn write_elements(
                     // 页一致性已在 `Flattener::add` 校验。
                     Value::Integer(*mcid)
                 }
-                PlannedKid::ObjectReference { annotation } => {
-                    // Table 325：`/Pg` 与 `/Obj` 均为间接引用；页取注解
-                    // 自身绑定的页，独立于元素 `/Pg`。
-                    let (page_num, generation) = page_refs[annotation_pages[*annotation]];
+                PlannedKid::ObjectReference { object_num, page } => {
+                    // Table 325：`/Pg` 与 `/Obj` 均为间接引用；页取目标
+                    // 自身的渲染页，独立于元素 `/Pg`。
+                    let (page_num, generation) = page_refs[*page];
                     Value::Dict(
                         Dict::new()
                             .insert("Type", Value::Name("OBJR".into()))
                             .insert("Pg", Value::Ref(page_num, generation))
-                            .insert("Obj", Value::Ref(annotation_nums[*annotation], 0)),
+                            .insert("Obj", Value::Ref(*object_num, 0)),
                     )
                 }
             });
@@ -1011,30 +1151,138 @@ fn write_page_parents(
     Ok(())
 }
 
-/// 注解字典追加 `/StructParent`（Table 326；14.7.4.4 的对象引用子项）。
-fn write_annotation_parents(
-    doc: &mut Document,
+/// OBJR 目标在错误信息里的称呼：类别名取自
+/// [`StructureObjectReference::kind_name`]，再附上定位该目标所需的句柄
+/// 或「页 + 页内资源序号」，与既有注解文案保持一致。
+fn describe_objr_target(object: &StructureObjectReference) -> String {
+    let kind = object.kind_name();
+    match object {
+        StructureObjectReference::Annotation(handle)
+        | StructureObjectReference::FormXObject { handle, .. } => {
+            format!("{kind} handle {handle}")
+        }
+        StructureObjectReference::ImageXObject { page, index } => {
+            format!("{kind} page {page} index {index}")
+        }
+    }
+}
+
+/// 字典（或流字典）条目的可读类型名。
+fn target_dict(value: &Value) -> Option<(&Dict, bool)> {
+    match value {
+        Value::Dict(dict) => Some((dict, false)),
+        Value::Stream(dict, _) => Some((dict, true)),
+        _ => None,
+    }
+}
+
+/// 校验每个 OBJR 目标对象（Table 325/326）：仍在结构对象号分配之前。
+///
+/// 规则：目标对象必须存在且是字典或流字典；注解目标不得是流，Form/图像
+/// 目标必须带匹配的 `/Subtype`（所声称的类别）；目标字典不得已带
+/// `/StructParent`（重复声称）或 `/StructParents`（Table 326 shall
+/// 「At most one of these two entries shall be present in a given object」
+/// ——`/StructParents` 属于「含标记内容序列的内容流」，本写端只有页字典
+/// 走该通道，故目标对象号落在带 `/StructParents` 的页上也拒绝）。
+fn validate_objr_targets(
+    doc: &Document,
     plan: &Plan<'_>,
-    annotation_nums: &[i64],
+    page_refs: &[(i64, i64)],
 ) -> Result<(), WriteError> {
-    for (handle, key) in &plan.objr_keys {
-        let num = annotation_nums[*handle];
+    // 将要写出 `/StructParents` 的页对象号（14.7.4.4 的内容流宿主）。
+    let container_nums: BTreeSet<i64> = plan
+        .page_keys
+        .keys()
+        .map(|page| page_refs[*page].0)
+        .collect();
+    let objects = doc.objects_for_write();
+    for (object_num, (element_index, target)) in &plan.objrs {
+        let describe = describe_objr_target(target);
+        let object = objects
+            .iter()
+            .find(|item| item.num == *object_num && item.generation == 0)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "structure OBJR {describe} object {object_num} 0 is missing"
+                ))
+            })?;
+        let (dict, is_stream) = target_dict(&object.value).ok_or_else(|| {
+            invalid(format!(
+                "structure OBJR {describe} object {object_num} 0 is not a dictionary"
+            ))
+        })?;
+        if container_nums.contains(object_num) {
+            return Err(invalid(format!(
+                "structure OBJR {describe} object {object_num} 0 is also a content stream carrying /StructParents; at most one of /StructParent and /StructParents may appear in an object (Table 326)"
+            )));
+        }
+        // 所声称类别与对象形态必须一致（Table 325 的 `/Obj` 引的是哪类对象）。
+        match target {
+            StructureObjectReference::Annotation(_) => {
+                if is_stream {
+                    return Err(invalid(format!(
+                        "structure OBJR {describe} object {object_num} 0 is a stream, not an annotation dictionary (Table 325)"
+                    )));
+                }
+            }
+            StructureObjectReference::FormXObject { .. }
+            | StructureObjectReference::ImageXObject { .. } => {
+                let expected = if matches!(target, StructureObjectReference::FormXObject { .. }) {
+                    "Form"
+                } else {
+                    "Image"
+                };
+                if !is_stream || dict.get("Subtype").and_then(Value::as_name) != Some(expected) {
+                    return Err(invalid(format!(
+                        "structure OBJR {describe} object {object_num} 0 is not a /Subtype /{expected} XObject stream (Table 325)"
+                    )));
+                }
+            }
+        }
+        for entry in ["StructParent", "StructParents"] {
+            if dict.get(entry).is_some() {
+                return Err(invalid(format!(
+                    "structure OBJR {describe} object {object_num} 0 already has /{entry} (element {element_index} claims it); at most one of /StructParent and /StructParents may appear in an object (Table 326)"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// OBJR 目标字典追加 `/StructParent`（Table 326；14.7.4.4 的对象引用子项）。
+///
+/// 注解字典与 Form/图像 XObject 的流字典同一路径：整对象作为内容项时
+/// 规范写的都是 `/StructParent`（14.7.4.4 的 Example 1 即 Form XObject 带
+/// `/StructParent`），流形态只替换字典、字节数据原样保留（`/Length` 由
+/// 写出阶段按实际字节重算）。
+fn write_object_parents(doc: &mut Document, plan: &Plan<'_>) -> Result<(), WriteError> {
+    for (object_num, key) in &plan.objr_keys {
         let objects = doc.objects_for_write();
         let object = objects
             .iter()
-            .find(|object| object.num == num && object.generation == 0)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "structure OBJR annotation object {num} 0 is missing"
-                ))
-            })?;
-        let mut dict = object.value.as_dict().cloned().ok_or_else(|| {
-            invalid(format!(
-                "structure OBJR annotation object {num} 0 is not a dictionary"
-            ))
-        })?;
+            .find(|item| item.num == *object_num && item.generation == 0)
+            .ok_or_else(|| invalid(format!("structure OBJR object {object_num} 0 is missing")))?;
+        let mut dict = match &object.value {
+            Value::Dict(dict) => dict.clone(),
+            Value::Stream(dict, data) => {
+                let mut dict = dict.clone();
+                dict = dict.insert("StructParent", Value::Integer(*key));
+                doc.set_object(Object::new(
+                    *object_num,
+                    0,
+                    Value::Stream(dict, data.clone()),
+                ));
+                continue;
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "structure OBJR object {object_num} 0 is not a dictionary"
+                )));
+            }
+        };
         dict = dict.insert("StructParent", Value::Integer(*key));
-        doc.set_object(Object::new(num, 0, Value::Dict(dict)));
+        doc.set_object(Object::new(*object_num, 0, Value::Dict(dict)));
     }
     Ok(())
 }
