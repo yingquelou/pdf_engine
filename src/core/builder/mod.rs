@@ -909,6 +909,11 @@ impl PdfBuilder {
     /// `Artifact` 的标记内容带 `/MCID`，均返回
     /// [`WriteError::InvalidObject`]，且不写出任何字节。未知页索引被忽略。
     /// 必须以 [`PdfBuilder::end_structure_content`] 结束。
+    ///
+    /// 与 [`PdfBuilder::begin_auto_structure_content`] 混用时，显式传入的
+    /// `mcid` 不得复用本页已被自动分配的标识符：`build` 在对象号分配之前
+    /// 返回 [`WriteError::InvalidObject`]（信息指明页、MCID 与两处来源），
+    /// 零字节输出。
     pub fn begin_structure_content(
         &mut self,
         page: usize,
@@ -920,8 +925,55 @@ impl PdfBuilder {
                 tag,
                 MarkedContentProperties::Dict(Dict::new().insert("MCID", Value::Integer(mcid))),
             );
+            self.navigation
+                .structure_mcids_mut()
+                .note_explicit(page, mcid);
         }
         self
+    }
+
+    /// 在指定页开始一段自动编号的结构内容：`/<tag> << /MCID n >> BDC`，
+    /// 返回分配的 `n`（ISO 32000-1 14.7.4.4 NOTE 与 14.8.2）。
+    ///
+    /// 与 [`PdfBuilder::begin_structure_content`] 的唯一区别是 MCID 由构建器
+    /// 自动分配：按页取「显式 ∪ 已自动分配」之外的最小非负整数，使纯自动
+    /// 编号的页面从 0 起稠密递增——14.7.4.4 NOTE 要求标识符「as small as
+    /// possible」以省父树数组空间，稠密的页面 MCID 集合让 `/ParentTree`
+    /// 数组没有 `null` 空洞。调用方必须把返回值写进结构树同一页的 MCR 子项
+    /// （[`StructureElement::with_marked_content`]），否则构建期交叉校验按
+    /// missing/orphan 拒绝。
+    ///
+    /// 必须以 [`PdfBuilder::end_structure_content`] 结束。页索引越界返回
+    /// [`WriteError::InvalidObject`]（本方法必须交付分配值，无法沿用既有
+    /// API 对未知页静默忽略的语义）；该页标识符空间耗尽（分配值将超出
+    /// 65535 上限）同样返回 [`WriteError::InvalidObject`]。两类失败都不
+    /// 写出内容、不占用标识符，零字节契约成立。后续
+    /// [`PdfBuilder::begin_structure_content`] 复用本页已自动分配的标识符
+    /// 时，`build` 在对象号分配之前返回 [`WriteError::InvalidObject`]。
+    pub fn begin_auto_structure_content(
+        &mut self,
+        page: usize,
+        tag: impl Into<String>,
+    ) -> Result<i64, WriteError> {
+        if page >= self.pages.len() {
+            return Err(WriteError::InvalidObject(format!(
+                "structure marked content: page {page} is out of range (page count {})",
+                self.pages.len()
+            )));
+        }
+        let mcid = self
+            .navigation
+            .structure_mcids_mut()
+            .allocate_auto(page)
+            .map_err(|message| {
+                WriteError::InvalidObject(format!("structure marked content: {message}"))
+            })?;
+        let p = &mut self.pages[page];
+        p.content.begin_marked_content_properties(
+            tag,
+            MarkedContentProperties::Dict(Dict::new().insert("MCID", Value::Integer(mcid))),
+        );
+        Ok(mcid)
     }
 
     /// 结束当前结构内容段（`EMC`）。未知页索引被忽略。
@@ -970,6 +1022,14 @@ impl PdfBuilder {
         if let Some(length) = self.pages.iter().find_map(|page| page.invalid_code_length) {
             return Err(WriteError::InvalidObject(format!(
                 "invalid CID character code length {length} in text_code_bytes (expected 1 to 4 bytes)"
+            )));
+        }
+        // 自动/显式 MCID 撞号（14.7.4.4）：begin_structure_content 复用了
+        // begin_auto_structure_content 已分配的标识符时，在 assemble_document
+        // 分配对象号之前拒绝，保持零字节契约。
+        if let Some(message) = self.navigation.structure_mcids_mut().take_conflict() {
+            return Err(WriteError::InvalidObject(format!(
+                "structure marked content: {message}"
             )));
         }
         let mut doc = self.assemble_document()?;

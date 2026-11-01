@@ -33,6 +33,11 @@
 //! 的父树条目是裸结构元素引用（14.7.4.4），写端同时给注解字典追加
 //! `/StructParent`（Table 326）；父树键先页面后 OBJR 连续分配，同一注解
 //! 句柄被两个元素声称、句柄或所在页越界一律返回 [`WriteError::InvalidObject`]。
+//!
+//! 父树键策略（14.7.4.4 shall）：新条目以当前 `/ParentTreeNextKey` 作键、
+//! 随后自增——页面键按页升序 `0..p-1`、OBJR 键接在其后，NextKey 写出为
+//! 条目总数；结构对象号分配之前由 `structure_content::validate_next_key`
+//! 复核 NextKey 严格大于全部在用键。
 
 use std::collections::BTreeMap;
 
@@ -48,11 +53,12 @@ use super::super::types::{
     text_string_value,
 };
 use super::invalid;
+use super::structure_content;
 use super::structure_standard::{self, StandardUsage};
 
 /// 写端 MCID 上限：父树数组按 MCID 作零基下标，与读端单元素子项上限
 /// 取同值，避免单页父树数组无界膨胀（65535 为最大可用 MCID）。
-const MAX_STRUCTURE_MCID: i64 = MAX_STRUCTURE_CHILDREN as i64 - 1;
+pub(super) const MAX_STRUCTURE_MCID: i64 = MAX_STRUCTURE_CHILDREN as i64 - 1;
 
 /// PDF 1.5 引入的标准结构类型（14.8.4）：`THead` `TBody` `TFoot`
 /// （Table 337）、`Annot`（Table 338）与 Ruby/Warichu 家族（Table 339）。
@@ -376,6 +382,13 @@ fn plan<'a>(
         parents.insert(key, ParentEntry::Object(*index));
         objr_keys.insert(*handle, key);
     }
+    // 14.7.4.4 shall：`/ParentTreeNextKey` 必须严格大于全部在用父树键。
+    // 键按「新条目取当前 NextKey、随后自增」连续分配（页面键 0..p-1，
+    // OBJR 键 p..），NextKey 写出为条目总数；在 `root_dict` 之前、仍在
+    // 任何结构对象号分配时复核该不变量，键策略回归即零字节拒绝。
+    let next_key = parents.len() as i64;
+    let used_keys: Vec<i64> = parents.keys().copied().collect();
+    structure_content::validate_next_key(&used_keys, next_key).map_err(invalid)?;
 
     Ok(Plan {
         flat: flattener.flat,

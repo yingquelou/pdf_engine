@@ -20,6 +20,11 @@
 //! 带 `/AP /N` 常态外观的可见注解被 OBJR 正确声称时七条诊断为空；
 //! 去掉声称恰好命中 `VisibleAnnotationNotInStructure`；置 Hidden 位
 //! 的注解即使带外观流也不要求入结构。文本提取在三条往返中不变。
+//!
+//! 第五条往返覆盖 14.7.4.4 NOTE 的自动 MCID 编号通道
+//! （`begin_auto_structure_content`）：按页从 0 稠密递增、跳过显式已占用
+//! 值，回读后每页父树数组无 `null` 空洞并与结构树 MCR 对齐，
+//! `/ParentTreeNextKey` 严格大于全部在用父树键。
 
 use super::*;
 
@@ -464,5 +469,132 @@ fn builder_hidden_annotation_appearance_roundtrip_reports_no_annotation_finding(
             .expect("diagnose writer produced page"),
         vec![],
         "Hidden 注解不要求进入逻辑结构，归属诊断应为空"
+    );
+}
+
+/// 自动编号通道往返（14.7.4.4 NOTE：标识符应尽可能小）：两页用
+/// `begin_auto_structure_content` 取回自动分配的 MCID 写进结构树 MCR，
+/// 页 1 混用一次显式 MCID 0 后自动分配跳过取 1。解析后每页父树数组
+/// `0..n-1` 全部 Some 无 `null` 空洞、与结构树 MCR 逐项对齐，
+/// `/ParentTreeNextKey` 严格大于全部在用键，文本提取不受标记影响。
+#[test]
+fn builder_auto_structure_content_roundtrip_keeps_parent_tree_dense_and_next_key_ahead() {
+    use pdf_engine::core::builder::{
+        Font, PageSize, PdfBuilder, StructureElement, StructureMarkInfo, StructureTree,
+    };
+    use pdf_engine::core::types::PdfVersion;
+
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_7);
+    let first = builder.page(PageSize::A4);
+    let second = builder.page(PageSize::A4);
+    let a0 = builder
+        .begin_auto_structure_content(first, "P")
+        .expect("first page auto MCID");
+    builder.text(first, &Font::helvetica(12.0), 72.0, 700.0, "First line");
+    builder.end_structure_content(first);
+    let a1 = builder
+        .begin_auto_structure_content(first, "Span")
+        .expect("second auto MCID on first page");
+    builder.text(first, &Font::helvetica(12.0), 72.0, 680.0, "Second line");
+    builder.end_structure_content(first);
+    // 显式占用 0 后，自动编号取「显式 ∪ 已分配」之外的最小整数 1。
+    builder.begin_structure_content(second, "P", 0);
+    builder.text(second, &Font::helvetica(12.0), 72.0, 700.0, "Explicit line");
+    builder.end_structure_content(second);
+    let b1 = builder
+        .begin_auto_structure_content(second, "Span")
+        .expect("auto MCID skips the explicit 0");
+    builder.text(second, &Font::helvetica(12.0), 72.0, 680.0, "Auto line");
+    builder.end_structure_content(second);
+    assert_eq!(
+        (a0, a1, b1),
+        (0, 1, 1),
+        "自动编号按页从 0 稠密递增且跳过显式值"
+    );
+
+    builder.set_structure_tree(
+        StructureTree::new().with_element(
+            StructureElement::new("Document")
+                .with_element(StructureElement::new("P").with_marked_content(first, a0))
+                .with_element(StructureElement::new("Span").with_marked_content(first, a1))
+                .with_element(StructureElement::new("P").with_marked_content(second, 0))
+                .with_element(StructureElement::new("Span").with_marked_content(second, b1)),
+        ),
+    );
+    builder.set_mark_info(StructureMarkInfo::new().with_marked(true));
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("build pages with auto-numbered structure content");
+    let raw = String::from_utf8_lossy(&buf).into_owned();
+    for entry in [
+        "/P << /MCID 0 >> BDC",
+        "/Span << /MCID 1 >> BDC",
+        "/StructParents 0",
+        "/StructParents 1",
+        "/ParentTreeNextKey 2",
+    ] {
+        assert!(raw.contains(entry), "缺少 {entry}: {raw}");
+    }
+    let doc = parse_buf(&buf);
+
+    let tree = doc
+        .structure_tree()
+        .expect("structure tree")
+        .expect("structure tree present");
+    // arena 前序：0 = Document、1 = P、2 = Span（页 0）；3 = P、4 = Span（页 1）。
+    // 自动编号使两页父树数组 0..n-1 全部命中，无任何 null 空洞。
+    let first_parents = doc
+        .page_struct_parents(first)
+        .expect("first page parents")
+        .expect("/StructParents");
+    assert_eq!(first_parents.key, 0, "页序首个带标记内容的页面得键 0");
+    assert_eq!(first_parents.parents, vec![Some(1), Some(2)]);
+    assert!(
+        first_parents.parents.iter().all(|slot| slot.is_some()),
+        "自动编号页面数组不应有 null 空洞: {:?}",
+        first_parents.parents
+    );
+    let second_parents = doc
+        .page_struct_parents(second)
+        .expect("second page parents")
+        .expect("/StructParents");
+    assert_eq!(second_parents.key, 1, "第二页得键 1");
+    assert_eq!(second_parents.parents, vec![Some(3), Some(4)]);
+    assert!(
+        second_parents.parents.iter().all(|slot| slot.is_some()),
+        "显式 0 + 自动 1 混用页同样稠密: {:?}",
+        second_parents.parents
+    );
+    assert_eq!(tree.mcid_parent(0, 0), Some(1));
+    assert_eq!(tree.mcid_parent(0, 1), Some(2));
+    assert_eq!(tree.mcid_parent(1, 0), Some(3));
+    assert_eq!(tree.mcid_parent(1, 1), Some(4));
+    assert_eq!(tree.mcid_parent(0, 2), None, "稠密区间之外无条目");
+
+    // shall：NextKey 严格大于全部在用父树键，且等于「新条目取当前键再自增」
+    // 后的下一个可用值。
+    let next_key = tree
+        .root()
+        .parent_tree_next_key
+        .expect("/ParentTreeNextKey present");
+    assert_eq!(next_key, 2);
+    for key in tree.root().parent_tree.keys() {
+        assert!(
+            *key < next_key,
+            "在用父树键 {key} 必须小于 /ParentTreeNextKey {next_key}"
+        );
+    }
+
+    assert_eq!(
+        doc.extract_page_text(first).as_deref(),
+        Some("First line\nSecond line"),
+        "自动编号标记段内的文本照常提取"
+    );
+    assert_eq!(
+        doc.extract_page_text(second).as_deref(),
+        Some("Explicit line\nAuto line"),
+        "混用页文本照常提取"
     );
 }
