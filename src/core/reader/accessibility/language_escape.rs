@@ -1,7 +1,7 @@
 //! Unicode 语言转义序列（ISO 32000-1 7.9.2.2 与 14.9.3–14.9.5）。
 //!
 //! 规范原文（7.9.2.2「Text String Type」，raw 抽取：散文在 L4218–L4219，
-//! 语法在 L4242–L4247）：
+//! 语法在 L4242–L4248）：
 //!
 //! > An escape sequence may appear anywhere in a Unicode text string to
 //! > indicate the language in which subsequent text shall be written.
