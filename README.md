@@ -193,6 +193,7 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 | JPXDecode | 1.5 | ✅ | ✅ | **显式拒绝**（内容特性） |
 | 可选内容 OC | 1.5 | ✅ | ✅ | **显式拒绝**（内容特性） |
 | 软蒙版 `/Matte` | 1.6 | ✅ | ✅ | **显式拒绝**（内容特性，`soft mask matte color`） |
+| 扩展字典 `/Extensions` | 1.7 | ✅ | ✅ | **显式拒绝**（内容特性，`extensions dictionary`） |
 | Predictor PNG Up / TIFF | * | ✅ | ✅ | 跟随 XRef 流/对象流降级 |
 
 > 标注 `*` 的 Predictor 是 XRef 流/对象流的内建属性，不单独占用最低版本阈值。
