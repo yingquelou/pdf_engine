@@ -32,7 +32,8 @@
 //! 本切片的范围限制：`/K` 写出子元素引用、MCR 字典（带显式 `/Pg` 与
 //! `/MCID`）、14.7.4.2 的整数 MCID 简写（[`StructureKid::InlineMarkedContent`]：
 //! 仅当元素自身以 `with_page` 携带同页 `/Pg` 时合法，写出为 `/K` 里的
-//! 裸整数）与 OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`）。
+//! 裸整数）、OBJR 对象引用字典（Table 325，`/Type` `/Pg` `/Obj`）与流
+//! 形态 MCR 字典（Table 324 `/Stm` `/StmOwn`，见下）。
 //! 元素 `/Pg`（Table 323）写出为页对象的间接引用，页索引越界拒绝。
 //!
 //! OBJR 的 `/Obj` 目标按 14.7.4.3 扩展到 XObject。规范原文（14.7.4.3，
@@ -53,13 +54,40 @@
 //! 的 Form XObject `/StructParent 6`（raw 29706 行）一致；父树条目是裸结构
 //! 元素引用（14.7.4.4「the value shall be an indirect reference to the
 //! parent structure element」）。`/StructParents` 只属于「content stream
-//! containing marked-content sequences」（raw 29694 行），本写端只有页字典
-//! 走该通道（流形态 MCR 的 `/Stm` `/StmOwn` 另有条目承接，不在此实现）。
+//! containing marked-content sequences」（raw 29694 行）：页面内容流走页
+//! 字典通道；流形态 MCR（14.7.4.2/14.7.4.4）按 shall「its parent tree key
+//! shall be found in the StructParents entry of the page object or other
+//! content stream in which the sequence resides」（raw 29722–29723 行）把
+//! 键追加在序列所在流的所有者字典上——无 `/StmOwn` 时即 `/Stm`（Form
+//! XObject）流字典自身，带 `/StmOwn` 时是该所有者对象字典。
 //! 互斥校验按 Table 326 的 shall「At most one of these two entries shall be
 //! present in a given object. An object may be either a content item in its
 //! entirety or a container for marked-content sequences that are content
 //! items, but not both」（raw 29697–29699 行）与 Table 95 对 Form XObject
 //! 的同款 shall（raw 12142–12145 行）执行。
+//!
+//! 流形态 MCR（14.7.4.2，Table 324 `/Stm` `/StmOwn`）以
+//! [`StructureKid::StreamMarkedContent`] 建模，写出 EXAMPLE 5（raw
+//! 29588–29594 行）的 `/K << /Type /MCR /Pg … /Stm … /MCID … >>` 形态。
+//! Table 324 原文（raw 29460–29481 行）：`/Stm` 是 shall 级间接引用
+//! 「(Optional; shall be an indirect reference) The content stream
+//! containing the marked-content sequence」（29469–29470 行），并附 should
+//! 级定位条件「This entry should be present only if the marked-content
+//! sequence resides in a content stream other than the content stream for
+//! the page」（29471–29473 行）与 shall「If this entry is absent, the
+//! marked-content sequence shall be contained in the content stream of the
+//! page identified by Pg」（29474–29476 行）；`/StmOwn` 是
+//! 「(Optional; shall be an indirect reference) The PDF object owning the
+//! stream identified by Stm; … annotation to which an appearance stream
+//! belongs」（29477–29479 行）；`/MCID` 是「MCID integer (Required) …」（
+//! 29480–29481 行）——本切片基线（PDF 32000-1:2008）的 Table 324 把
+//! `/MCID` 标为 Required，「存在 `/StmOwn` 时可缺省」在本地副本无依据，
+//! 故流形态同样必填 MCID，不引入 `Option<i64>`；`/Pg` 是「This entry
+//! overrides any Pg entry in the structure element containing the
+//! marked-content reference; it shall be required if the structure element
+//! has no such entry」（29464–29468 行）。Table 324 各行均无更高版本标注
+//! （MCR 随 14.7.4 整体为 PDF 1.3），不新增 feature 门禁，复用结构树既有
+//! ≥1.3 门槛。
 //!
 //! 库策略（规范未强制，比 shall 更严或更窄，理由写在括号里）：
 //! - 目标可寻址范围限于「写端能确定渲染页」的对象：Form 只能是
@@ -79,17 +107,39 @@
 //!   句柄、每页每个图像资源序号只出一个对象号，无法为第二次渲染另出对象，
 //!   故宁可拒绝也不写出「一个 `/StructParent` 指向两个父元素」的产物；同一页
 //!   多次绘制同一表单只需一次声称（NOTE 2 后一句），不额外要求。
+//! - 流形态 MCR 的 `/Stm` 目标限于文档级 Form XObject 句柄（写端唯一稳定的
+//!   「句柄→内容流对象号」通道）；页面内容流的序列继续走既有
+//!   [`StructureKid::MarkedContent`] 通道而不写 `/Stm`（Table 324 的 should：
+//!   条目只用于「不在页面内容流」的序列）；3D 流、缩略图、媒体与注解外观
+//!   流的直接形态没有独立句柄通道，留作缺口。
+//! - `/StmOwn` 由调用方显式给注解句柄、不自动推断（自动推断需要在页资源
+//!   与 `/AP` 之间做归属搜索，越界风险大于收益）；构建期核对「所有者」
+//!   shall——该注解的 `/AP`（`/N` 单引用或 `/N` 状态子字典、`/D`、`/R`）
+//!   必须存在指向 `/Stm` 流对象的外观引用，否则拒绝。
+//! - `/Pg` 解析次序：引用显式给出 → `/StmOwn` 注解绑定页 → 元素 `/Pg`；
+//!   引用给出的页与注解绑定页不一致即谎报渲染页，拒绝；三路皆空按
+//!   Table 324 的 shall（「it shall be required if the structure element
+//!   has no such entry」）拒绝。仅在前三路之一实际生效且非继承元素
+//!   `/Pg` 时写出显式 `/Pg`，继承时省略（由元素 `/Pg` 定位）。
+//! - 父树数组按「容器对象号」判重：有 `/StmOwn` 时容器是所有者，否则是
+//!   `/Stm` 流；容器同时被 OBJR 声称（写出 `/StructParent`）违反 Table 326
+//!   的「not both」shall，两路都拒绝。
 //!
 //! 校验先于对象号分配：句柄/页/资源序号越界、两路都取不到 `/Pg`、目标不是
 //! 所声称类别的字典或流字典（注解不得是流、Form/图像必须带对应
 //! `/Subtype`）、目标字典已带 `/StructParent` 或 `/StructParents`、目标落在
 //! 将写 `/StructParents` 的页对象号上、同一对象被两个元素声称，一律返回
-//! [`WriteError::InvalidObject`]，零字节。
+//! [`WriteError::InvalidObject`]，零字节。流形态 MCR 走同一条先分配前校验
+//! 通道：`/Stm` 句柄越界、解析出的对象不存在/不是 `/Subtype /Form` 流、
+//! `/StmOwn` 句柄越界、注解绑定页越界或与引用 `/Pg` 冲突、三路皆取不到页、
+//! 注解 `/AP` 不指向 `/Stm`、同容器 MCID 重复声称、容器与 OBJR 声称互斥，
+//! 同样零字节拒绝。
 //!
 //! 父树键策略（14.7.4.4 shall）：新条目以当前 `/ParentTreeNextKey` 作键、
-//! 随后自增——页面键按页升序 `0..p-1`、OBJR 键按目标对象号升序接在其后，
-//! NextKey 写出为条目总数；结构对象号分配之前由
-//! `structure_content::validate_next_key` 复核 NextKey 严格大于全部在用键。
+//! 随后自增——页面键按页升序 `0..p-1`、OBJR 键按目标对象号升序接在其后、
+//! `/Stm` 容器键按容器对象号升序接在 OBJR 键之后，NextKey 写出为条目总数；
+//! 结构对象号分配之前由 `structure_content::validate_next_key` 复核 NextKey
+//! 严格大于全部在用键。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -152,6 +202,16 @@ enum PlannedKid {
     InlineMarkedContent { mcid: i64 },
     /// OBJR（Table 325）：已解析的目标对象号 + `/Pg` 页索引。
     ObjectReference { object_num: i64, page: usize },
+    /// 流形态 MCR（Table 324 `/Stm` `/StmOwn`）：解析后的 `/Stm` 流对象号、
+    /// 可选 `/StmOwn` 对象号、渲染页索引、是否写出显式 `/Pg`（仅在引用
+    /// 显式给出或经 `/StmOwn` 解析时为 true；沿用元素 `/Pg` 时省略）、MCID。
+    StreamMarkedContent {
+        stream_num: i64,
+        owner_num: Option<i64>,
+        page: usize,
+        write_pg: bool,
+        mcid: i64,
+    },
 }
 
 /// OBJR 目标（14.7.4.3 [`StructureObjectReference`]）的解析表。
@@ -174,8 +234,12 @@ pub(in crate::core::builder) struct StructureTargets<'a> {
 
 /// 父树条目的两种形态（14.7.4.4）。
 enum ParentEntry {
-    /// 页面数组：按 MCID 作零基下标，空位 `None`。
-    Page(Vec<Option<usize>>),
+    /// 内容流容器数组：按 MCID 作零基下标，空位 `None`。容器是页字典
+    /// （页面内容流，`/StructParents` 写在页上）或流形态 MCR 的
+    /// `/Stm`/`/StmOwn` 宿主对象（14.7.4.4「the StructParents entry of the
+    /// page object or other content stream in which the sequence resides」，
+    /// raw 29722–29723 行）。
+    McidArray(Vec<Option<usize>>),
     /// OBJR 内容项对象的单元条目：父元素 arena 下标（写出为裸引用）。
     Object(usize),
 }
@@ -189,6 +253,9 @@ struct Plan<'a> {
     parents: BTreeMap<i64, ParentEntry>,
     /// OBJR 目标对象号 → 父树键（页面键之后按对象号升序连续分配）。
     objr_keys: BTreeMap<i64, i64>,
+    /// 流形态 MCR 容器对象号（`/StmOwn` 给出时为所有者，否则为 `/Stm`
+    /// 流）→ 父树键（OBJR 键之后按容器对象号升序连续分配）。
+    stream_keys: BTreeMap<i64, i64>,
     /// OBJR 目标对象号 → 声称它的元素 arena 下标（判重与错误信息用）。
     objrs: BTreeMap<i64, (usize, StructureObjectReference)>,
     /// `/ID` 原始字节 → 元素 arena 下标（按字节升序）。
@@ -247,6 +314,9 @@ pub(super) fn write(
     // 目标对象本身（注解字典 / XObject 流字典）的形态与 Table 326 的互斥
     // 条目在此核对：仍在结构对象号分配之前，失败即零字节。
     validate_objr_targets(doc, &plan, page_refs)?;
+    // 流形态 MCR 的 `/Stm`/`/StmOwn` 对象形态与「所有者持有该外观流」
+    // 一致性同样在结构对象号分配之前核对（Table 324）。
+    validate_stream_mcr_targets(doc, &plan)?;
 
     // 14.7.5.4：含用户属性的文档必须在 `/MarkInfo` 声明 `/UserProperties
     // true`。读端已在结构树之前校验过标记信息，这里只做交叉检查，仍在
@@ -315,6 +385,7 @@ pub(super) fn write(
     );
     write_page_parents(doc, &plan, page_refs)?;
     write_object_parents(doc, &plan)?;
+    write_stream_parents(doc, &plan)?;
 
     let mut features = doc.features.borrow_mut();
     features.insert(PdfFeature::LogicalStructure);
@@ -350,6 +421,7 @@ fn plan<'a>(
         ids: BTreeMap::new(),
         mcids: BTreeMap::new(),
         objrs: BTreeMap::new(),
+        stream_mcids: BTreeMap::new(),
         page_count: page_refs.len(),
         targets: *targets,
         role_map: &tree.role_map,
@@ -438,7 +510,7 @@ fn plan<'a>(
         for (mcid, index) in entries {
             array[*mcid as usize] = Some(*index);
         }
-        parents.insert(key, ParentEntry::Page(array));
+        parents.insert(key, ParentEntry::McidArray(array));
     }
     // 14.7.4.4：OBJR 内容项的父树条目是单元引用，键接在页面键之后按目标
     // 对象号升序连续分配，保证 0..n-1 无空洞。
@@ -448,6 +520,21 @@ fn plan<'a>(
         let key = first_objr_key + offset as i64;
         parents.insert(key, ParentEntry::Object(*index));
         objr_keys.insert(*object_num, key);
+    }
+    // 14.7.4.4：`/Stm` 序列的父树键由容器字典的 `/StructParents` 承载
+    // （有 `/StmOwn` 时是所有者，否则是 `/Stm` 流自身）；键接在 OBJR 键
+    // 之后按容器对象号升序连续分配，条目与页面数组同为 MCID 零基下标数组。
+    let mut stream_keys = BTreeMap::new();
+    let first_stream_key = first_objr_key + flattener.objrs.len() as i64;
+    for (offset, (container, entries)) in flattener.stream_mcids.iter().enumerate() {
+        let key = first_stream_key + offset as i64;
+        let max = entries.keys().next_back().copied().unwrap_or(0);
+        let mut array = vec![None; (max + 1) as usize];
+        for (mcid, index) in entries {
+            array[*mcid as usize] = Some(*index);
+        }
+        parents.insert(key, ParentEntry::McidArray(array));
+        stream_keys.insert(*container, key);
     }
     // 14.7.4.4 shall：`/ParentTreeNextKey` 必须严格大于全部在用父树键。
     // 键按「新条目取当前 NextKey、随后自增」连续分配（页面键 0..p-1，
@@ -463,6 +550,7 @@ fn plan<'a>(
         page_keys,
         parents,
         objr_keys,
+        stream_keys,
         objrs,
         ids: flattener.ids,
         uses_language: flattener.uses_language,
@@ -636,6 +724,9 @@ struct Flattener<'a> {
     /// 至多被一个元素声称；按解析后的对象号判重，故跨页去重共享的同一
     /// 图像 XObject 也算重复声称）。
     objrs: BTreeMap<i64, (usize, StructureObjectReference)>,
+    /// 流形态 MCR 容器对象号 → MCID → 父元素 arena 下标（Table 324
+    /// `/Stm`；容器取 `/StmOwn` 或 `/Stm`，同容器 MCID 唯一）。
+    stream_mcids: BTreeMap<i64, BTreeMap<i64, usize>>,
     page_count: usize,
     /// OBJR 目标的句柄 → 对象号/页解析表。
     targets: StructureTargets<'a>,
@@ -800,7 +891,112 @@ impl<'a> Flattener<'a> {
                             describe_objr_target(object)
                         )));
                     }
+                    if self.stream_mcids.contains_key(&object_num) {
+                        return Err(invalid(format!(
+                            "structure OBJR {} object {object_num} is also a /Stm container for marked-content sequences; an object may be a content item or a container for marked-content sequences, but not both (Table 326)",
+                            describe_objr_target(object)
+                        )));
+                    }
                     kids.push(PlannedKid::ObjectReference { object_num, page });
+                }
+                StructureKid::StreamMarkedContent {
+                    stream,
+                    owner,
+                    page,
+                    mcid,
+                } => {
+                    // 14.7.4.2 Table 324 流形态：`/Stm` 是持有序列的内容流
+                    // （写端目前只解析文档级 Form XObject 句柄），`/StmOwn`
+                    // 是其所有者（注解句柄）。句柄解析、页三路回落与 MCID
+                    // 判重都先于任何对象号分配。
+                    let Some(&stream_num) = self.targets.form_nums.get(*stream) else {
+                        return Err(invalid(format!(
+                            "structure MCR /Stm form XObject handle {stream} is out of range (count {})",
+                            self.targets.form_nums.len()
+                        )));
+                    };
+                    let mut owner_num = None;
+                    let mut owner_page = None;
+                    if let Some(handle) = owner {
+                        let Some(&num) = self.targets.annotation_nums.get(*handle) else {
+                            return Err(invalid(format!(
+                                "structure MCR /StmOwn annotation handle {handle} is out of range (count {})",
+                                self.targets.annotation_nums.len()
+                            )));
+                        };
+                        let Some(&pg) = self.targets.annotation_pages.get(*handle) else {
+                            return Err(invalid(format!(
+                                "structure MCR /StmOwn annotation handle {handle} is out of range (count {})",
+                                self.targets.annotation_pages.len()
+                            )));
+                        };
+                        if pg >= self.page_count {
+                            return Err(invalid(format!(
+                                "structure MCR /StmOwn annotation handle {handle} is attached to page {pg} out of range (page count {})",
+                                self.page_count
+                            )));
+                        }
+                        owner_num = Some(num);
+                        owner_page = Some(pg);
+                    }
+                    // Table 324 `/Pg`：「This entry overrides any Pg entry
+                    // in the structure element containing the
+                    // marked-content reference; it shall be required if the
+                    // structure element has no such entry」——引用显式给页
+                    // 优先（与注解绑定页冲突即谎报渲染页，拒绝），否则回落
+                    // `/StmOwn` 绑定页、再回落元素 `/Pg`；三路皆空拒绝。
+                    // 仅前两路生效时写出显式 `/Pg`，继承元素 `/Pg` 时省略。
+                    let (page, write_pg) = match page {
+                        Some(pg) => {
+                            if *pg >= self.page_count {
+                                return Err(invalid(format!(
+                                    "structure MCR /Stm page {pg} is out of range (page count {})",
+                                    self.page_count
+                                )));
+                            }
+                            if let (Some(handle), Some(owner_pg)) = (*owner, owner_page)
+                                && owner_pg != *pg
+                            {
+                                return Err(invalid(format!(
+                                    "structure MCR /StmOwn annotation handle {handle} is attached to page {owner_pg} but the reference names page {pg} (Table 324: /Pg is the page on which the sequence is rendered)"
+                                )));
+                            }
+                            (*pg, true)
+                        }
+                        None => match owner_page.or(element.page) {
+                            Some(pg) => (pg, owner_page.is_some()),
+                            None => {
+                                return Err(invalid(format!(
+                                    "structure MCR /Stm on form XObject handle {stream} needs a page: the reference gives no /Pg, there is no /StmOwn page to fall back to, and the element has no /Pg (Table 324)"
+                                )));
+                            }
+                        },
+                    };
+                    validate_mcid_value(*mcid)?;
+                    let container = owner_num.unwrap_or(stream_num);
+                    if self.objrs.contains_key(&container) {
+                        return Err(invalid(format!(
+                            "structure MCR /Stm container object {container} is also claimed as an OBJR content item; an object may be a content item or a container for marked-content sequences, but not both (Table 326)"
+                        )));
+                    }
+                    if self
+                        .stream_mcids
+                        .entry(container)
+                        .or_default()
+                        .insert(*mcid, index)
+                        .is_some()
+                    {
+                        return Err(invalid(format!(
+                            "structure MCR /Stm container object {container} MCID {mcid} is claimed by more than one structure element"
+                        )));
+                    }
+                    kids.push(PlannedKid::StreamMarkedContent {
+                        stream_num,
+                        owner_num,
+                        page,
+                        write_pg,
+                        mcid: *mcid,
+                    });
                 }
             }
         }
@@ -914,16 +1110,7 @@ impl<'a> Flattener<'a> {
                 self.page_count
             )));
         }
-        if mcid < 0 {
-            return Err(invalid(format!(
-                "structure MCR MCID must be non-negative, got {mcid}"
-            )));
-        }
-        if mcid > MAX_STRUCTURE_MCID {
-            return Err(invalid(format!(
-                "structure MCR MCID {mcid} exceeds the limit {MAX_STRUCTURE_MCID}"
-            )));
-        }
+        validate_mcid_value(mcid)?;
         if self
             .mcids
             .entry(page)
@@ -937,6 +1124,22 @@ impl<'a> Flattener<'a> {
         }
         Ok(())
     }
+}
+
+/// MCID 取值校验（非负且不超 `MAX_STRUCTURE_MCID`），页面通道与流形态
+/// `/Stm` 通道共用；错误文案保持既有形式。
+fn validate_mcid_value(mcid: i64) -> Result<(), WriteError> {
+    if mcid < 0 {
+        return Err(invalid(format!(
+            "structure MCR MCID must be non-negative, got {mcid}"
+        )));
+    }
+    if mcid > MAX_STRUCTURE_MCID {
+        return Err(invalid(format!(
+            "structure MCR MCID {mcid} exceeds the limit {MAX_STRUCTURE_MCID}"
+        )));
+    }
+    Ok(())
 }
 
 /// 结构树根字典（Table 322）。
@@ -958,7 +1161,8 @@ fn root_dict(
         nums = nums.push(match entry {
             // OBJR 单元条目：裸间接引用（14.7.4.4），不是数组。
             ParentEntry::Object(index) => Value::Ref(element_nums[*index], 0),
-            ParentEntry::Page(slots) => {
+            // 内容流容器条目：MCID 零基下标数组（页面或 `/Stm` 宿主）。
+            ParentEntry::McidArray(slots) => {
                 let mut values = Array::new();
                 for slot in slots {
                     values = values.push(match slot {
@@ -1088,6 +1292,28 @@ fn write_elements(
                             .insert("Pg", Value::Ref(page_num, generation))
                             .insert("Obj", Value::Ref(*object_num, 0)),
                     )
+                }
+                PlannedKid::StreamMarkedContent {
+                    stream_num,
+                    owner_num,
+                    page,
+                    write_pg,
+                    mcid,
+                } => {
+                    // Table 324 流形态（14.7.4.2 EXAMPLE 5）：`/Stm` 与
+                    // `/StmOwn` 均为间接引用；`/Pg` 只在引用显式给页或经
+                    // `/StmOwn` 解析时写出，继承元素 `/Pg` 时省略。
+                    // `/MCID` 必填（Table 324 标注 Required）。
+                    let mut dict = Dict::new().insert("Type", Value::Name("MCR".into()));
+                    if *write_pg {
+                        let (page_num, generation) = page_refs[*page];
+                        dict = dict.insert("Pg", Value::Ref(page_num, generation));
+                    }
+                    dict = dict.insert("Stm", Value::Ref(*stream_num, 0));
+                    if let Some(owner_num) = owner_num {
+                        dict = dict.insert("StmOwn", Value::Ref(*owner_num, 0));
+                    }
+                    Value::Dict(dict.insert("MCID", Value::Integer(*mcid)))
                 }
             });
         }
@@ -1283,6 +1509,142 @@ fn write_object_parents(doc: &mut Document, plan: &Plan<'_>) -> Result<(), Write
         };
         dict = dict.insert("StructParent", Value::Integer(*key));
         doc.set_object(Object::new(*object_num, 0, Value::Dict(dict)));
+    }
+    Ok(())
+}
+
+/// 校验流形态 MCR（Table 324）的目标对象形态；仍在结构对象号分配之前。
+///
+/// 规则（shall + 库策略，理由见模块注释）：`/Stm` 对象必须存在且是带
+/// `/Subtype /Form` 的流（写端唯一可解析的内容流来源）；`/StmOwn` 对象
+/// 必须存在且是普通注解字典，其 `/AP`（`/N` 单引用、`/N` 状态子字典、
+/// `/D`、`/R`）必须引用 `/Stm`——Table 324 的 `/StmOwn` 是「The PDF
+/// object owning the stream identified by Stm」，找不到外观引用就不是
+/// 所有者。容器与 `/Stm` 字典已带 `/StructParent`/`/StructParents` 按
+/// Table 326 互斥拒绝（公开 API 上写端不会预置这两个条目，该分支经测试
+/// 篡改 `Document` 触达）。
+fn validate_stream_mcr_targets(doc: &Document, plan: &Plan<'_>) -> Result<(), WriteError> {
+    let objects = doc.objects_for_write();
+    for flat in &plan.flat {
+        for kid in &flat.kids {
+            let PlannedKid::StreamMarkedContent {
+                stream_num,
+                owner_num,
+                ..
+            } = kid
+            else {
+                continue;
+            };
+            let stream_object = objects
+                .iter()
+                .find(|item| item.num == *stream_num && item.generation == 0)
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "structure MCR /Stm object {stream_num} 0 is missing"
+                    ))
+                })?;
+            let Value::Stream(stream_dict, _) = &stream_object.value else {
+                return Err(invalid(format!(
+                    "structure MCR /Stm object {stream_num} 0 is not a content stream ({})",
+                    stream_object.value.type_name()
+                )));
+            };
+            if stream_dict.get("Subtype").and_then(Value::as_name) != Some("Form") {
+                return Err(invalid(format!(
+                    "structure MCR /Stm object {stream_num} 0 is not a /Subtype /Form content stream (Table 324)"
+                )));
+            }
+            let mut container_dicts: Vec<(&str, i64, &Dict)> =
+                vec![("/Stm", *stream_num, stream_dict)];
+            if let Some(owner_num) = owner_num {
+                let owner_object = objects
+                    .iter()
+                    .find(|item| item.num == *owner_num && item.generation == 0)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "structure MCR /StmOwn object {owner_num} 0 is missing"
+                        ))
+                    })?;
+                let Value::Dict(owner_dict) = &owner_object.value else {
+                    return Err(invalid(format!(
+                        "structure MCR /StmOwn object {owner_num} 0 is not an annotation dictionary (Table 324: the object owning the /Stm stream)"
+                    )));
+                };
+                if !appearance_references(owner_dict, *stream_num) {
+                    return Err(invalid(format!(
+                        "structure MCR /StmOwn object {owner_num} 0 does not own the /Stm object {stream_num} 0: no appearance stream under its /AP references it (Table 324)"
+                    )));
+                }
+                container_dicts.push(("/StmOwn", *owner_num, owner_dict));
+            }
+            for (role, num, dict) in container_dicts {
+                for entry in ["StructParent", "StructParents"] {
+                    if dict.get(entry).is_some() {
+                        return Err(invalid(format!(
+                            "structure MCR {role} object {num} 0 already has /{entry}; at most one of /StructParent and /StructParents may appear in an object (Table 326)"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 注解字典的 `/AP` 是否引用对象号 `stream_num` 的外观流：`/N` 可以是
+/// 单条流引用，也可以是「状态名 → 流引用」子字典（Table 168 多状态
+/// Widget），`/D`、`/R` 为单引用。
+fn appearance_references(dict: &Dict, stream_num: i64) -> bool {
+    let Some(appearance) = dict.get("AP").and_then(Value::as_dict) else {
+        return false;
+    };
+    ["N", "D", "R"].iter().any(|key| match appearance.get(key) {
+        Some(Value::Ref(num, _)) => *num == stream_num,
+        Some(Value::Dict(states)) => states
+            .0
+            .values()
+            .any(|value| matches!(value, Value::Ref(num, _) if *num == stream_num)),
+        _ => false,
+    })
+}
+
+/// 流形态 MCR 的容器字典追加 `/StructParents`（Table 326；14.7.4.4 的
+/// 「the StructParents entry of the page object or other content stream
+/// in which the sequence resides」，raw 29722–29723 行）。容器是
+/// `/StmOwn` 给出的所有者注解字典，或无所有者时的 `/Stm`（Form
+/// XObject）流字典；流形态只替换字典、字节数据原样保留（`/Length` 由
+/// 写出阶段按实际字节重算）。
+fn write_stream_parents(doc: &mut Document, plan: &Plan<'_>) -> Result<(), WriteError> {
+    for (container, key) in &plan.stream_keys {
+        let objects = doc.objects_for_write();
+        let object = objects
+            .iter()
+            .find(|item| item.num == *container && item.generation == 0)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "structure MCR /Stm container object {container} 0 is missing"
+                ))
+            })?;
+        let mut dict = match &object.value {
+            Value::Dict(dict) => dict.clone(),
+            Value::Stream(dict, data) => {
+                let mut dict = dict.clone();
+                dict = dict.insert("StructParents", Value::Integer(*key));
+                doc.set_object(Object::new(
+                    *container,
+                    0,
+                    Value::Stream(dict, data.clone()),
+                ));
+                continue;
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "structure MCR /Stm container object {container} 0 is not a dictionary"
+                )));
+            }
+        };
+        dict = dict.insert("StructParents", Value::Integer(*key));
+        doc.set_object(Object::new(*container, 0, Value::Dict(dict)));
     }
     Ok(())
 }

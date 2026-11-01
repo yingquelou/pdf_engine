@@ -11,8 +11,9 @@
 //! XObject 与页面资源里的图像 XObject（14.7.4.3 的「an entire PDF object,
 //! such as an XObject or an annotation」）；标记内容序列以 MCR 字典
 //! （[`StructureKid::MarkedContent`]）或 14.7.4.2 的整数简写
-//! （[`StructureKid::InlineMarkedContent`]，须配合元素 `/Pg`）两式建模，
-//! `/Stm` `/StmOwn` 不在本模型内。
+//! （[`StructureKid::InlineMarkedContent`]，须配合元素 `/Pg`）两式建模；
+//! 序列位于页面内容流之外的流形态 MCR（Table 324 的 `/Stm` `/StmOwn`，
+//! 14.7.4.2 EXAMPLE 5）以 [`StructureKid::StreamMarkedContent`] 建模。
 //!
 //! 结构元素以拥有所有权的树形 `Vec` 表达（`StructureKid::Element` 装箱
 //! 子元素），与读端的 arena 前序模型不同：写端在 `PdfBuilder::build`
@@ -184,7 +185,8 @@ impl UserProperty {
 /// MCID 只在序列位于元素 `/Pg` 页面流时合法，见
 /// [`Self::with_inline_marked_content`]）。MCR 字典自带的 `/Pg` 覆盖
 /// 元素 `/Pg`（Table 324）。`/A` 属性对象（14.7.5）以
-/// [`StructureAttribute`] 按声明顺序写出；`/Stm` `/StmOwn` 不在本切片内。
+/// [`StructureAttribute`] 按声明顺序写出；流形态 MCR 的 `/Stm`
+/// `/StmOwn` 见 [`StructureKid::StreamMarkedContent`]。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructureElement {
     /// `/S`：结构类型（非空 PDF 名字）。
@@ -317,6 +319,21 @@ impl StructureElement {
         self.with_kid(StructureKid::marked_content(page, mcid))
     }
 
+    /// 追加一个流形态标记内容引用（MCR `/Stm`，14.7.4.2 Table 324
+    /// EXAMPLE 5）。
+    ///
+    /// `stream` 为 [`PdfBuilder::form_xobject`](crate::core::builder::PdfBuilder::form_xobject)
+    /// 的返回值——写端目前唯一可解析成间接对象号的内容流来源；`mcid` 是
+    /// 序列在该流内的标记内容标识符。默认不带 `/StmOwn`、`/Pg` 沿用元素
+    /// `/Pg`（Table 324：两者皆无时 `build` 在任何对象号分配之前返回
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError)，
+    /// 零字节）。需要 `/StmOwn`（如外观流的持有注解）或覆盖 `/Pg` 时直接
+    /// 构造 [`StructureKid::StreamMarkedContent`] 变体并经
+    /// [`Self::with_kid`] 挂上。
+    pub fn with_stream_marked_content(self, stream: usize, mcid: i64) -> Self {
+        self.with_kid(StructureKid::stream_marked_content(stream, mcid))
+    }
+
     /// 追加一个整数简写的标记内容标识符（14.7.4.2）。
     ///
     /// 写出为 `/K` 里的裸整数 MCID。规范只允许「序列所在页即元素
@@ -397,6 +414,39 @@ pub enum StructureKid {
         /// `/Obj` 的目标类别（注解 / Form XObject / 图像 XObject）。
         object: StructureObjectReference,
     },
+    /// 流形态标记内容引用 MCR（Table 324，14.7.4.2 EXAMPLE 5）：序列
+    /// 位于页面内容流以外的内容流（`/Stm`），可选其所有者对象
+    /// （`/StmOwn`）。
+    ///
+    /// 规范原文（Table 324，`/Stm`）是 should + shall：「This entry
+    /// should be present only if the marked-content sequence resides in a
+    /// content stream other than the content stream for the page」与
+    /// 「(Optional; shall be an indirect reference) The content stream
+    /// containing the marked-content sequence」；`/StmOwn` 是 shall：
+    /// 「(Optional; shall be an indirect reference) The PDF object owning
+    /// the stream identified by Stm; … annotation to which an appearance
+    /// stream belongs」。`/MCID` 在 Table 324 中标注 Required，故本变体
+    /// 的 `mcid` 保持必填。
+    StreamMarkedContent {
+        /// `/Stm` 目标：文档级 Form XObject 句柄
+        /// （[`PdfBuilder::form_xobject`](crate::core::builder::PdfBuilder::form_xobject)
+        /// 的返回值）；写出为其内容流的间接引用。
+        stream: usize,
+        /// `/StmOwn` 目标：持有该外观流的注解句柄
+        /// （[`PdfBuilder::add_annotation`](crate::core::builder::PdfBuilder::add_annotation)
+        /// 的返回值）；`None` 不写出。给出时构建期核对该注解的 `/AP`
+        /// 确实引用 `/Stm` 的流对象，且引用未显式给 `/Pg` 时以注解绑定页
+        /// 定位（详见 `navigation/structure.rs` 的范围说明）。
+        owner: Option<usize>,
+        /// `/Pg` 的 0 基页索引；`None` 时依次回落 `/StmOwn` 注解的绑定页
+        /// 与元素 `/Pg`（Table 324：「This entry overrides any Pg entry in
+        /// the structure element containing the marked-content reference;
+        /// it shall be required if the structure element has no such
+        /// entry」）。
+        page: Option<usize>,
+        /// 标记内容标识符（非负；Table 324 标注 Required）。
+        mcid: i64,
+    },
 }
 
 impl StructureKid {
@@ -414,6 +464,18 @@ impl StructureKid {
     /// [`StructureKid::InlineMarkedContent`]）。
     pub fn inline_marked_content(page: usize, mcid: i64) -> Self {
         Self::InlineMarkedContent { page, mcid }
+    }
+
+    /// 以流形态 MCR 构造内容项子项（Table 324 `/Stm`，见
+    /// [`StructureKid::StreamMarkedContent`]）；不带 `/StmOwn`，`/Pg`
+    /// 沿用元素 `/Pg`。
+    pub fn stream_marked_content(stream: usize, mcid: i64) -> Self {
+        Self::StreamMarkedContent {
+            stream,
+            owner: None,
+            page: None,
+            mcid,
+        }
     }
 
     /// 以 OBJR 对象引用构造内容项子项。

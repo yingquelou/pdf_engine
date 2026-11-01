@@ -222,6 +222,9 @@ fn collect(element: &StructureElement, claimed: &mut BTreeMap<usize, BTreeSet<i6
             }
             // OBJR 内容项不占用 MCID（14.7.4.3，Table 325）。
             StructureKid::ObjectReference { .. } => {}
+            // 流形态 MCR 的 MCID 属于 `/Stm` 内容流，不占用页面通道的
+            // MCID（14.7.4.2，Table 324；容器判重在 structure.rs 计划阶段）。
+            StructureKid::StreamMarkedContent { .. } => {}
         }
     }
 }

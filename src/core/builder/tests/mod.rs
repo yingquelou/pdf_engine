@@ -40,6 +40,7 @@
 //! - `structure`：逻辑结构树（14.7 Table 321–326）的目录条目、父树/`/IDTree`、版本门禁与输入校验；
 //! - `structure_content`：结构标记内容通道（14.8.2，`/MCID` 的 BDC 属性表）的写出与页面/结构树构建期交叉校验、自动编号 MCID（14.7.4.4 NOTE）与 `/ParentTreeNextKey` 键策略；
 //! - `structure_objr`：结构元素 OBJR 内容项（14.7.4.3–14.7.4.4 Table 325）的 `/K` 对象引用字典、父树单元条目与目标 `/StructParent`（Table 326）写出，覆盖注解、表单 XObject 与图像 XObject 三类目标的 `/Pg` 解析与句柄校验、`/StructParent`↔`/StructParents` 互斥与零字节契约；
+//! - `structure_mcr_stream`：流形态 MCR（14.7.4.2 Table 324 `/Stm` `/StmOwn`）的 `/K` 写出、容器 `/StructParents` 父树键（14.7.4.4）、`/Pg` 三路回落、`/StmOwn`↔`/AP` 一致性核对、与 OBJR 声称的互斥（Table 326）与零字节契约；
 //! - `structure_inline_mcid`：14.7.4.2 整数 MCID 简写与结构元素 `/Pg`（Table 323）的 `/K` 裸整数写出、页一致性零字节拒绝与父树数组归属；
 //! - `structure_standard`：标准属性 owners 与 List/PrintField/Table 条目（14.8.5.2、14.8.5.5–14.8.5.7）的往返、适用性与版本门禁；
 //! - `structure_types`：PDF 1.5 扩展标准结构类型（14.8.4）的直接/`/RoleMap` 到达方式与版本门禁；
@@ -142,6 +143,7 @@ mod structure;
 mod structure_content;
 mod structure_inline_mcid;
 mod structure_layout;
+mod structure_mcr_stream;
 mod structure_objr;
 mod structure_standard;
 mod structure_types;
