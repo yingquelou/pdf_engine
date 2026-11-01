@@ -82,7 +82,8 @@ impl StreamFilter for CcittFilter {
     }
 
     fn decode(&self, data: &[u8], params: Option<&Dict>) -> Result<Vec<u8>> {
-        let parsed = crate::core::ccitt::CcittParams::from_dict(params).map_err(DecodeError::new)?;
+        let parsed =
+            crate::core::ccitt::CcittParams::from_dict(params).map_err(DecodeError::new)?;
         crate::core::ccitt::decode(data, &parsed).map_err(DecodeError::new)
     }
 }
@@ -142,6 +143,40 @@ pub fn decode_stream_with(
         // 每个过滤器对应一个 /DecodeParms 字典（单字典只作用于首个过滤器）。
         let params = decode_params(dict, i);
         let filter = filters
+            .iter()
+            .copied()
+            .find(|f| f.name() == name)
+            .ok_or_else(|| {
+                DecodeError::new(format!("unsupported filter /{name} (cannot decode)"))
+            })?;
+        buf = filter.decode(&buf, params.as_ref())?;
+    }
+    Ok(buf)
+}
+
+/// 按内建过滤器解码，但 `skip` 判为真的规范名步骤**原样透传**。
+///
+/// `pub(crate)`：图像读端（§7.4.9 JPXDecode）需要拿到 JPX 步骤之前的
+/// 原始字节做语法层解析，而本 crate 按设计不解码 JPX 像素；其余步骤
+/// （Flate 等）照常解码，被跳过步骤的 `/DecodeParms` 一并忽略。
+/// 不改变 [`decode_stream`] 对任何现有调用方的行为。
+pub(crate) fn decode_stream_except(
+    dict: &Dict,
+    data: &[u8],
+    skip: &dyn Fn(&str) -> bool,
+) -> Result<Vec<u8>> {
+    let names = filter_names(dict)?;
+    if names.is_empty() {
+        return Ok(data.to_vec());
+    }
+    let mut buf = data.to_vec();
+    for (i, raw) in names.iter().enumerate() {
+        let name = canonical_filter(raw);
+        if skip(name) {
+            continue;
+        }
+        let params = decode_params(dict, i);
+        let filter = DEFAULT_FILTERS
             .iter()
             .copied()
             .find(|f| f.name() == name)

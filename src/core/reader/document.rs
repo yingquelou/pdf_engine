@@ -1,6 +1,6 @@
 //! `Document` 的懒加载对象解析（xref → 窗口 → 间接对象/对象流）。
 
-use crate::core::filters::decode_stream;
+use crate::core::filters::{decode_stream, decode_stream_except};
 use crate::core::types::{Document, Object, Value, XrefKind, scan_value_features};
 
 use super::lexer::Lexer;
@@ -113,6 +113,25 @@ impl Document {
         let raw = self.try_stream_bytes(value)?;
         let dict = Self::remove_crypt_filter(dict, self.is_encrypted())?;
         decode_stream(&dict, &raw).map_err(|error| error.to_string())
+    }
+
+    /// 与 [`Self::decode_stream_bytes`] 相同，但过滤链中被 `skip` 判定为
+    /// 真的规范名步骤原样透传（其 `/DecodeParms` 一并忽略）。
+    ///
+    /// 供 §7.4.9 JPXDecode 图像读端使用：本 crate 按设计不解码 JPX 像素，
+    /// 图像模型需要拿到 JPX 步骤之前的原始字节做头部语法解析；其余步骤
+    /// （Flate 等）与 `/Crypt` 处理照常。
+    pub(crate) fn decode_stream_bytes_except(
+        &self,
+        value: &Value,
+        skip: &dyn Fn(&str) -> bool,
+    ) -> std::result::Result<Vec<u8>, String> {
+        let Value::Stream(dict, _) = value else {
+            return Err("value is not a PDF stream".to_string());
+        };
+        let raw = self.try_stream_bytes(value)?;
+        let dict = Self::remove_crypt_filter(dict, self.is_encrypted())?;
+        decode_stream_except(&dict, &raw, skip).map_err(|error| error.to_string())
     }
 
     fn remove_crypt_filter(

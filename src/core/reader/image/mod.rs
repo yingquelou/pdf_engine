@@ -17,6 +17,14 @@
 //! 基空间分量，Separation/DeviceN 经 tint 函数求值。对 Indexed /
 //! Separation / DeviceN 的显式 `/Decode`（需在查色板/tint 之前映射）
 //! 暂不支持，返回类型化错误而不是猜测。
+//!
+//! **JPXDecode（§7.4.9）只建模到语法层**：`/Filter` 含 JPX 时过滤链的
+//! JPX 步骤原样透传（其余步骤照常解码），原始 JPX 字节交给
+//! [`parse_jpx_header`] 解析头部语法，结果挂在 [`ImageModel::jpx`]；
+//! 据此按 Table 89 忽略声明的 `/BitsPerComponent`、在 `/ColorSpace`
+//! 缺失时给出设备空间提示。按设计**不解码 JPX 像素**（无小波/熵解码，
+//! ICC 剖面只记长度），[`ImageModel::samples`] 对 JPX 图像返回类型化
+//! `Unsupported`。边界详见 [`jpx`] 模块文档。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -31,6 +39,10 @@ use super::page_content::PageContentError;
 
 #[cfg(test)]
 mod tests;
+
+mod jpx;
+
+pub use jpx::{JpxColorSpace, JpxComponent, JpxContainer, JpxHeader, parse_jpx_header};
 
 type Result<T> = std::result::Result<T, ImageError>;
 
@@ -169,6 +181,9 @@ pub struct ImageModel {
     pub alternates: Vec<ImageModel>,
     /// `/OPI`：OPI 代理版本字典（§14.11.7 Table 368–370，PDF 1.2）。
     pub opi: Option<OpiProxy>,
+    /// JPXDecode 图像的头部语法解析结果（§7.4.9，仅语法层，不解码
+    /// 像素）；`/Filter` 不含 JPX 或载荷无法解析时为 `None`。
+    pub jpx: Option<JpxHeader>,
     /// 已应用的过滤器规范名（`FlateDecode` 等），供样本读取判定。
     pub filters: Vec<String>,
     /// 未建模的其余字典条目。
@@ -196,6 +211,12 @@ impl ImageModel {
     /// `width × height × components`。流过滤器输出不是原始样本（DCT/JPEG）
     /// 或需要先于查色板/tint 应用 `/Decode` 的空间返回类型化错误。
     pub fn samples(&self) -> Result<ImageSamples> {
+        if jpx::is_jpx_filter(&self.filters) {
+            return Err(unsupported(
+                "JPXDecode image data is a JPEG 2000 codestream; this crate parses the JPX \
+                 header syntax only and does not decode pixels",
+            ));
+        }
         let bits = self.bits_per_component as usize;
         let width = self.width as usize;
         let height = self.height as usize;
@@ -453,9 +474,15 @@ impl Document {
                 None => return Err(invalid("/Subtype must be a name")),
             }
         }
-        let data = self
-            .decode_stream_bytes(&resolved)
-            .map_err(ImageError::Filter)?;
+        let filters = self.image_filters(dict)?;
+        let data = if jpx::is_jpx_filter(&filters) {
+            // §7.4.9：JPX 步骤透传，保留原始 JPX 字节给语法层解析；
+            // 链上其余步骤（Flate 等）与 /Crypt 处理照常。
+            self.decode_stream_bytes_except(&resolved, &|name| name == "JPXDecode" || name == "JPX")
+        } else {
+            self.decode_stream_bytes(&resolved)
+        }
+        .map_err(ImageError::Filter)?;
         self.parse_image_dict(dict, data, depth, ImageSource::XObject, None)
     }
 
@@ -516,6 +543,12 @@ impl Document {
         source: ImageSource,
         resolved_space: Option<ColorSpaceModel>,
     ) -> Result<ImageModel> {
+        let filters = self.image_filters(dict)?;
+        let jpx = if jpx::is_jpx_filter(&filters) {
+            jpx::parse_jpx_header(&data)
+        } else {
+            None
+        };
         let image_mask = match dict.get("ImageMask") {
             None => false,
             Some(value) => match self.resolve_image_value(value)? {
@@ -536,8 +569,14 @@ impl Document {
             }
             (None, 1)
         } else {
-            let bits = match dict.get("BitsPerComponent") {
-                Some(value) => {
+            // Table 89：JPXDecode 图像的 `/BitsPerComponent`「可选，存在时
+            // 必须忽略」——头部可解析时一律以解析出的位深为准。
+            let bits = match (
+                jpx.as_ref().and_then(JpxHeader::bits_per_component),
+                dict.get("BitsPerComponent"),
+            ) {
+                (Some(bits), _) => bits,
+                (None, Some(value)) => {
                     let bits = self.image_integer(value, "BitsPerComponent")?;
                     if !matches!(bits, 1 | 2 | 4 | 8 | 16) {
                         return Err(invalid(format!(
@@ -546,14 +585,24 @@ impl Document {
                     }
                     bits as u8
                 }
-                None if source == ImageSource::Inline => 8,
-                None => return Err(invalid("missing required /BitsPerComponent")),
+                (None, None) if source == ImageSource::Inline => 8,
+                (None, None) => return Err(invalid("missing required /BitsPerComponent")),
             };
             let space = match resolved_space {
                 Some(space) => space,
                 None => match dict.get("ColorSpace") {
                     Some(value) => self.color_space(value)?,
                     None if source == ImageSource::Inline => ColorSpaceModel::DeviceGray,
+                    // §7.4.9：JPX 的 /ColorSpace 可选；头部解析成功时按
+                    // 枚举空间/分量数回退到设备空间。
+                    None if jpx.is_some() => {
+                        match jpx.as_ref().and_then(JpxHeader::pdf_color_space_hint) {
+                            Some("DeviceGray") => ColorSpaceModel::DeviceGray,
+                            Some("DeviceRGB") => ColorSpaceModel::DeviceRGB,
+                            Some("DeviceCMYK") => ColorSpaceModel::DeviceCMYK,
+                            _ => return Err(invalid("missing required /ColorSpace")),
+                        }
+                    }
                     None => return Err(invalid("missing required /ColorSpace")),
                 },
             };
@@ -712,7 +761,7 @@ impl Document {
             }
         };
 
-        let filters = self.image_filters(dict)?;
+        // `filters` 已在函数开头计算（JPX 判定需要先行）。
         let opi = parse_opi_entry(self, dict).map_err(|error| invalid(format!("/OPI: {error}")))?;
         let mut other = BTreeMap::new();
         for (key, value) in &dict.0 {
@@ -736,6 +785,7 @@ impl Document {
             smask_in_data,
             alternates,
             opi,
+            jpx,
             filters,
             other,
             data,
