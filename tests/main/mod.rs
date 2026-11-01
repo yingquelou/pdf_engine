@@ -45,6 +45,7 @@ mod crypto;
 mod font_truetype;
 mod font_type1;
 mod font_type1_builtin;
+mod hybrid_reference;
 mod xref_streams;
 
 /// 合成一个最小 Type 1 程序：明文头 + eexec 加密的 Private 字典，

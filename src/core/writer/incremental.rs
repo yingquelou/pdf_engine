@@ -156,7 +156,8 @@ pub(super) fn build(
 }
 
 /// 历史遗留的结构对象：容器本身不进增量段，其内部对象由新条目逐个覆盖。
-fn is_structural(obj: &Object) -> bool {
+/// 混合引用写出（[`super::hybrid`]）同样以它剔除源文档遗留容器。
+pub(super) fn is_structural(obj: &Object) -> bool {
     matches!(
         obj.value
             .as_dict()

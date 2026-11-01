@@ -1599,3 +1599,72 @@ fn writer_filter_handling_matches_reader_decoding() {
         assert_eq!(kept, Some(f), "读端不解压的过滤器应原样保留（{f}）");
     }
 }
+
+/// 混合引用读端优先级固化（7.5.8.4，Table 19）：主经典表把对象 3 登记为
+/// generation 65535 自由条目（旧读端视其为 null 引用），更新段 trailer 的
+/// `/XRefStm` 补充流给出对象 3 的真实条目——合并查找必须让 `/XRefStm`
+/// 条目**覆盖**主表自由条目，`get_object(3)` 应返回真实对象。
+#[test]
+fn xref_stm_entry_overrides_main_table_free_entry() {
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(b"%PDF-1.5\n");
+    let off1 = buf.len();
+    buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let off2 = buf.len();
+    buf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n");
+    let off3 = buf.len();
+    buf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /HiddenFont >>\nendobj\n",
+    );
+    // 主经典表：0..3 全条目；对象 3 是自由条目（链 0 -> 3 -> 0，gen 65535）。
+    let off_xref = buf.len();
+    buf.extend_from_slice(b"xref\n0 4\n");
+    buf.extend_from_slice(b"0000000003 65535 f \r\n");
+    buf.extend_from_slice(format!("{off1:010} 00000 n \r\n").as_bytes());
+    buf.extend_from_slice(format!("{off2:010} 00000 n \r\n").as_bytes());
+    buf.extend_from_slice(b"0000000000 65535 f \r\n");
+    // 主 trailer：不含 /XRefStm（Table 19 shall）。
+    buf.extend_from_slice(b"trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n");
+    buf.extend_from_slice(format!("{off_xref}\n%%EOF\n").as_bytes());
+    // 补充交叉引用流对象 4：type 1 条目给出对象 3 的真实偏移。
+    let off_stm = buf.len();
+    let mut stream: Vec<u8> = Vec::new();
+    stream.push(1u8);
+    stream.extend_from_slice(&(off3 as u16).to_be_bytes());
+    stream.push(0u8);
+    buf.extend_from_slice(
+        format!(
+            "4 0 obj\n<< /Type /XRef /Size 5 /Index [3 1] /W [1 2 1] /Length {} >>\nstream\n",
+            stream.len()
+        )
+        .as_bytes(),
+    );
+    buf.extend_from_slice(&stream);
+    buf.extend_from_slice(b"\nendstream\nendobj\n");
+    // 更新段：空经典表 + trailer（/Prev 指主表、/XRefStm 指补充流）。
+    let off_update = buf.len();
+    buf.extend_from_slice(b"xref\n0 0\ntrailer\n");
+    buf.extend_from_slice(
+        format!("<< /Size 5 /Root 1 0 R /Prev {off_xref} /XRefStm {off_stm} >>\n").as_bytes(),
+    );
+    buf.extend_from_slice(b"startxref\n");
+    buf.extend_from_slice(format!("{off_update}\n%%EOF\n").as_bytes());
+
+    let doc = parse_buf(&buf);
+    // /XRefStm 条目覆盖主表 65535 自由条目：对象 3 必须可按真实条目取回。
+    let hidden = doc
+        .get_object(3)
+        .expect("parse")
+        .expect("obj 3 present: /XRefStm entry must override the main-table free entry");
+    assert_eq!(
+        hidden
+            .value
+            .as_dict()
+            .and_then(|d| d.get("BaseFont"))
+            .and_then(|v| v.as_name()),
+        Some("HiddenFont")
+    );
+    // 主表自身的 n 条目不受影响。
+    assert!(doc.get_object(1).expect("parse").is_some());
+    assert!(doc.get_object(2).expect("parse").is_some());
+}

@@ -6,6 +6,7 @@ use std::io::Write;
 use super::WriteError;
 use super::compression::StreamCompression;
 use super::context::WriteContext;
+use super::hybrid::{self, HybridReferencePolicy};
 use super::incremental;
 use super::serialize::{
     ClassicXrefSerializer, ObjectLayout, ObjectStreamLayout, PlainObjectLayout, XrefSerializer,
@@ -25,6 +26,8 @@ pub struct DocumentWriter {
     version: Option<PdfVersion>,
     /// D4 流压缩策略；未设置时输出保持明文透传（既有行为）。
     compression: Option<StreamCompression>,
+    /// E7 混合引用隐藏策略；仅 [`Self::build_hybrid`] 消费，`build` 忽略。
+    hybrid_policy: Option<HybridReferencePolicy>,
 }
 
 impl DocumentWriter {
@@ -140,6 +143,24 @@ impl DocumentWriter {
     /// 改写文件头版本的请求一律拒绝且零字节。详见 [`mod@incremental`]。
     pub fn build_incremental(&self, doc: &Document, w: &mut dyn Write) -> Result<(), WriteError> {
         incremental::build(doc, w, self.version, self.compression.clone())
+    }
+
+    /// 设置 [`Self::build_hybrid`] 的隐藏集策略（链式，与
+    /// [`Self::with_version`] 风格一致）；不影响 [`Self::build`]。
+    pub fn hybrid_reference(mut self, policy: HybridReferencePolicy) -> Self {
+        self.hybrid_policy = Some(policy);
+        self
+    }
+
+    /// 以**混合引用文件**（7.5.8.4，Table 19 `/XRefStm`）序列化 [`Document`]：
+    /// 经典主表登记可见对象（隐藏号在表中为 generation 65535 的自由条目），
+    /// 隐藏对象打包进对象流，由文件末尾更新段 trailer 的 `/XRefStm` 指向的
+    /// 交叉引用流补充真实条目——PDF 1.5 之前的读端把可选引用的目标当作
+    /// null 也能打开。目标版本须 ≥1.5，加密文档拒绝；校验失败零字节。
+    /// 隐藏键白名单与 v1 边界详见 [`mod@hybrid`]。
+    pub fn build_hybrid(&self, doc: &mut Document, w: &mut dyn Write) -> Result<(), WriteError> {
+        let policy = self.hybrid_policy.clone().unwrap_or_default();
+        hybrid::build(doc, w, self.version, self.compression.clone(), &policy)
     }
 }
 

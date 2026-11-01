@@ -99,7 +99,11 @@ impl WriteContext {
     }
 
     /// 写一个顶层对象并记录其 `Normal` 条目。
-    fn write_top_level_object(&mut self, doc: &Document, obj: &Object) -> Result<(), WriteError> {
+    pub(super) fn write_top_level_object(
+        &mut self,
+        doc: &Document,
+        obj: &Object,
+    ) -> Result<(), WriteError> {
         let off = self.write_raw_object(doc, obj)?;
         self.entries.push(XrefEntryOut::Normal {
             num: obj.num,

@@ -101,6 +101,9 @@ impl fmt::Display for PdfVersion {
 /// 散落在 reader/writer/builder 各处比较。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PdfFeature {
+    /// 混合引用文件（hybrid-reference file，7.5.8.4，trailer `/XRefStm`
+    /// Table 19），PDF 1.5 引入（依赖对象流与交叉引用流）。
+    HybridReferenceFiles,
     /// 交叉引用流（XRef stream，`/Type /XRef`），PDF 1.5 引入。
     XRefStream,
     /// 对象流（ObjStm，`/Type /ObjStm`），PDF 1.5 引入。
@@ -411,6 +414,7 @@ impl PdfFeature {
             | PdfFeature::ViewerPageBoundaryNames => PdfVersion::V1_4,
             PdfFeature::XRefStream
             | PdfFeature::ObjectStream
+            | PdfFeature::HybridReferenceFiles
             | PdfFeature::JPXDecode
             | PdfFeature::OptionalContent
             | PdfFeature::AnnotationBorderEffect
@@ -469,6 +473,7 @@ impl fmt::Display for PdfFeature {
         let name = match self {
             PdfFeature::XRefStream => "xref stream",
             PdfFeature::ObjectStream => "object stream",
+            PdfFeature::HybridReferenceFiles => "hybrid-reference file (7.5.8.4)",
             PdfFeature::EncryptionRC4 => "40-bit RC4 encryption",
             PdfFeature::JBIG2Decode => "JBIG2Decode filter",
             PdfFeature::JPXDecode => "JPXDecode filter",

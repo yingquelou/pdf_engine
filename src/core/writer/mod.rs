@@ -7,6 +7,7 @@
 //! - `context`：写出阶段的偏移/条目状态；
 //! - `document_writer`：`DocumentWriter` 编排与兼容入口；
 //! - `incremental`：增量更新写出（7.5.6，`/Prev` 链）；
+//! - `hybrid`：混合引用文件写出（7.5.8.4，经典主表 + `/XRefStm` 更新段）；
 //! - `signature`：签名增量更新（ByteRange 不动点与 Contents 回填）。
 
 use std::fmt;
@@ -55,6 +56,7 @@ impl From<io::Error> for WriteError {
 mod compression;
 mod context;
 mod document_writer;
+mod hybrid;
 mod incremental;
 mod serialize;
 mod signature;
@@ -65,6 +67,7 @@ mod version;
 
 pub use compression::{DeflateBackend, Flate2DeflateBackend, ImagePredictor, StreamCompression};
 pub use document_writer::{DocumentWriter, write_document};
+pub use hybrid::HybridReferencePolicy;
 pub use signature::{SignedIncremental, SigningSpec};
 pub use value::{write_object, write_value};
 
