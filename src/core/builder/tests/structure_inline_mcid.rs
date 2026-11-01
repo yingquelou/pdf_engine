@@ -214,6 +214,65 @@ fn marked_content_keeps_explicit_page_dict_when_the_element_also_carries_page() 
 }
 
 #[test]
+fn inline_marked_content_range_checks_match_the_mcr_form() {
+    // 整数值没有 `/MCID` 条目可查，但边界与重复声称必须和 MCR 字典同规则。
+    let mut negative = PdfBuilder::with_version(PdfVersion::V1_7);
+    negative.page(PageSize::A4);
+    negative.set_structure_tree(inline_tree(0, -1));
+    assert_invalid(
+        &mut negative,
+        "structure MCR MCID must be non-negative, got -1",
+    );
+
+    let mut too_large = PdfBuilder::with_version(PdfVersion::V1_7);
+    too_large.page(PageSize::A4);
+    too_large.set_structure_tree(inline_tree(0, 65536));
+    assert_invalid(
+        &mut too_large,
+        "structure MCR MCID 65536 exceeds the limit 65535",
+    );
+
+    let mut duplicated = PdfBuilder::with_version(PdfVersion::V1_7);
+    duplicated.page(PageSize::A4);
+    duplicated.set_structure_tree(
+        StructureTree::new()
+            .with_element(
+                StructureElement::new("Document").with_element(
+                    StructureElement::new("P")
+                        .with_page(0)
+                        .with_inline_marked_content(0, 0),
+                ),
+            )
+            .with_element(StructureElement::new("Span").with_marked_content(0, 0)),
+    );
+    assert_invalid(
+        &mut duplicated,
+        "page 0 MCID 0 is claimed by more than one structure element",
+    );
+}
+
+#[test]
+fn marked_content_dict_form_still_writes_type_mcr_when_the_element_has_no_page() {
+    // 回归护栏：不调用 `with_page` 时既有 MCR 形态仍写 `/Type /MCR` 字典，
+    // 且全篇只有 MCR 自带的一处 `/Pg`。
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_7);
+    let page = b.page(PageSize::A4);
+    b.begin_structure_content(page, "P", 0);
+    b.end_structure_content(page);
+    b.set_structure_tree(
+        StructureTree::new().with_element(
+            StructureElement::new("Document")
+                .with_element(StructureElement::new("P").with_marked_content(page, 0)),
+        ),
+    );
+
+    let raw = render(&mut b);
+    assert!(raw.contains("/Type /MCR"), "{raw}");
+    assert!(raw.contains("/MCID 0"), "{raw}");
+    assert_eq!(raw.matches("/Pg ").count(), 1, "仅 MCR 一处 /Pg: {raw}");
+}
+
+#[test]
 fn inline_marked_content_counts_toward_page_marked_content_consistency() {
     // 标记与声称一致时通过，且写出的是裸整数而非 MCR 字典。
     let mut ok = PdfBuilder::with_version(PdfVersion::V1_7);
