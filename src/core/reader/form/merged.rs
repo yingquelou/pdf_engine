@@ -24,6 +24,10 @@ pub struct LogicalField<'a> {
     pub flags: FieldFlags,
     /// 首个表示的生效 `/Opt`。
     pub options: Option<&'a Vec<FormOption>>,
+    /// 首个表示的 `/TU` 替代名。12.7.3.2 仅要求各表示的 `/FT` `/V` `/DV`
+    /// 一致，替代名按前序首个表示暴露；各表示自身的 `/TU` 经
+    /// `representations` 逐节点访问。
+    pub alternate_name: Option<&'a str>,
     /// 共享该全限定名的节点，按前序排列（含带 `/T` 的祖先节点）。
     pub representations: Vec<&'a Field>,
     /// `representations` 中声明 `/Rect` 的 Widget 表示。
@@ -60,6 +64,7 @@ fn groups(fields: &[Field]) -> Vec<LogicalField<'_>> {
                     default_value: node.default_value.as_ref(),
                     flags: node.flags,
                     options: node.options.as_ref(),
+                    alternate_name: node.alternate_name.as_deref(),
                     representations: Vec::new(),
                     widgets: Vec::new(),
                 });

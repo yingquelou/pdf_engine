@@ -1,6 +1,8 @@
 //! 表单级条目（`/NeedAppearances`、`/DA`、`/DR`、`/CO`）与按页绑定的字段树根。
 
 use crate::core::builder::types::{ColorSpace, Font, GraphicsState};
+use crate::core::types::{PdfFeature, PdfVersion};
+use crate::core::writer::WriteError;
 
 use super::field::FormField;
 
@@ -113,4 +115,34 @@ impl AcroForm {
     pub(crate) fn fields(&self) -> &[(usize, FormField)] {
         &self.fields
     }
+
+    /// 字段树（含子节点与 Widget 表示）中是否存在 `/TU` 替代名条目，
+    /// 供 assemble 写特征画像。
+    pub(crate) fn has_alternate_names(&self) -> bool {
+        self.fields
+            .iter()
+            .any(|(_, field)| node_has_alternate_name(field))
+    }
+
+    /// `/TU` 替代字段名自 PDF 1.3 引入（12.7.2 Table 220）：目标版本低于
+    /// 1.3 且字段树声明了替代名时返回 [`WriteError::UnsupportedVersion`]，
+    /// 由 assemble 在任何对象写出前调用以保持零字节契约。
+    pub(crate) fn validate_alternate_name_version(
+        &self,
+        version: PdfVersion,
+    ) -> Result<(), WriteError> {
+        if self.has_alternate_names() && !version.supports(PdfFeature::FormFieldAlternateName) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "{} require PDF {}, got {}",
+                PdfFeature::FormFieldAlternateName,
+                PdfFeature::FormFieldAlternateName.min_version().as_str(),
+                version.as_str()
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn node_has_alternate_name(field: &FormField) -> bool {
+    field.alternate_name().is_some() || field.kids().iter().any(node_has_alternate_name)
 }

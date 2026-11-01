@@ -1123,6 +1123,11 @@ impl PdfBuilder {
                     .borrow_mut()
                     .insert(PdfFeature::FormFieldAdditionalActions);
             }
+            if form.has_alternate_names() {
+                doc.features
+                    .borrow_mut()
+                    .insert(PdfFeature::FormFieldAlternateName);
+            }
             if form_field::has_calculate_actions(form)
                 || form
                     .calculation_order()

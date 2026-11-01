@@ -119,8 +119,8 @@ pub(crate) fn field_dict(
             )),
         );
     }
-    if let Some(tooltip) = field.tooltip() {
-        dict = dict.insert("TU", text_string_value(tooltip));
+    if let Some(name) = field.alternate_name() {
+        dict = dict.insert("TU", text_string_value(name));
     }
     if !field.actions().is_empty() {
         let mut additional = Dict::new();

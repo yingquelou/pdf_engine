@@ -185,6 +185,9 @@ pub enum PdfFeature {
     /// 表单字段附加动作（`/AA` 的 `/K` `/F` `/V` `/C` 触发事件，
     /// Table 196），PDF 1.3 引入。
     FormFieldAdditionalActions,
+    /// 表单字段的替代字段名（字段字典 `/TU`，12.7.2 Table 220；
+    /// 14.9.3 用于界面标识与无障碍朗读），PDF 1.3 引入。
+    FormFieldAlternateName,
     /// 复选框与单选按钮字段的 `/Opt` 导出值数组（Table 227），PDF 1.4 引入。
     FormButtonOptions,
     /// 选择字段的多选索引数组 `/I`（Table 231），PDF 1.4 引入。
@@ -341,6 +344,7 @@ impl PdfFeature {
             | PdfFeature::AnnotationMarkupState
             | PdfFeature::LinkAnnotationPressedAction
             | PdfFeature::FormFieldAdditionalActions
+            | PdfFeature::FormFieldAlternateName
             | PdfFeature::FormCalculationOrder
             | PdfFeature::FormActionFieldNames
             | PdfFeature::PageTemplates
@@ -449,6 +453,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::AnnotationMeasure => "annotation measure dictionary",
             PdfFeature::AnnotationBorderDash => "annotation border dash array",
             PdfFeature::FormFieldAdditionalActions => "form field additional actions",
+            PdfFeature::FormFieldAlternateName => "form field alternate names",
             PdfFeature::FormButtonOptions => "button form field options",
             PdfFeature::FormChoiceIndices => "choice field alternate indices",
             PdfFeature::FormCalculationOrder => "form calculation order",

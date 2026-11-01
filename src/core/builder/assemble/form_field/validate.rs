@@ -1,5 +1,6 @@
 //! 字段树校验：页号、矩形、`/FT` 继承、字段类型专属条目、外观句柄、
-//! `/AA` 触发事件、同名字段多重表示与 `/CO` 计算顺序（Table 220–231）。
+//! `/AA` 触发事件、同名字段多重表示、`/TU` 版本门禁与 `/CO` 计算顺序
+//! （Table 220–231）。
 
 use crate::core::builder::types::{
     AcroForm, Action, FieldActionEvent, FieldValue, FormField, FormFieldType, validate_name_value,
@@ -30,7 +31,10 @@ pub(crate) fn validate(
         )?;
     }
     validate_shared_representations(form)?;
-    validate_calculation_order(form, &calculate)
+    validate_calculation_order(form, &calculate)?;
+    // `/TU` 替代字段名自 PDF 1.3 引入（Table 220）：在分配对象号之前拒绝，
+    // 保持零字节契约。
+    form.validate_alternate_name_version(version)
 }
 
 #[allow(clippy::too_many_arguments)]
