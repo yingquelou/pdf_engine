@@ -187,6 +187,7 @@ demo gen <out.pdf> [--version X]   生成最小 PDF（X ∈ 1.0..=2.0；writer �
 | EncryptionRC4 | 1.1 | ✅ | ✅ | **显式拒绝**（内容特性） |
 | JBIG2Decode | 1.4 | ✅ | ✅ | **显式拒绝**（内容特性） |
 | 透明度 `/SMask` / `/ca` | 1.4 | ✅ | ✅ | **显式拒绝**（内容特性） |
+| 反序显示串（Tagged PDF） | 1.4 | ✅ | ✅ | **显式拒绝**（内容特性，`reversed show strings`） |
 | XRef 流 | 1.5 | ✅ | ✅ | **自动降级**为经典 xref 表 |
 | 对象流 ObjStm | 1.5 | ✅ | ✅ | **自动降级**为顶层对象 |
 | JPXDecode | 1.5 | ✅ | ✅ | **显式拒绝**（内容特性） |
