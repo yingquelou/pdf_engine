@@ -25,6 +25,17 @@
 //! 缺失时给出设备空间提示。按设计**不解码 JPX 像素**（无小波/熵解码，
 //! ICC 剖面只记长度），[`ImageModel::samples`] 对 JPX 图像返回类型化
 //! `Unsupported`。边界详见 [`jpx`] 模块文档。
+//!
+//! **JBIG2Decode（§7.4.7）同样只建模到段语法层**：`/Filter` 含 JBIG2
+//! 步骤时该步骤原样透传（其余步骤照常解码），原始段字节交给
+//! [`parse_jbig2_segments`] 遍历段链；`/JBIG2Globals` 解码参数按 JBIG2
+//! 步骤下标从 `/DecodeParms` 解析（数组早位可用 `null` 占位）并递归
+//! 解引用，结果连同页关联、文件头/页尾/文件尾段等「存在但禁用」的
+//! 类型化一致性发现挂在 [`ImageModel::jbig2`]；内联图像使用
+//! JBIG2Decode 依规范（shall not）直接拒绝。按设计**不解码 JBIG2
+//! 像素**（无算术/Huffman 熵解码、无符号字典重建、无区域合成），
+//! [`ImageModel::samples`] 对 JBIG2 图像返回类型化 `Unsupported`。
+//! 边界详见 [`jbig2`] 模块文档。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -40,8 +51,13 @@ use super::page_content::PageContentError;
 #[cfg(test)]
 mod tests;
 
+mod jbig2;
 mod jpx;
 
+pub use jbig2::{
+    Jbig2Error, Jbig2Finding, Jbig2ImageInfo, Jbig2PageInfo, Jbig2Segment, Jbig2SegmentKind,
+    Jbig2Stream, parse_jbig2_segments,
+};
 pub use jpx::{JpxColorSpace, JpxComponent, JpxContainer, JpxHeader, parse_jpx_header};
 
 type Result<T> = std::result::Result<T, ImageError>;
@@ -184,6 +200,10 @@ pub struct ImageModel {
     /// JPXDecode 图像的头部语法解析结果（§7.4.9，仅语法层，不解码
     /// 像素）；`/Filter` 不含 JPX 或载荷无法解析时为 `None`。
     pub jpx: Option<JpxHeader>,
+    /// JBIG2Decode 图像的段语法解析结果（§7.4.7，仅段语法层，不解码
+    /// 像素）：图像段链、`/JBIG2Globals` 全局段流与类型化一致性发现；
+    /// `/Filter` 不含 JBIG2 时为 `None`。
+    pub jbig2: Option<Jbig2ImageInfo>,
     /// 已应用的过滤器规范名（`FlateDecode` 等），供样本读取判定。
     pub filters: Vec<String>,
     /// 未建模的其余字典条目。
@@ -215,6 +235,12 @@ impl ImageModel {
             return Err(unsupported(
                 "JPXDecode image data is a JPEG 2000 codestream; this crate parses the JPX \
                  header syntax only and does not decode pixels",
+            ));
+        }
+        if jbig2::is_jbig2_filter(&self.filters) {
+            return Err(unsupported(
+                "JBIG2Decode image data is a JBIG2 segment stream; this crate parses the JBIG2 \
+                 segment syntax only and does not decode pixels",
             ));
         }
         let bits = self.bits_per_component as usize;
@@ -475,10 +501,12 @@ impl Document {
             }
         }
         let filters = self.image_filters(dict)?;
-        let data = if jpx::is_jpx_filter(&filters) {
-            // §7.4.9：JPX 步骤透传，保留原始 JPX 字节给语法层解析；
-            // 链上其余步骤（Flate 等）与 /Crypt 处理照常。
-            self.decode_stream_bytes_except(&resolved, &|name| name == "JPXDecode" || name == "JPX")
+        let data = if jpx::is_jpx_filter(&filters) || jbig2::is_jbig2_filter(&filters) {
+            // §7.4.9/§7.4.7：JPX 与 JBIG2 步骤透传，保留原始字节给语法层
+            // 解析；链上其余步骤（Flate 等）与 /Crypt 处理照常。
+            self.decode_stream_bytes_except(&resolved, &|name| {
+                matches!(name, "JPXDecode" | "JPX" | "JBIG2Decode" | "JBIG2")
+            })
         } else {
             self.decode_stream_bytes(&resolved)
         }
@@ -500,6 +528,13 @@ impl Document {
                 value.clone()
             };
             dict = dict.insert(key, value);
+        }
+        // §7.4.7：JBIG2Decode 过滤器不得用于内联图像（shall not）。
+        let declared_filters = self.image_filters(&dict)?;
+        if jbig2::is_jbig2_filter(&declared_filters) {
+            return Err(invalid(
+                "JBIG2Decode shall not be used with inline images (PDF 32000-1 7.4.7)",
+            ));
         }
         let filter_dict = Dict::new()
             .insert("Filter", dict.get("Filter").cloned().unwrap_or(Value::Null))
@@ -546,6 +581,11 @@ impl Document {
         let filters = self.image_filters(dict)?;
         let jpx = if jpx::is_jpx_filter(&filters) {
             jpx::parse_jpx_header(&data)
+        } else {
+            None
+        };
+        let jbig2 = if jbig2::is_jbig2_filter(&filters) {
+            Some(self.jbig2_image_info(dict, &data, &filters))
         } else {
             None
         };
@@ -786,10 +826,101 @@ impl Document {
             alternates,
             opi,
             jpx,
+            jbig2,
             filters,
             other,
             data,
         })
+    }
+
+    /// §7.4.7：解析图像流的 JBIG2 段链，并解析 `/JBIG2Globals` 全局段流
+    /// （挂在 JBIG2 步骤对应下标的 `/DecodeParms` 上，数组早位可为
+    /// `null`），产出类型化一致性发现。只读诊断，不改变解析成败。
+    fn jbig2_image_info(&self, dict: &Dict, data: &[u8], filters: &[String]) -> Jbig2ImageInfo {
+        let mut findings = Vec::new();
+        let page = jbig2::parse_jbig2_segments(data).unwrap_or_else(|error| {
+            findings.push(Jbig2Finding::UnparsableSegmentChain(error));
+            Jbig2Stream {
+                segments: Vec::new(),
+                findings: Vec::new(),
+                page_information: None,
+            }
+        });
+        // 图像流规则：段页关联应为 1；页关联 0 的全局段应另置于
+        // `/JBIG2Globals` 流（Table 12）。
+        for segment in &page.segments {
+            if segment.page_association == 0 {
+                findings.push(Jbig2Finding::GlobalSegmentInImageStream {
+                    segment_number: segment.number,
+                });
+            } else if segment.page_association > 1 {
+                findings.push(Jbig2Finding::UnexpectedPageAssociation {
+                    segment_number: segment.number,
+                    page_association: segment.page_association,
+                });
+            }
+        }
+        let step = filters
+            .iter()
+            .position(|name| name == "JBIG2Decode" || name == "JBIG2")
+            .unwrap_or(0);
+        let params = crate::core::filters::decode_params(dict, step);
+        let globals_value = params
+            .as_ref()
+            .and_then(|params| params.get("JBIG2Globals"));
+        let mut globals = None;
+        let mut globals_reference = None;
+        match globals_value {
+            Some(value) => {
+                if let Value::Ref(num, generation) = value {
+                    globals_reference = Some((*num, *generation));
+                }
+                match self.resolve_image_value(value) {
+                    Ok(resolved) => match &resolved {
+                        Value::Stream(_, _) => {
+                            let parsed = self
+                                .decode_stream_bytes(&resolved)
+                                .map_err(Jbig2Error::GlobalsStreamDecode)
+                                .and_then(|bytes| jbig2::parse_jbig2_segments(&bytes));
+                            match parsed {
+                                Ok(stream) => globals = Some(stream),
+                                Err(error) => {
+                                    findings.push(Jbig2Finding::Jbig2GlobalsUnparsable(error))
+                                }
+                            }
+                        }
+                        other => findings.push(Jbig2Finding::Jbig2GlobalsNotAStream {
+                            value_type: other.type_name().to_string(),
+                        }),
+                    },
+                    Err(_) => findings.push(Jbig2Finding::Jbig2GlobalsNotAStream {
+                        value_type: "unresolved reference".to_string(),
+                    }),
+                }
+            }
+            None => {
+                // 没有 /JBIG2Globals，而图像流段引用了本流不存在的段号：
+                // 全局段应置于单独的全局段流。
+                let present: Vec<u32> = page.segments.iter().map(|s| s.number).collect();
+                let dangling = page
+                    .segments
+                    .iter()
+                    .flat_map(|s| s.referred_to_segments.iter())
+                    .filter(|number| !present.contains(number))
+                    .count();
+                if dangling > 0 {
+                    findings.push(Jbig2Finding::Jbig2GlobalsMissing {
+                        dangling_reference_count: dangling,
+                    });
+                }
+            }
+        }
+        Jbig2ImageInfo {
+            page,
+            globals,
+            globals_reference,
+            findings,
+        }
     }
 
     fn parse_image_mask(

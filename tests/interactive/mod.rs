@@ -48,6 +48,7 @@ mod collection;
 mod embedded;
 mod extensions;
 mod form;
+mod image_jbig2;
 mod incremental;
 mod metadata;
 mod movie;

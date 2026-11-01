@@ -220,7 +220,11 @@ fn filter_names(dict: &Dict) -> Result<Vec<String>> {
 ///
 /// 单字典只作用于首个过滤器（规范：多过滤器时 /DecodeParms 应为数组）；
 /// 数组则按下标一一对应。缺失或非字典返回 `None`（即使用预测器默认值）。
-fn decode_params(dict: &Dict, index: usize) -> Option<Dict> {
+///
+/// `pub(crate)`：图像读端（§7.4.7 JBIG2Decode）也需按过滤器下标取
+/// `/DecodeParms` 来解析 `/JBIG2Globals`，与解码调度共用同一套下标
+/// 对齐规则（数组早位的 `null` 占位天然返回 `None`）。
+pub(crate) fn decode_params(dict: &Dict, index: usize) -> Option<Dict> {
     match dict.get("DecodeParms").or_else(|| dict.get("DP")) {
         Some(Value::Dict(d)) => {
             if index == 0 {
