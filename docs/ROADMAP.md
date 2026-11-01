@@ -91,7 +91,7 @@
 
 - [ ] `tests/main.rs`（2026-11-01 复测 7984 行 / 280 KiB，全仓最大违例；集成目标 `main` 计 81 项测试，其中 `builder*` 前缀 61 项。新增集成测试前须按 `tests/interactive` 先例目录化：`tests/main/mod.rs` 以 `#[path = "../support/mod.rs"] mod support;` 复用夹具，主题文件按字体/加密/构建器内容分组，测试名与数量零改动）
 
-- [ ] `reader/font/truetype/cmap.rs`（1537 行 / 69.2 KiB；任何 cmap 增量前拆分）
+- [x] `reader/font/truetype/cmap.rs`（原 1537 行 / 69.2 KiB）已于 2026-11-01 在隔离 worktree 拆为 `cmap/{mod,raw,validate,lookup,reverse}.rs`（198/37/296/260/211 行）+ `cmap/tests/{mod,support}.rs`（408/186 行，测试块 27.6 KiB 故夹具另置）；缝线：`mod.rs` 持 `Cmap`/`CmapFormat`/`parse`/子表选择与 `cmap_priority`，`raw.rs` 持字节读取与 `invalid_cmap`，`validate.rs`/`lookup.rs`/`reverse.rs` 按职责分派；放宽可见性仅 `read_u8/u16/u32`、`checked_add`、`invalid_cmap`、`Cmap::validate`、`Cmap::format2_subheader_glyph`、`Cmap::format8_is_32` → `pub(super)`（+ 10 个测试夹具），`Cmap` 字段与公开 API 不变；19 个测试名与全路径 `core::reader::font::truetype::cmap::tests::*` 零改动，四个引用方（`truetype/mod.rs`、`sfnt.rs`、`subset/cmap.rs`、`subset/source.rs`）未修改仍解析；提交 `834cf51`，全量 2172 与拆前一致（lib 1934 + cli 3 + fixtures 14 + interactive 103 + main 81 + syntax 37；doctest 3 通过/1 ignored，不计入）
 - [ ] `builder/tests/mod.rs`（1644 行 / 53.1 KiB；新增 builder 测试前按主题拆分；导航测试已独立为 `builder/tests/navigation.rs`，注解夹具已抽出 `tests/support.rs`，Line 注解测试独立为 `tests/annotation_line.rs`，FreeText 注解测试独立为 `tests/annotation_free_text.rs`，几何注解测试独立为 `tests/annotation_geometry.rs`，Link 注解测试独立为 `tests/annotation_link.rs`，子类型表一致性测试独立为 `tests/annotation_subtype_table.rs`，旧式边框测试独立为 `tests/annotation_border.rs`，Popup 关联测试独立为 `tests/annotation_popup.rs`、Redact 注解测试独立为 `tests/annotation_redact.rs`、外观特性 `/MK` 测试独立为 `tests/annotation_mk.rs`、Watermark `/FixedPrint` 测试独立为 `tests/annotation_watermark.rs`（2026-10-29）；本文件仍余 33 项对象布局/渲染辅助测试）
 - [ ] `builder/tests/cid.rs`（1217 行 / 39.4 KiB；新增 CID 写端测试前拆分）
 - [ ] `reader/font/truetype/sfnt.rs`（1164 行 / 50.0 KiB；SFNT 增量前拆分）
@@ -108,7 +108,7 @@
 - [ ] `builder/tests/font_program.rs`（722 行 / 25.1 KiB；新增字体程序测试前拆分）
 - [ ] `reader/tests.rs`（689 行 / 26.1 KiB；新增读端测试前拆分）
 - [ ] `builder/types/image.rs`（675 行 / 25.0 KiB；D2/D7 前拆分）
-- [ ] `builder/assemble/shading.rs`（651 行 / 20.9 KiB；组装变更前拆分；D5 为读端增量未触及）
+- [x] `builder/assemble/shading.rs`（原 651 行 / 20.9 KiB）已于 2026-11-01 在隔离 worktree 拆为目录模块 `shading/{mod,mesh,encode,tests}.rs`（176/263/206/32 行）：`mod.rs` 持着色字典组装入口与共享缝线，`mesh.rs` 持三角形/顶点网格（Table 118/119  bits 打包与补丁流），`encode.rs` 持函数样本编码与位宽计算，`tests.rs` 保留既有测试名；放宽可见性只到 `pub(super)`（17 处：跨文件共享的编码/网格/字典组装函数与 `BitWriter`），无一处放大为公开 API，调用方 `assemble/mod.rs` 与 `types/mod.rs` 未触及；提交 `d4a62c2`，全量 2172 与拆前一致（同上计数）、改动文件 `rustfmt --edition 2024 --check` 通过、`cargo clippy --lib --tests` 无新增告警
 - [ ] `reader/optional_content.rs`（813 行 / 28.1 KiB；B7 已触及仍未拆分，后续可选内容增量前拆分配置解析与 OCMD 求值）
 - [ ] `builder/tests/graphics_state.rs`（606 行 / 20.5 KiB；新增图形状态测试前拆分）
 - [ ] `tests/main.rs`（7957 行 / 279.8 KiB；集成测试按主题拆分，新增集成测试前先迁出对应主题）
