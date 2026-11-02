@@ -184,6 +184,7 @@ mod widths;
 
 use super::*;
 use crate::core::types::{Dict, Document, StreamData, Value};
+use crate::core::writer::WriteError;
 use common::{
     assert_image_rejected, embedded_program, embedded_program_stream, find_font_object,
     font_descriptor, numbers, render, sample_opentype_sfnt, sample_truetype_program,
