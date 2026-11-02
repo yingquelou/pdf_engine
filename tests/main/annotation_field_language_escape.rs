@@ -390,3 +390,197 @@ fn builder_field_alternate_name_escape_roundtrip_without_document_language() {
         "无转义时原样返回传入的 prevailing"
     );
 }
+
+/// 第三方文档夹具：把对象体按 `n 0 obj … endobj` 顺序写出，补一张标准 xref
+/// 与 trailer（形态同 `xref_streams.rs` 的裸字节夹具）。本库写端不产出注解
+/// `/TM`（ISO 32000-1 无此条目）与字段 `/RV`（未建模条目），故这两条视图只能
+/// 经真实解析器读第三方文档来验证。
+fn third_party_pdf(objects: &[String]) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for body in objects {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(body.as_bytes());
+        pdf.extend_from_slice(b"\n");
+    }
+    let size = objects.len() + 1;
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n")
+            .as_bytes(),
+    );
+    pdf
+}
+
+/// 带目录 `/Lang (en)`、一条 `Text` 注解与两个字段的第三方文档。
+fn third_party_document(contents: &str, modified_text: &str, rich_value: &str) -> Document {
+    let objects = vec![
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Lang (en) \
+         /AcroForm << /Fields [5 0 R 6 0 R] /DA (/F1 12 Tf 0 g) >> >>\nendobj"
+            .to_owned(),
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj".to_owned(),
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\nendobj"
+            .to_owned(),
+        format!(
+            "4 0 obj\n<< /Type /Annot /Subtype /Text /Rect [72 700 92 720] \
+             /Contents <{}> /TM <{}> >>\nendobj",
+            hex_of(contents),
+            hex_of(modified_text)
+        ),
+        format!(
+            "5 0 obj\n<< /FT /Tx /T (rich) /RV <{}> >>\nendobj",
+            hex_of(rich_value)
+        ),
+        // 第二个字段用名字形态的 `/RV`：不是 7.9.2.2 的文本串，恒判无转义。
+        "6 0 obj\n<< /FT /Tx /T (named) /RV /RichTextName >>\nendobj".to_owned(),
+    ];
+    parse_buf(&third_party_pdf(&objects))
+}
+
+/// 写入 → 重新解析（第三方裸字节）：未建模的注解 `/TM` 与已建模的 `/Contents`
+/// 在同一条注解上各自给出语言转义视图，目录 `/Lang (en)` 被串内转义覆盖
+/// （14.9.2.1 raw L31940–L31941）；`/TM` 的原值仍留在 `Annotation::dict`，
+/// 视图不改动它。
+#[test]
+fn third_party_annotation_modified_text_and_contents_escapes_read_through_language_views() {
+    let contents = format!(
+        "{}First note {}Zweiter Absatz.",
+        escape("en"),
+        escape("deCH")
+    );
+    let modified_text = format!("{}修正済みテキスト", escape("ja"));
+    let doc = third_party_document(&contents, &modified_text, "<body>unused</body>");
+
+    let prevailing = doc.document_language().expect("catalog /Lang (en)");
+    assert_eq!(
+        prevailing.as_ref().map(LanguageIdentifier::as_str),
+        Some("en")
+    );
+
+    let annotation = &doc.page_annotations(0).expect("annotations")[0];
+    assert_eq!(annotation.subtype, AnnotationSubtype::Text);
+
+    // 视图是纯读端：`/TM` 未被建模，原值仍按字典形态在场。
+    assert_eq!(
+        annotation.dict.get("TM"),
+        Some(&Value::HexString(hex_of(&modified_text))),
+        "解析器不读 TM 键，原值留在 Annotation::dict"
+    );
+    assert!(annotation.has_modified_text_language_escape());
+    let view = annotation
+        .modified_text_semantic_text()
+        .expect("terminated escape")
+        .expect("/TM present");
+    assert_eq!(view.escape_count(), 1);
+    assert_eq!(
+        annotation
+            .modified_text_text()
+            .expect("/TM view")
+            .as_deref()
+            .expect("/TM present"),
+        "修正済みテキスト"
+    );
+    assert_eq!(
+        annotation
+            .modified_text_language(prevailing.as_ref())
+            .expect("/TM language"),
+        Some(tag("ja")),
+        "串内转义 shall 覆盖 prevailing Lang"
+    );
+
+    // 同一条注解的 `/Contents` 逐段视图独立可读。
+    let contents_view = annotation
+        .contents_semantic_text()
+        .expect("two escapes")
+        .expect("/Contents present");
+    assert_eq!(contents_view.escape_count(), 2);
+    assert_eq!(contents_view.segments().len(), 2);
+    assert_eq!(
+        contents_view.segments()[1]
+            .language()
+            .map(LanguageIdentifier::as_str),
+        Some("de-CH"),
+        "ISO 3166 国家码拼为区域标签（7.9.2.2 c）"
+    );
+    assert_eq!(
+        annotation
+            .contents_language(prevailing.as_ref())
+            .expect("/Contents language"),
+        Some(tag("en")),
+        "首个转义决定整串生效语言"
+    );
+}
+
+/// 写入 → 重新解析（第三方裸字节）：字段 `/RV`（Table 222 raw L23767–L23771）
+/// 的两种值形态各自按只读视图口径落地——文本串形态展开转义并覆盖 `/Lang`，
+/// 名字形态恒判「无转义」、`Ok(None)` 且不报错（同注解 `/DS` 的先例）。
+#[test]
+fn third_party_field_rich_value_text_string_and_name_forms_read_through_language_views() {
+    let rich_value = format!("{}<body>Valeur</body>", escape("fr"));
+    let doc = third_party_document("plain note", "plain text", &rich_value);
+
+    let prevailing = doc.document_language().expect("catalog /Lang (en)");
+    let form = doc.acro_form().expect("form").expect("form present");
+
+    let text_field = &form.fields[0];
+    assert_eq!(
+        text_field.dict.get("RV"),
+        Some(&Value::HexString(hex_of(&rich_value))),
+        "未建模条目原样留在 Field::dict"
+    );
+    assert!(text_field.has_rich_value_language_escape());
+    assert_eq!(
+        text_field
+            .rich_value_semantic_text()
+            .expect("terminated escape")
+            .expect("/RV present")
+            .escape_count(),
+        1
+    );
+    assert_eq!(
+        text_field
+            .rich_value_text()
+            .expect("/RV view")
+            .as_deref()
+            .expect("/RV present"),
+        "<body>Valeur</body>"
+    );
+    assert_eq!(
+        text_field
+            .rich_value_language(prevailing.as_ref())
+            .expect("/RV language"),
+        Some(tag("fr")),
+        "14.9.3 raw L32117–L32120 的 shall 在 /RV 上生效"
+    );
+
+    // 名字形态：不是文本串，恒判无转义、无视图、不报错，语言回落 prevailing。
+    let named_field = &form.fields[1];
+    assert_eq!(
+        named_field.dict.get("RV"),
+        Some(&Value::Name("RichTextName".into()))
+    );
+    assert!(!named_field.has_rich_value_language_escape());
+    assert_eq!(
+        named_field
+            .rich_value_semantic_text()
+            .expect("name form is not an error"),
+        None,
+        "名字形态没有语言视图，也不报错"
+    );
+    assert_eq!(
+        named_field.rich_value_text().expect("/RV view").as_deref(),
+        Some("RichTextName"),
+        "名字形态的自然文本即名字本身"
+    );
+    assert_eq!(
+        named_field
+            .rich_value_language(prevailing.as_ref())
+            .expect("/RV language"),
+        prevailing,
+        "名字永不覆盖 prevailing Lang"
+    );
+}

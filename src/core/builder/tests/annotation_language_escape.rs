@@ -163,3 +163,87 @@ fn builder_free_text_default_style_escape_roundtrips_through_reparsed_document()
         "/DA 与 /DS 互不干扰"
     );
 }
+
+/// `/Contents`（Table 164 raw L21272–L21277）与未建模的 `/TM` 走同一条访问器
+/// 形态：`/Contents` 由写端 `with_contents` 落成文本串，重新解析后按 7.9.2.2
+/// 展开逐段语言；14.9.2.1（raw L31940–L31941）的 shall 在串内转义覆盖目录
+/// `/Lang`。本库写端不产出 `/TM`，故同一条注解的 `/TM` 视图恒为 `Ok(None)`。
+#[test]
+fn builder_annotation_contents_multilingual_escape_roundtrips_through_reparsed_document() {
+    let contents = format!(
+        "{}First note {}Zweiter Absatz.",
+        escape("en"),
+        escape("deCH")
+    );
+    let annot = PdfAnnotation::new(AnnotationKind::Text, [72.0, 700.0, 92.0, 720.0])
+        .with_contents(contents.clone())
+        .with_title("Reviewer");
+    let doc = annotated(annot, PdfVersion::V1_6);
+
+    let written = annot_object(&doc, 3, 0);
+    assert_eq!(
+        written.get("Contents"),
+        Some(&text_string_value(&contents)),
+        "/Contents 按 UTF-16BE 文本串写出，转义字节原样在场"
+    );
+
+    let annotation = &doc.page_annotations(0).expect("annotations")[0];
+    assert_eq!(
+        annotation.contents,
+        Some(text_string_value(&contents)),
+        "`contents` 保留未去转义的解码原串"
+    );
+    assert!(annotation.has_contents_language_escape());
+    let view = annotation
+        .contents_semantic_text()
+        .expect("two escapes")
+        .expect("/Contents present");
+    assert_eq!(view.escape_count(), 2);
+    assert_eq!(view.plain_text(), "First note Zweiter Absatz.");
+    assert_eq!(view.segments().len(), 2);
+    assert_eq!(
+        view.segments()[0]
+            .language()
+            .map(LanguageIdentifier::as_str),
+        Some("en")
+    );
+    assert_eq!(view.segments()[0].text(), "First note ");
+    assert_eq!(
+        view.segments()[1]
+            .language()
+            .map(LanguageIdentifier::as_str),
+        Some("de-CH"),
+        "ISO 3166 国家码拼为区域标签（7.9.2.2 c）"
+    );
+
+    let prevailing = doc.document_language().expect("catalog /Lang (en)");
+    assert_eq!(
+        annotation
+            .contents_language(prevailing.as_ref())
+            .expect("language view"),
+        Some(language("en")),
+        "串内转义 shall 覆盖 prevailing Lang"
+    );
+
+    // 同一条注解的其余视图互不干扰。
+    assert_eq!(
+        annotation.title_text().expect("/T readable").as_deref(),
+        Some("Reviewer"),
+        "无转义的 /T 仍是原串"
+    );
+    assert_eq!(
+        annotation
+            .title_language(prevailing.as_ref())
+            .expect("/T language"),
+        prevailing,
+        "无转义的 /T 沿用目录 /Lang"
+    );
+    assert!(!annotation.has_modified_text_language_escape());
+    assert_eq!(
+        annotation
+            .modified_text_semantic_text()
+            .expect("no /TM written by this library"),
+        None,
+        "本库写端不产出未建模的 /TM，故读端无视图"
+    );
+}
