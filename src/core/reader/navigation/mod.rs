@@ -151,7 +151,23 @@ impl Document {
     /// 按名称解析命名目标（12.3.2.3）。
     ///
     /// 先查 `/Names /Dests` 名称树（PDF 1.2+），再查目录旧式 `/Dests`
-    /// 字典（PDF 1.1）；名称不存在返回 `None`。
+    /// 字典（PDF 1.1）；名称不存在返回 `None`。两条通道的条目值都可为
+    /// Table 151 数组或含 `/D` 数组的字典（见
+    /// `destination::parse_named_destination`）。
+    ///
+    /// 通道**共存是规范允许的**，不是重名错误：12.3.2.3 NOTE 3
+    /// （PDF32000_2008.pdf `pdftotext -raw` L20532–L20535）原文
+    /// 「The use of strings as destination names is a PDF 1.2 feature. If
+    /// compatibility with earlier versions of PDF is required, only name
+    /// objects may be used to refer to named destinations. A document that
+    /// supports PDF 1.2 can contain both types. However, if backward
+    /// compatibility is not a consideration, applications should use the
+    /// string form of representation in the Dests name tree.」其中
+    /// 「can contain both types」是许可而非禁令，写端据此**不**做跨通道重名
+    /// 校验。规范未规定同名的解析优先级（全篇 `Dests` 只出现在 L3582、L3941、
+    /// L20521–L20535、L35909，均无 shall/should 取舍），故「名称树优先」属
+    /// **库策略**：与 NOTE 3 末尾对写者的 should（推荐文本串形态）一致，
+    /// 也让 1.2+ 文件的新通道覆盖 1.1 遗留条目。
     pub fn named_destination(&self, name: &str) -> Result<Option<Destination>> {
         if let Some(value) = self.name_tree("Dests")?.get(name) {
             let pages = page_tree_index(self)?;

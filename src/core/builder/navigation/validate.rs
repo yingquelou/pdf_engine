@@ -1,7 +1,8 @@
 //! 导航输入的构建期校验：页码范围、名称唯一性、目标操作数与大纲限深/计数。
 //!
 //! 旧式命名目标（12.3.2.3 的 PDF 1.1 通道）的名字是**名字对象**，故额外要求
-//! 可打印 ASCII；该限制属库策略，规范只规定键的形态。
+//! 可打印 ASCII；该限制属库策略，规范只规定键的形态。该通道内数组形态与
+//! `/D` 字典形态共用一个目录字典，故重名判定跨形态进行。
 
 use std::collections::BTreeSet;
 
@@ -10,7 +11,7 @@ use crate::core::reader::navigation::{
 };
 use crate::core::writer::WriteError;
 
-use super::{OutlineEntry, invalid};
+use super::{LegacyDestinationEntry, OutlineEntry, invalid};
 
 pub(super) fn page_labels(labels: &[PageLabelRange], page_count: usize) -> Result<(), WriteError> {
     let mut previous = None;
@@ -54,11 +55,11 @@ pub(super) fn named_destinations(
 }
 
 pub(super) fn legacy_named_destinations(
-    entries: &[(String, Destination)],
+    entries: &[LegacyDestinationEntry],
     page_count: usize,
 ) -> Result<(), WriteError> {
     let mut names = BTreeSet::new();
-    for (name, destination) in entries {
+    for (name, destination, _form) in entries {
         if name.is_empty() {
             return Err(invalid("legacy destination name is empty"));
         }

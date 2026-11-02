@@ -56,7 +56,7 @@ pub use collection::{
 };
 pub use outline::OutlineEntry;
 
-use names::legacy_dests_dict;
+use names::{LegacyDestinationEntry, legacy_dests_dict};
 pub(super) use names::{destination_value, name_tree};
 
 /// 构建器持有的文档级导航配置；空配置时不改写目录。
@@ -64,9 +64,10 @@ pub(super) use names::{destination_value, name_tree};
 pub(crate) struct NavigationState {
     page_labels: Vec<PageLabelRange>,
     named_destinations: Vec<(String, Destination)>,
-    /// 旧式命名目标（12.3.2.3 的 PDF 1.1 形态）：名字 + 显式目标，
-    /// 写入目录 `/Dests` 字典（Table 28 要求该字典是间接引用）。
-    legacy_named_destinations: Vec<(String, Destination)>,
+    /// 旧式命名目标（12.3.2.3 的 PDF 1.1 形态）：名字 + 显式目标 + 值形态
+    /// （Table 151 数组或含 `/D` 数组的字典），一并写入目录 `/Dests` 字典
+    /// （Table 28 要求该字典是间接引用）。
+    legacy_named_destinations: Vec<LegacyDestinationEntry>,
     named_pages: Vec<(String, usize)>,
     /// 命名模板页（12.7.6 `/Names /Templates`）：名称 + 不可见页尺寸。
     templates: Vec<(String, PageSize)>,
@@ -359,6 +360,8 @@ pub(super) fn apply(
         // Table 28：目录 `/Dests`「shall be an indirect reference」——字典本身
         // 写成独立间接对象，目录条目只存引用；对象号沿用 templates::write 的
         // max+1 分配法，且全部校验已在分配之前完成（零字节契约）。
+        // 字典里同时容纳 Table 151 数组形态与 `<< /D … >>` 字典形态（12.3.2.3
+        // 同一句并列两种形态，同属 PDF 1.1 通道，故无额外版本门）。
         let dict = legacy_dests_dict(&navigation.legacy_named_destinations, &page_refs)?;
         let num = doc
             .objects_for_write()

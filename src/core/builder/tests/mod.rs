@@ -143,6 +143,7 @@ mod metadata;
 mod movie;
 mod navigation;
 mod navigation_legacy_dests;
+mod navigation_legacy_dests_dict;
 mod object_layout;
 mod opi;
 mod optional_content;

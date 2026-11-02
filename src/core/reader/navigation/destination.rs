@@ -60,6 +60,17 @@ impl Destination {
 }
 
 /// 命名目标值 → 目的地；值可为目的地数组或含 `/D` 的字典。
+///
+/// 两条命名目标通道共用本函数，取值形态由同一句规范授权（12.3.2.3，
+/// PDF32000_2008.pdf `pdftotext -raw` L20522–L20524）：「The value of this
+/// entry shall be a dictionary in which each key is a destination name and the
+/// corresponding value is either an array defining the destination, using the
+/// syntax shown in Table 151, or a dictionary with a D entry whose value is
+/// such an array.」紧随其后的 NOTE 2（L20525–L20526）说明字典形态用于附加
+/// 属性与 go-to 动作目标；本库只读 `/D`，其余条目不参与目的地解析。
+/// 1.2+ 名称树段落的「The destination value associated with a key in the name
+/// tree may be either an array or a dictionary, as described in the preceding
+/// paragraph.」（L20530–L20531）把同一套形态也给了名称树通道。
 pub(crate) fn parse_named_destination(
     document: &Document,
     value: &Value,
@@ -67,6 +78,8 @@ pub(crate) fn parse_named_destination(
 ) -> Result<Destination, NavigationError> {
     let value = resolve(document, value)?;
     if let Value::Dict(dict) = &value {
+        // 字典形态：目的地在 `/D` 之下，缺 `/D` 即形态不合（上面那句
+        // 规定 `/D` 的值是 such an array，没有可选性）。
         let dest = dict
             .get("D")
             .ok_or_else(|| malformed("named destination dictionary is missing /D"))?;
