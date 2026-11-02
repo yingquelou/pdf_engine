@@ -66,8 +66,9 @@
 //! 替代名（Table 220，raw L23645–L23650 与 14.9.3 raw L32111–L32120；见
 //! [`Field::alternate_name_semantic_text`](crate::core::reader::form::Field::alternate_name_semantic_text)，
 //! 实现在 `reader/form/language_escape.rs`）。
-//! 其余文本串（字段 `/TM`、`/RV` 等）虽然按
-//! 14.9.2.1 同样可带转义，但尚未接线，属诚实缺口。
+//! 其余未列出的 Unicode 文本串虽然按
+//! 14.9.2.1 同样可带转义，但尚未接线，属诚实缺口；字段 `/TM` 与 `/RV`
+//! 已接线（`reader/form/language_escape.rs`）。
 //!
 //! # 边界与库策略（不是 shall）
 //!

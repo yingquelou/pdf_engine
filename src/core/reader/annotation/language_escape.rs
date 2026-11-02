@@ -44,8 +44,8 @@
 //! 同族视图另接了注解 `/Contents` 的语言转义逐段视图与注解字典里**未建模**的
 //! `/TM`（Acrobat/ISO 32000-2 的「修改后文本」条目，ISO 32000-1 无此键），
 //! 分别在 `language_escape_contents.rs` 与 `language_escape_modified_text.rs`；
-//! 字段侧 `/RV` 在 `reader/form/language_escape.rs`。字段映射名 `/TM`
-//! （Table 220，raw L23651）尚未接线，属诚实缺口。
+//! 字段侧的 `/RV`（Table 222）与映射名 `/TM`（Table 220，raw L23651–L23652）
+//! 则都在 `reader/form/language_escape.rs`。
 
 use crate::core::reader::accessibility::{
     LANGUAGE_ESCAPE, LanguageError, LanguageIdentifier, SemanticText,

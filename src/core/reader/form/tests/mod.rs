@@ -3,6 +3,7 @@
 mod choice;
 mod flags;
 mod language_escape;
+mod mapping_name_escape;
 mod merged;
 mod options;
 
