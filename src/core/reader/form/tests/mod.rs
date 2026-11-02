@@ -2,6 +2,7 @@
 
 mod choice;
 mod flags;
+mod language_escape;
 mod merged;
 mod options;
 

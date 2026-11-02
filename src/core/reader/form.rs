@@ -9,7 +9,8 @@
 //!   [`FormOption`]（Table 227 按钮字段可继承、Table 231 选择字段不继承）；
 //!   全限定名由 `/T` 链以 `.` 连接；替代字段名 `/TU`（Table 220，PDF 1.3，
 //!   14.9.3）不可继承，仅在声明该条目的节点上类型化为
-//!   [`Field::alternate_name`]。
+//!   [`Field::alternate_name`]，其 7.9.2.2 语言转义视图在
+//!   [`Field::alternate_name_semantic_text`]（`form/language_escape.rs`）。
 //! - Widget 节点（`/Subtype /Widget`）建模 `/Rect`、`/AP`、`/AS` 与 `/P`；
 //!   外观流内容求值归渲染，动作 `/A` 语义归 E3。
 //! - 字段 `/AA` 附加动作（`/K` `/F` `/V` `/C`，Table 196）经动作模型
@@ -27,6 +28,7 @@ use crate::core::types::{Dict, Document, Value};
 
 mod acro_form;
 mod flags;
+mod language_escape;
 mod merged;
 mod options;
 

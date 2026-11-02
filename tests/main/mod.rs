@@ -24,6 +24,7 @@ mod support;
 
 use support::*;
 
+mod annotation_field_language_escape;
 mod builder_cff_subset;
 mod builder_cid_font;
 mod builder_cmap_extract;

@@ -55,16 +55,23 @@
 //! 书签标题（12.3.3 `/Title`）也已接线，但走「保留原串 + 访问器」形态：
 //! [`OutlineItem::title_semantic_text`](crate::core::reader::navigation::OutlineItem::title_semantic_text)
 //! 等四个访问器按需解析，`OutlineItem::title` 字段仍是不去转义的原串。
-//! 其余文本串（`/T` 标题、`/TU` 字段别名等）虽然按 14.9.2.1 同样
-//! 可带转义，但本切片不接线，属诚实缺口。
+//! 同一形态另接到两处 Unicode 文本串上：注解 `/T` 弹出窗口标题
+//! （12.5.6.1 Table 170，raw L21666–L21668；见
+//! [`Annotation::title_semantic_text`](crate::core::reader::annotation::Annotation::title_semantic_text)，
+//! 实现在 `reader/annotation/language_escape.rs`）与表单字段 `/TU` 替代名
+//! （Table 220，raw L23645–L23650 与 14.9.3 raw L32111–L32120；见
+//! [`Field::alternate_name_semantic_text`](crate::core::reader::form::Field::alternate_name_semantic_text)，
+//! 实现在 `reader/form/language_escape.rs`）。
+//! 其余文本串（注解 `/Subj`、`/NM`、`/DS`，字段 `/TM`、`/RV` 等）虽然按
+//! 14.9.2.1 同样可带转义，但本切片不接线，属诚实缺口。
 //!
 //! # 边界与库策略（不是 shall）
 //!
 //! - 7.9.2.2 把转义定义在 **Unicode 文本串** 中，且 a) 项写明它是
 //!   「the byte sequence 0 followed by 27」，即 UTF-16BE 的 `00 1B`，解码后
 //!   正是 Rust 字符 U+001B。解析器工作在**解码后的字符串**上，因此无需
-//!   再判断源编码；实测 PDFDocEncoding 的第 27 字节按 Annex D 的控制码
-//!   映射解码为 U+0007 而不是 U+001B（见
+//!   再判断源编码； Annex D Table D.1（raw L34054）把 PDFDocEncoding 的
+//!   第 27 字节（0x1b）映射为 U+02D9 DOT ABOVE 而不是 U+001B（见
 //!   [`crate::core::types::PdfTextString`] 的表），所以转义实际上只在
 //!   UTF-16BE 文本串里可达——这与规范一致，不是本库的额外限制。
 //! - 14.9.3（raw L32115–L32116）的 shall「Alternate descriptions are text

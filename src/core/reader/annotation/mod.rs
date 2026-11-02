@@ -3,7 +3,8 @@
 //! - 页面 `/Annots` 数组遍历（直接字典与间接引用均支持），深度/数量/环防护。
 //! - 通用注解字典条目：`/Rect`、`/Subtype`、`/F` 标志（Table 165）、
 //!   `/Contents`、`/T`、`/NM`、`/M`、`/C`、`/CA`、`/AP`/`/AS` 外观流、
-//!   `/BS`/`/BM`/`/Border` 边框（12.5.4）。
+//!   `/BS`/`/BM`/`/Border` 边框（12.5.4）；`/T` 的 7.9.2.2 语言转义视图在
+//!   [`Annotation::title_semantic_text`]（`annotation/language_escape.rs`）。
 //! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A` 原样保留、动作语义由
 //!   E3 的 [`crate::core::reader::action`] 解析，`/Dest` 经
 //!   `Document::annotation_destination` 解析为 12.3.2 目标模型。
@@ -69,6 +70,7 @@ mod entries;
 mod exdata;
 mod flags;
 mod kind;
+mod language_escape;
 mod link;
 mod measure;
 mod mk;

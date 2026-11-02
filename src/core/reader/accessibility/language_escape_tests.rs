@@ -205,7 +205,7 @@ fn semantic_text_from_value_decodes_unicode_and_pdfdocencoded_strings() {
     assert_eq!(parsed.escape_language(), Some(&identifier("ja")));
 
     // 14.9.3 的编码 shall 只允许 PDFDocEncoding 或 Unicode；PDFDocEncoding
-    // 的第 27 字节按 Annex D 的控制码映射解码为 U+0007，不是 U+001B，
+    // 的第 27 字节按 Annex D Table D.1（raw L34054）映射为 U+02D9，不是 U+001B，
     // 因此这种编码里根本不会出现语言转义（与 7.9.2.2 的原文一致）。
     let pdfdoc = text(&format!("{ESCAPE}de{ESCAPE}alt"));
     let parsed = SemanticText::from_value(&pdfdoc).expect("PDFDocEncoding string");
