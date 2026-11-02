@@ -7,7 +7,9 @@
 //!   `/DS` 的 7.9.2.2 语言转义视图在
 //!   [`Annotation::title_semantic_text`]、[`Annotation::subject_semantic_text`]、
 //!   [`Annotation::name_semantic_text`] 与
-//!   [`Annotation::default_style_semantic_text`]（`annotation/language_escape.rs`）。
+//!   [`Annotation::default_style_semantic_text`]（`annotation/language_escape.rs`）；
+//!   `/Contents` 逐段视图与未建模的 `/TM` 在 `annotation/language_escape_contents.rs`
+//!   与 `annotation/language_escape_modified_text.rs`。
 //! - 标记类注解附加条目（12.5.6.2 Table 170）：`/Subj` 主题、`/IRT` 所回复
 //!   注解的间接引用、`/RT` 回复类型，解析在 [`reply`]。
 //! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A` 原样保留、动作语义由
@@ -76,6 +78,8 @@ mod exdata;
 mod flags;
 mod kind;
 mod language_escape;
+mod language_escape_contents;
+mod language_escape_modified_text;
 mod link;
 mod measure;
 mod mk;

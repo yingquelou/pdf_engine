@@ -41,8 +41,11 @@
 //! 存成解码后的 `String`。7.9.2.2 的转义只定义在 Unicode 文本串里，故名字
 //! 形态一律判为「无转义」且不报错——见
 //! [`default_style_semantic_text`](Self::default_style_semantic_text) 的口径。
-//! 其余可带转义的串（字段 `/TM`、`/RV`、注解 `/Contents` 的逐段视图等）尚未
-//! 接线，属诚实缺口。
+//! 同族视图另接了注解 `/Contents` 的语言转义逐段视图与注解字典里**未建模**的
+//! `/TM`（Acrobat/ISO 32000-2 的「修改后文本」条目，ISO 32000-1 无此键），
+//! 分别在 `language_escape_contents.rs` 与 `language_escape_modified_text.rs`；
+//! 字段侧 `/RV` 在 `reader/form/language_escape.rs`。字段映射名 `/TM`
+//! （Table 220，raw L23651）尚未接线，属诚实缺口。
 
 use crate::core::reader::accessibility::{
     LANGUAGE_ESCAPE, LanguageError, LanguageIdentifier, SemanticText,

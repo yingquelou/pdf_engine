@@ -26,7 +26,9 @@
 //! PDFDocEncoding 侧另有一条测试钉住「字面串里的 0x1B 解为 U+02D9、因而
 //! 不构成转义」。
 
+mod contents;
 mod default_style;
+mod modified_text;
 mod name;
 mod subject;
 mod title;
@@ -134,4 +136,38 @@ fn free_text_with_default_style(style: Value) -> Annotation {
             .insert("DS", style),
     )
     .expect("free text annotation parses")
+}
+
+/// 单条 `Text` 注解，`/Contents` 为给定的文本串值（Table 164 的通用条目，
+/// 解析器已建模为 `Annotation::contents`，原串不去转义）。
+fn annotation_with_contents(contents: Value) -> Annotation {
+    let document = doc(vec![catalog_object()]);
+    parse_annotation(
+        &document,
+        0,
+        None,
+        &base_annotation("Text").insert("Contents", contents),
+    )
+    .expect("annotation parses")
+}
+
+/// 单条 `Text` 注解，未建模条目 `/TM` 为给定的字典值。
+///
+/// `parse_annotation` 不读 `TM` 键（ISO 32000-1 无此条目），值原样留在
+/// `Annotation::dict`，供 `language_escape_modified_text.rs` 的视图回查。
+fn annotation_with_modified_text(modified_text: Value) -> Annotation {
+    let document = doc(vec![catalog_object()]);
+    parse_annotation(
+        &document,
+        0,
+        None,
+        &base_annotation("Text").insert("TM", modified_text),
+    )
+    .expect("annotation parses")
+}
+
+/// 既没有 `/Contents` 也没有 `/TM` 的单条 `Text` 注解。
+fn annotation_without_contents_or_modified_text() -> Annotation {
+    let document = doc(vec![catalog_object()]);
+    parse_annotation(&document, 0, None, &base_annotation("Text")).expect("annotation parses")
 }
