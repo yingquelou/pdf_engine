@@ -6,7 +6,7 @@ use crate::core::builder::{Pattern, PdfBuilder};
 use crate::core::types::{Document, PdfFeature};
 
 use super::plan::{GroupPlan, Preflight};
-use super::{annotation, form_field};
+use super::{annotation, annotation_markup, form_field};
 
 impl PdfBuilder {
     /// 创建 `Document` 并写入特征画像；条目顺序与拆分前一致。
@@ -98,6 +98,10 @@ impl PdfBuilder {
             // `/ExData` 3D 标记（13.6.6 Table 313）自 PDF 1.7 引入。
             if entry.annot.ex_data().is_some() {
                 doc.features.borrow_mut().insert(PdfFeature::ThreeDMarkup);
+            }
+            // Table 170 附加条目：`/Subj` `/IRT`（1.5）与 `/RT`（1.6）。
+            for feature in annotation_markup::markup_universal_features(&entry.annot) {
+                doc.features.borrow_mut().insert(feature);
             }
             for feature in annotation::link_features(&entry.annot) {
                 doc.features.borrow_mut().insert(feature);

@@ -1,15 +1,16 @@
-//! 注解 `/T` 标题的语言转义读端测试（ISO 32000-1 7.9.2.2、12.5.6.1
-//! Table 170、14.9.2.1 与 14.9.3）。
+//! 注解 `/T` 标题与 `/Subj` 主题的语言转义读端测试（ISO 32000-1 7.9.2.2、
+//! 12.5.6.2 Table 170、14.9.2.1 与 14.9.3）。
 //!
 //! Table 170（raw L21666–L21668）把 `/T` 定为「显示在注解弹出窗口标题栏的
-//! 文本标签」；7.9.2.2（raw L4242–L4248）允许任意 Unicode 文本串内带
+//! 文本标签」，L21706–L21707 把 `/Subj` 定为「简述注解主题」的文本串；
+//! 7.9.2.2（raw L4242–L4248）允许任意 Unicode 文本串内带
 //! U+001B 定界的语言转义；14.9.2.1（raw L31940–L31941）与 14.9.3 NOTE 3
 //! （raw L32117–L32120）要求「串内转义覆盖 prevailing Lang」。注解字典按
 //! Table 164/Table 170 没有 `/Lang` 条目，故 prevailing 即目录 `/Lang`
 //! （14.9.2.3 raw L31955–L31956「catalogue Lang shall 为全文默认语言」）。
-//! 这里钉住 `Annotation` 的口径：`title` 保留解码原串、`title_text()` 给
-//! 去转义的标题文本、`title_language(prevailing)` 给生效语言、
-//! `title_semantic_text()` 给逐段视图。
+//! 这里钉住 `Annotation` 的口径：`title` / `subject` 保留解码原串、
+//! `title_text()` 与 `subject_text()` 给去转义文本、
+//! `*_language(prevailing)` 给生效语言、`*_semantic_text()` 给逐段视图。
 //!
 //! 7.9.2.2 a) 把转义写成「the byte sequence 0 followed by 27」，即 UTF-16BE
 //! 的 `00 1B`，故夹具用 `PdfTextString` 编出的 UTF-16BE 十六进制串；
@@ -301,4 +302,115 @@ fn annotation_title_literal_pdfdocencoding_escape_byte_is_not_a_language_escape(
 /// 第 `index` 段的转义语言标签（越界即 panic，便于测试失败定位）。
 fn segments_language_tag(text: &SemanticText, index: usize) -> Option<&str> {
     language_tag(text.segments()[index].language())
+}
+
+/// 单条 `Text` 注解，`/Subj` 为给定的文本串值。
+fn annotation_with_subject(subject: Value) -> Annotation {
+    let document = doc(vec![catalog_object()]);
+    parse_annotation(
+        &document,
+        0,
+        None,
+        &base_annotation("Text").insert("Subj", subject),
+    )
+    .expect("annotation parses")
+}
+
+#[test]
+fn annotation_subject_with_language_escape_returns_plain_text_and_declared_language() {
+    // Table 170 L21706–L21707 的 `/Subj` 是文本串，故与 `/T` 共用 7.9.2.2
+    // 的转义口径：原串保留、语言视图按需解析。
+    let subject = format!("{}Rechnung", escape("de"));
+    let annotation = annotation_with_subject(unicode_text(&subject));
+
+    assert_eq!(
+        annotation.subject,
+        Some(unicode_text(&subject)),
+        "/Subj 保留未去转义的原串"
+    );
+    assert!(annotation.has_subject_language_escape());
+    assert_eq!(
+        annotation
+            .subject_semantic_text()
+            .unwrap()
+            .expect("escaped /Subj")
+            .escape_count(),
+        1
+    );
+    assert_eq!(
+        annotation.subject_text().unwrap().as_deref(),
+        Some("Rechnung")
+    );
+    let prevailing = identifier("en");
+    assert_eq!(
+        language_tag(
+            annotation
+                .subject_language(Some(&prevailing))
+                .unwrap()
+                .as_ref()
+        ),
+        Some("de"),
+        "串内转义 shall 覆盖 prevailing Lang（14.9.2.1 raw L31940–L31941）"
+    );
+}
+
+#[test]
+fn annotation_subject_without_escape_keeps_prevailing_lang_entry() {
+    let annotation = annotation_with_subject(Value::String("Invoice".into()));
+    assert!(!annotation.has_subject_language_escape());
+    assert_eq!(
+        annotation.subject_text().unwrap().as_deref(),
+        Some("Invoice"),
+        "无转义时自然文本即原串"
+    );
+    let prevailing = identifier("en-US");
+    assert_eq!(
+        language_tag(
+            annotation
+                .subject_language(Some(&prevailing))
+                .unwrap()
+                .as_ref()
+        ),
+        Some("en-US")
+    );
+    assert_eq!(annotation.subject_language(None).unwrap(), None);
+}
+
+#[test]
+fn annotation_without_subject_has_no_language_view() {
+    let annotation = annotation_without_title();
+    assert_eq!(annotation.subject, None);
+    assert!(!annotation.has_subject_language_escape());
+    assert_eq!(annotation.subject_semantic_text().unwrap(), None);
+    assert_eq!(annotation.subject_text().unwrap(), None);
+    assert_eq!(annotation.subject_language(None).unwrap(), None);
+}
+
+#[test]
+fn annotation_subject_unterminated_escape_is_typed_malformed_error() {
+    // 残缺转义不影响注解读取与 `/T` 视图，只在索取 `/Subj` 语言视图时报错，
+    // 且上下文是 `/Subj`（与 `/T` 的错误串可区分）。
+    let subject = format!("broken {}", unterminated_escape("en"));
+    let annotation = annotation_with_subject(unicode_text(&subject));
+    assert!(annotation.has_subject_language_escape());
+    assert_eq!(
+        annotation.subject,
+        Some(unicode_text(&subject)),
+        "原串仍按解析结果保留"
+    );
+    assert_eq!(annotation.title_text().unwrap(), None, "无 /T 不受影响");
+
+    for result in [
+        annotation.subject_semantic_text().map(|_| ()),
+        annotation.subject_text().map(|_| ()),
+        annotation.subject_language(None).map(|_| ()),
+    ] {
+        let error = result.expect_err("unterminated escape shall be rejected");
+        assert!(
+            matches!(error, LanguageError::Malformed(_)),
+            "残缺转义应是类型化 Malformed，got {error:?}"
+        );
+        assert!(error.to_string().contains("annotation /Subj"), "{error}");
+        assert!(error.to_string().contains("not terminated"), "{error}");
+    }
 }

@@ -10,7 +10,7 @@ use super::entries::{
 };
 use super::{
     Annotation, AnnotationError, AnnotationFlags, AnnotationSubtype, Result, exdata, malformed,
-    measure, mk, movie, printer_mark, redact, sound, subtype, trap_net, watermark,
+    measure, mk, movie, printer_mark, redact, reply, sound, subtype, trap_net, watermark,
 };
 use crate::core::reader::three_d::ThreeDError;
 use crate::core::types::{Dict, Document, Value};
@@ -72,6 +72,7 @@ pub(super) fn parse_annotation(
         name: parse_text_string(dict, "NM")?,
         modified_date: parse_text_string(dict, "M")?,
         creation_date: parse_text_string(dict, "CreationDate")?,
+        subject: parse_text_string(dict, "Subj")?,
         color: parse_number_array(dict, "C", false)?,
         interior_color: parse_number_array(dict, "IC", false)?,
         opacity: parse_opacity(dict)?,
@@ -146,6 +147,8 @@ pub(super) fn parse_annotation(
             ),
         },
         measure: measure::parse_measure(document, dict)?,
+        in_reply_to: reply::parse_in_reply_to(dict)?,
+        reply_type: reply::parse_reply_type(dict)?,
         ex_data: exdata::parse_external_data(document, dict.get("ExData"), "annotation /ExData")?,
         dict: dict.clone(),
     })

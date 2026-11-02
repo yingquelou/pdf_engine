@@ -7,7 +7,10 @@ use crate::core::types::{PdfFeature, PdfVersion};
 use crate::core::writer::WriteError;
 
 use super::plan::{AnnotPlan, Preflight};
-use super::{annotation, annotation_exdata, embedded_file, form_field, rendition, sound, three_d};
+use super::{
+    annotation, annotation_exdata, annotation_markup, embedded_file, form_field, rendition, sound,
+    three_d,
+};
 
 impl PdfBuilder {
     /// 为注解、字段树与各文档级对象池分配对象号；顺序与拆分前一致。
@@ -28,6 +31,21 @@ impl PdfBuilder {
                 .annotations
                 .iter()
                 .map(|entry| &entry.annot)
+                .collect::<Vec<_>>(),
+        )?;
+        // 标记类注解 `/IRT`（Table 170）指向另一条注解：句柄范围、自引用与
+        // 「两条注解同页」的 shall 同样在任何对象号分配前完成；页号取自注册
+        // 表，与下方循环绑定的页一致。
+        annotation_markup::validate_in_reply_to(
+            &self
+                .annotations
+                .iter()
+                .map(|entry| &entry.annot)
+                .collect::<Vec<_>>(),
+            &self
+                .annotations
+                .iter()
+                .map(|entry| entry.page)
                 .collect::<Vec<_>>(),
         )?;
         let mut annotation_nums = vec![0i64; self.annotations.len()];
@@ -83,6 +101,8 @@ impl PdfBuilder {
             annotation::measure_feature_gate(&entry.annot, self.version)?;
             // `/ExData` 3D 标记（13.6.6）PDF 1.7 门禁。
             annotation::markup_3d_feature_gate(&entry.annot, self.version)?;
+            // Table 170 附加条目：`/Subj` `/IRT` PDF 1.5、`/RT` PDF 1.6 门禁。
+            annotation_markup::markup_universal_feature_gate(&entry.annot, self.version)?;
             // Link 专有条目按 Table 173 的版本门起分组门禁。
             annotation::link_feature_gate(&entry.annot, self.version)?;
             // Trap 网络跟踪条目（14.11.6 Table 366）PDF 1.4 / 1.3 门禁。

@@ -6,6 +6,7 @@
 //! `mk` 覆盖外观特性字典 `/MK`（Table 189）与图标适配字典 `/IF`（Table 247），
 //! `measure` 覆盖 12.9 的 measure 字典（Table 261–263），
 //! `exdata` 覆盖 3D 标记的 `/ExData` 外部数据字典（13.6.6 Table 313），
+//! `reply` 覆盖标记类注解的 `/Subj` `/IRT` `/RT` 附加条目（12.5.6.2 Table 170），
 //! `watermark` 覆盖 Watermark 的固定打印字典 `/FixedPrint`（Table 190/191），
 //! `printer_mark` 覆盖 Printer's mark 注解的 `/MN` 与表单项（Table 362/363），
 //! `trap_net` 覆盖 Trap 网络注解的跟踪条目与表单条目（14.11.6 Table 366/367），
@@ -23,6 +24,7 @@ mod mk;
 mod movie;
 mod printer_mark;
 mod redact;
+mod reply;
 mod sound;
 mod subtype;
 mod support;

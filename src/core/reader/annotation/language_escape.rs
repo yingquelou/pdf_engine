@@ -1,4 +1,5 @@
-//! 注解 `/T` 标题的 Unicode 语言转义视图（ISO 32000-1 7.9.2.2 与 14.9.2.1）。
+//! 注解 `/T` 标题与 `/Subj` 主题的 Unicode 语言转义视图（ISO 32000-1
+//! 7.9.2.2 与 14.9.2.1）。
 //!
 //! 规范原文（`docs/PDF32000_2008.pdf` 的 `pdftotext -raw` 行号）：
 //!
@@ -21,9 +22,10 @@
 //!   本库按通用条目把 `/T` 解析为 [`Annotation::title`]，因此这些子类型
 //!   共用同一视图。
 //!
-//! 形态与书签标题（12.3.3 `/Title`）一致：`Annotation::title` 保留**不去
-//! 转义的原串**，语言视图按需由此处的访问器解析，解析路径与既有测试零改动。
-//! `/Subj`、`/NM`、`/DS` 等其余 Unicode 串尚未接线，属诚实缺口。
+//! 形态与书签标题（12.3.3 `/Title`）一致：`Annotation::title` 与
+//! `Annotation::subject` 保留**不去转义的原串**，语言视图按需由此处的访问器
+//! 解析，解析路径与既有测试零改动。`/NM`、`/DS` 等其余 Unicode 串尚未接线，
+//! 属诚实缺口。
 
 use crate::core::reader::accessibility::{
     LANGUAGE_ESCAPE, LanguageError, LanguageIdentifier, SemanticText,
@@ -86,6 +88,56 @@ impl Annotation {
     ) -> Result<Option<LanguageIdentifier>, LanguageError> {
         Ok(self
             .title_semantic_text()?
+            .and_then(|text| text.effective_language(prevailing)))
+    }
+
+    /// 主题 `/Subj`（Table 170 的 L21706–L21707：「(Optional; PDF 1.5) Text
+    /// representing a short description of the subject being addressed by the
+    /// annotation」）里是否出现 7.9.2.2 的 Unicode 语言转义序列。
+    ///
+    /// 与 [`has_title_language_escape`](Self::has_title_language_escape) 同
+    /// 一口径：只判断 U+001B 是否存在、不校验合法性；无 `/Subj` 为 `false`。
+    pub fn has_subject_language_escape(&self) -> bool {
+        self.subject
+            .as_ref()
+            .and_then(text_value)
+            .is_some_and(|text| text.contains(LANGUAGE_ESCAPE))
+    }
+
+    /// 主题 `/Subj` 按 7.9.2.2 解析出的 [`SemanticText`] 视图：逐段的转义
+    /// 语言与去转义文本（14.9.2.1 raw L31940–L31941 同款 shall）。
+    ///
+    /// 没有 `/Subj` 时返回 `Ok(None)`；残缺转义与不可解码的值返回
+    /// [`LanguageError::Malformed`]，读取注解本身不因残缺转义失败。
+    pub fn subject_semantic_text(&self) -> Result<Option<SemanticText>, LanguageError> {
+        let Some(subject) = self.subject.as_ref() else {
+            return Ok(None);
+        };
+        let text = SemanticText::from_value(subject)
+            .map_err(|error| LanguageError::Malformed(format!("annotation /Subj: {error}")))?;
+        Ok(Some(text))
+    }
+
+    /// 主题 `/Subj` 去掉全部语言转义后的自然文本；无 `/Subj` 返回 `Ok(None)`。
+    ///
+    /// 不含转义时与 [`Annotation::subject`] 解码后的原串相同。
+    pub fn subject_text(&self) -> Result<Option<String>, LanguageError> {
+        Ok(self.subject_semantic_text()?.map(|text| text.plain_text()))
+    }
+
+    /// 主题 `/Subj` 生效的语言（14.9.2.1 的 shall：串内 Unicode 语言转义
+    /// **覆盖** prevailing Lang entry）。
+    ///
+    /// 注解字典没有 `/Lang` 条目，故 `prevailing` 由调用方传入
+    /// `Document::document_language` 的结果；有转义时返回**首个转义**的语言
+    /// 并忽略 `prevailing`，无转义时原样返回 `prevailing`，无 `/Subj` 返回
+    /// `Ok(None)`。逐段语言见 [`subject_semantic_text`](Self::subject_semantic_text)。
+    pub fn subject_language(
+        &self,
+        prevailing: Option<&LanguageIdentifier>,
+    ) -> Result<Option<LanguageIdentifier>, LanguageError> {
+        Ok(self
+            .subject_semantic_text()?
             .and_then(|text| text.effective_language(prevailing)))
     }
 }

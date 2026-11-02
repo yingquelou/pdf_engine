@@ -71,7 +71,7 @@ pub use types::{
     OpiTagText, OpiVersion, OptionalContentGroup, OutputIntent, OutputIntentProfile,
     PageBoundaries, PageSize, PaintType, PdfAnnotation, Placement, PolygonIntent,
     PrintFieldAttributes, PrintFieldChecked, PrintFieldRole, RadialShading, Rendition,
-    RenditionAction, RenditionOperation, RubyAlign, RubyPosition, SampledFunction,
+    RenditionAction, RenditionOperation, ReplyType, RubyAlign, RubyPosition, SampledFunction,
     SelectorRendition, Separation, SeparationInfo, SetOcgStateAction, Shading, ShadingOptions,
     ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction,
     SoundEncoding, SpanProperties, StampIcon, StitchingFunction, StructureAttribute,

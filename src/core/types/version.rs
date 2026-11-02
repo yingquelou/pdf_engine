@@ -138,6 +138,12 @@ pub enum PdfFeature {
     DigitalSignatures,
     /// 文本注解标记状态条目（`/State`、`/StateModel`），PDF 1.3 引入。
     AnnotationMarkupState,
+    /// 标记类注解的主题条目 `/Subj`（12.5.6.2 Table 170），PDF 1.5 引入。
+    AnnotationSubject,
+    /// 标记类注解的回复目标 `/IRT`（12.5.6.2 Table 170），PDF 1.5 引入。
+    AnnotationInReplyTo,
+    /// 标记类注解的回复类型名 `/RT`（12.5.6.2 Table 170），PDF 1.6 引入。
+    AnnotationReplyType,
     /// Line 注解端点样式与填充色条目（`/LE`、`/IC`，Table 175），PDF 1.4 引入。
     LineAnnotationArrowEndings,
     /// Line 注解引线条目（`/LL`、`/LLE`、`/Cap`、`/IT`，Table 175），PDF 1.6 引入。
@@ -430,7 +436,9 @@ impl PdfFeature {
             | PdfFeature::LayoutExtendedAttributes
             | PdfFeature::StructureTypeExtensions
             | PdfFeature::StructureExpandedText
-            | PdfFeature::SpanAlternateText => PdfVersion::V1_5,
+            | PdfFeature::SpanAlternateText
+            | PdfFeature::AnnotationSubject
+            | PdfFeature::AnnotationInReplyTo => PdfVersion::V1_5,
             PdfFeature::SoftMaskMatte
             | PdfFeature::LineAnnotationLeader
             | PdfFeature::PolygonCloudIntent
@@ -445,7 +453,8 @@ impl PdfFeature {
             | PdfFeature::TagSuspects
             | PdfFeature::LayoutColumnAttributes
             | PdfFeature::StructureUserProperties
-            | PdfFeature::ViewerPrintScaling => PdfVersion::V1_6,
+            | PdfFeature::ViewerPrintScaling
+            | PdfFeature::AnnotationReplyType => PdfVersion::V1_6,
             PdfFeature::LineAnnotationArrowEndings => PdfVersion::V1_4,
             PdfFeature::LineAnnotationCaption
             | PdfFeature::PolygonDimensionIntent
@@ -492,6 +501,9 @@ impl fmt::Display for PdfFeature {
             PdfFeature::MarkupAnnotations => "markup annotations",
             PdfFeature::DigitalSignatures => "digital signature field",
             PdfFeature::AnnotationMarkupState => "text annotation markup state",
+            PdfFeature::AnnotationSubject => "annotation subject (/Subj)",
+            PdfFeature::AnnotationInReplyTo => "annotation in reply to (/IRT)",
+            PdfFeature::AnnotationReplyType => "annotation reply type (/RT)",
             PdfFeature::LineAnnotationArrowEndings => "line annotation arrow endings",
             PdfFeature::LineAnnotationLeader => "line annotation leader settings",
             PdfFeature::LineAnnotationCaption => "line annotation caption settings",

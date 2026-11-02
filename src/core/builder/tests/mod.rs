@@ -21,6 +21,7 @@
 //! - `annotation_printer_mark`：Printer's mark 注解 `/F` `/MN` 与表单条目（Table 362/363）的写出、校验与 PDF 1.4 门禁；
 //! - `annotation_trap_net`：Trap 网络注解跟踪条目（Table 366）与表单条目（Table 367）的写出、校验、每页唯一与 PDF 1.3/1.4 门禁；
 //! - `annotation_exdata`：`/ExData` 3D 标记（13.6.6 Table 313）的 `/3DA` `/3DV` `/MD5` 写出、跨注解目标校验与 PDF 1.7 门禁；
+//! - `annotation_markup`：标记类注解 Table 170 附加条目（`/Subj` `/IRT` `/RT`）的写出、`/IRT` 同页与分组校验、归属/依赖校验与 PDF 1.5/1.6 门禁；
 //! - `annotation_mk`：外观特性字典 `/MK`（Table 189）与图标适配 `/IF`（Table 247）的取值契约、Screen 归属与 PDF 1.5 门禁；
 //! - `hide_action`：Hide 动作 `/T` 目标解析与 `/H`（Table 210）的写出、校验与 PDF 1.2 门禁；
 //! - `sound`：声音对象（13.3 Table 294）、Sound 动作（Table 208）与 Sound 注解（Table 185）的流对象分配、引用解析与 PDF 1.2 门禁；
@@ -97,6 +98,7 @@ mod annotation_free_text;
 mod annotation_geometry;
 mod annotation_line;
 mod annotation_link;
+mod annotation_markup;
 mod annotation_measure;
 mod annotation_mk;
 mod annotation_popup;

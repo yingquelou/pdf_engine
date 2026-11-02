@@ -16,7 +16,8 @@
 //! `/Measure` 测量字典（Table 261–263）；`mk` 覆盖外观特性字典 `/MK`（Table 189）
 //! 与图标适配字典 `/IF`（Table 247）；`watermark` 覆盖 Watermark 的固定打印
 //! 字典 `/FixedPrint`（Table 190/191）；`exdata` 覆盖 3D 标记注解的外部数据
-//! 字典 `/ExData`（13.6.6 Table 313）；`printer_mark` 覆盖 Printer's mark
+//! 字典 `/ExData`（13.6.6 Table 313）；`markup` 覆盖标记类注解的 Table 170
+//! 附加条目 `/Subj` `/IRT` `/RT`；`printer_mark` 覆盖 Printer's mark
 //! 注解的 `/MN` 与 `/F`/外观契约（14.11.3 Table 362）；`trap_net` 覆盖
 //! Trap 网络注解的跟踪条目与 `/F`/外观契约（14.11.6 Table 366），子类型
 //! 归属守卫集中在 `guard`。
@@ -28,6 +29,7 @@ mod geometry;
 mod guard;
 mod kind;
 mod link;
+mod markup;
 mod measure;
 mod mk;
 mod movie;
@@ -48,6 +50,7 @@ pub use geometry::PolygonIntent;
 pub use kind::AnnotationKind;
 use link::LinkEntries;
 pub use link::LinkHighlightMode;
+pub use markup::ReplyType;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 pub use mk::{AppearanceCharacteristics, IconFit, IconScaleWhen, IconScaling};
 use printer_mark::PrinterMarkEntries;
@@ -113,6 +116,9 @@ pub struct PdfAnnotation {
     trap_network: Option<TrapNetworkEntries>,
     modified_date: Option<String>,
     creation_date: Option<String>,
+    subject: Option<String>,
+    in_reply_to: Option<usize>,
+    reply_type: Option<ReplyType>,
     color: Option<Vec<f64>>,
     interior_color: Option<Vec<f64>>,
     opacity: Option<f64>,
@@ -174,6 +180,9 @@ impl PdfAnnotation {
             trap_network: None,
             modified_date: None,
             creation_date: None,
+            subject: None,
+            in_reply_to: None,
+            reply_type: None,
             color: None,
             interior_color: None,
             opacity: None,
@@ -658,6 +667,7 @@ impl PdfAnnotation {
             markup.validate()?;
         }
         self.validate_subtype_entries()?;
+        self.validate_markup_universal_entries()?;
         printer_mark::validate(self)?;
         trap_net::validate(self)?;
         Ok(())

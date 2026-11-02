@@ -7,6 +7,7 @@
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
 //! - `annotation`：注解字典（`/Annots` 间接对象与目标引用解析）；
 //! - `annotation_exdata`：`/ExData` 3D 标记（13.6.6 Table 313）的 `/3DA` 跨注解校验；
+//! - `annotation_markup`：标记类注解 Table 170 附加条目（`/Subj` `/IRT` `/RT`）的写出、`/IRT` 跨注解同页校验与版本门禁；
 //! - `annotation_popup`：`/Popup` 与 `/Parent` 的单侧声明补出与配对冲突校验；
 //! - `embedded_file`：嵌入文件与文件规格（`/EmbeddedFiles` 名称树）；
 //! - `form_field`：AcroForm 字段树对象分配与 Widget 字典写出；
@@ -39,6 +40,7 @@ mod alloc_groups;
 mod alloc_pools;
 mod annotation;
 mod annotation_exdata;
+mod annotation_markup;
 mod annotation_mk;
 mod annotation_popup;
 mod catalog_tree;

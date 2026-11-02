@@ -46,6 +46,8 @@ impl FeatureProfile {
 /// - `/Type /Sound`、`/Subtype /Sound`、`/S /Sound` → SoundObjects（1.2）
 /// - `/Subtype /Movie`、`/S /Movie` → MovieObjects（1.2）
 /// - `/Subtype /Markup3D` → ThreeDMarkup（1.7）
+/// - 注解字典（`/Type /Annot`）的 `/Subj` `/IRT` → AnnotationSubject /
+///   AnnotationInReplyTo（1.5），`/RT` → AnnotationReplyType（1.6）
 /// - `/Subtype /PrinterMark`，或 `/Subtype /Form` 带 `/MarkStyle` `/Colorants`
 ///   之一 → PrinterMarks（1.4）
 /// - `/Subtype /TrapNet` → TrapNetworks（1.3），带 `/LastModified` 时另记
@@ -213,6 +215,20 @@ fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     // ExData、ISO 示例写作 Markup3D，写法不唯一，故只按 `/Subtype` 命中。
     if d.get("Subtype").and_then(|v| v.as_name()) == Some("Markup3D") {
         features.insert(PdfFeature::ThreeDMarkup);
+    }
+    // 标记类注解的附加通用条目（12.5.6.2 Table 170）：`/Subj` 与 `/IRT`
+    // 为 PDF 1.5，`/RT` 为 PDF 1.6。只在 `/Type /Annot` 的字典上登记，
+    // 避免别处的同名键误判。
+    if d.get("Type").and_then(|v| v.as_name()) == Some("Annot") {
+        if d.0.contains_key("Subj") {
+            features.insert(PdfFeature::AnnotationSubject);
+        }
+        if d.0.contains_key("IRT") {
+            features.insert(PdfFeature::AnnotationInReplyTo);
+        }
+        if d.0.contains_key("RT") {
+            features.insert(PdfFeature::AnnotationReplyType);
+        }
     }
     // 打印机标记（PDF 1.4）：PrinterMark 注解 `/Subtype /PrinterMark`
     // （14.11.3 Table 362），以及带 `/MarkStyle` 或 `/Colorants` 的 Form

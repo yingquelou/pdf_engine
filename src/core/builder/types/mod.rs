@@ -82,7 +82,7 @@ pub use annotation::{
     BorderArray, BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FixedPrint,
     FreeTextIntent, IconFit, IconScaleWhen, IconScaling, LineEndStyle, LineIntent,
     LinkHighlightMode, Markup3D, Measure, NumberFormat, NumberFraction, NumberLabelOrder,
-    PdfAnnotation, PolygonIntent, StampIcon,
+    PdfAnnotation, PolygonIntent, ReplyType, StampIcon,
 };
 pub use artifact::{ArtifactAttachment, ArtifactProperties, ArtifactSubtype, ArtifactType};
 pub use cid::{CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics, CidWidth};

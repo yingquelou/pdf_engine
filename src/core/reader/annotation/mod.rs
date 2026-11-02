@@ -3,8 +3,11 @@
 //! - 页面 `/Annots` 数组遍历（直接字典与间接引用均支持），深度/数量/环防护。
 //! - 通用注解字典条目：`/Rect`、`/Subtype`、`/F` 标志（Table 165）、
 //!   `/Contents`、`/T`、`/NM`、`/M`、`/C`、`/CA`、`/AP`/`/AS` 外观流、
-//!   `/BS`/`/BM`/`/Border` 边框（12.5.4）；`/T` 的 7.9.2.2 语言转义视图在
-//!   [`Annotation::title_semantic_text`]（`annotation/language_escape.rs`）。
+//!   `/BS`/`/BM`/`/Border` 边框（12.5.4）；`/T` 与 `/Subj` 的 7.9.2.2 语言
+//!   转义视图在 [`Annotation::title_semantic_text`] 与
+//!   [`Annotation::subject_semantic_text`]（`annotation/language_escape.rs`）。
+//! - 标记类注解附加条目（12.5.6.2 Table 170）：`/Subj` 主题、`/IRT` 所回复
+//!   注解的间接引用、`/RT` 回复类型，解析在 [`reply`]。
 //! - 标记类注解公共条目 `/QuadPoints`（12.5.6.4）；`/A` 原样保留、动作语义由
 //!   E3 的 [`crate::core::reader::action`] 解析，`/Dest` 经
 //!   `Document::annotation_destination` 解析为 12.3.2 目标模型。
@@ -78,6 +81,7 @@ mod movie;
 mod parse;
 mod printer_mark;
 mod redact;
+mod reply;
 mod sound;
 pub mod subtype;
 mod trap_net;
@@ -92,6 +96,7 @@ pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 pub use mk::{AppearanceCharacteristics, IconFit, IconScaleWhen, IconScaling};
 use parse::parse_annotation;
 pub use printer_mark::{PrinterMark, PrinterMarkForm};
+pub use reply::ReplyType;
 pub use subtype::{
     BorderEffect, BorderEffectStyle, CalloutLine, CaptionPosition, FreeTextIntent, LineEndStyle,
     LineIntent, PolygonIntent, StampIcon,
@@ -221,6 +226,8 @@ pub struct Annotation {
     pub modified_date: Option<Value>,
     /// `/CreationDate` 创建日期文本串。
     pub creation_date: Option<Value>,
+    /// `/Subj` 主题简述文本串（12.5.6.2 Table 170，PDF 1.5）。
+    pub subject: Option<Value>,
     /// `/C` 标注颜色。
     pub color: Option<Vec<f64>>,
     /// `/IC` 背景色。
@@ -336,6 +343,10 @@ pub struct Annotation {
     /// `/Parent` 父注解引用（Table 183：Popup 关联的父注解；
     /// Widget 上指向字段字典）。
     pub parent: Option<(i64, i64)>,
+    /// `/IRT` 所回复注解的间接引用（Table 170，PDF 1.5）。
+    pub in_reply_to: Option<(i64, i64)>,
+    /// `/RT` 回复类型名（Table 170，PDF 1.6；仅 `/IRT` 存在时有意义）。
+    pub reply_type: Option<ReplyType>,
     /// `/Measure` 测量字典（12.9；Line 与 Polygon/PolyLine，PDF 1.7）。
     pub measure: Option<Measure>,
     /// 3D 标记注解的外部数据字典 `/ExData`（13.6.6 Table 313，PDF 1.7）。
