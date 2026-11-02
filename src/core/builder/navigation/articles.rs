@@ -9,6 +9,7 @@ use crate::core::types::{Array, Dict, Document, Object, PdfFeature, PdfVersion, 
 use crate::core::writer::WriteError;
 
 use super::super::metadata::DocumentInfo;
+use super::PdfBuilder;
 use super::invalid;
 
 /// 写端文章线上的一个 bead（12.4.3 Table 161）。
@@ -160,4 +161,17 @@ pub(super) fn write_threads(
 
     doc.features.borrow_mut().insert(PdfFeature::ArticleThreads);
     Ok(thread_refs)
+}
+
+impl PdfBuilder {
+    /// 追加一条文章线（12.4.3），按注册顺序写入目录 `/Threads`。
+    ///
+    /// 线程与 bead 作为间接对象写出，bead 链首尾闭合，所在页面追加
+    /// `/B` 数组。bead 至少一个、页索引须在范围内、矩形须为有限数，
+    /// 否则构建返回 [`WriteError::InvalidObject`]；目标版本低于 1.1
+    /// 返回 [`WriteError::UnsupportedVersion`]。
+    pub fn add_article_thread(&mut self, thread: ArticleThread) -> &mut Self {
+        self.navigation.article_threads.push(thread);
+        self
+    }
 }

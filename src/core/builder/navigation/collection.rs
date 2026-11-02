@@ -10,6 +10,7 @@ use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
 use super::super::types::text_string_value;
+use super::PdfBuilder;
 use super::invalid;
 
 /// 集合字段的数据类型（Table 157 `/Subtype` 的 8 个标准值）。
@@ -323,4 +324,16 @@ fn is_valid_name(name: &str) -> bool {
                     '(' | ')' | '<' | '>' | '[' | ']' | '{' | '}' | '/' | '%' | '#'
                 )
         })
+}
+
+impl PdfBuilder {
+    /// 设置便携集合（12.3.5），写入目录 `/Collection`。
+    ///
+    /// 字段键须为合法且唯一的 PDF 名字、`/N` 非空、排序字段必须已在
+    /// 模式中声明，否则构建返回 [`WriteError::InvalidObject`]；目标版本
+    /// 低于 1.7 返回 [`WriteError::UnsupportedVersion`]。
+    pub fn collection(&mut self, collection: Collection) -> &mut Self {
+        self.navigation.collection = Some(collection);
+        self
+    }
 }

@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use crate::core::types::{Dict, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
+use super::PdfBuilder;
 use super::invalid;
 
 /// 构建期注册的单个扩展：前缀 + BaseVersion + ExtensionLevel。
@@ -73,4 +74,28 @@ pub(super) fn extensions_dict(extensions: &[RegisteredExtension]) -> Dict {
         dict = dict.insert(prefix.clone(), Value::Dict(inner));
     }
     dict
+}
+
+impl PdfBuilder {
+    /// 注册一个开发者扩展（7.12），写入目录 `/Extensions` 扩展字典。
+    ///
+    /// 每个前缀写一个直接对象开发者扩展字典（Table 50）：
+    /// `/Type /DeveloperExtensions`、`/BaseVersion` 为 `base_version`
+    /// 的版本名、`/ExtensionLevel` 为 `extension_level`。前缀须为
+    /// Annex E 的 4 字节字母数字注册前缀形态且互不重复、
+    /// `extension_level` 须为正整数、`base_version` 不得超过目标文档
+    /// 版本（7.12.3），否则构建返回 [`WriteError::InvalidObject`]；
+    /// 目标版本低于 1.7 返回 [`WriteError::UnsupportedVersion`]，
+    /// 均零字节输出。全部内容嵌套在目录内，不分配间接对象号。
+    pub fn add_extension(
+        &mut self,
+        prefix: impl Into<String>,
+        base_version: PdfVersion,
+        extension_level: i64,
+    ) -> &mut Self {
+        self.navigation
+            .extensions
+            .push((prefix.into(), base_version, extension_level));
+        self
+    }
 }

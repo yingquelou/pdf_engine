@@ -15,6 +15,7 @@ use crate::core::builder::types::PageSize;
 use crate::core::types::{Array, Dict, Document, Object, PdfFeature, Value};
 use crate::core::writer::WriteError;
 
+use super::PdfBuilder;
 use super::invalid;
 
 /// 校验模板页名称与尺寸；在分配任何对象号之前调用，保持零字节输出契约。
@@ -78,4 +79,21 @@ pub(super) fn write(doc: &mut Document, templates: &[(String, PageSize)]) -> Vec
     }
     doc.features.borrow_mut().insert(PdfFeature::PageTemplates);
     refs
+}
+
+impl PdfBuilder {
+    /// 注册一个命名模板页（12.7.6），写入目录 `/Names /Templates` 名称树，
+    /// 返回注册顺序下标。
+    ///
+    /// 模板页是不可见页面：以 `/Type /Template` 的间接对象写出，`/MediaBox`
+    /// 取自 `size`，**不含** `/Parent` 与 `/B`，也不进入页面树（`/Pages`
+    /// 的 `/Kids` 与 `/Count` 不变）。本切片不生成内容流，模板页没有
+    /// `/Contents`。名称为名称树键（PDF 文本串），须非空、不含 NUL 且
+    /// 互不重复，否则构建返回 [`WriteError::InvalidObject`]；目标版本低于
+    /// 1.3 返回 [`WriteError::UnsupportedVersion`]，均零字节输出。
+    pub fn add_template(&mut self, name: impl Into<String>, size: PageSize) -> usize {
+        let handle = self.navigation.templates.len();
+        self.navigation.templates.push((name.into(), size));
+        handle
+    }
 }

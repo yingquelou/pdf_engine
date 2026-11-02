@@ -18,6 +18,7 @@ use crate::core::types::{Dict, Document, Object, PdfFeature, PdfTextString, Valu
 use crate::core::writer::WriteError;
 
 use super::super::types::text_string_value;
+use super::PdfBuilder;
 use super::{invalid, name_tree};
 
 /// 写端幻灯片配置（13.5 Table 297）。
@@ -253,4 +254,20 @@ fn hex_bytes(hex: &str) -> Option<Vec<u8>> {
         bytes.push((high * 16 + low) as u8);
     }
     Some(bytes)
+}
+
+impl PdfBuilder {
+    /// 注册一个备用演示幻灯片（13.5），写入目录
+    /// `/Names /AlternatePresentations` 名称树。
+    ///
+    /// 每个资源的值为对应嵌入文件在目录 `/Names /EmbeddedFiles` 中的
+    /// 文件规格引用，因此须先通过 [`PdfBuilder::embed_file`] 注册。幻灯片
+    /// 名称须非空且唯一、`/StartResource` 须为已声明的资源键、资源键须非空
+    /// 且唯一、引用的嵌入文件名须已注册，否则构建返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.4 返回
+    /// [`WriteError::UnsupportedVersion`]，均零字节输出。
+    pub fn add_alternate_presentation(&mut self, show: Slideshow) -> &mut Self {
+        self.navigation.alternate_presentations.push(show);
+        self
+    }
 }
