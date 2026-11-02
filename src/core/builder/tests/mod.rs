@@ -138,6 +138,7 @@ mod image_xobject;
 mod metadata;
 mod movie;
 mod navigation;
+mod navigation_legacy_dests;
 mod object_layout;
 mod opi;
 mod optional_content;

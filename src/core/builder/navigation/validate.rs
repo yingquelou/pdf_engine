@@ -1,4 +1,7 @@
 //! 导航输入的构建期校验：页码范围、名称唯一性、目标操作数与大纲限深/计数。
+//!
+//! 旧式命名目标（12.3.2.3 的 PDF 1.1 通道）的名字是**名字对象**，故额外要求
+//! 可打印 ASCII；该限制属库策略，规范只规定键的形态。
 
 use std::collections::BTreeSet;
 
@@ -44,6 +47,38 @@ pub(super) fn named_destinations(
     for (name, destination) in entries {
         if !names.insert(name.as_str()) {
             return Err(invalid(format!("duplicate named destination {name:?}")));
+        }
+        destination_page(destination, page_count)?;
+    }
+    Ok(())
+}
+
+pub(super) fn legacy_named_destinations(
+    entries: &[(String, Destination)],
+    page_count: usize,
+) -> Result<(), WriteError> {
+    let mut names = BTreeSet::new();
+    for (name, destination) in entries {
+        if name.is_empty() {
+            return Err(invalid("legacy destination name is empty"));
+        }
+        if name.contains('\0') {
+            return Err(invalid(format!(
+                "legacy destination name {name:?} contains a NUL character"
+            )));
+        }
+        // 名字对象不是文本串：写出时无需任何编码，故本库只接受可打印 ASCII
+        // （0x20–0x7E）。这是**库策略**而非规范 shall——规范只说键是名字对象。
+        if name.chars().any(|c| !matches!(c, '\u{20}'..='\u{7e}')) {
+            return Err(invalid(format!(
+                "legacy destination name {name:?} is not printable ASCII; destination names are \
+                 name objects, not text strings"
+            )));
+        }
+        if !names.insert(name.as_str()) {
+            return Err(invalid(format!(
+                "duplicate legacy destination name {name:?}"
+            )));
         }
         destination_page(destination, page_count)?;
     }

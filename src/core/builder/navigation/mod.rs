@@ -14,7 +14,8 @@
 //! 与幻灯片对象从现有最大对象号之后分配，因此不影响既有对象布局。
 //!
 //! 版本门控（构建期返回 [`WriteError::UnsupportedVersion`]，零字节输出）：
-//! 大纲自 PDF 1.1 起、命名目标自 1.2 起、页面标签、命名页面与命名模板页
+//! 大纲与旧式命名目标（目录 `/Dests`，12.3.2.3 的 PDF 1.1 形态）自 1.1 起、
+//! 命名目标自 1.2 起、页面标签、命名页面与命名模板页
 //! 自 1.3 起、备用演示自 1.4 起、扩展字典（目录 `/Extensions`）自 1.7 起。输入非法（页码越界、名称重复、标签起点
 //! 乱序、颜色越界、未知嵌入文件等）返回 [`WriteError::InvalidObject`]，
 //! 同样零字节输出。
@@ -55,6 +56,7 @@ pub use collection::{
 };
 pub use outline::OutlineEntry;
 
+use names::legacy_dests_dict;
 pub(super) use names::{destination_value, name_tree};
 
 /// 构建器持有的文档级导航配置；空配置时不改写目录。
@@ -62,6 +64,9 @@ pub(super) use names::{destination_value, name_tree};
 pub(crate) struct NavigationState {
     page_labels: Vec<PageLabelRange>,
     named_destinations: Vec<(String, Destination)>,
+    /// 旧式命名目标（12.3.2.3 的 PDF 1.1 形态）：名字 + 显式目标，
+    /// 写入目录 `/Dests` 字典（Table 28 要求该字典是间接引用）。
+    legacy_named_destinations: Vec<(String, Destination)>,
     named_pages: Vec<(String, usize)>,
     /// 命名模板页（12.7.6 `/Names /Templates`）：名称 + 不可见页尺寸。
     templates: Vec<(String, PageSize)>,
@@ -197,6 +202,11 @@ pub(super) fn apply(
             "named destinations",
         ),
         (
+            !navigation.legacy_named_destinations.is_empty(),
+            PdfVersion::V1_1,
+            "legacy named destinations (catalog /Dests)",
+        ),
+        (
             !navigation.named_pages.is_empty(),
             PdfVersion::V1_3,
             "named pages",
@@ -253,6 +263,7 @@ pub(super) fn apply(
 
     validate::page_labels(&navigation.page_labels, page_count)?;
     validate::named_destinations(&navigation.named_destinations, page_count)?;
+    validate::legacy_named_destinations(&navigation.legacy_named_destinations, page_count)?;
     validate::named_pages(&navigation.named_pages, page_count)?;
     templates::validate(&navigation.templates)?;
     validate::outline(&navigation.outline, page_count)?;
@@ -342,6 +353,25 @@ pub(super) fn apply(
             names = names.insert("AlternatePresentations", name_tree(show_refs));
         }
         catalog = catalog.insert("Names", Value::Dict(names));
+    }
+
+    if !navigation.legacy_named_destinations.is_empty() {
+        // Table 28：目录 `/Dests`「shall be an indirect reference」——字典本身
+        // 写成独立间接对象，目录条目只存引用；对象号沿用 templates::write 的
+        // max+1 分配法，且全部校验已在分配之前完成（零字节契约）。
+        let dict = legacy_dests_dict(&navigation.legacy_named_destinations, &page_refs)?;
+        let num = doc
+            .objects_for_write()
+            .iter()
+            .map(|object| object.num)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        doc.set_object(Object::new(num, 0, dict));
+        catalog = catalog.insert("Dests", Value::Ref(num, 0));
+        doc.features
+            .borrow_mut()
+            .insert(PdfFeature::LegacyNamedDestinations);
     }
 
     if !navigation.outline.is_empty() {

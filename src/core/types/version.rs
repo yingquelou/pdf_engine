@@ -357,6 +357,9 @@ pub enum PdfFeature {
     /// 字体选择器属性（14.8.2.4.3 Table 332 的 FontFamily/GenericFontFamily/
     /// FontWeight/FontStretch 等；描述符条目见 Table 122），PDF 1.5 引入。
     FontSelectorAttributes,
+    /// 旧式命名目标字典（目录 `/Dests`，12.3.2.3 的 PDF 1.1 形态；
+    /// Table 28 要求该字典**是间接引用**），PDF 1.1 引入。
+    LegacyNamedDestinations,
 }
 
 impl PdfFeature {
@@ -367,7 +370,8 @@ impl PdfFeature {
             | PdfFeature::AnnotationBorderDash
             | PdfFeature::PagePresentation
             | PdfFeature::ArticleThreads
-            | PdfFeature::ThreadAction => PdfVersion::V1_1,
+            | PdfFeature::ThreadAction
+            | PdfFeature::LegacyNamedDestinations => PdfVersion::V1_1,
             PdfFeature::TilingPattern
             | PdfFeature::LinkAnnotationHighlighting
             | PdfFeature::HideAction
@@ -572,6 +576,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::ViewerEnforcement => "viewer preferences enforce array",
             PdfFeature::FontCharacteristics => "font characteristics",
             PdfFeature::FontSelectorAttributes => "font selector attributes",
+            PdfFeature::LegacyNamedDestinations => "legacy catalog /Dests dictionary",
         };
         write!(f, "{name}")
     }
