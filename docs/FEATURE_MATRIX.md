@@ -8,6 +8,8 @@
 >
 > **与 ROADMAP.md 的关系**：本矩阵是事实层（现状盘点，只随代码实测更新）；`docs/ROADMAP.md` 是规划层（把本矩阵中的 ⬜/🟡 条目按价值与依赖组织为开发阶段）。ROADMAP 的阶段条目一律通过本矩阵的章节号回溯。
 >
+> **2026-11-02 07:55 工程债续清一笔（约定 #5 目录化，纯重构、零状态列变化、总览计数不变）**：`reader/structure/tests.rs` 805 行 / 26.7 KiB → `reader/structure/tests/{mod,element_tree,parent_tree,user_properties,attributes,malformed,mark_info}.rs`（最大 155 行 / 5.9 KiB；车道 `1dacc03` → 主树 `3639b21`）；helper 全留 `mod.rs`、子文件 `use super::*;`、零可见性放宽，落地复核 `#[test]` 12↔12、名字集合 27↔27 对称差空、全量 2520 逐项相等、新目录 rustfmt 无输出、clippy 持平 28。逐修订口径复扫后全仓超限文件 **24 个**，下一批候选 `builder/mod.rs` 1105 / 51.5、`builder/tests/structure_mcr_stream.rs` 738 / 27.9、`reader/font/type3/tests.rs` 739 / 24.6
+>
 > **2026-11-02 07:05 工程债续清两笔（约定 #5 目录化，纯重构、零状态列变化、总览计数不变）**：`reader/action/tests.rs` 811 行 → `reader/action/tests/{mod,basic,form,goto,remote,transition,visibility}.rs`（车道 `574faad` → 主树 `c60e127`）；`reader/color_space/mod.rs` 775 行 / 28.8 KiB → `color_space/{mod,error,model,pdf,sample,parse}.rs` + 原 `tests.rs`（车道 `359051a` → 主树 `d49e201`）。两笔逐行搬运、公开 API 与测试叶名零改动，落地复核 `#[test]` 14↔14 与 16↔16、名字集合（group(2)）对称差为空、全量 2520 逐项相等、新目录 rustfmt 无输出、clippy 持平 28。复扫改用逐修订清单（`git ls-tree -r --name-only <rev> src`）后全仓超限文件 **25 个**，下一批候选 `builder/mod.rs` 1105 / 51.5、`reader/structure/tests.rs` 805 / 26.7、`builder/tests/structure_mcr_stream.rs` 738 / 27.9
 >
 > **2026-11-02 06:20 工程债续清三笔（约定 #5 目录化，纯重构、零状态列变化、总览计数不变）**：> `builder/types/image.rs`（785 行 / 29.19 KiB → 7 文件，零可见性放宽，主树 `cacd583`）；> `reader/annotation/subtype.rs` + `reader/annotation/tests/subtype.rs`（709 / 26.76 与 735 / 24.79 → 4 + 5 文件，Table 169/174/175/176/177/178/179/181/182 的子类型条目模型与其测试按 Line 几何 / FreeText / 文本标记-Stamp-Ink 三档分组，主树 `dc6c0f4`）。> 两笔复核口径同前：group(2) 名字对称差空、`#[test]` 计数不变（0↔0、20↔20）、全量 2520 逐项相等、新目录 rustfmt 无输出、clippy 持平 28。
