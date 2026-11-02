@@ -19,6 +19,8 @@ mod extensions;
 mod name_tree;
 pub(crate) use name_tree::{name_tree_entries, number_tree_entries};
 mod outline;
+#[cfg(test)]
+mod outline_tests;
 mod page_labels;
 mod page_tree;
 mod templates;

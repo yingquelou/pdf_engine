@@ -52,7 +52,10 @@
 //! （[`AlternateText::semantic_text_for`](crate::core::reader::accessibility::AlternateText::semantic_text_for)）
 //! 与注解 `/Contents`
 //! （[`Annotation::alternate_description`](crate::core::reader::annotation::Annotation::alternate_description)）。
-//! 其余文本串（书签标题、`/T` 标题、`/TU` 字段别名等）虽然按 14.9.2.1 同样
+//! 书签标题（12.3.3 `/Title`）也已接线，但走「保留原串 + 访问器」形态：
+//! [`OutlineItem::title_semantic_text`](crate::core::reader::navigation::OutlineItem::title_semantic_text)
+//! 等四个访问器按需解析，`OutlineItem::title` 字段仍是不去转义的原串。
+//! 其余文本串（`/T` 标题、`/TU` 字段别名等）虽然按 14.9.2.1 同样
 //! 可带转义，但本切片不接线，属诚实缺口。
 //!
 //! # 边界与库策略（不是 shall）
