@@ -1,4 +1,4 @@
-use super::super::FontError;
+use super::super::super::FontError;
 use super::*;
 
 /// A minimal `.notdef` or `B`: `0 0 hsbw endchar`.

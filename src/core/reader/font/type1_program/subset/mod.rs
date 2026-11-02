@@ -10,10 +10,12 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use super::super::encoding_data;
-use super::{
-    FontResult, Scanner, Token, Type1FontProgram, decrypt, eexec_section, integer, invalid_type1,
-};
+use super::super::{FontResult, encoding_data};
+use super::Type1FontProgram;
+use super::crypto::{decrypt, eexec_section};
+use super::error::invalid_type1;
+use super::private_dict::integer;
+use super::scanner::{Scanner, Token};
 
 /// Number of `0` bytes that terminate the `eexec` section.
 const ZERO_GUARD: usize = 512;
