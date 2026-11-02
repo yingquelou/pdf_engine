@@ -1,7 +1,7 @@
 //! Color space reader model tests.
 
 use super::*;
-use crate::core::types::{Array, Object, StreamData, Trailer, Value};
+use crate::core::types::{Array, Dict, Document, Object, StreamData, Trailer, Value};
 
 fn doc_with_objects(objects: Vec<(i64, Value)>) -> Document {
     let doc = Document::new();
