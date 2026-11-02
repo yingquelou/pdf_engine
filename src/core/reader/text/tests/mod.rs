@@ -1,0 +1,10 @@
+//! Unit tests for content stream text extraction.
+
+mod artifacts_fragments;
+mod composite_fonts;
+mod content_operators;
+mod form_xobjects;
+mod marked_content;
+mod page_tree_limits;
+mod simple_fonts;
+mod support;
