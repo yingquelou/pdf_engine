@@ -55,15 +55,19 @@
 //! 书签标题（12.3.3 `/Title`）也已接线，但走「保留原串 + 访问器」形态：
 //! [`OutlineItem::title_semantic_text`](crate::core::reader::navigation::OutlineItem::title_semantic_text)
 //! 等四个访问器按需解析，`OutlineItem::title` 字段仍是不去转义的原串。
-//! 同一形态另接到两处 Unicode 文本串上：注解 `/T` 弹出窗口标题
+//! 同一形态另接到五处 Unicode 文本串上：注解 `/T` 弹出窗口标题
 //! （12.5.6.1 Table 170，raw L21666–L21668；见
-//! [`Annotation::title_semantic_text`](crate::core::reader::annotation::Annotation::title_semantic_text)，
-//! 实现在 `reader/annotation/language_escape.rs`）与表单字段 `/TU` 替代名
-//! （Table 220，raw L23645–L23650 与 14.9.3 raw L32111–L32120；见
+//! [`Annotation::title_semantic_text`](crate::core::reader::annotation::Annotation::title_semantic_text)）、
+//! 注解 `/Subj` 主题（同表 raw L21706–L21707）、注解 `/NM` 名
+//! （12.5.2 Table 164，raw L21283–L21284）与 FreeText `/DS` 默认样式串
+//! （12.5.6.3 Table 174，raw L21909；`/DS` 另有名字形态的宽容口径，见
+//! [`Annotation::default_style_semantic_text`](crate::core::reader::annotation::Annotation::default_style_semantic_text)），
+//! 四者实现在 `reader/annotation/language_escape.rs`；以及表单字段 `/TU`
+//! 替代名（Table 220，raw L23645–L23650 与 14.9.3 raw L32111–L32120；见
 //! [`Field::alternate_name_semantic_text`](crate::core::reader::form::Field::alternate_name_semantic_text)，
 //! 实现在 `reader/form/language_escape.rs`）。
-//! 其余文本串（注解 `/Subj`、`/NM`、`/DS`，字段 `/TM`、`/RV` 等）虽然按
-//! 14.9.2.1 同样可带转义，但本切片不接线，属诚实缺口。
+//! 其余文本串（字段 `/TM`、`/RV` 等）虽然按
+//! 14.9.2.1 同样可带转义，但尚未接线，属诚实缺口。
 //!
 //! # 边界与库策略（不是 shall）
 //!

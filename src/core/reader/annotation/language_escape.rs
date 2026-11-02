@@ -1,5 +1,7 @@
-//! 注解 `/T` 标题与 `/Subj` 主题的 Unicode 语言转义视图（ISO 32000-1
-//! 7.9.2.2 与 14.9.2.1）。
+//! 注解 `/T` 标题、`/Subj` 主题、`/NM` 注解名与 FreeText `/DS` 默认样式串的
+//! Unicode 语言转义视图（ISO 32000-1
+//! 7.9.2.2、12.5.2 Table 164、12.5.6.2 Table 170、12.5.6.3 Table 174 与
+//! 14.9.2.1）。
 //!
 //! 规范原文（`docs/PDF32000_2008.pdf` 的 `pdftotext -raw` 行号）：
 //!
@@ -22,15 +24,31 @@
 //!   本库按通用条目把 `/T` 解析为 [`Annotation::title`]，因此这些子类型
 //!   共用同一视图。
 //!
-//! 形态与书签标题（12.3.3 `/Title`）一致：`Annotation::title` 与
-//! `Annotation::subject` 保留**不去转义的原串**，语言视图按需由此处的访问器
-//! 解析，解析路径与既有测试零改动。`/NM`、`/DS` 等其余 Unicode 串尚未接线，
-//! 属诚实缺口。
+//! 形态与书签标题（12.3.3 `/Title`）一致：`Annotation::title`、
+//! `Annotation::subject`、`Annotation::name` 与 FreeText 的
+//! `Annotation::default_style` 保留**不去转义的原串**，语言视图按需由此处的
+//! 访问器解析，解析路径与既有测试零改动。已接线的 Unicode 串共四条：
+//!
+//! - `/T` 弹出窗口标题（Table 170）与 `/Subj` 主题（Table 170）；
+//! - `/NM` 注解名（12.5.2 Table 164，raw L21283–L21284「The annotation name,
+//!   a text string uniquely identifying it among all the annotations on its
+//!   page」，PDF 1.4）；
+//! - `/DS` 默认样式串（12.5.6.3 Table 174，raw L21909「A default style
+//!   string, as described in 12.7.3.4, "Rich Text Strings"」，PDF 1.5）。
+//!
+//! `/DS` 的形态与其余三条不同：解析器按库策略用 `parse_name_or_text` 宽容
+//! 接受**名字**与**文本串**两种写法（Table 174 只声明 text string），并统一
+//! 存成解码后的 `String`。7.9.2.2 的转义只定义在 Unicode 文本串里，故名字
+//! 形态一律判为「无转义」且不报错——见
+//! [`default_style_semantic_text`](Self::default_style_semantic_text) 的口径。
+//! 其余可带转义的串（字段 `/TM`、`/RV`、注解 `/Contents` 的逐段视图等）尚未
+//! 接线，属诚实缺口。
 
 use crate::core::reader::accessibility::{
     LANGUAGE_ESCAPE, LanguageError, LanguageIdentifier, SemanticText,
 };
 use crate::core::reader::content::text_value;
+use crate::core::types::Value;
 
 use super::Annotation;
 
@@ -138,6 +156,139 @@ impl Annotation {
     ) -> Result<Option<LanguageIdentifier>, LanguageError> {
         Ok(self
             .subject_semantic_text()?
+            .and_then(|text| text.effective_language(prevailing)))
+    }
+
+    /// 注解名 `/NM`（12.5.2 Table 164，raw L21283–L21284：「The annotation
+    /// name, a text string uniquely identifying it among all the annotations
+    /// on its page」，PDF 1.4）里是否出现 7.9.2.2 的 Unicode 语言转义序列。
+    ///
+    /// 与 [`has_title_language_escape`](Self::has_title_language_escape)、
+    /// [`has_subject_language_escape`](Self::has_subject_language_escape) 同一
+    /// 口径：只判断 U+001B 是否存在、不校验转义是否合法；无 `/NM` 为 `false`。
+    pub fn has_name_language_escape(&self) -> bool {
+        self.name
+            .as_ref()
+            .and_then(text_value)
+            .is_some_and(|text| text.contains(LANGUAGE_ESCAPE))
+    }
+
+    /// 注解名 `/NM` 按 7.9.2.2 解析出的 [`SemanticText`] 视图：逐段的转义语言
+    /// 与去转义文本（14.9.2.1 raw L31940–L31941 同款 shall）。
+    ///
+    /// 没有 `/NM` 时返回 `Ok(None)`；未闭合、码长非 2/4、码字节非 ASCII 字母
+    /// 的残缺转义返回 [`LanguageError::Malformed`]，错误串带
+    /// `annotation /NM` 上下文；读取注解本身不因残缺转义失败，只有索取语言
+    /// 视图时才报错。
+    pub fn name_semantic_text(&self) -> Result<Option<SemanticText>, LanguageError> {
+        let Some(name) = self.name.as_ref() else {
+            return Ok(None);
+        };
+        let text = SemanticText::from_value(name)
+            .map_err(|error| LanguageError::Malformed(format!("annotation /NM: {error}")))?;
+        Ok(Some(text))
+    }
+
+    /// 注解名 `/NM` 去掉全部语言转义后的自然文本；无 `/NM` 返回 `Ok(None)`。
+    ///
+    /// 不含转义时与 [`Annotation::name`] 解码后的原串相同。注意注解名常被
+    /// 用作跨更新的标识（如 `GoToE` 动作的 `/A`、`Markup3D` 的 `/3DA`），
+    /// 那些入口按 12.6.4.4 消费**原串**，本访问器只影响语言视图，不改写
+    /// `name` 字段。
+    pub fn name_text(&self) -> Result<Option<String>, LanguageError> {
+        Ok(self.name_semantic_text()?.map(|text| text.plain_text()))
+    }
+
+    /// 注解名 `/NM` 生效的语言（14.9.2.1 raw L31940–L31941 的 shall：串内
+    /// Unicode 语言转义**覆盖** prevailing Lang entry）。
+    ///
+    /// 注解字典没有 `/Lang` 条目，故 `prevailing` 由调用方传入
+    /// `Document::document_language` 的结果；有转义时返回**首个转义**声明的
+    /// 语言并忽略 `prevailing`，无转义时原样返回 `prevailing`，无 `/NM` 返回
+    /// `Ok(None)`。逐段语言见
+    /// [`name_semantic_text`](Self::name_semantic_text)。
+    pub fn name_language(
+        &self,
+        prevailing: Option<&LanguageIdentifier>,
+    ) -> Result<Option<LanguageIdentifier>, LanguageError> {
+        Ok(self
+            .name_semantic_text()?
+            .and_then(|text| text.effective_language(prevailing)))
+    }
+
+    /// `/DS` 是否为名字形态：解析器用 `parse_name_or_text` 同时接受名字与
+    /// 文本串（见模块文档），此处回查原字典值判别形态，只读不改写。
+    fn default_style_is_name(&self) -> bool {
+        self.default_style.is_some() && self.dict.get("DS").and_then(Value::as_name).is_some()
+    }
+
+    /// FreeText 默认样式串 `/DS`（12.5.6.3 Table 174，raw L21909：「A default
+    /// style string, as described in 12.7.3.4, "Rich Text Strings"」，
+    /// PDF 1.5）里是否出现 7.9.2.2 的 Unicode 语言转义序列。
+    ///
+    /// 与 [`has_name_language_escape`](Self::has_name_language_escape) 的差别
+    /// 只在形态：7.9.2.2 把转义定义在**Unicode 文本串**里，故名字形态的
+    /// `/DS` 一律为 `false`（即使解码出的名字里真有 U+001B 也不按转义处理），
+    /// 无 `/DS` 同为 `false`。
+    pub fn has_default_style_language_escape(&self) -> bool {
+        !self.default_style_is_name()
+            && self
+                .default_style
+                .as_deref()
+                .is_some_and(|text| text.contains(LANGUAGE_ESCAPE))
+    }
+
+    /// 默认样式串 `/DS` 按 7.9.2.2 解析出的 [`SemanticText`] 视图。
+    ///
+    /// 返回 `Ok(None)` 的三种情形：没有 `/DS`；`/DS` 是名字形态（名字不是
+    /// 文本串，转义不适用，按库策略不报错，见模块文档）。文本串形态下残缺
+    /// 转义返回 [`LanguageError::Malformed`]，错误串带 `annotation /DS`
+    /// 上下文；与 `/T`、`/Subj`、`/NM` 一样，读取注解本身不因残缺转义失败。
+    pub fn default_style_semantic_text(&self) -> Result<Option<SemanticText>, LanguageError> {
+        if self.default_style_is_name() {
+            return Ok(None);
+        }
+        let Some(text) = self.default_style.as_deref() else {
+            return Ok(None);
+        };
+        let view = SemanticText::parse(text)
+            .map_err(|error| LanguageError::Malformed(format!("annotation /DS: {error}")))?;
+        Ok(Some(view))
+    }
+
+    /// 默认样式串 `/DS` 去掉全部语言转义后的文本；无 `/DS` 返回 `Ok(None)`。
+    ///
+    /// 文本串形态无转义时、以及名字形态下，返回值都等于
+    /// [`Annotation::default_style`] 原串（名字没有转义可去）。
+    pub fn default_style_text(&self) -> Result<Option<String>, LanguageError> {
+        if self.default_style_is_name() {
+            return Ok(self.default_style.clone());
+        }
+        Ok(self
+            .default_style_semantic_text()?
+            .map(|text| text.plain_text()))
+    }
+
+    /// 默认样式串 `/DS` 生效的语言（14.9.2.1 的 shall：串内 Unicode 语言转义
+    /// **覆盖** prevailing Lang entry）。
+    ///
+    /// `prevailing` 由调用方传入 `Document::document_language` 的结果。文本串
+    /// 形态有转义时返回**首个转义**的语言并忽略 `prevailing`；无转义与名字
+    /// 形态都原样返回 `prevailing`（名字不携带转义，故永不覆盖）；没有 `/DS`
+    /// 返回 `Ok(None)`。逐段语言见
+    /// [`default_style_semantic_text`](Self::default_style_semantic_text)。
+    pub fn default_style_language(
+        &self,
+        prevailing: Option<&LanguageIdentifier>,
+    ) -> Result<Option<LanguageIdentifier>, LanguageError> {
+        if self.default_style.is_none() {
+            return Ok(None);
+        }
+        if self.default_style_is_name() {
+            return Ok(prevailing.cloned());
+        }
+        Ok(self
+            .default_style_semantic_text()?
             .and_then(|text| text.effective_language(prevailing)))
     }
 }
