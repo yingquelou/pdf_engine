@@ -73,7 +73,7 @@ impl Document {
     ///
     /// `font_file3_subtype` restricts the stream `/Subtype` required when the
     /// descriptor uses `/FontFile3`; `None` leaves validation to the caller.
-    fn font_program(
+    pub(super) fn font_program(
         &self,
         value: &Value,
         expected_subtype: &str,

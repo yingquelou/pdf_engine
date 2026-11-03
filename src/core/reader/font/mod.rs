@@ -15,6 +15,7 @@ mod embedded_program;
 mod encoding;
 mod encoding_data;
 mod encoding_unicode;
+mod mmtype1;
 pub(crate) mod predefined_cmaps;
 mod simple;
 mod standard14_metrics;
@@ -36,6 +37,7 @@ pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 pub use encoding::{EncodingMapping, PredefinedEncoding, SimpleFontEncoding, strip_subset_tag};
+pub use mmtype1::MultipleMasterFont;
 pub(crate) use simple::SimpleFontToUnicode;
 pub use simple::Type1Font;
 pub use truetype::{
@@ -112,3 +114,5 @@ fn number(value: &Value) -> Option<f64> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_mmtype1;
