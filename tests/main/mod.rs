@@ -44,6 +44,7 @@ mod builder_type3;
 mod cmap_use_cmap;
 mod content_text;
 mod crypto;
+mod document_requirements;
 mod fdf;
 mod font_truetype;
 mod font_type1;

@@ -23,6 +23,7 @@ mod outline;
 mod outline_tests;
 mod page_labels;
 mod page_tree;
+mod requirements;
 mod templates;
 #[cfg(test)]
 mod tests;
@@ -41,6 +42,10 @@ pub use extensions::{DeveloperExtension, ExtensionsDictionary};
 pub use outline::{Outline, OutlineDestination, OutlineItem};
 pub use page_labels::{PageLabelRange, PageLabelStyle, PageLabels};
 pub(crate) use page_tree::{PageTreeIndex, page_tree_index};
+pub use requirements::{
+    DocumentRequirements, HandlerType, RequirementDictionary, RequirementHandler, RequirementType,
+    RequirementsIssue,
+};
 pub use templates::TemplatePage;
 pub use viewer_preferences::{
     Duplex, NonFullScreenPageMode, PageBoundaryName, PrintScaling, ReadingDirection,
