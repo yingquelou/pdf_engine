@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod javascript;
 mod write;
 
 /// 追加一段文本到缓冲（避免闭包与长度读取的借用冲突）。

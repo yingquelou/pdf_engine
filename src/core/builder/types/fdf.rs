@@ -4,8 +4,9 @@
 //!
 //! 口径：未建模的原始条目按 [`FdfField::dict`] / [`FdfDictionary::dict`]
 //! 原样保留；已建模条目以类型化字段为准——`Some` 覆盖原值，`None`
-//! 删除字典里的同名条目。文本串（`/T`、`/Status`、类型化的 `/Target`）
-//! 统一写成十六进制串（[`PdfTextString::encode`]：PDFDocEncoding 优先，
+//! 删除字典里的同名条目。文本串（`/T`、`/Status`、类型化的 `/Target`
+//! 与 Table 245 的脚本正文）统一写成十六进制串
+//! （[`PdfTextString::encode`]：PDFDocEncoding 优先，
 //! 含不可映射字符时回退 UTF-16BE 带 BOM），与读端
 //! `content::text_value` 的解码口径配对。
 //!
@@ -14,7 +15,7 @@
 //! match（在本车道写集之外），故门禁直接比较 [`PdfVersion`] 常量，
 //! 与 `navigation/mod.rs` 既有门禁口径一致。
 
-use crate::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField};
+use crate::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField, FdfJavaScript};
 use crate::core::types::{Array, Dict, PdfTextString, PdfVersion, Value};
 
 /// 文本串值：写端一律输出十六进制串（Table 246 `/T`、Table 243
@@ -95,6 +96,38 @@ pub(crate) fn field_value(field: &FdfField) -> Value {
     Value::Dict(dict)
 }
 
+/// FDF `/JavaScript` 脚本字典（Table 245，raw L24951–L24981）→ 直接
+/// 字典值。类型化的 `/Before`、`/After`、`/AfterPermsReady` 写成十六进制
+/// 文本串（与读端 `text_value` 配对）并覆盖原值；类型化为 `None` 时保留
+/// 字典里的原值——那必然是文本流/间接引用等就地不可确证的形态，不丢弃。
+/// `/Doc` 在原数组**已被完整解码**或原数组缺失时按类型化配对写出，否则
+/// 保留原数组（含流形态的配对整体留档）。
+pub(crate) fn javascript_value(entry: &FdfJavaScript) -> Value {
+    let mut dict = entry.dict.clone();
+    for (key, text) in [
+        ("Before", entry.before.as_deref()),
+        ("After", entry.after.as_deref()),
+        ("AfterPermsReady", entry.after_perms_ready.as_deref()),
+    ] {
+        if let Some(text) = text {
+            dict = dict.insert(key, text_string_value(text));
+        }
+    }
+    // 原数组里未进入类型化列表的配对（流形态）只能整体保留；完整解码
+    // 或原数组缺失时才以类型化配对为准（可与读端逐字节往返）。
+    let keep_raw_doc = matches!(dict.get("Doc"), Some(Value::Array(items))
+        if entry.doc_scripts.len() * 2 != items.0.len());
+    if !keep_raw_doc && !entry.doc_scripts.is_empty() {
+        let mut pairs = Vec::with_capacity(entry.doc_scripts.len() * 2);
+        for script in &entry.doc_scripts {
+            pairs.push(Value::Name(script.name.clone()));
+            pairs.push(text_string_value(&script.script));
+        }
+        dict = dict.insert("Doc", Value::Array(Array(pairs)));
+    }
+    Value::Dict(dict)
+}
+
 /// FDF 字典（Table 243）→ 直接对象值。
 pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
     // Table 243 续表 — `/Target`（string；PDF 1.4；raw L24927–L24929）：
@@ -106,6 +139,15 @@ pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
         .as_deref()
         .map(text_string_value)
         .or_else(|| fdf.target.clone());
+    // Table 243 续表 — `/JavaScript`（dictionary；PDF 1.4；raw
+    // L24933–L24934）：类型化脚本字典（Table 245）优先，`None` 时透传
+    // 原值（含非字典形态，由 `navigation/fdf.rs` 装配前按 Table 243
+    // 的 dictionary 类型拒绝）。
+    let javascript = fdf
+        .javascript_scripts
+        .as_ref()
+        .map(javascript_value)
+        .or_else(|| fdf.javascript.clone());
     let dict = overlay(
         fdf.dict.clone(),
         &[
@@ -139,8 +181,8 @@ pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
             ("Target", target),
             // Table 243 — `/EmbeddedFDFs` 内嵌 FDF 文件规范数组（原值；PDF 1.4）。
             ("EmbeddedFDFs", fdf.embedded_fdfs.clone()),
-            // Table 243 — `/JavaScript` 文档级脚本字典（原值；PDF 1.4，Table 245）。
-            ("JavaScript", fdf.javascript.clone()),
+            // Table 243 — `/JavaScript` 文档级脚本字典（类型化优先，原值兜底；PDF 1.4）。
+            ("JavaScript", javascript),
         ],
     );
     Value::Dict(dict)

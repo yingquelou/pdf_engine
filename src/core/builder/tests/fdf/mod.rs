@@ -1,10 +1,15 @@
 //! FDF 写端单元测试（12.7.7）：文件结构形状、Table 242/243/246 版本
 //! 门禁（`UnsupportedVersion` 零字节）与结构校验（`InvalidObject`
 //! 零字节）、读模型序列化（含未建模条目保留与 `/Version` 补写）。
+//! `/JavaScript`（Table 243 续表 + Table 245）的写出与校验见子模块
+//! javascript.rs。
 
 use super::*;
 use crate::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField};
 use crate::core::types::{Array, PdfVersion};
+
+/// Table 245 JavaScript 字典的写出、原值保留与装配前校验。
+mod javascript;
 
 /// 最小合法规格目录（Table 242：`/FDF` 必填直接字典）。
 fn minimal_catalog() -> Dict {
@@ -59,6 +64,7 @@ fn bare_fdf_dictionary() -> FdfDictionary {
         target_frame: None,
         embedded_fdfs: None,
         javascript: None,
+        javascript_scripts: None,
         dict: Dict::new(),
     }
 }

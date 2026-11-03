@@ -13,8 +13,8 @@ use crate::core::reader::navigation::resolve;
 use crate::core::types::{Dict, Document, Value};
 
 use super::{
-    FdfDictionary, FdfDocument, FdfError, FdfField, MAX_FDF_FIELD_DEPTH, MAX_FDF_FIELD_NODES,
-    malformed,
+    FdfDictionary, FdfDocument, FdfError, FdfField, FdfJavaScript, FdfJavaScriptScript,
+    MAX_FDF_FIELD_DEPTH, MAX_FDF_FIELD_NODES, malformed,
 };
 
 type Result<T> = std::result::Result<T, FdfError>;
@@ -112,6 +112,8 @@ pub(crate) fn fdf_document(document: &Document) -> Result<Option<FdfDocument>> {
         .get("Target")
         .filter(|value| matches!(value, Value::String(_) | Value::HexString(_)))
         .and_then(text_value);
+    let javascript = fdf_dict.get("JavaScript").cloned();
+    let javascript_scripts = javascript_dict(javascript.as_ref());
 
     Ok(Some(FdfDocument {
         catalog_version,
@@ -128,10 +130,61 @@ pub(crate) fn fdf_document(document: &Document) -> Result<Option<FdfDocument>> {
             target: fdf_dict.get("Target").cloned(),
             target_frame,
             embedded_fdfs: fdf_dict.get("EmbeddedFDFs").cloned(),
-            javascript: fdf_dict.get("JavaScript").cloned(),
+            javascript,
+            javascript_scripts,
             dict: fdf_dict,
         },
     }))
+}
+
+/// Table 243 续表 — `/JavaScript`（dictionary；PDF 1.4；raw
+/// L24933–L24934）指向的 Table 245 JavaScript 字典（raw L24951–L24981）。
+///
+/// 只就地确证**文本串**形态：`/Before`（L24953–L24956）、`/After`
+/// （L24957–L24960）、`/AfterPermsReady`（L24961–L24969）与 `/Doc`
+/// （L24970–L24981）规范都写成「text string **or** text stream」，
+/// 其中字面/十六进制串走 `text_value` 解码（与写端
+/// `text_string_value` 的十六进制文本串策略配对），文本流与间接引用
+/// 保持 `None`——读端宽容，原值留在 [`FdfJavaScript::dict`] 与
+/// `FdfDictionary::javascript` 里，不报错、不丢弃。非字典形态的
+/// `/JavaScript` 整体返回 `None`（写端按 Table 243 在装配前拒绝）。
+fn javascript_dict(value: Option<&Value>) -> Option<FdfJavaScript> {
+    let dict = value?.as_dict()?.clone();
+    let script_text = |key: &str| {
+        dict.get(key)
+            .filter(|value| matches!(value, Value::String(_) | Value::HexString(_)))
+            .and_then(text_value)
+    };
+    // Table 245 — `/Doc`：偶数个元素、每对「name + text string or
+    // text stream」。仅两端都可确证的对进入类型化列表，其余（含
+    // 奇数长度的尾部）整体保留在 `/Doc` 原值里。
+    let doc_scripts = match dict.get("Doc") {
+        Some(Value::Array(items)) => items
+            .0
+            .chunks(2)
+            .filter_map(|pair| {
+                let [name, script] = pair else {
+                    return None;
+                };
+                let name = name.as_name()?;
+                if !matches!(script, Value::String(_) | Value::HexString(_)) {
+                    return None;
+                }
+                Some(FdfJavaScriptScript {
+                    name: name.to_string(),
+                    script: text_value(script)?,
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(FdfJavaScript {
+        before: script_text("Before"),
+        after: script_text("After"),
+        after_perms_ready: script_text("AfterPermsReady"),
+        doc_scripts,
+        dict,
+    })
 }
 
 /// 解析一个字段数组（`/Fields` 根数组或 `/Kids` 子数组）。

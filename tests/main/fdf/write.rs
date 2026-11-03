@@ -47,6 +47,7 @@ fn dictionary() -> FdfDictionary {
         target_frame: None,
         embedded_fdfs: None,
         javascript: None,
+        javascript_scripts: None,
         dict: Dict::new(),
     }
 }

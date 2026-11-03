@@ -2,12 +2,16 @@
 //!
 //! 全部通过写入端形态的 `Document`（对象预置缓存、无源文件）驱动
 //! `Document::fdf()` 路径，逐条覆盖：检测宽容策略、目录/FDF 字典条目
-//! 类型化、字段树全限定名连接、直接/间接 Kids、未建模条目原样保留、
+//! 类型化（`/Target` 串形态；`/JavaScript` 见子模块 javascript.rs）、
+//! 字段树全限定名连接、直接/间接 Kids、未建模条目原样保留、
 //! 整型标志校验、环与深度上限拒绝、便捷枚举接口。
 
 use crate::core::types::{Array, Dict, Document, Object, StartXref, Trailer, Value, Xref};
 
 use super::{FdfDocument, FdfError, MAX_FDF_FIELD_DEPTH};
+
+/// `/JavaScript`（Table 243 续表 + Table 245）的类型化解码测试。
+mod javascript;
 
 /// 组装 trailer `/Root → 1 0 R` 的文件级 Document（对象全部预置缓存）。
 fn doc_from_objects(objects: Vec<Object>) -> Document {
@@ -142,11 +146,23 @@ fn fdf_dictionary_entries_typed_where_thin() {
     assert_eq!(fdf.fdf.target, Some(Value::String("_top".to_string())));
     // Table 243 续表 — `/Target`（raw L24927）本轮类型化：串形态解码。
     assert_eq!(fdf.fdf.target_frame.as_deref(), Some("_top"));
-    // /ID 与 /JavaScript 以原值保留（本切片不展开建模）
+    // /ID 以原值保留（本切片不展开建模）
     assert!(fdf.fdf.identifier.is_some());
+    // Table 243 续表（raw L24933–L24934）—— `/JavaScript` 本轮类型化：
+    // 字典形态给出类型化视图（空字典 = Table 245 四条目皆 None），
+    // 原值同时保留（全形态覆盖见 tests/javascript.rs）。
     assert!(fdf.fdf.javascript.is_some());
+    let scripts = fdf.fdf.javascript_scripts.expect("字典形态应被类型化");
+    assert_eq!(scripts.before, None);
+    assert_eq!(scripts.after, None);
+    assert_eq!(scripts.after_perms_ready, None);
+    assert!(scripts.doc_scripts.is_empty());
     // 全部条目同时可以从原始字典取回
     assert!(fdf.fdf.dict.get("JavaScript").is_some());
+    assert!(matches!(
+        fdf.fdf.dict.get("JavaScript"),
+        Some(Value::Dict(_))
+    ));
 }
 
 #[test]

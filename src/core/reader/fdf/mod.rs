@@ -13,9 +13,10 @@
 //! - FDF 字典 Table 243：`/F`、`/ID`、`/Fields`、`/Status`、`/Pages`、
 //!   `/Encoding`、`/Annots`、`/Differences`、`/Target`、`/EmbeddedFDFs`、
 //!   `/JavaScript`。除 `/Fields` 展开为 [`FdfField`] 树、`/Status`、
-//!   `/Encoding` 与 `/Target`（L24927：浏览器框架名字符串）解码外，
-//!   其余按原值保留（文件规范、数组与字典不在本切片类型化，属剩余
-//!   缺口）。
+//!   `/Encoding`、`/Target`（L24927：浏览器框架名字符串）与
+//!   `/JavaScript`（L24933：指向 Table 245 的脚本字典，raw
+//!   L24951–L24981）解码外，其余按原值保留（文件规范、数组与字典
+//!   不在本切片类型化，属剩余缺口）。
 //! - FDF 字段字典 Table 246（L24983 起）：`/Kids`（直接**或**间接子项）、
 //!   `/T`（必填文本串）、`/V`、`/Ff`、`/SetFf`、`/ClrFf`、`/F`（整型
 //!   widget 注解标志，与字段树 PDF 侧 `/F` 文件规范**不同名同义**）、
@@ -24,7 +25,9 @@
 //!
 //! 版本门禁说明：`/Pages`/`/Annots`/`/APRef`/`/IF` 标注 PDF 1.3、
 //! `/Differences`/`/Target`/`/EmbeddedFDFs`/`/JavaScript` 标注 PDF 1.4、
-//! `/RV` 标注 PDF 1.5。新增 [`PdfFeature`](crate::core::types::PdfFeature)
+//! `/RV` 标注 PDF 1.5（Table 245 的 `/AfterPermsReady` 标注 PDF 1.6，
+//! 由写端 `builder/navigation/fdf.rs` 直接比较 `PdfVersion` 常量把关）。
+//! 新增 [`PdfFeature`](crate::core::types::PdfFeature)
 //! 变体需要改动 `src/core/types/version/feature.rs`，超出本车道写集，
 //! 故读端一律宽容读取、不做版本拒绝（保守行为，待核项：门禁位）。
 
@@ -112,6 +115,54 @@ pub struct FdfField {
     pub dict: Dict,
 }
 
+/// FDF `/JavaScript` 文档级脚本字典（Table 245，raw L24951–L24981）的
+/// 类型化读模型，由 [`FdfDictionary::javascript_scripts`] 承载。
+///
+/// Table 245 的四个条目都可取「文本串**或**文本流」两种形态（raw
+/// L24953–L24981），本切片只就地确证文本串：字面串与十六进制串经
+/// `text_value` 解码为 `Some`，流形态与间接引用保持 `None`，原值留在
+/// [`Self::dict`] 与 [`FdfDictionary::javascript`] 里不丢弃（读端宽容，
+/// 与 `/Target` 同一口径）。文本流需要独立间接对象承载字节，而
+/// 12.7.7.2 的 FDF 写端只产出**一个**间接对象，故该形态属剩余缺口。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FdfJavaScript {
+    /// `/Before` 导入前执行的脚本（文本串形态；raw L24953–L24956）。
+    pub before: Option<String>,
+    /// `/After` 导入后执行的脚本（文本串形态；raw L24957–L24960）。
+    pub after: Option<String>,
+    /// `/AfterPermsReady` 权限就绪后执行的脚本（文本串形态；
+    /// Optional; PDF 1.6；raw L24961–L24969）。
+    pub after_perms_ready: Option<String>,
+    /// `/Doc` 附加全局脚本（raw L24970–L24981：数组按「名字 + 文本串
+    /// 或文本流」成对排列）。只有**两端都可确证**的对进入本表；含流
+    /// 形态的配对整体保留在 [`Self::dict`] 的 `/Doc` 原值中。
+    pub doc_scripts: Vec<FdfJavaScriptScript>,
+    /// 原始 JavaScript 字典（保留全部条目，含流形态与未建模键）。
+    pub dict: Dict,
+}
+
+impl FdfJavaScript {
+    /// 按脚本名查找 `/Doc` 中的首个匹配脚本正文。
+    pub fn doc_script(&self, name: &str) -> Option<&str> {
+        self.doc_scripts
+            .iter()
+            .find(|script| script.name == name)
+            .map(|script| script.script.as_str())
+    }
+}
+
+/// Table 245 `/Doc` 数组的一对：脚本名（name 对象）+ 脚本正文
+/// （文本串形态的 text string）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FdfJavaScriptScript {
+    /// 配对第一项：脚本名（Table 245 raw L24974–L24975「The first
+    /// element of each pair shall be a name」）。
+    pub name: String,
+    /// 配对第二项：脚本正文（仅文本串形态被解码；raw L24975–L24976
+    /// 「the second shall be a text string or text stream」）。
+    pub script: String,
+}
+
 /// FDF 字典（Table 243）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FdfDictionary {
@@ -146,8 +197,20 @@ pub struct FdfDictionary {
     pub target_frame: Option<String>,
     /// `/EmbeddedFDFs` 内嵌 FDF 文件规范数组原值（PDF 1.4）。
     pub embedded_fdfs: Option<Value>,
-    /// `/JavaScript` 文档级脚本字典原值（PDF 1.4，Table 245）。
+    /// `/JavaScript` 原值（保留全部形态，不丢弃；类型化解码见
+    /// [`Self::javascript_scripts`]）。
     pub javascript: Option<Value>,
+    /// `/JavaScript` 文档级脚本字典（Table 245）的类型化视图（PDF 1.4；
+    /// Table 243 续表 raw L24933–L24934「JavaScript dictionary
+    /// (Optional; PDF 1.4) A JavaScript dictionary (see Table 245)
+    /// defining document-level JavaScript scripts」）。仅**字典形态**
+    /// 给出 `Some`；字典内只有文本串形态的 `/Before`、`/After`、
+    /// `/AfterPermsReady` 与「名字 + 文本串」的 `/Doc` 配对被解码，
+    /// 流形态与间接引用保持原位（[`FdfJavaScript::dict`] 与
+    /// [`Self::javascript`] 不丢弃）。非字典形态（如把 `/JavaScript`
+    /// 直接写成串）读端宽容：本字段为 `None`，原值保留；写端装配前
+    /// 按 Table 243 的 dictionary 类型拒绝。
+    pub javascript_scripts: Option<FdfJavaScript>,
     /// 原始 FDF 字典（保留全部未建模条目）。
     pub dict: Dict,
 }

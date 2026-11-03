@@ -18,10 +18,13 @@
 //! - Table 242 — 目录 `/Version`：PDF 1.4；
 //! - Table 243 — FDF 字典 `/Encoding` `/Pages` `/Annots`：PDF 1.3；
 //!   `/Differences` `/Target` `/EmbeddedFDFs` `/JavaScript`：PDF 1.4；
+//! - Table 245 — JavaScript 字典 `/AfterPermsReady`：PDF 1.6；
 //! - Table 246 — 字段 `/APRef` `/IF`：PDF 1.3；`/RV`：PDF 1.5。
 //!
 //! 结构非法（`/FDF` 缺失、`/Fields` 与 `/Pages` 或 `/Status` 同现、
-//! `/Target` 非字符串（Table 243：string）、字段缺 `/T`、整型标志非整数、
+//! `/Target` 非字符串（Table 243：string）、`/JavaScript` 非字典
+//! （Table 243：dictionary）、Table 245 的脚本条目既非文本串又非文本流
+//! 或 `/Doc` 非数组/配对不齐、字段缺 `/T`、整型标志非整数、
 //! 超出读端深度/数量上限等）返回
 //! [`WriteError::InvalidObject`]，同样零字节。
 //!
@@ -47,6 +50,19 @@ const GATED_1_4_FDF_KEYS: [&str; 4] = ["Differences", "Target", "EmbeddedFDFs", 
 const GATED_1_3_FIELD_KEYS: [&str; 2] = ["APRef", "IF"];
 /// Table 246 — 整型标志条目。
 const INTEGER_FIELD_KEYS: [&str; 6] = ["Ff", "SetFf", "ClrFf", "F", "SetF", "ClrF"];
+/// Table 245 — JavaScript 字典中的脚本条目（`/AfterPermsReady` 另需 1.6 档位）。
+const JAVASCRIPT_SCRIPT_KEYS: [&str; 3] = ["Before", "After", "AfterPermsReady"];
+
+/// Table 245 脚本条目的可接受形态：文本串（字面/十六进制/ASCII85）或
+/// **间接引用**的文本流（按原值写出，引用是否与单对象写出一致属剩余
+/// 缺口）。直接内联流被拒绝：12.7.7.2 的写端只走一个间接对象，
+/// `write_value` 无法把流字节带进字典文本，产出会是静默损坏的文件。
+fn script_value_ok(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::String(_) | Value::HexString(_) | Value::Ascii85String(_) | Value::Ref(..)
+    )
+}
 
 fn unsupported(entry: &str, minimum: PdfVersion, version: PdfVersion) -> WriteError {
     WriteError::UnsupportedVersion(format!(
@@ -135,6 +151,66 @@ pub(super) fn validate(catalog: &Dict, version: PdfVersion) -> Result<(), WriteE
         return Err(invalid(
             "FDF dictionary /Target must be a string (Table 243)",
         ));
+    }
+    // Table 243 续表 — `/JavaScript` 类型是 dictionary（PDF 1.4；raw
+    // L24933–L24934「A JavaScript dictionary (see Table 245) defining
+    // document-level JavaScript scripts」），指向 Table 245（raw
+    // L24951–L24981）。字典形态按 Table 245 逐条目把关。
+    if let Some(value) = fdf.get("JavaScript") {
+        let Some(scripts) = value.as_dict() else {
+            return Err(invalid(
+                "FDF dictionary /JavaScript must be a dictionary (Table 243)",
+            ));
+        };
+        // Table 245 — `/AfterPermsReady`（Optional; PDF 1.6；raw
+        // L24961–L24969）：档位门禁先于类型校验，与 FDF 字典条目同口径。
+        if scripts.get("AfterPermsReady").is_some() && gate < PdfVersion::V1_6 {
+            return Err(unsupported(
+                "FDF /JavaScript /AfterPermsReady (Table 245)",
+                PdfVersion::V1_6,
+                gate,
+            ));
+        }
+        // Table 245 — `/Before` `/After` `/AfterPermsReady` 是
+        // 「text string or text stream」；`/Doc` 是偶数长度的
+        // 「name + text string or text stream」配对数组。
+        for key in JAVASCRIPT_SCRIPT_KEYS {
+            if let Some(entry) = scripts.get(key)
+                && !script_value_ok(entry)
+            {
+                return Err(invalid(format!(
+                    "FDF /JavaScript /{key} must be a text string or text stream (Table 245)"
+                )));
+            }
+        }
+        if let Some(entry) = scripts.get("Doc") {
+            let array = entry
+                .as_array()
+                .ok_or_else(|| invalid("FDF /JavaScript /Doc must be an array (Table 245)"))?;
+            if array.0.len() % 2 != 0 {
+                return Err(invalid(
+                    "FDF /JavaScript /Doc shall contain an even number of elements (Table 245)",
+                ));
+            }
+            for pair in array.0.chunks(2) {
+                // 偶数长度已在上面把关，此处配对必然齐全；不齐即拒。
+                let [name, value] = pair else {
+                    return Err(invalid(
+                        "FDF /JavaScript /Doc pairs shall be complete (Table 245)",
+                    ));
+                };
+                if name.as_name().is_none() {
+                    return Err(invalid(
+                        "FDF /JavaScript /Doc pairs shall start with a name object (Table 245)",
+                    ));
+                }
+                if !script_value_ok(value) {
+                    return Err(invalid(
+                        "FDF /JavaScript /Doc pair values shall be text strings or text streams (Table 245)",
+                    ));
+                }
+            }
+        }
     }
     // Table 243：`/Fields` 与 `/Pages`、`/Status` 与 `/Pages` shall not
     // both be present。
