@@ -9,13 +9,13 @@
 //! 自己的文件，否则 `hints/mod.rs` 无法再容纳新表接线。
 
 use crate::core::filters::decode_stream;
-use crate::core::types::{Dict, Document, Value};
+use crate::core::types::{Dict, Document, PdfVersion, Value};
 
 use super::super::LinearizationInfo;
 use super::super::checks::read_object_at;
 use super::super::dict::HintRange;
 use super::super::issues::LinearizationIssue;
-use super::generic::GENERIC_HINT_KEYS;
+use super::extended::{check_extended_shared_id_widths, group_hint_keys, parse_extended};
 use super::{
     GenericHintTable, HintTablePosition, LinearizationHints, PAGE_OFFSET_TABLE_POSITION,
     PageOffsetHintTable, STANDARD_HINT_KEYS, SharedObjectHintTable, ThumbnailHintTable,
@@ -24,8 +24,8 @@ use super::{
 
 impl Document {
     /// 类型化解析附录 F.4 的 hint 表（读端；当前完整解析 F.4.1 页偏移表、
-    /// F.4.2 共享对象 hint 表、F.4.3 缩略图 hint 表与 F.4.4 generic hint 表，
-    /// 其余家族见模块头的诚实缺口）。
+    /// F.4.2 共享对象 hint 表、F.4.3 缩略图 hint 表、F.4.4 generic hint 表与
+    /// F.4.5 extended generic hint 表，其余家族见模块头的诚实缺口）。
     ///
     /// 返回 `Ok(None)` 表示**无 hint 可解**：文档非线性化、缺 `/H`，或
     /// 主 hint 流对象完全不可读（此时不给诊断——[`Document::linearization`]
@@ -63,6 +63,7 @@ impl Document {
                     shared_object: None,
                     thumbnail: None,
                     generic: Vec::new(),
+                    extended: Vec::new(),
                     issues,
                 });
             }
@@ -90,13 +91,19 @@ impl Document {
         check_thumbnail_semantics(thumbnail.as_ref(), &mut issues);
         // F.4.4：键 `O`/`A`/`E`/`I`/`L` 各描述一个对象组，表体的字节范围同样
         // 参与「表互不重叠」的位置剔除，故须排在 F.4.2 之前——`S` 的位置一旦
-        // 落进 generic 表体就没有可信的解析起点。
-        let generic = parse_generic(&mut table_positions, &data, &mut issues);
+        // 落进 generic 表体就没有可信的解析起点。声明版本 < 1.5 时 `V`/`C`/`R`
+        // 也并进来按 Table F.9 读（F.4.5 的版本门，见 [`group_hint_keys`]）。
+        let version = self.source_version();
+        let generic = parse_generic(&mut table_positions, &data, version, &mut issues);
+        // F.4.5：`V`/`C`/`R` 的 extended 表（Table F.10）长度随项 5/项 6 变化，
+        // 同样参与位置剔除，故排在 `S` 之前。
+        let extended = parse_extended(&mut table_positions, &data, version, &mut issues);
         // 键存在但形态不符时不再叠加「缺 S」诊断。
         let s_declared = dict.get("S").is_some();
         let shared_object = parse_shared(&table_positions, s_declared, &data, &mut issues);
         check_header_consistency(shared_object.as_ref(), &mut issues);
         check_page_offset_semantics(page_offset.as_ref(), &mut issues);
+        check_extended_shared_id_widths(page_offset.as_ref(), &extended, &mut issues);
         page_offset_derive::check_page_offset_derivations(
             page_offset.as_ref(),
             first_page_object,
@@ -111,6 +118,7 @@ impl Document {
             shared_object,
             thumbnail,
             generic,
+            extended,
             issues,
         })
     }
@@ -360,19 +368,23 @@ fn check_thumbnail_semantics(
 /// 不再叠加诊断。产品专有表（F.4.4「may be used for product-specific objects」
 /// 35757）须走 Annex E 注册键，本库不猜未知键的形态，故只按标准名单分发。
 ///
-/// 逐键「先解析、随即用本表体去剔除后续键的位置」：generic 一家有五键，若先
-/// 把五键全解析完再剔除，落进前一张表体里的位置也会先被当成解析起点读一遍
-/// （读到的是别人的表体字节，既假阳性也假阴性）。故本函数按 [`GENERIC_HINT_KEYS`]
-/// 的名单序遍历，每读成一张表就调用 [`drop_positions_inside_generic_table`]，
-/// 末尾只保留位置仍然存活的键——[`super::LinearizationHints::generic_group_of`]
-/// 与 [`super::LinearizationHints::position_of`] 因此始终同进退。
+/// 逐键「先解析、随即用本表体去剔除后续键的位置」：generic 一家有五个（声明
+/// 版本 < 1.5 时连 `V`/`C`/`R` 一起是八个）键，若先把它们全解析完再剔除，落进
+/// 前一张表体里的位置也会先被当成解析起点读一遍
+/// （读到的是别人的表体字节，既假阳性也假阴性）。故本函数按
+/// [`group_hint_keys`] 给出的键序遍历（即 [`super::generic::GENERIC_HINT_KEYS`]
+/// 的名册序，< 1.5 时再并入 `V`/`C`/`R`），每读成一张表就调用
+/// [`drop_positions_inside_generic_table`]，末尾只保留位置仍然存活的键——
+/// [`super::LinearizationHints::generic_group_of`] 与
+/// [`super::LinearizationHints::position_of`] 因此始终同进退。
 fn parse_generic(
     positions: &mut Vec<HintTablePosition>,
     data: &[u8],
+    version: PdfVersion,
     issues: &mut Vec<LinearizationIssue>,
 ) -> Vec<GenericHintTable> {
     let mut tables = Vec::new();
-    for key in GENERIC_HINT_KEYS {
+    for key in group_hint_keys(version).iter().copied() {
         let Some(position) = positions
             .iter()
             .find(|entry| entry.key == key)

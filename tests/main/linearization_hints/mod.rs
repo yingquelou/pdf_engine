@@ -33,7 +33,10 @@ mod shared_object;
 /// F.4.4 generic hint 表家族。
 mod generic;
 
+/// F.4.5 extended generic hint 表家族。
+mod extended;
+
 use support::{
-    BitWriter, PAGE_COUNT, build, hint_entries, hint_payload, page_offset_bytes,
+    BitWriter, PAGE_COUNT, build, build_at_version, hint_entries, hint_payload, page_offset_bytes,
     page_offset_table_bits, shared_object_table_bits,
 };

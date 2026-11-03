@@ -137,6 +137,22 @@ pub enum LinearizationIssue {
     /// 位数类条目的 0—32 范围（35524—35525）。缺键是**合法**形态（各类对象
     /// 「Present only if …」），不因缺键给诊断。
     GenericHintTableCorrupt { key: String, problem: String },
+    /// F.4.5：Table F.2 键 `V`/`C`/`R` 给出的 extended generic hint 表
+    /// （Table F.10）位流损坏——自键给出的起点起读不满项 1—6（4×32 + 32 + 16
+    /// 位），项 7 的标识符列越过流尾（项 5 × 项 6 的位预算不足），或项 6 声明
+    /// 位宽越出位数类条目的 0—32 范围（35524—35525 按 Table F.3 同一措辞
+    /// 类比沿用）。缺键是**合法**形态（三类对象「Present only if …」），不因
+    /// 缺键给诊断。
+    ExtendedHintTableCorrupt { key: String, problem: String },
+    /// F.4.5 项 6 与 F.4.1 Table F.3 项 11 的**派生**一致性核对（**不是**原文
+    /// 的 shall，见 `hints::extended` 模块头的**待核**）：某个 extended 对象组
+    /// 声明的共享对象标识符位宽超过页偏移 hint 表声明的文档级位宽。声明值一律
+    /// 保留、表也按组内声明宽度读取完毕，这里只做类型化报告。
+    ExtendedHintIdWidthExceedsDocument {
+        key: String,
+        group_bits: u64,
+        document_bits: u64,
+    },
 }
 
 impl fmt::Display for LinearizationIssue {
@@ -342,6 +358,18 @@ impl fmt::Display for LinearizationIssue {
             Self::GenericHintTableCorrupt { key, problem } => write!(
                 f,
                 "F.4.4 (Table F.9): the generic hint table for key {key} is corrupt: {problem}"
+            ),
+            Self::ExtendedHintTableCorrupt { key, problem } => write!(
+                f,
+                "F.4.5 (Table F.10): the extended generic hint table for key {key} is corrupt: {problem}"
+            ),
+            Self::ExtendedHintIdWidthExceedsDocument {
+                key,
+                group_bits,
+                document_bits,
+            } => write!(
+                f,
+                "F.4.5 (Table F.10 item 6) / F.4.1 (Table F.3 item 11): the extended generic hint table for key {key} declares {group_bits} bit(s) for the greatest shared object identifier of its group while the page offset hint table declares {document_bits} bit(s) for the whole document; the table is read with its own group width and the raw values are kept (derived consistency rule, not a literal shall)"
             ),
         }
     }

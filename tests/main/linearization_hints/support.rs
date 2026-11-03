@@ -185,11 +185,12 @@ fn content_stream(number: i64) -> String {
     )
 }
 
-/// 按 F.3.1 的分部顺序写一轮，返回字节与实际布局。
-fn assemble(payload: &[u8], hint_entries: &str, g: Guess) -> (Vec<u8>, Guess) {
+/// 按 F.3.1 的分部顺序写一轮，返回字节与实际布局。`version` 写进文件头
+/// （F.3.2 的版本声明）：F.4.5 的版本门用例需要 1.4 的头，其余家族沿用 1.5。
+fn assemble(version: &str, payload: &[u8], hint_entries: &str, g: Guess) -> (Vec<u8>, Guess) {
     let mut buf = Vec::new();
     // part 1：头部（F.3.2）。
-    push(&mut buf, "%PDF-1.5\n");
+    push(&mut buf, &format!("%PDF-{version}\n"));
     // part 2：线性化参数字典（F.3.3；Table F.1 条目）。
     let dict_at = buf.len() as u64;
     push(
@@ -301,9 +302,14 @@ fn assemble(payload: &[u8], hint_entries: &str, g: Guess) -> (Vec<u8>, Guess) {
 
 /// 定点迭代到布局自洽（定宽字段保证收敛）。
 pub(super) fn build(payload: &[u8], hint_entries: &str) -> Vec<u8> {
+    build_at_version("1.5", payload, hint_entries)
+}
+
+/// 同 [`build`]，但文件头声明给定的 PDF 版本（F.4.5 版本门用例需要 1.4）。
+pub(super) fn build_at_version(version: &str, payload: &[u8], hint_entries: &str) -> Vec<u8> {
     let mut guess = Guess::default();
     for _ in 0..8 {
-        let (bytes, measured) = assemble(payload, hint_entries, guess);
+        let (bytes, measured) = assemble(version, payload, hint_entries, guess);
         if measured == guess {
             return bytes;
         }

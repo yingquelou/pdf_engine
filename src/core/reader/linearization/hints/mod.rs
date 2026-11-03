@@ -1,5 +1,5 @@
-//! 附录 F.4 hint 表读端解码（已完整解析**页偏移**、**共享对象**、**缩略图**
-//! 与 **generic** 四家）。
+//! 附录 F.4 hint 表读端解码（已完整解析**页偏移**、**共享对象**、**缩略图**、
+//! **generic** 与 **extended generic** 五家）。
 //!
 //! 消费上层已识别的 [`LinearizationInfo`]（Table F.1 `/H` 给出的 hint 流
 //! 范围由 [`HintStreams`]/[`HintRange`] 承载，本模块不重复定位，只做：
@@ -24,14 +24,20 @@
 //!   只描述**一个**对象组）；Outline/Thread/Named destination/Information
 //!   dictionary/Page label 五家共用该形态，即 Table F.2 键 `O`/`A`/`E`/`I`/`L`，
 //!   每类一个独立条目给出表起始位置；五键都是**条件存在**，缺键同样不给诊断；
+//! - [`extended`]：F.4.5 extended generic hint 表（Table F.10：项 1—4 同
+//!   Table F.9，另加项 5 的共享对象引用数、项 6 的组内标识符位宽与项 7 起的
+//!   标识符列）；Interactive form/Logical structure/Renditions name tree 三家
+//!   共用该形态，即 Table F.2 键 `V`/`C`/`R`，同样**条件存在**、缺键不给诊断；
+//!   声明版本 < 1.5 时三键退回 [`generic`] 形态（F.4.5「As of PDF 1.5」35781
+//!   的版本门，见 [`extended`] 模块头）；
 //! - [`assemble`]：装配层——读主/溢出 hint 流、过滤解码、拼接、按 Table F.2 键
 //!   分发各家族并互校表位置（零行为变更自本文件拆出）。
 //!
-//! **未解析（诚实缺口）**：F.4 其余家族——extended generic hint 表（F.4.5，
-//! Table F.10，interactive form/logical structure/renditions name tree 共用）、
-//! embedded file stream hint 表（F.4.6，Table F.11/F.12）。这些表的位置
-//! 仍按 Table F.2 键在 [`LinearizationHints::table_positions`] 里如实
-//! 列出，但内容为原样字节，未类型化。
+//! **未解析（诚实缺口）**：F.4 其余家族——embedded file stream hint 表
+//! （F.4.6，Table F.11/F.12，Table F.2 键 `B`；F.4.5 的 35786—35788 明确把
+//! 嵌入式文件流划归该家族）。这些表的位置仍按 Table F.2 键在
+//! [`LinearizationHints::table_positions`] 里如实列出，但内容为原样字节，
+//! 未类型化。
 //!
 //! 诊断进入 [`LinearizationHints::issues`]（复用 [`LinearizationIssue`]
 //! 的 hint 家族新增变体），不写 `Document::warnings`；[`Document::linearization`]
@@ -42,6 +48,7 @@ use super::issues::LinearizationIssue;
 
 mod assemble;
 pub mod bits;
+mod extended;
 mod generic;
 mod page_offset;
 mod page_offset_derive;
@@ -51,6 +58,7 @@ mod thumbnail;
 #[cfg(test)]
 mod tests;
 
+pub use extended::ExtendedHintTable;
 pub use generic::GenericHintTable;
 pub use page_offset::{PageOffsetEntry, PageOffsetHeader, PageOffsetHintTable};
 pub use page_offset_derive::SharedObjectPosition;
@@ -124,6 +132,13 @@ pub struct LinearizationHints {
     /// 短于五且**不给诊断**；键在而解析失败则不列条目，并在 [`Self::issues`]
     /// 给出类型化诊断。
     pub generic: Vec<GenericHintTable>,
+    /// 已按 F.4.5 形态解析的 extended 对象组：Table F.2 键 `V`/`C`/`R` 每出现
+    /// 一个键给一条（一张表只描述**一个**对象组，项 1—4 与 [`GenericHintTable`]
+    /// 同形，另加项 5—7 的共享对象引用信息）。三键都是**条件存在**，缺键属
+    /// 合法形态、**不给诊断**；键在而解析失败则不列条目，并在 [`Self::issues`]
+    /// 给出类型化诊断。声明版本 < 1.5 时三键走 F.4.4 形态、列在
+    /// [`Self::generic`] 里，本列表为空（版本门见 [`extended`] 模块头）。
+    pub extended: Vec<ExtendedHintTable>,
     /// hint 层一致性诊断；`LinearizationInfo::issues` 的文档结构诊断
     /// 不在此列（由 [`Document::linearization`] 报告）。
     pub issues: Vec<LinearizationIssue>,

@@ -133,6 +133,7 @@ fn hints(
         shared_object,
         thumbnail: None,
         generic: Vec::new(),
+        extended: Vec::new(),
         issues: Vec::new(),
     }
 }
