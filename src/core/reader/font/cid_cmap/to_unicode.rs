@@ -36,6 +36,9 @@ impl ToUnicodeMap {
     /// same value, clipped to the locally declared codespace ranges. Other
     /// base CMaps have no available registry and are ignored so that local
     /// mappings remain usable. Malformed streams yield `None`.
+    ///
+    /// 流字典 `/UseCMap` 指向的内嵌基座（Table 120）由 `parse_with_base` 传入，
+    /// 本入口只看流内 `usecmap`。
     pub fn parse_lenient(data: &[u8]) -> Option<Self> {
         Self::parse_lenient_with(data, builtin_base)
     }
@@ -50,20 +53,37 @@ impl ToUnicodeMap {
         data: &[u8],
         resolve: impl FnOnce(&str) -> FontResult<ToUnicodeMap>,
     ) -> Option<Self> {
+        Self::parse_with_base(data, None, resolve)
+    }
+
+    /// Parse a ToUnicode CMap that may also inherit its base from the stream
+    /// dictionary's `/UseCMap` entry (Table 120: "The name of a predefined
+    /// CMap, or a stream containing a CMap"), supplied as `dict_base`.
+    ///
+    /// Rule (a) of 9.7.5.3 requires an in-stream `usecmap` reference and
+    /// `/UseCMap` to name the same CMap; when both are present the stream
+    /// dictionary entry is used, because it is the only form that can carry an
+    /// embedded base (library policy). Local mappings win over inherited ones,
+    /// and an unresolvable base is ignored so that local mappings stay usable.
+    pub(in crate::core::reader::font) fn parse_with_base(
+        data: &[u8],
+        dict_base: Option<ToUnicodeMap>,
+        resolve: impl FnOnce(&str) -> FontResult<ToUnicodeMap>,
+    ) -> Option<Self> {
         let ParsedToUnicode {
             mappings,
             code_spaces,
-            base,
+            base: in_stream_base,
         } = parse_to_unicode_sections(data).ok()?;
-        Some(match base {
-            Some(name) => match resolve(&name) {
-                Ok(base) => merge_mappings(mappings, &code_spaces, base),
-                Err(_) => Self {
-                    mappings,
-                    identity_base: false,
-                    identity_spaces: Vec::new(),
-                },
+        let inherited = match dict_base {
+            Some(base) => Some(base),
+            None => match &in_stream_base {
+                Some(name) => resolve(name).ok(),
+                None => None,
             },
+        };
+        Some(match inherited {
+            Some(base) => merge_mappings(mappings, &code_spaces, base),
             None => Self {
                 mappings,
                 identity_base: false,
@@ -107,7 +127,9 @@ impl ToUnicodeMap {
 }
 
 /// Resolve the built-in ToUnicode base roster.
-fn builtin_base(name: &str) -> FontResult<ToUnicodeMap> {
+///
+/// 供 `parse_lenient` 与 `use_cmap`（Table 120 的 name 形态）共用同一份名册。
+pub(super) fn builtin_base(name: &str) -> FontResult<ToUnicodeMap> {
     if name == IDENTITY_UCS_NAME {
         Ok(ToUnicodeMap {
             mappings: BTreeMap::new(),

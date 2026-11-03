@@ -1,5 +1,7 @@
 use super::{CidCMap, ToUnicodeMap, identity_cmap, invalid_cmap};
 
+mod use_cmap;
+
 #[test]
 fn parses_codespaces_cid_chars_ranges_and_wmode() {
     let source = b"
@@ -75,7 +77,7 @@ fn usecmap_inherits_identity_base_and_overrides_mappings() {
         /Identity-H usecmap
         1 begincodespacerange <0000> <FFFF> endcodespacerange
         1 begincidrange <0041> <0042> 100 endcidrange";
-    let cmap = CidCMap::parse_inheriting(source, |name| match name {
+    let cmap = CidCMap::parse_with_base(source, None, |name| match name {
         "Identity-H" => Ok(identity_cmap(0)),
         other => panic!("unexpected base {other}"),
     })
@@ -89,13 +91,14 @@ fn usecmap_inherits_identity_base_and_overrides_mappings() {
 #[test]
 fn usecmap_inherits_writing_mode_and_rejects_unknown_bases() {
     let source = b"/Identity-V usecmap 1 begincodespacerange <0000> <FFFF> endcodespacerange";
-    let cmap = CidCMap::parse_inheriting(source, |_| Ok(identity_cmap(1))).unwrap();
+    let cmap = CidCMap::parse_with_base(source, None, |_| Ok(identity_cmap(1))).unwrap();
     assert_eq!(cmap.writing_mode(), 1);
-    assert!(CidCMap::parse_inheriting(source, |_| Err(invalid_cmap("unknown base"))).is_err());
+    assert!(CidCMap::parse_with_base(source, None, |_| Err(invalid_cmap("unknown base"))).is_err());
     assert!(CidCMap::parse(source).is_err());
     assert!(
-        CidCMap::parse_inheriting(
+        CidCMap::parse_with_base(
             b"usecmap 1 begincodespacerange <00> <FF> endcodespacerange",
+            None,
             |_| Ok(identity_cmap(0)),
         )
         .is_err()
@@ -105,7 +108,7 @@ fn usecmap_inherits_writing_mode_and_rejects_unknown_bases() {
 #[test]
 fn usecmap_clips_inherited_mappings_to_defined_codespace() {
     let source = b"/Identity-H usecmap 1 begincodespacerange <00> <FF> endcodespacerange";
-    let cmap = CidCMap::parse_inheriting(source, |_| Ok(identity_cmap(0))).unwrap();
+    let cmap = CidCMap::parse_with_base(source, None, |_| Ok(identity_cmap(0))).unwrap();
     assert_eq!(cmap.decode(&[0x41]).unwrap(), [(vec![0x41], 0)]);
     assert_eq!(cmap.decode(&[0x00, 0x41]).unwrap().len(), 2);
 }

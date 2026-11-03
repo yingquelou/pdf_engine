@@ -2,8 +2,27 @@ use crate::core::types::{Document, Value};
 
 use super::{
     CidFontType0, CidFontType2, FontError, FontResult,
-    cid_cmap::{CidCMap, ToUnicodeMap, identity_cmap},
+    cid_cmap::{CidCMap, ToUnicodeMap, identity_cmap, parse_to_unicode_stream, resolve_cid_base},
 };
+
+/// Resolve a CMap base named by an in-stream `usecmap` operator or by a
+/// stream dictionary's `/UseCMap` entry (Table 120) against the built-in
+/// roster.
+fn predefined_cid_base(name: &str) -> FontResult<CidCMap> {
+    match name {
+        "Identity-H" => Ok(identity_cmap(0)),
+        "Identity-V" => Ok(identity_cmap(1)),
+        // 名册内的预定义 CMap（如 Adobe-GB1、UniGB-UCS2-H）按名称解析。
+        _ => {
+            let predefined = super::predefined_cmaps::resolve_predefined_cmap(name)?;
+            Ok(CidCMap::from_predefined(
+                &predefined.codespace_ranges,
+                &predefined.cid_mappings,
+                predefined.writing_mode,
+            ))
+        }
+    }
+}
 
 /// One character code decoded through a Type 0 font's encoding CMap.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,7 +132,9 @@ impl Document {
     /// CMaps with codespace, `cidchar`, and `cidrange` sections are supported.
     /// `/Encoding` may also reference a predefined CMap from the
     /// `predefined_cmaps` roster by name; embedded CMaps may inherit
-    /// `/Identity-H`, `/Identity-V`, or a roster CMap through `usecmap`.
+    /// `/Identity-H`, `/Identity-V`, or a roster CMap through `usecmap`, and
+    /// may inherit either a predefined name or another embedded CMap stream
+    /// through the stream dictionary's `/UseCMap` entry (9.7.5.3, Table 120).
     ///
     /// Returns `Ok(None)` for values whose `/Subtype` is not `/Type0`.
     pub fn type0_font(&self, value: &Value) -> FontResult<Option<Type0Font>> {
@@ -156,18 +177,12 @@ impl Document {
                         "failed to decode Type 0 /Encoding CMap stream: {error}"
                     ))
                 })?;
-                CidCMap::parse_inheriting(&bytes, |name| match name {
-                    "Identity-H" => Ok(identity_cmap(0)),
-                    "Identity-V" => Ok(identity_cmap(1)),
-                    _ => {
-                        let predefined = super::predefined_cmaps::resolve_predefined_cmap(name)?;
-                        Ok(CidCMap::from_predefined(
-                            &predefined.codespace_ranges,
-                            &predefined.cid_mappings,
-                            predefined.writing_mode,
-                        ))
-                    }
-                })?
+                // Table 120：/Encoding CMap 流字典的 /UseCMap 可以是预定义名，
+                // 也可以是另一个内嵌 CMap 流；基座不可解析时退回只用本地映射。
+                let dict_base = encoding_value
+                    .as_dict()
+                    .and_then(|dict| resolve_cid_base(self, dict, predefined_cid_base));
+                CidCMap::parse_with_base(&bytes, dict_base, predefined_cid_base)?
             }
             _ => {
                 return Err(FontError::Invalid(
@@ -176,16 +191,13 @@ impl Document {
             }
         };
         // `/ToUnicode` 是可选的文本映射；流损坏或引用不可解析时退化为按
-        // 编码解码。`Adobe-Identity-UCS` 基座按内置恒等关系解析，其他
-        // 未知基座退化为仅使用本地映射，而不是让整个字体不可用。
-        let to_unicode = dict.get("ToUnicode").and_then(|value| {
-            let value = self.resolve_value(value).ok()?;
-            if !matches!(value, Value::Stream(_, _)) {
-                return None;
-            }
-            let bytes = self.decode_stream_bytes(&value).ok()?;
-            ToUnicodeMap::parse_lenient(&bytes)
-        });
+        // 编码解码。`Adobe-Identity-UCS` 基座按内置恒等关系解析，流字典的
+        // `/UseCMap`（Table 120）可指向预定义名或内嵌基座流；其余未知基座
+        // 退化为仅使用本地映射，而不是让整个字体不可用。
+        let to_unicode = dict
+            .get("ToUnicode")
+            .and_then(|value| self.resolve_value(value).ok())
+            .and_then(|value| parse_to_unicode_stream(self, &value));
 
         let descendants = dict
             .get("DescendantFonts")

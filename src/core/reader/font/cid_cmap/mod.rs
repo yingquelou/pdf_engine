@@ -2,17 +2,20 @@
 //!
 //! - `cid`：Type 0 `/Encoding` 的嵌入 CMap，含 `usecmap` 基座合并；
 //! - `to_unicode`：`/ToUnicode` CMap，含 `usecmap` 基座映射继承；
+//! - `use_cmap`：CMap **流字典**的 `/UseCMap` 基座（9.7.5.3，Table 120）；
 //! - `token`：两个解析器共用的 PostScript 词法与段辅助。
 
 mod cid;
 mod to_unicode;
 mod token;
+mod use_cmap;
 
 #[cfg(test)]
 mod tests;
 
 pub(super) use cid::{CidCMap, identity_cmap};
 pub(super) use to_unicode::ToUnicodeMap;
+pub(super) use use_cmap::{parse_to_unicode_stream, resolve_cid_base};
 
 use super::{FontError, FontResult};
 

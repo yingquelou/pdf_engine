@@ -105,17 +105,36 @@ impl CidCMap {
         parsed.finish()
     }
 
-    /// Parse an embedded CMap that may inherit a base CMap through
-    /// `/BaseName usecmap`. Mappings defined here take precedence over
-    /// inherited ones; codespace ranges defined here replace the inherited
-    /// codespace and clip inherited mappings to their bounds.
-    pub fn parse_inheriting(
+    /// Parse an embedded CMap that inherits a base CMap.
+    ///
+    /// The base comes either from `dict_base` — the stream dictionary's
+    /// `/UseCMap` entry (Table 120: "The name of a predefined CMap, or a
+    /// stream containing a CMap"), resolved by the caller — or from an
+    /// in-stream `/BaseName usecmap` operator resolved through `resolve`.
+    /// Rule (a) of 9.7.5.3 requires both to identify the same CMap; when both
+    /// are available the stream dictionary entry is used, since it is the only
+    /// form that can carry an embedded base (library policy).
+    ///
+    /// Mappings defined here take precedence over inherited ones; codespace
+    /// ranges defined here replace the inherited codespace and clip inherited
+    /// mappings to their bounds. An in-stream base that `resolve` cannot
+    /// resolve is an error, as before; a missing or unresolvable `/UseCMap`
+    /// base is never replaced by synthesized mappings.
+    pub(in crate::core::reader::font) fn parse_with_base(
         data: &[u8],
+        dict_base: Option<Self>,
         resolve: impl FnOnce(&str) -> FontResult<CidCMap>,
     ) -> FontResult<Self> {
         let parsed = parse_sections(data)?;
-        match parsed.base.clone() {
-            Some(name) => parsed.merge_into(resolve(&name)?),
+        let inherited = match dict_base {
+            Some(base) => Some(base),
+            None => match &parsed.base {
+                Some(name) => Some(resolve(name)?),
+                None => None,
+            },
+        };
+        match inherited {
+            Some(base) => parsed.merge_into(base),
             None => parsed.finish(),
         }
     }

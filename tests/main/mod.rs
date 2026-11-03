@@ -41,6 +41,7 @@ mod builder_separation_intent;
 mod builder_shading;
 mod builder_transparency;
 mod builder_type3;
+mod cmap_use_cmap;
 mod content_text;
 mod crypto;
 mod fdf;
