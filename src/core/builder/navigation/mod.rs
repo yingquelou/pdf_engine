@@ -38,6 +38,7 @@ mod alternate_presentation;
 mod articles;
 mod collection;
 mod extensions;
+mod fdf;
 mod names;
 mod outline;
 mod pages;

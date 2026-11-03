@@ -123,6 +123,7 @@ mod compression;
 mod embedded_file;
 mod encoding;
 mod extensions;
+mod fdf;
 mod font;
 mod font_cff;
 mod font_program;

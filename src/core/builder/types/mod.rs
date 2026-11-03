@@ -40,6 +40,7 @@ mod cid;
 mod descriptor;
 mod embedded_file;
 mod encoding;
+pub mod fdf;
 mod font;
 mod form;
 mod form_field;

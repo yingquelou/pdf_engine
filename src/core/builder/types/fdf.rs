@@ -1,0 +1,157 @@
+//! FDF 写端值类型（ISO 32000-1 12.7.7，PDF 1.2）：把读端类型化模型
+//! （[`FdfDocument`] / [`FdfDictionary`] / [`FdfField`]，Table 242/243/246）
+//! 转回可直接序列化的目录字典。
+//!
+//! 口径：未建模的原始条目按 [`FdfField::dict`] / [`FdfDictionary::dict`]
+//! 原样保留；已建模条目以类型化字段为准——`Some` 覆盖原值，`None`
+//! 删除字典里的同名条目。文本串（`/T`、`/Status`）统一写成十六进制串
+//! （[`PdfTextString::encode`]：PDFDocEncoding 优先，含不可映射字符时
+//! 回退 UTF-16BE 带 BOM），与读端 `content::text_value` 的解码口径配对。
+//!
+//! 版本门禁与文件装配在 `builder/navigation/fdf.rs`。`PdfFeature` 新
+//! 变体需要同步 `types/version/feature_display.rs` 的穷尽 `Display`
+//! match（在本车道写集之外），故门禁直接比较 [`PdfVersion`] 常量，
+//! 与 `navigation/mod.rs` 既有门禁口径一致。
+
+use crate::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField};
+use crate::core::types::{Array, Dict, PdfTextString, PdfVersion, Value};
+
+/// 文本串值：写端一律输出十六进制串（Table 246 `/T`、Table 243
+/// `/Status` 的文本串形态；编码见模块头的口径说明）。
+pub(crate) fn text_string_value(text: &str) -> Value {
+    Value::HexString(
+        PdfTextString::new(text)
+            .encode()
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect(),
+    )
+}
+
+/// 把类型化条目覆盖写回原始字典：`Some` 插入（覆盖同名原值），
+/// `None` 删除原值（类型化字段是唯一事实源）。返回新字典。
+fn overlay(mut dict: Dict, entries: &[(&str, Option<Value>)]) -> Dict {
+    for (key, value) in entries {
+        match value {
+            Some(value) => dict = dict.insert(*key, value.clone()),
+            None => {
+                dict.0.remove(*key);
+            }
+        }
+    }
+    dict
+}
+
+/// FDF 字段字典（Table 246）→ 直接对象值；`/Kids` 子字段同样写成
+/// 直接对象（12.7.7.3.2：FDF 字段允许直接对象，与读端宽容解析对齐）。
+pub(crate) fn field_value(field: &FdfField) -> Value {
+    // Table 246 — `/T` 部分字段名（必填文本串；写端无条件写出）。
+    let mut dict = overlay(
+        field.dict.clone(),
+        &[
+            ("T", Some(text_string_value(&field.partial_name))),
+            // Table 246 — `/V` 字段值（原值透传）。
+            ("V", field.value.clone()),
+            // Table 246 — `/Ff` 字段标志位（整型）。
+            ("Ff", field.field_flags.map(Value::Integer)),
+            // Table 246 — `/SetFf` 导入时置位的 `/Ff` 位（整型）。
+            ("SetFf", field.set_field_flags.map(Value::Integer)),
+            // Table 246 — `/ClrFf` 导入时清位的 `/Ff` 位（整型）。
+            ("ClrFf", field.clear_field_flags.map(Value::Integer)),
+            // Table 246 — `/F` widget 注解标志位（整型，12.5.3）。
+            ("F", field.widget_flags.map(Value::Integer)),
+            // Table 246 — `/SetF` 导入时置位的 `/F` 位（整型）。
+            ("SetF", field.set_widget_flags.map(Value::Integer)),
+            // Table 246 — `/ClrF` 导入时清位的 `/F` 位（整型）。
+            ("ClrF", field.clear_widget_flags.map(Value::Integer)),
+            // Table 246 — `/Opt` 选择字段选项数组（原值）。
+            ("Opt", field.options.clone()),
+            // Table 246 — `/AP` 外观字典（原值；N/R/D 均为流）。
+            ("AP", field.appearance.clone()),
+            // Table 246 — `/APRef` 外部页引用外观字典（原值；PDF 1.3）。
+            ("APRef", field.appearance_reference.clone()),
+            // Table 246 — `/IF` 图标适配字典（原值；PDF 1.3，Table 247）。
+            ("IF", field.icon_fit.clone()),
+            // Table 246 — `/A` 激活动作字典（原值；12.6）。
+            ("A", field.action.clone()),
+            // Table 246 — `/AA` 附加动作字典（原值；12.6.3）。
+            ("AA", field.additional_actions.clone()),
+            // Table 246 — `/RV` 富文本值（原值；PDF 1.5）。
+            ("RV", field.rich_value.clone()),
+        ],
+    );
+    // Table 246 — `/Kids` 直接子字段数组（声明序；子字段写成直接对象）。
+    if field.kids.is_empty() {
+        dict.0.remove("Kids");
+    } else {
+        dict = dict.insert(
+            "Kids",
+            Value::Array(Array(
+                field.kids.iter().map(field_value).collect::<Vec<_>>(),
+            )),
+        );
+    }
+    Value::Dict(dict)
+}
+
+/// FDF 字典（Table 243）→ 直接对象值。
+pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
+    let dict = overlay(
+        fdf.dict.clone(),
+        &[
+            // Table 243 — `/F` 源/目标 PDF 文件规范（原值）。
+            ("F", fdf.source_file.clone()),
+            // Table 243 — `/ID` 文件标识符数组（原值，14.4）。
+            ("ID", fdf.identifier.clone()),
+            // Table 243 — `/Fields` 根字段数组（Table 246 字段字典）。
+            (
+                "Fields",
+                fdf.fields
+                    .as_ref()
+                    .map(|fields| Value::Array(Array(fields.iter().map(field_value).collect()))),
+            ),
+            // Table 243 — `/Status` 状态文本串（PDFDocEncoding）。
+            ("Status", fdf.status.as_deref().map(text_string_value)),
+            // Table 243 — `/Pages` 页字典数组（原值；PDF 1.3，Table 248）。
+            ("Pages", fdf.pages.clone()),
+            // Table 243 — `/Encoding` 名字（PDF 1.3；缺省 PDFDocEncoding）。
+            (
+                "Encoding",
+                fdf.encoding
+                    .as_deref()
+                    .map(|name| Value::Name(name.to_string())),
+            ),
+            // Table 243 — `/Annots` 注解字典数组（原值；PDF 1.3，Table 251）。
+            ("Annots", fdf.annots.clone()),
+            // Table 243 — `/Differences` 增量更新流（原值；PDF 1.4）。
+            ("Differences", fdf.differences.clone()),
+            // Table 243 — `/Target` 浏览器框架名（原值；PDF 1.4）。
+            ("Target", fdf.target.clone()),
+            // Table 243 — `/EmbeddedFDFs` 内嵌 FDF 文件规范数组（原值；PDF 1.4）。
+            ("EmbeddedFDFs", fdf.embedded_fdfs.clone()),
+            // Table 243 — `/JavaScript` 文档级脚本字典（原值；PDF 1.4，Table 245）。
+            ("JavaScript", fdf.javascript.clone()),
+        ],
+    );
+    Value::Dict(dict)
+}
+
+/// FDF 目录字典（Table 242）：`/FDF` 必填（直接字典），`/Version` 按
+/// 声明版本补写（Table 242 — `/Version` 名字，Optional；PDF 1.4）。
+pub(crate) fn catalog_dict(fdf: &FdfDocument, version: PdfVersion) -> Dict {
+    let mut catalog = fdf.catalog.clone();
+    catalog = catalog.insert("FDF", fdf_dictionary_value(&fdf.fdf));
+    match fdf.catalog_version.as_deref() {
+        // Table 242 — `/Version` 名字：模型已有原值时按原值写回。
+        Some(name) => catalog = catalog.insert("Version", Value::Name(name.to_string())),
+        None => {
+            catalog.0.remove("Version");
+            // Table 242 — `/Version` 自 PDF 1.4 起可用；1.2/1.3 的版别
+            // 由文件头 `%FDF-<ver>` 承载（12.7.7.2.2）。
+            if version >= PdfVersion::V1_4 {
+                catalog = catalog.insert("Version", Value::Name(version.as_str()));
+            }
+        }
+    }
+    catalog
+}
