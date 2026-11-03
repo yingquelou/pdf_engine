@@ -10,6 +10,9 @@ use crate::core::types::{Array, Dict, Document, Object, StartXref, Trailer, Valu
 
 use super::{FdfDocument, FdfError, MAX_FDF_FIELD_DEPTH};
 
+/// `/Differences`（stream）与 `/EmbeddedFDFs`（file specification 数组）
+/// 的类型化读端测试（Table 243 续表 + Table 244）。
+mod embedded;
 /// `/JavaScript`（Table 243 续表 + Table 245）的类型化解码测试。
 mod javascript;
 

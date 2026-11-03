@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod embedded;
 mod javascript;
 mod write;
 

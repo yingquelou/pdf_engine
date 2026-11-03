@@ -17,6 +17,17 @@
 //!   `/JavaScript`（L24933：指向 Table 245 的脚本字典，raw
 //!   L24951–L24981）解码外，其余按原值保留（文件规范、数组与字典
 //!   不在本切片类型化，属剩余缺口）。
+//! - PDF 1.4 的 `/Differences`（stream；raw L24906–L24926）与
+//!   `/EmbeddedFDFs`（file specification 数组；raw L24930–L24932）另有
+//!   类型化只读视图：[`Document::fdf_differences`] 确证「它是流」并原值
+//!   保留流字典条目（`/Length`、`/Filter` 等），[`Document::fdf_embedded_fdfs`]
+//!   逐项按 7.11 文件规范解析（复用 `reader/embedded.rs`）、识别
+//!   Table 244 的 `/EncryptionRevision` 并递归解析可解出的子 FDF 文档
+//!   （递归受层数、单数组条目数与**跨层全局条目预算**三重上限约束，子文档
+//!   自己的 `/Differences` 在同一趟递归里逐层类型化）。
+//!   两者以**方法**而非 `FdfDictionary` 字段暴露（加字段需改本车道
+//!   写集外的全字段字面构造点），见子模块 `embedded` 的模块文档；
+//!   `differences`/`embedded_fdfs` 原值字段继续保留，两条通道互不替代。
 //! - FDF 字段字典 Table 246（L24983 起）：`/Kids`（直接**或**间接子项）、
 //!   `/T`（必填文本串）、`/V`、`/Ff`、`/SetFf`、`/ClrFf`、`/F`（整型
 //!   widget 注解标志，与字段树 PDF 侧 `/F` 文件规范**不同名同义**）、
@@ -29,15 +40,22 @@
 //! 由写端 `builder/navigation/fdf.rs` 直接比较 `PdfVersion` 常量把关）。
 //! 新增 [`PdfFeature`](crate::core::types::PdfFeature)
 //! 变体需要改动 `src/core/types/version/feature.rs`，超出本车道写集，
-//! 故读端一律宽容读取、不做版本拒绝（保守行为，待核项：门禁位）。
+//! 故读端一律宽容读取、不做版本拒绝（保守行为，待核项：门禁位）；
+//! 其中 PDF 1.4 的 `/Differences` 与 `/EmbeddedFDFs` 在声明版本低于 1.4
+//! 时（优先序：FDF 目录 `/Version` → `%FDF-x.y` 文件头 →
+//! [`Document::source_version`]）由类型化视图附带一条诊断记录，仍照常
+//! 读取（见子模块 `embedded`）。
 
 use std::fmt;
 
 use crate::core::types::{Dict, Document, Value};
 
+mod embedded;
 mod parse;
 #[cfg(test)]
 mod tests;
+
+pub use embedded::{FdfDifferences, FdfEmbeddedFdf, FdfEmbeddedFdfs};
 
 /// 字段树最大嵌套深度（库策略，与 `reader/form.rs` 的 `MAX_FIELD_DEPTH`
 /// 同一口径，防护不可信文件）。
@@ -182,7 +200,8 @@ pub struct FdfDictionary {
     /// `/Annots` 注解字典数组原值（PDF 1.3，Table 251 加 `/Page`；
     /// 本切片不类型化）。
     pub annots: Option<Value>,
-    /// `/Differences` 增量更新流原值（PDF 1.4）。
+    /// `/Differences` 增量更新流原值（PDF 1.4）。流形态识别与解引用后的
+    /// 类型化视图见 [`Document::fdf_differences`]（原值在此不丢弃）。
     pub differences: Option<Value>,
     /// `/Target` 原值（保留全部形态，不丢弃；类型化解码见
     /// [`Self::target_frame`]）。
@@ -195,7 +214,9 @@ pub struct FdfDictionary {
     /// 原值不丢弃（写端装配前按 Table 243 拒绝非串，见
     /// `builder/navigation/fdf.rs`）。
     pub target_frame: Option<String>,
-    /// `/EmbeddedFDFs` 内嵌 FDF 文件规范数组原值（PDF 1.4）。
+    /// `/EmbeddedFDFs` 内嵌 FDF 文件规范数组原值（PDF 1.4）。逐项
+    /// 文件规范类型化、Table 244 `/EncryptionRevision` 识别与递归子
+    /// FDF 文档见 [`Document::fdf_embedded_fdfs`]（原值在此不丢弃）。
     pub embedded_fdfs: Option<Value>,
     /// `/JavaScript` 原值（保留全部形态，不丢弃；类型化解码见
     /// [`Self::javascript_scripts`]）。
