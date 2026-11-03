@@ -2,7 +2,15 @@ use super::helpers::{entry, integer, invalid, number};
 use super::model::{SoftMask, SoftMaskSubtype};
 use super::{BTreeMap, Dict, Document, Result, Value};
 
-/// Parse a soft-mask dictionary (`Table 144`).
+/// Parse a soft-mask dictionary (ISO 32000-1 Table 144, 11.6.5.2).
+///
+/// Table 144 lists `Type`, `S`, `G`, `BC` and `TR` and nothing else.
+/// `/Matte` (Table 146, 11.6.5.3, PDF 1.4) and `/SMaskInData` (Table 89,
+/// 8.9.5, PDF 1.5) belong to the soft-mask *image* clauses, yet real files
+/// do put them into this dictionary next to the preblended or embedded
+/// mask data they describe, so they are accepted and typed here instead of
+/// being dropped into the `other` map; every other unknown entry is
+/// still preserved verbatim.
 pub(super) fn parse_soft_mask(document: &Document, dict: &Dict) -> Result<SoftMask> {
     let subtype = match entry(document, dict, "S")? {
         None => return Err(invalid("soft mask /S is required")),
@@ -99,6 +107,8 @@ pub(super) fn parse_soft_mask(document: &Document, dict: &Dict) -> Result<SoftMa
         }
     };
 
+    // Table 144's own keys are `Type`, `S`, `G`, `BC`, `TR`; the last two
+    // entries are the tolerated image-clause keys documented above.
     const SOFT_MASK_ENTRIES: [&str; 7] = ["Type", "S", "G", "BC", "TR", "SMaskInData", "Matte"];
     let mut other = BTreeMap::new();
     for (key, value) in &dict.0 {

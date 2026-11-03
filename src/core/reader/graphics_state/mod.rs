@@ -1,10 +1,11 @@
-//! Graphics state parameter dictionaries (PDF 8.4.4, Table 58).
+//! Graphics state parameter dictionaries (PDF 8.4.5, Table 58).
 //!
 //! [`ExtGState`] exposes every standard entry with type and range checks.
 //! Entries that carry function, halftone or soft-mask objects (`/SMask`,
 //! `/TR`, `/TR2`, `/HT`, `/BG`, `/BG2`, `/UCR`, `/UCR2`) are preserved as
 //! resolved raw values; [`Document::soft_mask`] additionally parses an
-//! `/SMask` value into a typed [`SoftMask`] dictionary and
+//! `/SMask` value into a typed [`SoftMask`] dictionary (11.6.5.2, Table 144)
+//! and
 //! `Document::halftone` (see the `halftone` submodule) parses an `/HT`
 //! value into a [`HalftoneModel`]. Interpreting transfer functions remains
 //! out of scope.

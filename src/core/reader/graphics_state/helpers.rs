@@ -2,6 +2,15 @@ use super::model::{BlendMode, DashPattern, ExtGStateFont};
 use super::{Dict, Document, GraphicsStateError, Result, Value};
 
 /// Standard entries of the graphics state parameter dictionary.
+///
+/// Exactly the 26 parameter keys of ISO 32000-1 Table 58 (8.4.5), in table
+/// order apart from `/Type`: `/LW /LC /LJ /ML /D /RI /OP /op /OPM /Font
+/// /BG /BG2 /UCR /UCR2 /TR /TR2 /HT /FL /SM /SA /BM /SMask /CA /ca /AIS /TK`.
+/// Table 58 lists no other key: in particular `/DS` is not a graphics state
+/// entry (it is a free-text annotation and variable-text field entry,
+/// Table 174 and Table 222, PDF 1.5), and `/Type` is validated separately.
+/// A key outside this list is not rejected: it is preserved verbatim in
+/// `ExtGState::other`.
 pub(super) const STANDARD_ENTRIES: [&str; 26] = [
     "LW", "LC", "LJ", "ML", "D", "RI", "OP", "op", "OPM", "Font", "FL", "SM", "SA", "BM", "CA",
     "ca", "AIS", "TK", "SMask", "TR", "TR2", "HT", "BG", "BG2", "UCR", "UCR2",
@@ -82,13 +91,19 @@ pub(super) fn optional_code(
 ) -> Result<Option<u8>> {
     match entry(document, dict, key)? {
         Some(value) => {
-            let Some(code) = integer(&value).and_then(|value| u8::try_from(value).ok()) else {
+            // A negative integer, an integer above 255 and a value above
+            // `max` are all the same defect: the code is outside `0..=max`.
+            // Reporting them as "must be an integer" would hide the real
+            // problem, so the range and the offending value are both named.
+            let Some(code) = integer(&value) else {
                 return Err(invalid(format!("/{key} must be an integer")));
             };
-            if code > max {
-                return Err(invalid(format!("/{key} must be within 0..={max}")));
+            if code < 0 || code > i64::from(max) {
+                return Err(invalid(format!(
+                    "/{key} must be an integer within 0..={max}, got {code}"
+                )));
             }
-            Ok(Some(code))
+            Ok(Some(code as u8))
         }
         None => Ok(None),
     }

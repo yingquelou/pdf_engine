@@ -1,5 +1,5 @@
-//! Table 144 软遮罩字典：`/S` `/G` `/BC` `/TR` `/SMaskInData` `/Matte`
-//! 的解析与逐项拒绝。
+//! 软遮罩字典：Table 144（11.6.5.2）的 `/S` `/G` `/BC` `/TR`，加上读端宽容
+//! 接受的 `/SMaskInData`（Table 89）与 `/Matte`（Table 146），逐项解析与拒绝。
 
 use super::*;
 

@@ -40,6 +40,10 @@ pub enum SoftMaskSubtype {
 }
 
 /// Parsed soft-mask dictionary (`/SMask`, Table 144).
+///
+/// Table 144 (11.6.5.2) lists five keys only — `Type`, `S`, `G`, `BC`, `TR`.
+/// The two extra typed fields below come from the neighbouring soft-mask
+/// *image* clauses and are tolerated, not required.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SoftMask {
     /// `/S` subtype.
@@ -50,11 +54,22 @@ pub struct SoftMask {
     pub backdrop: Option<Vec<f64>>,
     /// `/TR` transfer function as written (name `Identity` or a function).
     pub transfer: Option<Value>,
-    /// `/SMaskInData` (0–2).
+    /// `/SMaskInData` (0–2), kept for masks carried together with it.
+    ///
+    /// Not a Table 144 entry: 8.9.5 Table 89 defines it for an image
+    /// dictionary whose samples embed soft-mask information (`/JPXDecode`,
+    /// PDF 1.5, default 0). This reader also accepts it inside a soft-mask
+    /// dictionary because real files attach it there; see the `soft_mask`
+    /// module documentation.
     pub smask_in_data: Option<u8>,
-    /// `/Matte` matte colour components (non-empty, finite); PDF 1.6.
+    /// `/Matte` matte colour components (non-empty, finite).
+    ///
+    /// Not a Table 144 entry: 11.6.5.3 Table 146 defines it as the optional
+    /// PDF 1.4 entry of a *soft-mask image* dictionary, naming the colour the
+    /// parent image's data was preblended with. Accepted here as well
+    /// because preblended masks travel with this dictionary in real files.
     pub matte: Option<Vec<f64>>,
-    /// Entries outside Table 146, preserved verbatim and unresolved.
+    /// Entries outside Table 144, preserved verbatim and unresolved.
     pub other: BTreeMap<String, Value>,
 }
 
@@ -81,7 +96,14 @@ pub struct ExtGState {
     pub overprint_mode: Option<u8>,
     /// `/Font` font resource and size.
     pub font: Option<ExtGStateFont>,
-    /// `/FL` flatness tolerance (0–100).
+    /// `/FL` flatness tolerance, accepted in `0..=100`.
+    ///
+    /// Table 58 defers the value to 10.6.2, where flatness "shall be a
+    /// positive number" with an initial value of 1.0 (Table 53); the only
+    /// explicit numeric range in the standard is the `i` operator row of
+    /// Table 57, "a number in the range 0 to 100; a value of 0 shall specify
+    /// the output device's default flatness tolerance". Both bounds and the
+    /// meaning of 0 therefore stay as they are.
     pub flatness: Option<f64>,
     /// `/SM` smoothness tolerance (0–1).
     pub smoothness: Option<f64>,
@@ -97,7 +119,7 @@ pub struct ExtGState {
     pub alpha_is_shape: Option<bool>,
     /// `/TK` text knockout.
     pub text_knockout: Option<bool>,
-    /// `/SMask` soft mask: `/None` or a soft-mask dictionary.
+    /// `/SMask` soft mask: `/None` (11.6.4.3) or a soft-mask dictionary.
     pub soft_mask: Option<Value>,
     /// `/TR` transfer function.
     pub transfer: Option<Value>,

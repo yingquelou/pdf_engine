@@ -58,11 +58,16 @@ impl Document {
     /// Parse an ExtGState `/SMask` value as a soft-mask dictionary.
     ///
     /// `value` may be a dictionary or an indirect reference to one.
-    /// `/S` must be `/Alpha` or `/Luminosity`, `/G` must resolve to a
-    /// Form or Image XObject stream, `/BC` components must lie within
-    /// `0..=1`, `/SMaskInData` must be 0–2, `/Matte` must be a non-empty
-    /// array of numbers, and a `/TR` name must be `/Identity`. `/G` and
-    /// `/TR` are kept as written so callers can resolve them themselves.
+    /// Table 144 (11.6.5.2) requires `/S` to be `/Alpha` or `/Luminosity`
+    /// and `/G` to be a transparency group XObject; this reader also accepts
+    /// an Image XObject for `/G`, because the same entry point is used for
+    /// the soft-mask images of 11.6.5.3. `/BC` components must lie within
+    /// `0..=1` (the group colour space of Table 147 is restricted to that
+    /// interval) and a `/TR` name must be `/Identity`; `/G` and `/TR` are
+    /// kept as written so callers can resolve them themselves.
+    /// `/SMaskInData` (Table 89, 0–2) and `/Matte` (Table 146, non-empty
+    /// array of colour components) are not Table 144 entries but are
+    /// accepted here; see the `soft_mask` module.
     pub fn soft_mask(&self, value: &Value) -> Result<SoftMask> {
         let value = self.resolve_graphics_state_value(value)?;
         let dict = value.as_dict().ok_or_else(|| {
@@ -105,6 +110,11 @@ pub fn parse_ext_g_state(document: &Document, dict: &Dict) -> Result<ExtGState> 
         nonstroking_overprint: optional_bool(document, dict, "op")?,
         overprint_mode: optional_code(document, dict, "OPM", 1)?,
         font: optional_font(document, dict)?,
+        // Table 58 gives no range for `/FL` and defers to 10.6.2 ("shall be
+        // a positive number", initial value 1.0 per Table 53). The only
+        // stated interval is the `i` row of Table 57, "a number in the range
+        // 0 to 100", where 0 asks for the output device's default; 0 is
+        // therefore accepted rather than rejected as non-positive.
         flatness: optional_ranged_number(document, dict, "FL", 0.0, 100.0)?,
         smoothness: optional_ranged_number(document, dict, "SM", 0.0, 1.0)?,
         stroke_adjustment: optional_bool(document, dict, "SA")?,
