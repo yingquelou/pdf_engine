@@ -4,6 +4,7 @@ mod artifacts_fragments;
 mod composite_fonts;
 mod content_operators;
 mod form_xobjects;
+mod graphics_state_matrices;
 mod marked_content;
 mod page_tree_limits;
 mod simple_fonts;

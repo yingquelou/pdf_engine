@@ -79,11 +79,18 @@ pub(super) struct MarkedFrame {
 }
 
 /// Text/graphics state saved by `q` and restored by `Q`.
+///
+/// ISO 32000-1 8.4.2 makes `q` push "a copy of the entire graphics state" and
+/// `Q` restore it, and 9.3.1 files the text state under "those graphics state
+/// parameters that only affect text", so the text matrices `Tm`/`Tlm` of 9.4.1
+/// travel with the rest of the record.
 #[derive(Clone)]
 struct SavedState {
     font_name: Option<String>,
     font_size: Option<f64>,
     ctm: Matrix,
+    text_matrix: Matrix,
+    line_matrix: Matrix,
     leading: f64,
     rise: f64,
 }
@@ -103,8 +110,10 @@ pub(super) struct TextState {
     /// Current run being accumulated; flushed when the position changes or a
     /// separator is emitted.
     pending_fragment: Option<TextFragment>,
-    /// States saved by `q` and restored by `Q`. Only the selected font and the
-    /// text parameters that affect positioning are modeled.
+    /// States saved by `q` and restored by `Q`: the selected font plus the
+    /// text-state and transformation parameters this extractor models
+    /// (`CTM`, `Tm`, `Tlm`, leading, rise). Other graphics state parameters
+    /// (colour, line style, clipping, transparency) are not modeled at all.
     saved_states: Vec<SavedState>,
     /// Open marked-content sections (`BMC`/`BDC` … `EMC` nesting).
     pub(super) marked: Vec<MarkedFrame>,
@@ -176,6 +185,8 @@ impl TextState {
                 font_name: self.font_name.clone(),
                 font_size: self.font_size,
                 ctm: self.ctm,
+                text_matrix: self.text_matrix,
+                line_matrix: self.line_matrix,
                 leading: self.leading,
                 rise: self.rise,
             });
@@ -187,6 +198,8 @@ impl TextState {
             self.font_name = saved.font_name;
             self.font_size = saved.font_size;
             self.ctm = saved.ctm;
+            self.text_matrix = saved.text_matrix;
+            self.line_matrix = saved.line_matrix;
             self.leading = saved.leading;
             self.rise = saved.rise;
         }
