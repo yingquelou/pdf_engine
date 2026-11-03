@@ -46,3 +46,8 @@ path = "tests/interactive/mod.rs"
 [[test]]
 name = "main"
 path = "tests/main/mod.rs"
+
+# 第 7 章语法与文件结构集成测试按主题分文件（`tests/syntax/`），同上需显式声明路径。
+[[test]]
+name = "syntax"
+path = "tests/syntax/mod.rs"
