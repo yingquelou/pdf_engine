@@ -17,6 +17,9 @@ mod marked_tests;
 mod mapping_tests;
 
 #[cfg(test)]
+mod operand_guard_tests;
+
+#[cfg(test)]
 mod state_tests;
 
 #[cfg(test)]

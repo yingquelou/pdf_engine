@@ -4,7 +4,39 @@ use crate::core::reader::content::TextElement;
 use crate::core::reader::text::tokenizer::CsToken;
 use crate::core::types::Value;
 
-pub(super) fn expect_number(token: &CsToken, operator: &str, index: usize) -> Result<f64> {
+/// Borrow the operand at `index`, or report a truncated operator.
+///
+/// Content streams are untrusted input: an operator may be written with fewer
+/// operands than its arity, so every positional access must answer with the
+/// existing [`ContentStreamError::InvalidOperandCount`] instead of indexing
+/// panic.
+fn operand<'a>(tokens: &'a [CsToken], operator: &str, index: usize) -> Result<&'a CsToken> {
+    tokens
+        .get(index)
+        .ok_or_else(|| ContentStreamError::InvalidOperandCount {
+            operator: operator.into(),
+            expected: (index + 1).to_string(),
+            actual: tokens.len(),
+        })
+}
+
+pub(super) fn expect_number(tokens: &[CsToken], operator: &str, index: usize) -> Result<f64> {
+    number_value(operand(tokens, operator, index)?, operator, index)
+}
+
+pub(super) fn expect_integer(tokens: &[CsToken], operator: &str, index: usize) -> Result<i64> {
+    integer_value(operand(tokens, operator, index)?, operator, index)
+}
+
+pub(super) fn expect_name(tokens: &[CsToken], operator: &str, index: usize) -> Result<String> {
+    name_value(operand(tokens, operator, index)?, operator, index)
+}
+
+pub(super) fn expect_string(tokens: &[CsToken], operator: &str, index: usize) -> Result<Vec<u8>> {
+    string_value(operand(tokens, operator, index)?, operator, index)
+}
+
+fn number_value(token: &CsToken, operator: &str, index: usize) -> Result<f64> {
     match token {
         CsToken::Number(n) => Ok(*n),
         _ => Err(ContentStreamError::InvalidOperandValue {
@@ -15,7 +47,7 @@ pub(super) fn expect_number(token: &CsToken, operator: &str, index: usize) -> Re
     }
 }
 
-pub(super) fn expect_integer(token: &CsToken, operator: &str, index: usize) -> Result<i64> {
+fn integer_value(token: &CsToken, operator: &str, index: usize) -> Result<i64> {
     match token {
         CsToken::Number(n) => Ok(*n as i64),
         _ => Err(ContentStreamError::InvalidOperandValue {
@@ -26,7 +58,7 @@ pub(super) fn expect_integer(token: &CsToken, operator: &str, index: usize) -> R
     }
 }
 
-pub(super) fn expect_name(token: &CsToken, operator: &str, index: usize) -> Result<String> {
+fn name_value(token: &CsToken, operator: &str, index: usize) -> Result<String> {
     match token {
         CsToken::Name(n) => Ok(n.clone()),
         _ => Err(ContentStreamError::InvalidOperandValue {
@@ -37,7 +69,7 @@ pub(super) fn expect_name(token: &CsToken, operator: &str, index: usize) -> Resu
     }
 }
 
-pub(super) fn expect_string(token: &CsToken, operator: &str, index: usize) -> Result<Vec<u8>> {
+fn string_value(token: &CsToken, operator: &str, index: usize) -> Result<Vec<u8>> {
     match token {
         CsToken::LiteralString(s) | CsToken::HexString(s) => Ok(s.clone()),
         _ => Err(ContentStreamError::InvalidOperandValue {
@@ -63,7 +95,7 @@ pub(super) fn expect_numbers_exact(
     tokens
         .iter()
         .enumerate()
-        .map(|(i, t)| expect_number(t, operator, i))
+        .map(|(i, t)| number_value(t, operator, i))
         .collect()
 }
 
@@ -71,7 +103,7 @@ pub(super) fn expect_numbers_variadic(tokens: &[CsToken], operator: &str) -> Res
     tokens
         .iter()
         .enumerate()
-        .map(|(i, t)| expect_number(t, operator, i))
+        .map(|(i, t)| number_value(t, operator, i))
         .collect()
 }
 
@@ -115,7 +147,7 @@ pub(super) fn expect_number_array(
     let values = inner
         .iter()
         .enumerate()
-        .map(|(i, t)| expect_number(t, operator, i))
+        .map(|(i, t)| number_value(t, operator, i))
         .collect::<Result<Vec<_>>>()?;
     Ok((values, next))
 }

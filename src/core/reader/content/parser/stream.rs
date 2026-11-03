@@ -74,10 +74,10 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
                 nums[0], nums[1], nums[2], nums[3], nums[4], nums[5],
             ]))
         }
-        "w" => Ok(Op::SetLineWidth(expect_number(&operands[0], "w", 0)?)),
-        "J" => Ok(Op::SetLineCap(expect_integer(&operands[0], "J", 0)?)),
-        "j" => Ok(Op::SetLineJoin(expect_integer(&operands[0], "j", 0)?)),
-        "M" => Ok(Op::SetMiterLimit(expect_number(&operands[0], "M", 0)?)),
+        "w" => Ok(Op::SetLineWidth(expect_number(operands, "w", 0)?)),
+        "J" => Ok(Op::SetLineCap(expect_integer(operands, "J", 0)?)),
+        "j" => Ok(Op::SetLineJoin(expect_integer(operands, "j", 0)?)),
+        "M" => Ok(Op::SetMiterLimit(expect_number(operands, "M", 0)?)),
         "d" => {
             let (dash_array, next) = expect_number_array(operands, "d", 0)?;
             if operands.len() != next + 1 {
@@ -87,12 +87,12 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
                     actual: operands.len(),
                 });
             }
-            let phase = expect_number(&operands[next], "d", next)?;
+            let phase = expect_number(operands, "d", next)?;
             Ok(Op::SetDashPattern(dash_array, phase))
         }
-        "ri" => Ok(Op::SetRenderingIntent(expect_name(&operands[0], "ri", 0)?)),
-        "i" => Ok(Op::SetFlatness(expect_number(&operands[0], "i", 0)?)),
-        "gs" => Ok(Op::SetExtGState(expect_name(&operands[0], "gs", 0)?)),
+        "ri" => Ok(Op::SetRenderingIntent(expect_name(operands, "ri", 0)?)),
+        "i" => Ok(Op::SetFlatness(expect_number(operands, "i", 0)?)),
+        "gs" => Ok(Op::SetExtGState(expect_name(operands, "gs", 0)?)),
 
         // Path construction
         "m" => {
@@ -148,25 +148,17 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         "ET" => Ok(Op::EndText),
 
         // Text state
-        "Tc" => Ok(Op::SetCharSpacing(expect_number(&operands[0], "Tc", 0)?)),
-        "Tw" => Ok(Op::SetWordSpacing(expect_number(&operands[0], "Tw", 0)?)),
-        "Tz" => Ok(Op::SetHorizontalScaling(expect_number(
-            &operands[0],
-            "Tz",
-            0,
-        )?)),
-        "TL" => Ok(Op::SetTextLeading(expect_number(&operands[0], "TL", 0)?)),
+        "Tc" => Ok(Op::SetCharSpacing(expect_number(operands, "Tc", 0)?)),
+        "Tw" => Ok(Op::SetWordSpacing(expect_number(operands, "Tw", 0)?)),
+        "Tz" => Ok(Op::SetHorizontalScaling(expect_number(operands, "Tz", 0)?)),
+        "TL" => Ok(Op::SetTextLeading(expect_number(operands, "TL", 0)?)),
         "Tf" => {
-            let name = expect_name(&operands[0], "Tf", 0)?;
-            let size = expect_number(&operands[1], "Tf", 1)?;
+            let name = expect_name(operands, "Tf", 0)?;
+            let size = expect_number(operands, "Tf", 1)?;
             Ok(Op::SetFont(name, size))
         }
-        "Tr" => Ok(Op::SetTextRenderingMode(expect_integer(
-            &operands[0],
-            "Tr",
-            0,
-        )?)),
-        "Ts" => Ok(Op::SetTextRise(expect_number(&operands[0], "Ts", 0)?)),
+        "Tr" => Ok(Op::SetTextRenderingMode(expect_integer(operands, "Tr", 0)?)),
+        "Ts" => Ok(Op::SetTextRise(expect_number(operands, "Ts", 0)?)),
 
         // Text positioning
         "Td" => {
@@ -186,16 +178,12 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         "T*" => Ok(Op::NextLine),
 
         // Text showing
-        "Tj" => Ok(Op::ShowText(expect_string(&operands[0], "Tj", 0)?)),
-        "'" => Ok(Op::NextLineAndShowText(expect_string(
-            &operands[0],
-            "'",
-            0,
-        )?)),
+        "Tj" => Ok(Op::ShowText(expect_string(operands, "Tj", 0)?)),
+        "'" => Ok(Op::NextLineAndShowText(expect_string(operands, "'", 0)?)),
         "\"" => {
-            let aw = expect_number(&operands[0], "\"", 0)?;
-            let ac = expect_number(&operands[1], "\"", 1)?;
-            let text = expect_string(&operands[2], "\"", 2)?;
+            let aw = expect_number(operands, "\"", 0)?;
+            let ac = expect_number(operands, "\"", 1)?;
+            let text = expect_string(operands, "\"", 2)?;
             Ok(Op::SetSpacingAndShowText(aw, ac, text))
         }
         "TJ" => Ok(Op::ShowTextWithPositioning(expect_text_array(
@@ -215,8 +203,8 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         }
 
         // Color
-        "CS" => Ok(Op::SetStrokeColorSpace(expect_name(&operands[0], "CS", 0)?)),
-        "cs" => Ok(Op::SetFillColorSpace(expect_name(&operands[0], "cs", 0)?)),
+        "CS" => Ok(Op::SetStrokeColorSpace(expect_name(operands, "CS", 0)?)),
+        "cs" => Ok(Op::SetFillColorSpace(expect_name(operands, "cs", 0)?)),
         "SC" => Ok(Op::SetStrokeColor(expect_numbers_variadic(operands, "SC")?)),
         "SCN" => {
             if let Some(CsToken::Name(pattern)) = operands.last() {
@@ -251,8 +239,8 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
                 Ok(Op::SetFillColorN(expect_numbers_variadic(operands, "scn")?))
             }
         }
-        "G" => Ok(Op::SetStrokeGray(expect_number(&operands[0], "G", 0)?)),
-        "g" => Ok(Op::SetFillGray(expect_number(&operands[0], "g", 0)?)),
+        "G" => Ok(Op::SetStrokeGray(expect_number(operands, "G", 0)?)),
+        "g" => Ok(Op::SetFillGray(expect_number(operands, "g", 0)?)),
         "RG" => {
             let nums = expect_numbers_exact(operands, "RG", 3)?;
             Ok(Op::SetStrokeRgb(nums[0], nums[1], nums[2]))
@@ -271,21 +259,21 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         }
 
         // Shading
-        "sh" => Ok(Op::PaintShading(expect_name(&operands[0], "sh", 0)?)),
+        "sh" => Ok(Op::PaintShading(expect_name(operands, "sh", 0)?)),
 
         // XObject
-        "Do" => Ok(Op::PaintXObject(expect_name(&operands[0], "Do", 0)?)),
+        "Do" => Ok(Op::PaintXObject(expect_name(operands, "Do", 0)?)),
 
         // Marked content
-        "MP" => Ok(Op::MarkedContentPoint(expect_name(&operands[0], "MP", 0)?)),
+        "MP" => Ok(Op::MarkedContentPoint(expect_name(operands, "MP", 0)?)),
         "DP" => {
-            let tag = expect_name(&operands[0], "DP", 0)?;
+            let tag = expect_name(operands, "DP", 0)?;
             let props = expect_properties(operands, "DP", 1)?;
             Ok(Op::MarkedContentPointWithProperties(tag, props))
         }
-        "BMC" => Ok(Op::BeginMarkedContent(expect_name(&operands[0], "BMC", 0)?)),
+        "BMC" => Ok(Op::BeginMarkedContent(expect_name(operands, "BMC", 0)?)),
         "BDC" => {
-            let tag = expect_name(&operands[0], "BDC", 0)?;
+            let tag = expect_name(operands, "BDC", 0)?;
             let props = expect_properties(operands, "BDC", 1)?;
             Ok(Op::BeginMarkedContentWithProperties(tag, props))
         }

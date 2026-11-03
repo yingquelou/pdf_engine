@@ -78,3 +78,81 @@ fn builder_text_fragments_report_positions() {
         Some("First\nSecond")
     );
 }
+
+/// 缺陷回归：畸形内容流（`Tf` 只给 1 个操作数）经 `Document::page_content_ops`
+/// 入口不得 panic，应返回类型化解析错误。
+#[test]
+fn page_content_ops_returns_typed_error_for_truncated_operands() {
+    fn doc_with_content(content: &'static [u8]) -> Document {
+        let mut doc = Document::new();
+        doc.set_object(Object::new(
+            1,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("Catalog".into()))
+                    .insert("Pages", Value::Ref(2, 0)),
+            ),
+        ));
+        doc.set_object(Object::new(
+            2,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("Pages".into()))
+                    .insert("Kids", Value::Array(Array::new().push(Value::Ref(3, 0))))
+                    .insert("Count", Value::Integer(1)),
+            ),
+        ));
+        doc.set_object(Object::new(
+            3,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("Page".into()))
+                    .insert("Parent", Value::Ref(2, 0))
+                    .insert("Resources", Value::Dict(Dict::new()))
+                    .insert("Contents", Value::Ref(4, 0)),
+            ),
+        ));
+        doc.set_object(Object::new(
+            4,
+            0,
+            Value::Stream(Dict::new(), StreamData::Owned(content.to_vec())),
+        ));
+        doc.trailer = Trailer {
+            dict: Dict::new()
+                .insert("Root", Value::Ref(1, 0))
+                .insert("Size", Value::Integer(5)),
+        };
+        doc
+    }
+
+    // 原始缺陷形态：`Tf` 缺少字号操作数。
+    let doc = doc_with_content(b"BT /F1 Tf (x) Tj ET");
+    let error = doc
+        .page_content_ops(0)
+        .expect_err("truncated Tf must not parse");
+    assert!(
+        error.to_string().contains("Tf"),
+        "错误应指明算子 Tf: {error}"
+    );
+
+    // 单操作数算子整族缺操作数同样只返回错误。
+    for content in [
+        &b"BT w ET"[..],
+        &b"BT gs ET"[..],
+        &b"BT Tj ET"[..],
+        &b"BT ' ET"[..],
+        &b"BT 1 2 \" ET"[..],
+        &b"BT /F1 12 Tf 1 0 0 re ET"[..],
+        &b"0 0 0 1 2 3 4 sh Do"[..],
+    ] {
+        let doc = doc_with_content(content);
+        assert!(
+            doc.page_content_ops(0).is_err(),
+            "畸形内容流应返回错误: {}",
+            String::from_utf8_lossy(content)
+        );
+    }
+}
