@@ -153,6 +153,42 @@ pub enum LinearizationIssue {
         group_bits: u64,
         document_bits: u64,
     },
+    /// F.4.6：Table F.2 键 `B` 给出的内嵌文件流 hint 表（Table F.11/F.12）位流
+    /// 损坏——读不满 160 位头部、项主序的某列（含项 5 的标识符列）越过流尾，或
+    /// 头部项 4—7／文档级 Table F.3 项 11 的位宽越出 0—32（35524—35525）。缺键
+    /// 是**合法**形态（35381「Present only if embedded file streams exist」）。
+    EmbeddedFileHintTableCorrupt { problem: String },
+    /// F.4.6：键 `B` 在场，但项 5 的唯一宽度来源（**文档级** Table F.3 项 11，
+    /// 35847）不可得——页偏移表缺失或读坏。本表**不类型化**：以 0 宽冒充会把所有
+    /// 标识符伪造成 0（取舍见 `hints::embedded_file` 模块头）。
+    EmbeddedFileIdWidthUnavailable,
+    /// F.4.6：Table F.11 项 3 声明 0 组，而键 `B` 的条件就是「有内嵌文件流」
+    /// （35381），35795—35797 又规定每项按组数重复——自相矛盾（**派生**结论）。
+    EmbeddedFileGroupCountZero,
+    /// F.4.6：Table F.12 项 2/项 3 互斥 shall（35837—35844，同 35793—35794 的组
+    /// 约定）：一项为 0 时另一项须为 0 且项 4 须大于 0。原值保留、表照常解析。
+    EmbeddedFileSharedOnlyGroupViolation {
+        group: u64,
+        rule: &'static str,
+        object_count: u64,
+        group_length: u64,
+        shared_reference_count: u64,
+    },
+    /// F.4.6：项 5 的标识符越出 F.4.2 共享对象 hint 表的条目数（35847—35850 的
+    /// 「indices into the shared object hint table」＋35604 的自 0 起顺序位置）。
+    EmbeddedFileSharedObjectIndexOutOfRange {
+        group: u64,
+        index: u64,
+        entries: u64,
+    },
+    /// F.4.6 第一组的**派生**相邻性核对（由 35792 的号相邻约定＋Table F.11 项 1
+    /// 的字面定义**推出**，非原文写成判定式的 shall）：第一组条目的项 1 落在
+    /// 头部项 1 与项 1＋项 2−1 张成的号区间之外。
+    EmbeddedFileFirstGroupAnchorMismatch {
+        object_number: u64,
+        run_start: u64,
+        run_end: u64,
+    },
 }
 
 impl fmt::Display for LinearizationIssue {
@@ -370,6 +406,44 @@ impl fmt::Display for LinearizationIssue {
             } => write!(
                 f,
                 "F.4.5 (Table F.10 item 6) / F.4.1 (Table F.3 item 11): the extended generic hint table for key {key} declares {group_bits} bit(s) for the greatest shared object identifier of its group while the page offset hint table declares {document_bits} bit(s) for the whole document; the table is read with its own group width and the raw values are kept (derived consistency rule, not a literal shall)"
+            ),
+            Self::EmbeddedFileHintTableCorrupt { problem } => write!(
+                f,
+                "F.4.6 (Table F.11/F.12): the embedded file stream hint table for key B is corrupt: {problem}"
+            ),
+            Self::EmbeddedFileIdWidthUnavailable => write!(
+                f,
+                "F.4.6 (Table F.12 item 5): key B declares an embedded file stream hint table, but the document-level bit width from Table F.3 item 11 is unavailable because the page offset hint table is missing or corrupt; the table is not typed because item 5's identifiers would otherwise be fabricated as zeros"
+            ),
+            Self::EmbeddedFileGroupCountZero => write!(
+                f,
+                "F.4.6 (Table F.11 item 3): key B declares an embedded file stream hint table whose header declares 0 groups, although F.4.6 repeats every item of Table F.12 once per group and key B is present only if embedded file streams exist"
+            ),
+            Self::EmbeddedFileSharedOnlyGroupViolation {
+                group,
+                rule,
+                object_count,
+                group_length,
+                shared_reference_count,
+            } => write!(
+                f,
+                "F.4.6 (Table F.12): group {group} violates the rule \"{rule}\": item 2 = {object_count}, item 3 = {group_length}, item 4 = {shared_reference_count}; the raw values are kept and the table is still read (derived from the group convention in F.4.6)"
+            ),
+            Self::EmbeddedFileSharedObjectIndexOutOfRange {
+                group,
+                index,
+                entries,
+            } => write!(
+                f,
+                "F.4.6 (Table F.12 item 5): group {group} refers to shared object hint table entry {index}, but F.4.2 requires an index that is a sequential position in that table counting from 0 and the table holds {entries} entry(ies)"
+            ),
+            Self::EmbeddedFileFirstGroupAnchorMismatch {
+                object_number,
+                run_start,
+                run_end,
+            } => write!(
+                f,
+                "F.4.6 (Table F.11 items 1/3 + Table F.12 item 1): the first embedded file stream group's object number {object_number} lies outside the adjacent object number range {run_start}..={run_end} derived from Table F.11 item 1 and the group's object count, although F.4.6 requires all objects of a group to have adjacent object numbers (derived consistency rule, not a literal shall)"
             ),
         }
     }

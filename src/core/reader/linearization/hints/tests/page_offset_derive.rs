@@ -134,6 +134,7 @@ fn hints(
         thumbnail: None,
         generic: Vec::new(),
         extended: Vec::new(),
+        embedded_file: None,
         issues: Vec::new(),
     }
 }

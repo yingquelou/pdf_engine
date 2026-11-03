@@ -1,5 +1,5 @@
 //! 附录 F.4 hint 表读端解码（已完整解析**页偏移**、**共享对象**、**缩略图**、
-//! **generic** 与 **extended generic** 五家）。
+//! **generic**、**extended generic** 与 **embedded file stream** 六家）。
 //!
 //! 消费上层已识别的 [`LinearizationInfo`]（Table F.1 `/H` 给出的 hint 流
 //! 范围由 [`HintStreams`]/[`HintRange`] 承载，本模块不重复定位，只做：
@@ -30,13 +30,22 @@
 //!   共用该形态，即 Table F.2 键 `V`/`C`/`R`，同样**条件存在**、缺键不给诊断；
 //!   声明版本 < 1.5 时三键退回 [`generic`] 形态（F.4.5「As of PDF 1.5」35781
 //!   的版本门，见 [`extended`] 模块头）；
+//! - [`embedded_file`]：F.4.6 内嵌文件流 hint 表（Table F.11 头部 7 项 +
+//!   Table F.12 每组 5 项，条目按**项主序（转置）**排列：所有组的项 1，再所有组
+//!   的项 2……35797—35799）；由 Table F.2 键 `B` 定位（35381—35382「Present only
+//!   if embedded file streams exist; PDF 1.5」），故缺键同样是**合法形态**、不给
+//!   诊断；项 5 的位打包标识符列表宽度取**文档级** Table F.3 项 11，因此本家族
+//!   硬依赖 [`page_offset`]（该宽度不可得时本表不类型化，见 [`embedded_file`]
+//!   模块头）；
 //! - [`assemble`]：装配层——读主/溢出 hint 流、过滤解码、拼接、按 Table F.2 键
 //!   分发各家族并互校表位置（零行为变更自本文件拆出）。
 //!
-//! **未解析（诚实缺口）**：F.4 其余家族——embedded file stream hint 表
-//! （F.4.6，Table F.11/F.12，Table F.2 键 `B`；F.4.5 的 35786—35788 明确把
-//! 嵌入式文件流划归该家族）。这些表的位置仍按 Table F.2 键在
-//! [`LinearizationHints::table_positions`] 里如实列出，但内容为原样字节，
+//! **未解析（诚实缺口）**：F.4 的六个家族至此**全部**有类型化读端；仍不做的部分
+//! 一律记在各自模块头的**剩余缺口**/**待核**里，其中最主要的是**写端不存在**
+//! （本库不产出线性化布局，故各表只读不写），以及 F.4.6 的组内对象号相邻性只对
+//! **第一组**可判定（Table F.12 不给其余组的第一个对象号，见
+//! [`embedded_file`] 模块头）。这些表的位置仍按 Table F.2 键在
+//! [`LinearizationHints::table_positions`] 里如实列出，读失败时内容为原样字节、
 //! 未类型化。
 //!
 //! 诊断进入 [`LinearizationHints::issues`]（复用 [`LinearizationIssue`]
@@ -48,6 +57,7 @@ use super::issues::LinearizationIssue;
 
 mod assemble;
 pub mod bits;
+mod embedded_file;
 mod extended;
 mod generic;
 mod page_offset;
@@ -58,6 +68,7 @@ mod thumbnail;
 #[cfg(test)]
 mod tests;
 
+pub use embedded_file::{EmbeddedFileGroupEntry, EmbeddedFileHeader, EmbeddedFileHintTable};
 pub use extended::ExtendedHintTable;
 pub use generic::GenericHintTable;
 pub use page_offset::{PageOffsetEntry, PageOffsetHeader, PageOffsetHintTable};
@@ -139,6 +150,15 @@ pub struct LinearizationHints {
     /// 给出类型化诊断。声明版本 < 1.5 时三键走 F.4.4 形态、列在
     /// [`Self::generic`] 里，本列表为空（版本门见 [`extended`] 模块头）。
     pub extended: Vec<ExtendedHintTable>,
+    /// 已按 F.4.6 形态解析的内嵌文件流 hint 表（Table F.11 头部 + Table F.12 的
+    /// 每组条目）：本家族由 Table F.2 **唯一**键 `B` 定位，且**一张表描述全部组**
+    /// （与 [`Self::generic`]/[`Self::extended`] 的「一键一组」不同，条目序是
+    /// 项主序的转置排列，35797—35799）。键缺失（文档没有内嵌文件流，35381
+    /// 「Present only if embedded file streams exist」）是**合法形态**、
+    /// **不给诊断**；键在而解析失败亦为 `None`，并在 [`Self::issues`] 给出类型化
+    /// 诊断。项 5 的标识符宽度取**文档级** Table F.3 项 11，故 [`Self::page_offset`]
+    /// 不可得时本字段为 `None` 并落类型化诊断（见 [`embedded_file`] 模块头）。
+    pub embedded_file: Option<EmbeddedFileHintTable>,
     /// hint 层一致性诊断；`LinearizationInfo::issues` 的文档结构诊断
     /// 不在此列（由 [`Document::linearization`] 报告）。
     pub issues: Vec<LinearizationIssue>,

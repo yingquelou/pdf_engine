@@ -36,6 +36,9 @@ mod generic;
 /// F.4.5 extended generic hint 表家族。
 mod extended;
 
+/// F.4.6 内嵌文件流 hint 表家族。
+mod embedded_file;
+
 use support::{
     BitWriter, PAGE_COUNT, build, build_at_version, hint_entries, hint_payload, page_offset_bytes,
     page_offset_table_bits, shared_object_table_bits,

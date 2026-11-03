@@ -15,6 +15,7 @@ use super::super::LinearizationInfo;
 use super::super::checks::read_object_at;
 use super::super::dict::HintRange;
 use super::super::issues::LinearizationIssue;
+use super::embedded_file::{check_embedded_file_semantics, parse_embedded_file};
 use super::extended::{check_extended_shared_id_widths, group_hint_keys, parse_extended};
 use super::{
     GenericHintTable, HintTablePosition, LinearizationHints, PAGE_OFFSET_TABLE_POSITION,
@@ -64,6 +65,7 @@ impl Document {
                     thumbnail: None,
                     generic: Vec::new(),
                     extended: Vec::new(),
+                    embedded_file: None,
                     issues,
                 });
             }
@@ -98,12 +100,31 @@ impl Document {
         // F.4.5：`V`/`C`/`R` 的 extended 表（Table F.10）长度随项 5/项 6 变化，
         // 同样参与位置剔除，故排在 `S` 之前。
         let extended = parse_extended(&mut table_positions, &data, version, &mut issues);
+        // F.4.6：键 `B` 的内嵌文件流 hint 表（Table F.11/F.12）。项 5 的标识符宽度
+        // 取**文档级** Table F.3 项 11，故须排在页偏移表之后；本表体的字节范围
+        // 同样参与「表互不重叠」的位置剔除，故排在 `S` 之前——`S` 的位置一旦落进
+        // 本表体就没有可信的解析起点。
+        let embedded_file = parse_embedded_file(
+            &mut table_positions,
+            &data,
+            page_offset.as_ref(),
+            &mut issues,
+        );
         // 键存在但形态不符时不再叠加「缺 S」诊断。
         let s_declared = dict.get("S").is_some();
         let shared_object = parse_shared(&table_positions, s_declared, &data, &mut issues);
         check_header_consistency(shared_object.as_ref(), &mut issues);
         check_page_offset_semantics(page_offset.as_ref(), &mut issues);
         check_extended_shared_id_widths(page_offset.as_ref(), &extended, &mut issues);
+        // F.4.6 的表内 shall 与派生核对需要 F.4.2 的条目数（项 5 的标识符是共享
+        // 对象 hint 表的顺序下标），故排在 `S` 之后。
+        check_embedded_file_semantics(
+            embedded_file.as_ref(),
+            shared_object.as_ref().map(|table| {
+                table.first_page_groups.len() as u64 + table.shared_section_groups.len() as u64
+            }),
+            &mut issues,
+        );
         page_offset_derive::check_page_offset_derivations(
             page_offset.as_ref(),
             first_page_object,
@@ -119,6 +140,7 @@ impl Document {
             thumbnail,
             generic,
             extended,
+            embedded_file,
             issues,
         })
     }
