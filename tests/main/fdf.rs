@@ -9,6 +9,9 @@ use super::*;
 
 mod embedded;
 mod javascript;
+/// Table 248–251 的 `/Pages`/`/Annots` 类型化视图写出→重解析往返与
+/// 写端装配前校验的零字节拒绝。
+mod pages;
 mod write;
 
 /// 追加一段文本到缓冲（避免闭包与长度读取的借用冲突）。

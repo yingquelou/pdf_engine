@@ -10,12 +10,30 @@
 //! 含不可映射字符时回退 UTF-16BE 带 BOM），与读端
 //! `content::text_value` 的解码口径配对。
 //!
-//! 版本门禁与文件装配在 `builder/navigation/fdf.rs`。`PdfFeature` 新
+//! Table 248–251（`/Pages` 的四层结构 + `/Annots` 的 `/Page`）另有一组
+//! **独立**的写入口径（[`pages_value`] / [`annots_value`] 一族）：它们只
+//! 覆盖类型化命中的条目、**不动**类型化为 `None` 的原值（`keep_raw`），
+//! 因为这几张表里的可选条目（Table 248 `/Info`、Table 249 `/Rename`
+//! 「Default value: true」、Table 250 `/F`）都不该物化缺省；无法确证为
+//! 字典的数组项整体按原值透传。之所以是独立函数而不是
+//! [`catalog_dict`] 的一部分：`FdfDictionary` 的 `pages`/`annots` 是
+//! **原值**字段（类型化视图以方法暴露，见 `reader/fdf/pages.rs` 缺口
+//! 说明），把类型化页写回 `FdfDocument` 需要给该结构加字段，而它的
+//! 全字段字面构造点在本车道写集之外。对外入口是
+//! `PdfBuilder::fdf_pages_value` / `PdfBuilder::fdf_annots_value`
+//! （`builder/navigation/fdf/mod.rs`），产出的值写回上述原值字段后照常走
+//! [`catalog_dict`] + `export_fdf`；这几张表自身的装配前校验在子模块
+//! `builder/navigation/fdf/pages.rs`。
+//!
+//! 版本门禁与文件装配在 `builder/navigation/fdf/mod.rs`。`PdfFeature` 新
 //! 变体需要同步 `types/version/feature_display.rs` 的穷尽 `Display`
 //! match（在本车道写集之外），故门禁直接比较 [`PdfVersion`] 常量，
 //! 与 `navigation/mod.rs` 既有门禁口径一致。
 
-use crate::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField, FdfJavaScript};
+use crate::core::reader::fdf::{
+    FdfAnnotation, FdfDictionary, FdfDocument, FdfField, FdfJavaScript, FdfNamedPage, FdfPage,
+    FdfTemplate,
+};
 use crate::core::types::{Array, Dict, PdfTextString, PdfVersion, Value};
 
 /// 文本串值：写端一律输出十六进制串（Table 246 `/T`、Table 243
@@ -133,7 +151,7 @@ pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
     // Table 243 续表 — `/Target`（string；PDF 1.4；raw L24927–L24929）：
     // 类型化字段为准，写成十六进制文本串（与读端 `text_value` 解码
     // 配对）；`target_frame` 为 None 时透传原值，非串形态不丢弃、
-    // 由 `navigation/fdf.rs` 在装配前按 Table 243 的 string 类型拒绝。
+    // 由 `navigation/fdf/mod.rs` 在装配前按 Table 243 的 string 类型拒绝。
     let target = fdf
         .target_frame
         .as_deref()
@@ -141,7 +159,7 @@ pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
         .or_else(|| fdf.target.clone());
     // Table 243 续表 — `/JavaScript`（dictionary；PDF 1.4；raw
     // L24933–L24934）：类型化脚本字典（Table 245）优先，`None` 时透传
-    // 原值（含非字典形态，由 `navigation/fdf.rs` 装配前按 Table 243
+    // 原值（含非字典形态，由 `navigation/fdf/mod.rs` 装配前按 Table 243
     // 的 dictionary 类型拒绝）。
     let javascript = fdf
         .javascript_scripts
@@ -206,4 +224,122 @@ pub(crate) fn catalog_dict(fdf: &FdfDocument, version: PdfVersion) -> Dict {
         }
     }
     catalog
+}
+
+/// FDF 页字典数组（Table 248，raw L25085–L25090）→ 直接对象数组值
+/// （Table 243 `/Pages`，PDF 1.3）。
+pub(crate) fn pages_value(pages: &[FdfPage]) -> Value {
+    Value::Array(Array(pages.iter().map(page_value).collect()))
+}
+
+/// 单个 FDF 页字典（Table 248）→ 直接字典值。
+///
+/// 写入口径与 [`field_value`] 一致：类型化条目覆盖写回 `page.dict`，
+/// 未建模条目（含 Adobe 扩展键）原样保留。与 `overlay` 的
+/// 「`None` 即删除」不同，这里用 [`keep_raw`]：类型化为 `None` 时**不动**
+/// 原值——Table 248/249/250/251 的可选条目本就不该物化缺省，而形态不
+/// 可确证的原值（如 `/Rename` 写成整数）也不能被静默删掉。
+///
+/// 无法类型化为字典的数组项（[`FdfPage::dict`] 为空且 `raw` 非字典）
+/// 整体按原值透传，不伪造一个空页。
+pub(crate) fn page_value(page: &FdfPage) -> Value {
+    if !is_dict_form(&page.raw) && page.dict.0.is_empty() {
+        return page.raw.clone();
+    }
+    let templates = Value::Array(Array(page.templates.iter().map(template_value).collect()));
+    let mut dict = keep_raw(page.dict.clone(), "Templates", Some(templates));
+    // Table 248 — `/Info`（Optional；「FDF page information dictionary」在
+    // 32000-1 无条目表）：原值透传，缺席不物化。
+    if let Some(info) = &page.info {
+        dict = dict.insert("Info", info.clone());
+    }
+    Value::Dict(dict)
+}
+
+/// FDF 模板字典（Table 249，raw L25113–L25123）→ 直接字典值。
+pub(crate) fn template_value(template: &FdfTemplate) -> Value {
+    if !is_dict_form(&template.raw) && template.dict.0.is_empty() {
+        return template.raw.clone();
+    }
+    let mut dict = template.dict.clone();
+    // Table 249 — `/TRef`（Required；named page reference dictionary，
+    // Table 250）。类型化缺失时不伪造：原值（若有）留在 dict 里，
+    // 由 `navigation/fdf/pages.rs` 的装配前校验拒绝缺 Required 的产物。
+    if let Some(reference) = &template.named_page {
+        dict = dict.insert("TRef", named_page_value(reference));
+    }
+    // Table 249 — `/Fields`（Optional；指向 Table 246 字段字典的引用）。
+    // 只有原数组被**完整**类型化时才以类型化为准，否则整体保留原值
+    // （与 [`javascript_value`] 的 `/Doc` 同一策略，畸形项不丢）。
+    let fully_typed = match dict.get("Fields") {
+        None => true,
+        Some(Value::Array(items)) => items.0.len() == template.fields.len(),
+        Some(_) => false,
+    };
+    if fully_typed && !template.fields.is_empty() {
+        dict = dict.insert(
+            "Fields",
+            Value::Array(Array(template.fields.iter().map(field_value).collect())),
+        );
+    }
+    // Table 249 — `/Rename`（Optional; boolean; **Default value: true**）：
+    // 缺省**不物化**，条目缺席就不写；非布尔形态（类型化为 None）原值保留。
+    if let Some(flag) = template.rename {
+        dict = dict.insert("Rename", Value::Bool(flag));
+    }
+    Value::Dict(dict)
+}
+
+/// FDF 命名页引用字典（Table 250，raw L25124–L25128）→ 直接字典值。
+pub(crate) fn named_page_value(reference: &FdfNamedPage) -> Value {
+    if !is_dict_form(&reference.raw) && reference.dict.0.is_empty() {
+        return reference.raw.clone();
+    }
+    let mut dict = reference.dict.clone();
+    // Table 250 — `/Name`（Required; string）：类型化命中才覆盖写成
+    // 十六进制文本串（与读端 `text_value` 配对）；形态不可确证时原值保留。
+    if let Some(name) = reference.name.as_deref() {
+        dict = dict.insert("Name", text_string_value(name));
+    }
+    // Table 250 — `/F`（Optional; file specification）：原值透传；缺席即
+    // 规范推定「该页在关联的 PDF 文件里」（raw L25127–L25128），不伪造。
+    if let Some(file) = &reference.file {
+        dict = dict.insert("F", file.clone());
+    }
+    Value::Dict(dict)
+}
+
+/// FDF 注解字典数组（Table 243 `/Annots` + Table 251，raw L25129–L25132）
+/// → 直接对象数组值。
+pub(crate) fn annots_value(annots: &[FdfAnnotation]) -> Value {
+    Value::Array(Array(annots.iter().map(annotation_value).collect()))
+}
+
+/// 单个 FDF 注解字典 → 直接字典值。Table 251 只新增 `/Page`（integer，
+/// Required for annotations in FDF files），其余条目（12.5.2 公共条目与
+/// Table 171 起的子类型条目）一律原样保留。
+pub(crate) fn annotation_value(annotation: &FdfAnnotation) -> Value {
+    if !is_dict_form(&annotation.raw) && annotation.dict.0.is_empty() {
+        return annotation.raw.clone();
+    }
+    // Table 251 — `/Page` 序数（0 起）；类型化为 None（缺失或非整型）时
+    // 原值留在字典里不删。
+    let mut dict = annotation.dict.clone();
+    if let Some(page) = annotation.page {
+        dict = dict.insert("Page", Value::Integer(page));
+    }
+    Value::Dict(dict)
+}
+
+/// 只在类型化给出值时覆盖，否则保留原字典条目（缺省不物化）。
+fn keep_raw(mut dict: Dict, key: &str, value: Option<Value>) -> Dict {
+    if let Some(value) = value {
+        dict = dict.insert(key, value);
+    }
+    dict
+}
+
+/// 该原值形态是否就是字典（决定要不要整体透传）。
+fn is_dict_form(value: &Value) -> bool {
+    matches!(value, Value::Dict(_) | Value::Stream(_, _))
 }

@@ -4,7 +4,8 @@
 //! `Document::fdf()` 路径，逐条覆盖：检测宽容策略、目录/FDF 字典条目
 //! 类型化（`/Target` 串形态；`/JavaScript` 见子模块 javascript.rs）、
 //! 字段树全限定名连接、直接/间接 Kids、未建模条目原样保留、
-//! 整型标志校验、环与深度上限拒绝、便捷枚举接口。
+//! 整型标志校验、环与深度上限拒绝、便捷枚举接口，以及 `/Pages` 四层
+//! 结构与 `/Annots` 的 Table 251 `/Page`（见子模块 pages.rs）。
 
 use crate::core::types::{Array, Dict, Document, Object, StartXref, Trailer, Value, Xref};
 
@@ -15,6 +16,9 @@ use super::{FdfDocument, FdfError, MAX_FDF_FIELD_DEPTH};
 mod embedded;
 /// `/JavaScript`（Table 243 续表 + Table 245）的类型化解码测试。
 mod javascript;
+/// `/Pages`（Table 248/249/250）与 `/Annots`（Table 251）的类型化读端测试，
+/// 含上限防护（`pages::limits`）与 Annex J 导入合并（`pages::merge`）。
+mod pages;
 
 /// 组装 trailer `/Root → 1 0 R` 的文件级 Document（对象全部预置缓存）。
 fn doc_from_objects(objects: Vec<Object>) -> Document {

@@ -15,8 +15,19 @@
 //!   `/JavaScript`。除 `/Fields` 展开为 [`FdfField`] 树、`/Status`、
 //!   `/Encoding`、`/Target`（L24927：浏览器框架名字符串）与
 //!   `/JavaScript`（L24933：指向 Table 245 的脚本字典，raw
-//!   L24951–L24981）解码外，其余按原值保留（文件规范、数组与字典
-//!   不在本切片类型化，属剩余缺口）。
+//!   L24951–L24981）解码外，其余按原值保留（文件规范与 `/ID` 数组
+//!   属剩余缺口）；`/Pages` 与 `/Annots` 另有类型化只读视图（下一条）。
+//! - PDF 1.3 的 `/Pages`（FDF 页字典数组；raw L24874–L24877）与
+//!   `/Annots`（FDF 注解字典数组；raw L24885–L24889）由子模块 `pages`
+//!   类型化：[`Document::fdf_pages`] 逐页展开全部四层（Table 248
+//!   `/Templates`/`/Info` → Table 249 `/TRef`/`/Fields`/`/Rename` →
+//!   Table 250 `/Name`/`/F`，模板 `/Fields` 复用 [`FdfField`] 字段树），
+//!   [`Document::fdf_annots`] 逐项检查 Table 251 的必需 `/Page` 序数与
+//!   Table 243 的注解类型白名单，[`Document::fdf_import_merge`] 给出
+//!   Annex J（informative）口径的导入合并报告。三者的 shall 违例与降级
+//!   一律走类型化诊断 [`FdfPagesIssue`]，绝不让整份 FDF 解析失败；
+//!   与 `embedded` 同样以**方法**而非字段暴露，`pages`/`annots` 原值
+//!   字段继续保留，两条通道互不替代。
 //! - PDF 1.4 的 `/Differences`（stream；raw L24906–L24926）与
 //!   `/EmbeddedFDFs`（file specification 数组；raw L24930–L24932）另有
 //!   类型化只读视图：[`Document::fdf_differences`] 确证「它是流」并原值
@@ -37,11 +48,16 @@
 //! 版本门禁说明：`/Pages`/`/Annots`/`/APRef`/`/IF` 标注 PDF 1.3、
 //! `/Differences`/`/Target`/`/EmbeddedFDFs`/`/JavaScript` 标注 PDF 1.4、
 //! `/RV` 标注 PDF 1.5（Table 245 的 `/AfterPermsReady` 标注 PDF 1.6，
-//! 由写端 `builder/navigation/fdf.rs` 直接比较 `PdfVersion` 常量把关）。
+//! 由写端 `builder/navigation/fdf/mod.rs` 直接比较 `PdfVersion`
+//! 常量把关）。
 //! 新增 [`PdfFeature`](crate::core::types::PdfFeature)
-//! 变体需要改动 `src/core/types/version/feature.rs`，超出本车道写集，
+//! 变体需要同时改动 `src/core/types/version/feature.rs` 与
+//! `feature_display.rs` 的穷尽 `Display` match，既有 FDF 切片一律**不**
+//! 新增变体、直接比较 `PdfVersion` 常量，本车道沿用该口径（读写两侧
+//! 一致，避免为同一个特性开第二个门禁位）；
 //! 故读端一律宽容读取、不做版本拒绝（保守行为，待核项：门禁位）；
-//! 其中 PDF 1.4 的 `/Differences` 与 `/EmbeddedFDFs` 在声明版本低于 1.4
+//! 其中 PDF 1.4 的 `/Differences` 与 `/EmbeddedFDFs`、PDF 1.3 的
+//! `/Pages` 与 `/Annots` 在声明版本低于对应档位
 //! 时（优先序：FDF 目录 `/Version` → `%FDF-x.y` 文件头 →
 //! [`Document::source_version`]）由类型化视图附带一条诊断记录，仍照常
 //! 读取（见子模块 `embedded`）。
@@ -51,11 +67,17 @@ use std::fmt;
 use crate::core::types::{Dict, Document, Value};
 
 mod embedded;
+mod pages;
 mod parse;
 #[cfg(test)]
 mod tests;
 
 pub use embedded::{FdfDifferences, FdfEmbeddedFdf, FdfEmbeddedFdfs};
+pub(crate) use pages::MAX_FDF_PAGES_ARRAY_ENTRIES;
+pub use pages::{
+    FdfAnnotation, FdfAnnots, FdfFieldNameConflict, FdfImportMerge, FdfNamedPage, FdfPage,
+    FdfPages, FdfPagesIssue, FdfTemplate, FdfTemplateImport, PROHIBITED_FDF_ANNOTATION_TYPES,
+};
 
 /// 字段树最大嵌套深度（库策略，与 `reader/form.rs` 的 `MAX_FIELD_DEPTH`
 /// 同一口径，防护不可信文件）。
@@ -193,12 +215,17 @@ pub struct FdfDictionary {
     pub fields: Option<Vec<FdfField>>,
     /// `/Status` 状态文本串（PDFDocEncoding 解码）。
     pub status: Option<String>,
-    /// `/Pages` 页字典数组原值（PDF 1.3，Table 248；本切片不类型化）。
+    /// `/Pages` 页字典数组原值（PDF 1.3，Table 248）。逐项类型化的
+    /// 页/模板（Table 249）/命名页引用（Table 250）视图见
+    /// [`Document::fdf_pages`]（原值在此不丢弃，与 `/Differences` 同一
+    /// 双通道口径）。
     pub pages: Option<Value>,
     /// `/Encoding` 名字（PDF 1.3；缺省语义为 PDFDocEncoding）。
     pub encoding: Option<String>,
-    /// `/Annots` 注解字典数组原值（PDF 1.3，Table 251 加 `/Page`；
-    /// 本切片不类型化）。
+    /// `/Annots` 注解字典数组原值（PDF 1.3）。逐项类型化（Table 251 的
+    /// 必需 `/Page` 序数 + Table 243 的注解类型白名单）见
+    /// [`Document::fdf_annots`]；与 `/Pages` 的导入合并交叉分析见
+    /// [`Document::fdf_import_merge`]（原值在此不丢弃）。
     pub annots: Option<Value>,
     /// `/Differences` 增量更新流原值（PDF 1.4）。流形态识别与解引用后的
     /// 类型化视图见 [`Document::fdf_differences`]（原值在此不丢弃）。
@@ -212,7 +239,7 @@ pub struct FdfDictionary {
     /// 串经 `text_value` 解码；非串形态（如 Adobe FDF 2.0 的字典式
     /// `/Target`，非 ISO 32000-1 基线，待核）保持 `None`，读端宽容，
     /// 原值不丢弃（写端装配前按 Table 243 拒绝非串，见
-    /// `builder/navigation/fdf.rs`）。
+    /// `builder/navigation/fdf/mod.rs`）。
     pub target_frame: Option<String>,
     /// `/EmbeddedFDFs` 内嵌 FDF 文件规范数组原值（PDF 1.4）。逐项
     /// 文件规范类型化、Table 244 `/EncryptionRevision` 识别与递归子

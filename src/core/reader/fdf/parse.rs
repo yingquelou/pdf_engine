@@ -20,13 +20,24 @@ use super::{
 type Result<T> = std::result::Result<T, FdfError>;
 
 /// 字段树遍历防护：节点计数 + 引用环检测（与 `reader/form.rs` 同一手法）。
-struct Walker {
+///
+/// `pages` 子模块展开 Table 249 模板 `/Fields` 时**复用同一个** `Walker`，
+/// 使 `MAX_FDF_FIELD_NODES` 与深度上限约束的是整份 FDF 文件里的字段树，
+/// 而不是每个数组各一套（不可信输入防护）。
+pub(crate) struct Walker {
     nodes: usize,
     visited: HashSet<(i64, i64)>,
 }
 
 impl Walker {
-    fn admit(&mut self, depth: usize) -> Result<()> {
+    pub(crate) fn new() -> Self {
+        Self {
+            nodes: 0,
+            visited: HashSet::new(),
+        }
+    }
+
+    pub(crate) fn admit(&mut self, depth: usize) -> Result<()> {
         if depth > MAX_FDF_FIELD_DEPTH {
             return Err(FdfError::LimitExceeded("FDF field depth"));
         }
@@ -71,10 +82,7 @@ pub(crate) fn fdf_document(document: &Document) -> Result<Option<FdfDocument>> {
         ),
     };
 
-    let mut walker = Walker {
-        nodes: 0,
-        visited: HashSet::new(),
-    };
+    let mut walker = Walker::new();
     let fields = match fdf_dict.get("Fields") {
         None => None,
         Some(value) => {
@@ -191,27 +199,41 @@ fn javascript_dict(value: Option<&Value>) -> Option<FdfJavaScript> {
 ///
 /// Table 246：FDF 字段的 `/Kids` 元素允许**直接对象**（PDF 字段树则要求
 /// 间接引用），因此逐项 resolve 后按字典校验。
-fn parse_field_array(
+pub(crate) fn parse_field_array(
     document: &Document,
     entries: &[Value],
     parent_fqn: &str,
     depth: usize,
     walker: &mut Walker,
 ) -> Result<Vec<FdfField>> {
-    let mut fields = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if let Some(key) = entry.as_ref()
-            && !walker.visited.insert(key)
-        {
-            return Err(malformed("FDF field tree contains a reference cycle"));
-        }
-        let value = resolve(document, entry).map_err(|error| malformed(error.to_string()))?;
-        let dict = value
-            .as_dict()
-            .ok_or_else(|| malformed("FDF field is not a dictionary"))?;
-        fields.push(parse_field(document, dict, parent_fqn, depth, walker)?);
+    entries
+        .iter()
+        .map(|entry| field_entry(document, entry, parent_fqn, depth, walker))
+        .collect()
+}
+
+/// 解析字段数组的**一项**（Table 246 字段字典，直接对象或间接引用皆可）。
+///
+/// `pub(crate)` 供 `pages` 子模块逐项类型化 Table 249 的模板 `/Fields`
+/// 数组：规范把那些元素声明为「references to FDF field dictionaries」，
+/// 单颗畸形字段要能降级为诊断而不牵连整个模板（见 `fdf/pages.rs`）。
+pub(crate) fn field_entry(
+    document: &Document,
+    entry: &Value,
+    parent_fqn: &str,
+    depth: usize,
+    walker: &mut Walker,
+) -> Result<FdfField> {
+    if let Some(key) = entry.as_ref()
+        && !walker.visited.insert(key)
+    {
+        return Err(malformed("FDF field tree contains a reference cycle"));
     }
-    Ok(fields)
+    let value = resolve(document, entry).map_err(|error| malformed(error.to_string()))?;
+    let dict = value
+        .as_dict()
+        .ok_or_else(|| malformed("FDF field is not a dictionary"))?;
+    parse_field(document, dict, parent_fqn, depth, walker)
 }
 
 /// 解析单个 FDF 字段字典（Table 246）。

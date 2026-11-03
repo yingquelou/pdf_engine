@@ -25,8 +25,21 @@
 //! `/Target` 非字符串（Table 243：string）、`/JavaScript` 非字典
 //! （Table 243：dictionary）、Table 245 的脚本条目既非文本串又非文本流
 //! 或 `/Doc` 非数组/配对不齐、字段缺 `/T`、整型标志非整数、
+//! Table 248 的页缺 `/Templates` 数组或模板缺 `/TRef`（Table 249
+//! Required）或其 `/Rename` 非布尔或 `/TRef /Name` 缺失/非串（Table 250
+//! Required）、Table 251 的注解缺 `/Page`、`/Page` 非整型或为负序数、
+//! `/Subtype` 命中 Table 243 的注解类型黑名单、
 //! 超出读端深度/数量上限等）返回
 //! [`WriteError::InvalidObject`]，同样零字节。
+//!
+//! Table 248–251 的写端只下降**直接数组里的直接字典**：本入口只产出
+//! 一个间接对象，无法解引用 `/Pages`/`/Annots`/`/Templates`/模板
+//! `/Fields`/`/TRef` 的间接引用，那些条目按原值透传（读端
+//! `Document::fdf_pages`/`Document::fdf_annots` 以类型化诊断
+//! `FdfPagesIssue::*Unresolvable` 降级，见 `reader/fdf/pages.rs`）；
+//! 既不可能是字典也不可能被解引用的其它形态（整数、名字等）在装配字节
+//! 之前拒绝。条目数上限与读端共用 `MAX_FDF_PAGES_ARRAY_ENTRIES`，
+//! 保证「写得出就读得回、且不截断」。
 //!
 //! `PdfFeature` 新变体需同步 `types/version/feature_display.rs` 的穷尽
 //! `Display` match（本车道写集之外），故此处直接比较 [`PdfVersion`]
@@ -34,13 +47,17 @@
 
 use std::io::Write as _;
 
-use crate::core::builder::types::fdf::catalog_dict;
-use crate::core::reader::fdf::{FdfDocument, MAX_FDF_FIELD_DEPTH, MAX_FDF_FIELD_NODES};
+use crate::core::builder::types::fdf::{annots_value, catalog_dict, pages_value};
+use crate::core::reader::fdf::{
+    FdfAnnotation, FdfDocument, FdfPage, MAX_FDF_FIELD_DEPTH, MAX_FDF_FIELD_NODES,
+};
 use crate::core::types::{Dict, PdfVersion, Value};
 use crate::core::writer::{WriteError, write_value};
 
 use super::PdfBuilder;
 use super::invalid;
+
+mod pages;
 
 /// Table 243 — FDF 字典中 PDF 1.3 档位条目。
 const GATED_1_3_FDF_KEYS: [&str; 3] = ["Encoding", "Pages", "Annots"];
@@ -72,8 +89,9 @@ fn unsupported(entry: &str, minimum: PdfVersion, version: PdfVersion) -> WriteEr
 }
 
 /// 字段树遍历防护：节点计数与读端 `MAX_FDF_FIELD_NODES` 同口径，
-/// 保证写出的文件必然可被读端接收。
-struct FieldCounter {
+/// 保证写出的文件必然可被读端接收。`pub(super)` 与 [`walk_field`] 同因
+/// （子模块 `pages` 校验 Table 249 模板 `/Fields` 时共享同一计数器）。
+pub(super) struct FieldCounter {
     nodes: usize,
 }
 
@@ -227,6 +245,15 @@ pub(super) fn validate(catalog: &Dict, version: PdfVersion) -> Result<(), WriteE
             .ok_or_else(|| invalid("FDF dictionary /Fields must be an array (Table 243)"))?;
         walk_field_array(&array.0, 1, &mut counter, gate)?;
     }
+    // Table 243 — `/Pages`（PDF 1.3）与 `/Annots`（PDF 1.3）的档位门禁已在
+    // 上面按 `GATED_1_3_FDF_KEYS` 把关；此处只做结构校验（Table 248–251），
+    // 且只下降直接数组里的直接字典，间接引用原样透传（模块头有口径说明）。
+    if let Some(Value::Array(items)) = fdf.get("Pages") {
+        pages::walk_pages_array(&items.0, &mut counter, gate)?;
+    }
+    if let Some(Value::Array(items)) = fdf.get("Annots") {
+        pages::walk_annots_array(&items.0)?;
+    }
     Ok(())
 }
 
@@ -251,7 +278,10 @@ fn walk_field_array(
 }
 
 /// 走单个字段字典（Table 246）。
-fn walk_field(
+///
+/// `pub(super)` 供子模块 [`pages`] 校验 Table 249 模板 `/Fields` 的
+/// 直接字典项（与 `/Fields` 同一套条目与共享节点计数）。
+pub(super) fn walk_field(
     dict: &Dict,
     depth: usize,
     counter: &mut FieldCounter,
@@ -353,5 +383,40 @@ impl PdfBuilder {
         version: PdfVersion,
     ) -> Result<Vec<u8>, WriteError> {
         emit(&catalog_dict(fdf, version), version)
+    }
+
+    /// 把读端类型化的 FDF **页字典**数组（[`FdfPage`]，Table 248；其
+    /// `/Templates` → Table 249 → `/TRef` → Table 250 → 模板 `/Fields`
+    /// → Table 246 一并展开）转成 Table 243 `/Pages` 条目值，供写入
+    /// [`FdfDictionary::pages`](crate::core::reader::fdf::FdfDictionary::pages)
+    /// 原值字段后走 [`export_fdf`](Self::export_fdf)（`FdfDictionary` 的
+    /// `pages` 是原值字段，类型化视图以方法暴露，故写回的入口是一对
+    /// 转换函数而不是新字段）：
+    ///
+    /// - 可选条目**不物化缺省**——Table 249 `/Rename`「Default value: true」
+    ///   （raw L25120–L25122）只在类型化为 `Some` 时写出；Table 250 `/F`
+    ///   缺席即保留「该页在关联 PDF 文件里」的规范推定（raw
+    ///   L25127–L25128），不伪造文件规范；
+    /// - 类型化为 `None`/形态不可确证的原值一律保留（[`Self::fdf_annots_value`]
+    ///   同口径），未建模条目（含 Adobe 扩展键）不丢弃；
+    /// - 产出的值仍要过 [`export_fdf`](Self::export_fdf) /
+    ///   [`build_fdf`](Self::build_fdf) 的装配前校验（Table 248 `/Templates`
+    ///   与 Table 249 `/TRef`/`/TRef /Name` 的 Required、Table 251 的
+    ///   `/Page` 等）。
+    #[must_use]
+    pub fn fdf_pages_value(pages: &[FdfPage]) -> Value {
+        pages_value(pages)
+    }
+
+    /// 把读端类型化的 FDF **注解字典**数组（[`FdfAnnotation`]，Table 251
+    /// 的 `/Page` 序数 + Table 243 的注解类型白名单）转成 Table 243
+    /// `/Annots` 条目值，写回
+    /// [`FdfDictionary::annots`](crate::core::reader::fdf::FdfDictionary::annots)
+    /// 原值字段后走 [`export_fdf`](Self::export_fdf)；口径与
+    /// [`Self::fdf_pages_value`] 相同（可选/不可确证条目原样保留，
+    /// 装配前仍按 Table 251 校 `/Page`）。
+    #[must_use]
+    pub fn fdf_annots_value(annots: &[FdfAnnotation]) -> Value {
+        annots_value(annots)
     }
 }
