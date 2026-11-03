@@ -1,5 +1,7 @@
 use super::*;
 
+mod codec_gate;
+
 /// D1 读端颜色空间模型：写端产出的 Indexed / Separation / DeviceN / ICCBased
 /// 图片与页级命名颜色空间，经 `Document::color_space` 解析为类型化模型，
 /// `decode_samples` 解码样本值正确（调色板展开、tint 函数求值、ICC 配置

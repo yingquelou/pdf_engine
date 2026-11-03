@@ -332,14 +332,30 @@ impl ImageModel {
     /// - [`ImageModel::samples`] 本身**不受影响**，现有行为零变化。
     ///
     /// 便捷路径不注入文档版本（`pdf_version: None`）；需要版本门禁的
-    /// 调用方请自行构造请求并调用 [`decode_jbig2_with`]/[`decode_jpx_with`]。
+    /// 调用方改用
+    /// [`Document::decode_image_with`](crate::core::types::Document::decode_image_with)
+    /// （由 `Document` 注入 `source_version()`），或自行构造请求并调用
+    /// [`decode_jbig2_with`]/[`decode_jpx_with`]。
     /// 同时含两种过滤器的病态字典按 JPX 优先分发。
     pub fn decode_image_with(&self, backends: &ImageBackends<'_>) -> Result<DecodedBitmap> {
+        self.decode_image_at(backends, None)
+    }
+
+    /// 带文档声明版本的内部分发：与 [`ImageModel::decode_image_with`]
+    /// 逐路径一致，仅把 `pdf_version` 注入请求供版本门禁判定。便捷路径
+    /// 恒传 `None`（行为不变），
+    /// [`Document::decode_image_with`](crate::core::types::Document::decode_image_with)
+    /// 传入 `self.source_version()` 使 [`check_codec_version`] 端到端生效。
+    pub(super) fn decode_image_at(
+        &self,
+        backends: &ImageBackends<'_>,
+        pdf_version: Option<PdfVersion>,
+    ) -> Result<DecodedBitmap> {
         if is_jpx_filter(&self.filters) {
             let request = JpxDecodeRequest {
                 codestream: &self.data,
                 header: self.jpx.as_ref(),
-                pdf_version: None,
+                pdf_version,
             };
             decode_jpx_with(backends.jpx(), &request)
         } else if is_jbig2_filter(&self.filters) {
@@ -350,7 +366,7 @@ impl ImageModel {
                     .jbig2
                     .as_ref()
                     .and_then(|info| info.page.page_information.as_ref()),
-                pdf_version: None,
+                pdf_version,
             };
             decode_jbig2_with(backends.jbig2(), &request)
         } else {
@@ -361,6 +377,10 @@ impl ImageModel {
         }
     }
 }
+
+mod document_entry;
+#[cfg(test)]
+mod document_entry_tests;
 
 #[cfg(test)]
 mod tests;
