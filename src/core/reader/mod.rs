@@ -80,6 +80,7 @@ pub mod graphics_state;
 pub mod group;
 pub mod image;
 mod lexer;
+pub mod linearization;
 pub mod metadata;
 pub mod movie;
 pub mod navigation;
