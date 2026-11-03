@@ -24,7 +24,7 @@ use super::to_unicode::{self, ToUnicodeMap};
 pub(in crate::core::reader::font) const MAX_USE_CMAP_DEPTH: usize = 64;
 
 /// Table 120 – `/UseCMap` 的两种取值形态（`name or stream`）。
-enum UseCMap {
+pub(super) enum UseCMap {
     /// 预定义 CMap 的名字。
     Name(String),
     /// 内嵌 CMap 流；间接引用时记录对象号用于环检测。
@@ -55,8 +55,8 @@ impl Chain {
 /// 读取 CMap 流字典的 `/UseCMap`（Table 120），间接引用解析一次。
 ///
 /// 条目缺失、引用悬空或解析后既非名字也非流时返回 `None`，按「基座不可
-/// 解析」降级。
-fn entry(document: &Document, dict: &Dict) -> Option<UseCMap> {
+/// 解析」降级。类型化读端（`super::cmap_dict`）复用本函数，不重复实现解析。
+pub(super) fn entry(document: &Document, dict: &Dict) -> Option<UseCMap> {
     let raw = dict.get("UseCMap")?;
     let number = match raw {
         Value::Ref(number, _) => Some(*number),

@@ -15,7 +15,7 @@ use super::{
 pub use self::types::{CidSystemInfo, DefaultVerticalMetrics, VerticalMetrics};
 
 use self::tables::{metric_number, parse_vertical_metrics, parse_widths};
-use self::types::parse_cid_system_info;
+pub(in crate::core::reader::font) use self::types::parse_cid_system_info;
 
 #[derive(Debug, Clone, PartialEq)]
 enum CidToGidMap {

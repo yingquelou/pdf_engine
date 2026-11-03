@@ -51,7 +51,10 @@ pub struct VerticalMetrics {
     pub v1y: f64,
 }
 
-pub(super) fn parse_cid_system_info(document: &Document, dict: &Dict) -> FontResult<CidSystemInfo> {
+pub(in crate::core::reader::font) fn parse_cid_system_info(
+    document: &Document,
+    dict: &Dict,
+) -> FontResult<CidSystemInfo> {
     let value = dict
         .get("CIDSystemInfo")
         .ok_or_else(|| FontError::Invalid("CID font is missing /CIDSystemInfo".into()))?;

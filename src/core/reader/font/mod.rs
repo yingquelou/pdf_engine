@@ -33,6 +33,10 @@ pub use cff::{
 #[cfg(test)]
 pub(crate) use cff::fixtures;
 pub use cid::{CidFontType2, CidSystemInfo, DefaultVerticalMetrics, VerticalMetrics};
+pub use cid_cmap::{
+    CMapBaseReference, CMapConsistencyIssue, CMapConsistencyRule, CMapDictionary, CMapEntry,
+    CMapFileDeclarations, CMapPosition, CMapWritingMode, Type0CMaps,
+};
 pub use cid_type0::CidFontType0;
 pub use descriptor::FontDescriptorMetrics;
 pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};

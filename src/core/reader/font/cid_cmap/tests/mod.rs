@@ -1,5 +1,7 @@
 use super::{CidCMap, ToUnicodeMap, identity_cmap, invalid_cmap};
 
+mod cmap_dict;
+mod consistency;
 mod use_cmap;
 
 #[test]

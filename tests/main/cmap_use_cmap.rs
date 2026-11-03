@@ -8,6 +8,8 @@
 
 use super::*;
 
+mod consistency;
+
 /// `/Encoding` 基座流：`<0041>`、`<0042>` 两个码。
 const ENCODING_BASE: &str = "\
 1 begincodespacerange
