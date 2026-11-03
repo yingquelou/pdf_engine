@@ -150,6 +150,16 @@ impl WriteContext {
     /// 把非流对象打包写出为一个对象流（ObjStm，`/Type /ObjStm`）对象，
     /// 并为每个被打包的对象记录 `InObjStream` 条目。
     ///
+    /// **7.5.7 咽喉点守卫**：进入这里的对象必须都是非流对象——规范
+    /// 「The following objects shall not be stored in an object stream:
+    /// ▪ Stream objects」（`docs/PDF32000_2008.pdf`，`pdftotext -raw` 第
+    /// 2240–2241 行）。打包只走 [`super::value::write_value`]，它对
+    /// `Value::Stream` **只输出字典、不含 `stream` 正文**，所以一旦让流
+    /// 对象进来就会静默丢内容。这里在任何字节落地前返回
+    /// [`WriteError::StreamInObjectStream`]；正常的选择路径
+    /// （[`super::serialize::ObjectStreamLayout`]）本就排除流对象，本守卫
+    /// 同时护住 hybrid/incremental 等其它调用方。
+    ///
     /// 流内容：头部 N 对「对象号 相对偏移」（ASCII、空白分隔），随后
     /// 各对象本体；`/First` 为首个对象本体在流内的偏移。默认**不压缩**；
     /// 启用 D4 压缩策略时，容器流与文档流一样在序列化咽喉点压缩。
@@ -159,6 +169,9 @@ impl WriteContext {
         packed: &[&Object],
         stream_num: i64,
     ) -> Result<(), WriteError> {
+        if let Some(offender) = packed.iter().find(|o| matches!(o.value, Value::Stream(..))) {
+            return Err(WriteError::StreamInObjectStream(offender.num));
+        }
         let mut header = String::new();
         let mut body = String::new();
         for o in packed {

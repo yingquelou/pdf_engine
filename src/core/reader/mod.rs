@@ -110,6 +110,7 @@ pub mod viewport;
 pub mod xmp;
 mod xref;
 
+pub use document::ObjectStreamViolation;
 pub use lexer::Lexer;
 pub use parser::Parser;
 

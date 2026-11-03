@@ -272,3 +272,62 @@ pub(super) fn build_linearized_xref_stream(hint_payload: &[u8]) -> Vec<u8> {
         )
     })
 }
+
+/// 「对象流内嵌流对象」的违例 PDF（1.5，未压缩对象流）构造器。
+///
+/// 物理布局：对象 1 = Catalog（`/Marker 5 0 R`）；对象 6 = `/Type /ObjStm`
+/// （`/N 1 /First 4`，载荷头部是「5 0 」），内含对象 5；对象 5 的本体自带
+/// `stream … endstream` ——这正是 7.5.7「The following objects shall not be
+/// stored in an object stream: ▪ Stream objects」所禁止的形态；对象 7 = XRef
+/// 流（对象 5 记为 type 2 条目 `(2, 6, 0)`）。
+///
+/// `inner_length` 是内联流字典声明的 `/Length`：传 11 与正文
+/// `"hello world"` 相符（读端可还原）；传更大的值则声明长度越过载荷窗口、
+/// 尾部不可定位（读端保留字典并报告 `recovered: false`）。
+pub(super) fn objstm_inline_stream_pdf(inner_length: i64) -> Vec<u8> {
+    let inner =
+        format!("<< /Marker /Inline /Length {inner_length} >>\nstream\nhello world\nendstream");
+    let mut stm = Vec::new();
+    stm.extend_from_slice(b"5 0 "); // 对象号 5，相对偏移 0
+    stm.extend_from_slice(inner.as_bytes());
+    let first = 4usize; // 「5 0 」的字节数
+
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(b"%PDF-1.5\n");
+    let off1 = buf.len();
+    buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Marker 5 0 R >>\nendobj\n");
+
+    let off6 = buf.len();
+    buf.extend_from_slice(
+        format!(
+            "6 0 obj\n<< /Type /ObjStm /N 1 /First {first} /Length {} >>\nstream\n",
+            stm.len()
+        )
+        .as_bytes(),
+    );
+    buf.extend_from_slice(&stm);
+    buf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let off7 = buf.len();
+    let mut xs: Vec<u8> = Vec::new();
+    xs.extend_from_slice(&xref_row(0, 0, 255)); // 0：free
+    xs.extend_from_slice(&xref_row(1, off1 as u16, 0)); // 1：Catalog
+    for _ in 2..5 {
+        xs.extend_from_slice(&xref_row(0, 0, 255)); // 2..=4：free
+    }
+    xs.extend_from_slice(&xref_row(2, 6, 0)); // 5：ObjStm 6 内索引 0
+    xs.extend_from_slice(&xref_row(1, off6 as u16, 0)); // 6：ObjStm
+    xs.extend_from_slice(&xref_row(1, off7 as u16, 0)); // 7：XRef 流
+    buf.extend_from_slice(
+        format!(
+            "7 0 obj\n<< /Type /XRef /Size 8 /Index [0 8] /W [1 2 1] /Length {} /Root 1 0 R >>\nstream\n",
+            xs.len()
+        )
+        .as_bytes(),
+    );
+    buf.extend_from_slice(&xs);
+    buf.extend_from_slice(b"\nendstream\nendobj\nstartxref\n");
+    buf.extend_from_slice(format!("{off7}\n").as_bytes());
+    buf.extend_from_slice(b"%%EOF\n");
+    buf
+}

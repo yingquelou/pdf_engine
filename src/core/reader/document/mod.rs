@@ -1,10 +1,28 @@
 //! `Document` 的懒加载对象解析（xref → 窗口 → 间接对象/对象流）。
+//!
+//! ## 对象流内的流对象：规范立场与本轮分支
+//!
+//! ISO 32000-1:2008 7.5.7「Object Streams」（本仓库 `docs/PDF32000_2008.pdf`，
+//! `pdftotext -raw` 抽取的第 2240–2241 行）以 shall 句式**禁止**把流对象存进
+//! 对象流——「The following objects **shall not** be stored in an object
+//! stream: ▪ Stream objects」。故本轮取 **「拒收 + 诊断」分支**，而不是
+//! 「按许可修复内联流语义」：
+//!
+//! - 读端维持既有「宽进」姿态，但违例文档里的内联流对象**不再被静默降级成
+//!   字典**：正文从解码后的对象流载荷里切成 `StreamData::Owned` 原样保住，
+//!   同时登记 [`ObjectStreamViolation`]。解包实现与 7.5.7 完整条款引文（含
+//!   其余三条 shall-not 与线性化专有条款）在 [`object_stream`] 子模块。
+//! - 写端**不得**产出违例文件：打包选择显式排除流对象
+//!   （`crate::core::writer::serialize::ObjectStreamLayout`），
+//!   `crate::core::writer::context` 另有写出前的咽喉点守卫。
+mod object_stream;
+pub use object_stream::ObjectStreamViolation;
 
 use crate::core::filters::{decode_stream, decode_stream_except};
 use crate::core::types::{Document, Object, Value, XrefKind, scan_value_features};
 
 use super::lexer::Lexer;
-use super::object::{parse_indirect_object_with_length_resolver, parse_int_token, parse_object};
+use super::object::parse_indirect_object_with_length_resolver;
 use super::{DEFAULT_WINDOW, Result, err};
 
 impl Document {
@@ -245,121 +263,6 @@ impl Document {
             Some(_) => return Err("invalid PDF stream /DecodeParms".to_string()),
         }
         Ok(result)
-    }
-
-    /// 解析「位于对象流（ObjStm）内」的第 `index` 个对象。
-    ///
-    /// 流程：先取出对象流对象本身（其 xref 条目应是可直接定位的
-    /// `Normal` 条目），取其原始字节，按 `/Filter` + `/DecodeParms`
-    /// （含 Flate 与 Predictor）**解码**，再读字典 `/N`（流内对象个数）
-    /// 与 `/First`（首个对象数据的偏移）；流字节开头是 N 对
-    /// `对象号 相对偏移`（ASCII 数字，空白分隔），第 `index` 对给出目标
-    /// 对象号与其在流内的相对偏移，对象本体位于 `First + 相对偏移`。
-    /// 对象流内对象没有 `N G obj` 包裹，直接是对象本体。
-    ///
-    /// 无法解码（不支持的过滤器 / 数据损坏）或结构异常时记 warning 并
-    /// 返回 `Ok(None)`，绝不 panic。
-    fn get_object_from_obj_stream(
-        &self,
-        num: i64,
-        stream_num: i64,
-        index: i64,
-    ) -> Result<Option<Object>> {
-        // 对象流自身必须是可直接定位的普通条目；若它也位于另一个对象流
-        // 内，则放弃，避免递归取对象流造成无限递归。
-        match self.xref.get(stream_num).map(|e| &e.kind) {
-            Some(XrefKind::Normal) => {}
-            Some(XrefKind::InObjStream { .. }) => {
-                self.push_warning(format!(
-                    "object {num}: object stream {stream_num} is itself inside an object stream; \
-                     nested object streams are not supported"
-                ));
-                return Ok(None);
-            }
-            _ => return Ok(None),
-        }
-        let stream_obj = match self.get_object(stream_num)? {
-            Some(o) => o,
-            None => return Ok(None),
-        };
-        let (dict, data) = match &stream_obj.value {
-            Value::Stream(d, sd) => (d, sd),
-            _ => {
-                self.push_warning(format!(
-                    "object {num}: referenced object {stream_num} for object stream is not a stream"
-                ));
-                return Ok(None);
-            }
-        };
-        // 版本门控：对象流自 PDF 1.5 引入。声明版本更低仍尝试解析（读取
-        // 结果与版本无关），仅记说明性 warning，保持宽容。
-        if !self.source_version.supports_object_streams() {
-            self.push_warning(format!(
-                "object stream {stream_num} present but declared version {} < 1.5; \
-                 attempting parse anyway",
-                self.source_version
-            ));
-        }
-        // 按 /Filter + /DecodeParms 解码（对象流常见 /FlateDecode）。不支持的
-        // 过滤器或数据损坏 → 记 warning 优雅失败（返回 None），绝不 panic。
-        let bytes = match self.decode_stream_bytes(&stream_obj.value) {
-            Ok(b) => b,
-            Err(e) => {
-                self.push_warning(format!(
-                    "object {num} (index {index} in object stream {stream_num}) is compressed \
-                     (filter {:?}); decoding failed: {e}; giving up",
-                    dict.get("Filter")
-                ));
-                return Ok(None);
-            }
-        };
-        let (n, first) = match (
-            dict.get("N").and_then(|v| v.as_integer()),
-            dict.get("First").and_then(|v| v.as_integer()),
-        ) {
-            (Some(n), Some(first)) if n > 0 && first >= 0 => (n, first as usize),
-            _ => {
-                self.push_warning(format!(
-                    "object stream {stream_num} missing/invalid /N or /First"
-                ));
-                return Ok(None);
-            }
-        };
-        if index < 0 || index >= n {
-            return Ok(None);
-        }
-        // 流字节是对象流自身内容的窗口，词法器 base 取其文件绝对偏移
-        // （仅用于错误定位；Owned 字节无文件偏移，按 0 计）。
-        let base = match data {
-            crate::core::types::StreamData::Ref { offset, .. }
-            | crate::core::types::StreamData::EncryptedRef { offset, .. } => *offset,
-            crate::core::types::StreamData::Owned(_) => 0,
-        };
-        // 头部：N 对「对象号 相对偏移」。读第 index 对（0 基）。
-        let mut hlex = Lexer::at(&bytes, base);
-        let mut inner_num = 0i64;
-        let mut rel = 0i64;
-        for _ in 0..=index {
-            inner_num = parse_int_token(&mut hlex, "ObjStm header object number")?;
-            rel = parse_int_token(&mut hlex, "ObjStm header offset")?;
-        }
-        let start = match usize::try_from(rel).ok().and_then(|r| first.checked_add(r)) {
-            Some(s) if s < bytes.len() => s,
-            _ => {
-                self.push_warning(format!(
-                    "object stream {stream_num}: object {num} offset out of range"
-                ));
-                return Ok(None);
-            }
-        };
-        let mut lex = Lexer::at(&bytes[start..], base + start as u64);
-        let value = parse_object(&mut lex)?;
-        // 对象流内对象不带 `N G obj` 包裹，其 generation 规范上为 0。
-        let obj = Object::new(inner_num, 0, value);
-        // 顺带扫描特性，与 Normal 路径保持一致。
-        scan_value_features(&mut self.features.borrow_mut(), &obj.value);
-        self.cache.borrow_mut().insert(obj.num, obj.clone());
-        Ok(Some(obj))
     }
 
     /// 追加一条解析警告（`&self` 下经 `Document::warnings` 的 `RefCell`

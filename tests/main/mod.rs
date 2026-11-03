@@ -51,6 +51,7 @@ mod font_type1;
 mod font_type1_builtin;
 mod hybrid_reference;
 mod linearization_hints;
+mod objstm_inline_stream;
 mod outline_language_escape;
 mod xref_streams;
 

@@ -27,6 +27,11 @@ pub enum WriteError {
     /// 流压缩后端失败（注入的压缩后端返回错误）。
     /// writer 先缓冲后一次性写出，失败时输出端不会收到任何字节。
     Compression(String),
+    /// 试图把流对象打包进对象流（`/ObjStm`）——ISO 32000-1 7.5.7 明确禁止
+    /// 「Stream objects」存于对象流。writer 在写出任何字节前拒绝；打包
+    /// 选择本身已把流对象留在顶层，本变体只可能在调用方绕过策略直接
+    /// 请求打包时出现（`write_object_stream` 的咽喉点守卫）。
+    StreamInObjectStream(i64),
 }
 
 impl fmt::Display for WriteError {
@@ -41,6 +46,11 @@ impl fmt::Display for WriteError {
                 write!(f, "unsupported pdf version: {s}")
             }
             WriteError::Compression(s) => write!(f, "stream compression failed: {s}"),
+            WriteError::StreamInObjectStream(num) => write!(
+                f,
+                "7.5.7 forbids storing stream objects in an object stream: object {num} \
+                 is a stream and was refused (it must stay a top-level object)"
+            ),
         }
     }
 }

@@ -382,3 +382,85 @@ fn ascii85_string_object_stream_container_write_fails_with_zero_bytes() {
     }
     assert!(buf.is_empty(), "拒绝必须零字节");
 }
+
+// ── 7.5.7：流对象不得进对象流 ─────────────────────────────────────────
+//
+// 规范原文（docs/PDF32000_2008.pdf，pdftotext -raw 第 2240–2241 行）：
+// 「The following objects shall not be stored in an object stream:
+//  ▪ Stream objects」。写端两条防线：打包选择显式排除流对象；
+// `write_object_stream` 在字节落地前拒收混入的流对象（护住 hybrid 等
+// 其它调用方），绝不静默丢正文——`write_value` 对 `Value::Stream` 只输出
+// 字典、不含 `stream` 正文，一旦被打包内容即丢失。
+
+/// 打包选择：流对象一律留在顶层，只有非流对象进对象流。
+#[test]
+fn object_stream_layout_keeps_stream_objects_at_top_level() {
+    use super::context::WriteContext;
+    use super::serialize::{ObjectLayout, ObjectStreamLayout};
+    use crate::core::types::PdfVersion;
+
+    let objs = vec![
+        Object::new(
+            1,
+            0,
+            Value::Dict(Dict::new().insert("Type", Value::Name("Catalog".into()))),
+        ),
+        Object::new(
+            2,
+            0,
+            Value::Stream(
+                Dict::new().insert("Length", Value::Integer(5)),
+                StreamData::Owned(b"hello".to_vec()),
+            ),
+        ),
+        Object::new(3, 0, Value::Integer(7)),
+    ];
+    let (top, packed) = ObjectStreamLayout.plan(&objs);
+    assert_eq!(
+        top.iter().map(|o| o.num).collect::<Vec<_>>(),
+        vec![2],
+        "唯一的流对象须留在顶层"
+    );
+    assert_eq!(
+        packed.iter().map(|o| o.num).collect::<Vec<_>>(),
+        vec![1, 3],
+        "非流对象才进对象流"
+    );
+    // 顶层流对象按 1.7 写出后仍是可读的流（不依赖对象流）。
+    let mut ctx = WriteContext::new(PdfVersion::V1_7, None);
+    let doc = crate::core::types::Document::new();
+    ctx.write_top_level_object(&doc, top[0])
+        .expect("顶层流对象可写");
+    let out = String::from_utf8_lossy(&ctx.buf);
+    assert!(out.contains("2 0 obj"), "应写出顶层流对象：{out}");
+    assert!(out.contains("stream\nhello\nendstream"), "正文须在：{out}");
+}
+
+/// 咽喉点守卫：直接请求打包流对象 → 类型化拒绝且零字节落地。
+#[test]
+fn write_object_stream_refuses_stream_object_with_zero_bytes() {
+    use super::context::WriteContext;
+    use crate::core::types::PdfVersion;
+
+    let stream_obj = Object::new(
+        5,
+        0,
+        Value::Stream(
+            Dict::new().insert("Length", Value::Integer(11)),
+            StreamData::Owned(b"hello world".to_vec()),
+        ),
+    );
+    let dict_obj = Object::new(1, 0, Value::Dict(Dict::new()));
+    let doc = crate::core::types::Document::new();
+    let mut ctx = WriteContext::new(PdfVersion::V1_7, None);
+    let err = ctx
+        .write_object_stream(&doc, &[&dict_obj, &stream_obj], 9)
+        .expect_err("流对象打包必须被拒收");
+    assert!(
+        matches!(err, WriteError::StreamInObjectStream(5)),
+        "错误类型/对象号不符：{err:?}"
+    );
+    assert!(err.to_string().contains("7.5.7"), "错误须带条款文本：{err}");
+    assert!(ctx.buf.is_empty(), "拒绝须发生在任何字节落地前");
+    assert!(ctx.entries.is_empty(), "拒绝不得留下半成品条目");
+}

@@ -189,7 +189,17 @@ impl ObjectLayout for PlainObjectLayout {
 }
 
 /// 对象流布局（≥1.5）：**非流对象**打包进一个 ObjStm；流对象（内容流、
-/// 图片 XObject 等）仍是顶层对象（规范禁止把流对象放进对象流）。
+/// 图片 XObject 等）仍是顶层对象。
+///
+/// 依据 ISO 32000-1 7.5.7「The following objects shall not be stored in an
+/// object stream: ▪ Stream objects」（本仓库 `docs/PDF32000_2008.pdf`，
+/// `pdftotext -raw` 抽取的第 2240–2241 行；NOTE 1 第 2236–2237 行同样把对象流
+/// 的目的限定为「indirect objects **other than streams**」）。
+///
+/// 这里的选择是**排他**的：只要值是 `Value::Stream` 就一律留在顶层，
+/// 因此读端为违例文档（对象流内内联流）还原出的流对象也会被写成普通
+/// 顶层流对象、不会被重新打包。`WriteContext::write_object_stream` 另有
+/// 咽喉点守卫，防止任何调用方绕过本策略把流对象塞进对象流。
 pub(super) struct ObjectStreamLayout;
 
 impl ObjectLayout for ObjectStreamLayout {
@@ -197,6 +207,7 @@ impl ObjectLayout for ObjectStreamLayout {
         let mut top = Vec::new();
         let mut packed = Vec::new();
         for o in objs {
+            // 7.5.7：流对象不得进对象流 → 顶层。
             if matches!(o.value, Value::Stream(_, _)) {
                 top.push(o);
             } else {

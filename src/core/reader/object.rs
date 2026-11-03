@@ -207,12 +207,68 @@ fn try_peek_is_number(lex: &mut Lexer<'_>) -> Result<Token> {
 
 /// 解析 `num gen obj <value> endobj`。
 ///
-/// 流处理：当 `<value>` 是 dict 且后跟 `stream` 关键字时，消费 `stream`
-/// 与一个 EOL，调用 [`Lexer::compute_stream_range`] 得到流字节在文件中的
-/// **绝对偏移 + 长度**，构造 `Value::Stream(d, StreamData::Ref{offset,len})`。
-/// 流字节不读入内存。
+/// 流处理：当 `<value>` 是 dict 且后跟 `stream` 关键字时，走
+/// [`parse_stream_tail`] 得到流字节的**文件绝对偏移 + 长度**，构造
+/// `Value::Stream(d, StreamData::Ref{offset,len})`。流字节不读入内存。
 pub(crate) fn parse_indirect_object(lex: &mut Lexer<'_>) -> Result<Object> {
     parse_indirect_object_with_length_resolver(lex, |_, _| Ok(None))
+}
+
+/// `<dict>` 之后紧跟 `stream` 关键字时的流尾部定位（7.3.7 语法）。
+///
+/// 前置条件：`lex` 停在字典右括号 `>>` 之后，且调用方已用
+/// [`Lexer::peek_is_stream_keyword`] 确认其后是 `stream`。本函数消费
+/// `stream` 与一个 EOL（规范要求 CRLF 或 LF，此处容错到任意一个换行），
+/// 按 `/Length`（整数 / 间接引用 / 缺失）定位流字节范围，再校验并消费
+/// `endstream`。
+///
+/// 返回 `(offset, len)`，`offset` 即 [`Lexer::compute_stream_range`] 的
+/// **`lex.base` + 流字节在该词法器 `input` 切片内的下标**：
+/// - 顶层间接对象的 `base` 就是文件偏移，该值可直接用作
+///   [`crate::core::types::StreamData::Ref`]；
+/// - 对象流（ObjStm）载荷的 `base` 只是容器流在文件中的偏移，而载荷字节是
+///   **解码后的内存副本、在源文件里不可寻址**，调用方必须减去 `base` 取回
+///   切片下标、再从载荷里切出 [`crate::core::types::StreamData::Owned`]
+///   （见 `Document::get_object_from_obj_stream`）。
+///
+/// 顶层间接对象与对象流内联流共用这一识别，避免两处各写一份 `stream`
+/// 尾部语法。
+pub(crate) fn parse_stream_tail(
+    lex: &mut Lexer<'_>,
+    d: &Dict,
+    resolve_length: &mut impl FnMut(i64, i64) -> Result<Option<u64>>,
+) -> Result<(u64, u64)> {
+    // 消费 "stream"
+    let _ = lex.next_token()?;
+    // 规范要求 stream 后跟 CRLF 或 LF；我们容错到任意一个换行。
+    if lex.peek() == Some(b'\r') {
+        lex.pos += 1;
+    }
+    if lex.peek() == Some(b'\n') {
+        lex.pos += 1;
+    }
+    let declared_length = match d.get("Length") {
+        Some(Value::Integer(length)) => Some(
+            u64::try_from(*length)
+                .map_err(|_| err(lex.pos(), "invalid negative stream /Length"))?,
+        ),
+        Some(Value::Ref(length_num, length_generation)) => {
+            resolve_length(*length_num, *length_generation)?
+        }
+        Some(_) => return Err(err(lex.pos(), "invalid stream /Length")),
+        None => None,
+    };
+    let range = lex.compute_stream_range(declared_length)?;
+    // 消费 endstream
+    lex.skip_ws();
+    let end = lex.next_token()?;
+    if !matches!(end, Token::Keyword(ref k) if k == "endstream") {
+        return Err(err(
+            lex.pos(),
+            format!("expected 'endstream', got {:?}", end),
+        ));
+    }
+    Ok(range)
 }
 
 pub(crate) fn parse_indirect_object_with_length_resolver(
@@ -231,36 +287,7 @@ pub(crate) fn parse_indirect_object_with_length_resolver(
     if let Value::Dict(d) = &value
         && lex.peek_is_stream_keyword()
     {
-        // 消费 "stream"
-        let _ = lex.next_token()?;
-        // 规范要求 stream 后跟 CRLF 或 LF；我们容错到任意一个换行。
-        if lex.peek() == Some(b'\r') {
-            lex.pos += 1;
-        }
-        if lex.peek() == Some(b'\n') {
-            lex.pos += 1;
-        }
-        let declared_length = match d.get("Length") {
-            Some(Value::Integer(length)) => Some(
-                u64::try_from(*length)
-                    .map_err(|_| err(lex.pos(), "invalid negative stream /Length"))?,
-            ),
-            Some(Value::Ref(length_num, length_generation)) => {
-                resolve_length(*length_num, *length_generation)?
-            }
-            Some(_) => return Err(err(lex.pos(), "invalid stream /Length")),
-            None => None,
-        };
-        let (offset, len) = lex.compute_stream_range(declared_length)?;
-        // 消费 endstream
-        lex.skip_ws();
-        let end = lex.next_token()?;
-        if !matches!(end, Token::Keyword(ref k) if k == "endstream") {
-            return Err(err(
-                lex.pos(),
-                format!("expected 'endstream', got {:?}", end),
-            ));
-        }
+        let (offset, len) = parse_stream_tail(lex, d, &mut resolve_length)?;
         value = Value::Stream(
             d.clone(),
             crate::core::types::StreamData::Ref { offset, len },
