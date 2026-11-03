@@ -15,6 +15,7 @@ mod support;
 
 use support::*;
 
+mod ascii85_string;
 mod classic_xref;
 mod filters_and_names;
 mod incremental_read;

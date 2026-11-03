@@ -4,6 +4,7 @@ use super::*;
 use std::io::Write;
 use std::process::id;
 
+mod ascii85_string;
 mod basic;
 mod document;
 mod linearized;

@@ -102,6 +102,9 @@ pub(crate) fn parse_object(lex: &mut Lexer<'_>) -> Result<Value> {
             Token::Name(s) => Value::Name(s),
             Token::Literal(s) => Value::String(s),
             Token::Hex(s) => Value::HexString(s),
+            // 非 ISO 32000-1 的 `<~ ~>` ASCII85 字符串扩展形态：payload
+            // 逐字保留（与写端包裹方式对称），不在此处做 base-85 解码。
+            Token::Ascii85(s) => Value::Ascii85String(s),
             Token::Keyword(k) => match k.as_str() {
                 "true" => Value::Bool(true),
                 "false" => Value::Bool(false),

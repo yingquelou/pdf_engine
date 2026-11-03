@@ -1,4 +1,10 @@
 //! PDF 窗口词法器。
+//!
+//! token 形态覆盖 ISO 32000-1 第 7.2 节，另含一项**非 ISO 32000-1
+//! 语法**：`<~ ... ~>` ASCII85 字符串——Adobe 的扩展字面量形态，标准
+//! 第 7 章只定义 ASCII85 *过滤器*（7.4.3）而未定义该字面量。此处按
+//! 生产者实态提供互操作读取（本库写端 `writer/value.rs` 亦产出该形态），
+//! 不把它建模为 ISO 特性，故不纳入 `PdfFeature` 版本门禁。
 
 use super::{Result, err, find_subslice};
 
@@ -28,6 +34,13 @@ pub(super) enum Token {
     Literal(String),
     /// 十六进制字符串，已去掉 `<>` 包裹。
     Hex(String),
+    /// ASCII85 字符串，已去掉 `<~` `~>` 包裹。
+    ///
+    /// **非 ISO 32000-1 语法**：`<~ ... ~>` 是 Adobe 的 ASCII85 字符串
+    /// 扩展形态，标准第 7 章未定义（规范只定义 ASCII85 *过滤器*，
+    /// 7.4.3）。此处按生产者实态提供互操作读取，不是 ISO 特性，
+    /// 故不纳入 `PdfFeature` 版本门禁。
+    Ascii85(String),
     /// `<<`。
     DictOpen,
     /// `>>`。
@@ -127,6 +140,14 @@ impl<'a> Lexer<'a> {
                 Some(b'<') => {
                     self.pos += 2;
                     Ok(Token::DictOpen)
+                }
+                // `<~`：非 ISO 32000-1 的 ASCII85 字符串扩展形态。必须在
+                // 十六进制分支之前判别，否则 `<~` 会被当成 `<` 起始的
+                // 十六进制串、把 `~` 当作数据字符吞进去。
+                Some(b'~') => {
+                    self.pos += 2;
+                    let s = self.read_ascii85()?;
+                    Ok(Token::Ascii85(s))
                 }
                 _ => {
                     self.pos += 1;
@@ -248,6 +269,39 @@ impl<'a> Lexer<'a> {
             }
         }
         Err(err(self.pos(), "unterminated hex string"))
+    }
+
+    /// ASCII85 字符串（非 ISO 32000-1 扩展语法）：从 `<~` 之后读到 `~>`。
+    ///
+    /// 语义口径——与写端 `writer/value.rs` 的 `Value::Ascii85String` 分支
+    /// **逐字对称**：写端把 payload 原样夹在 `<~` 与 `~>` 之间、不做任何
+    /// 转义，故此处也**逐字**收集其间全部字符（含空白、换行与杂散 `~`），
+    /// 只剥掉两个定界符。payload 是 ASCII85 **编码文本**（不是解码后的
+    /// 字节）；取字节请走既有公共入口 `filters::decode_stream`，本词法层
+    /// 不重复实现 base-85 解码。
+    ///
+    /// 结束标记鲁棒性：`~` 在 ASCII85 里本身是「数据结束」标记，故 `~>`
+    /// 之前允许出现杂散 `~`（`~~>` 形态）、尾部允许混入空白/换行。只在
+    /// 真正看到 `~>` 时停止：其余 `~` 一律留在 payload 内，既不 panic，
+    /// 也不会吃掉后续 token。
+    ///
+    /// 未闭合（窗口末尾没有 `~>`）返回类型化词法错误，与
+    /// `unterminated literal string` / `unterminated hex string` 同风格；
+    /// 不 panic、不无限循环，也不静默把后续对象吞进串里当作成功值。
+    pub(super) fn read_ascii85(&mut self) -> Result<String> {
+        let mut out = String::new();
+        while let Some(b) = self.bump() {
+            if b == b'~' {
+                if self.peek() == Some(b'>') {
+                    self.pos += 1;
+                    return Ok(out);
+                }
+                out.push('~');
+                continue;
+            }
+            out.push(b as char);
+        }
+        Err(err(self.pos(), "unterminated ascii85 string"))
     }
 
     /// Name：到分隔符/空白为止，已去掉前导 `/`。
