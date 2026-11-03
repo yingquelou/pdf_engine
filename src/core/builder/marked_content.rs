@@ -50,6 +50,87 @@ impl PdfBuilder {
         handle
     }
 
+    /// 注册一个文档级标记内容属性表字典（14.6），返回文档唯一句柄。
+    ///
+    /// 字典**原样保留**，本层不建模字段：`/OC`、`/ActualText`、`/Lang`、`/MCID`
+    /// 等任意条目都能携带（键的合法性由 `Dict` 类型与调用方负责，此处不做
+    /// 额外校验）。句柄供 [`PdfBuilder::begin_marked_properties`] 与
+    /// [`PdfBuilder::marked_point_properties`] 引用。
+    ///
+    /// 装配阶段（`assemble::marked_properties`）只为**被内容流实际引用**的句柄
+    /// 从文档共享的对象号游标取号，把页面内容里的占位操作数替换成
+    /// `<实际对象号> 0 R`，并把字典本身写成真正的间接对象；同一句柄被多处
+    /// 引用时只分配一个对象（共享属性表）。注册后从未使用的句柄不产生对象、
+    /// 不占对象号，输出与不注册时逐字节相同——与可选内容组/渐变/图案的
+    /// 「只为实际引用取号」做法一致（回收不引用者而非拒绝：句柄是调用方的
+    /// 声明，未引用说明不了任何不一致）。
+    ///
+    /// **写出形态的规范地位**：把整张属性表做成间接对象、直接以
+    /// `/Tag 5 0 R BDC` 作操作数，是互操作容错/本库自有写法，**不是**
+    /// ISO 32000-1 授权的形态——Table 320 只授权内联字典与 `/Properties`
+    /// 命名资源两种操作数，14.6.2 要求值含间接引用的属性表 **shall** 定义为
+    /// `/Properties` 命名资源并按名称引用（读端对两种形态都能解析）。
+    pub fn add_marked_content_properties(&mut self, properties: Dict) -> usize {
+        let handle = self.marked_properties.len();
+        self.marked_properties.push(properties);
+        handle
+    }
+
+    /// 在指定页开始一段带**注册属性表句柄**的标记内容：
+    /// `/tag <对象号> 0 R BDC`（ISO 32000-1 14.6 的属性表操作数）。
+    ///
+    /// `handle` 必须是 [`PdfBuilder::add_marked_content_properties`] 的返回值；
+    /// 本入口先写入未定型占位（[`MarkedContentProperties::pending_handle`]），
+    /// 对象号由装配期分配并回填（见
+    /// [`PdfBuilder::add_marked_content_properties`]）。句柄越界（未注册）时
+    /// [`PdfBuilder::build`] 在任何对象号分配与字节写出之前返回
+    /// [`WriteError::InvalidObject`]；页索引越界按既有风格静默忽略。
+    /// 必须以 [`PdfBuilder::end_marked_properties`] 结束。
+    pub fn begin_marked_properties(
+        &mut self,
+        page: usize,
+        tag: impl Into<String>,
+        handle: usize,
+    ) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.begin_marked_content_properties(
+                tag,
+                MarkedContentProperties::pending_handle(handle),
+            );
+        }
+        self
+    }
+
+    /// 结束当前标记内容段（`EMC`）；与
+    /// [`PdfBuilder::begin_marked_properties`] 配对，复用既有 `EMC` 闭包通路，
+    /// 不引入第二种结束方式。页索引越界被静默忽略。
+    pub fn end_marked_properties(&mut self, page: usize) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.end_marked_content();
+        }
+        self
+    }
+
+    /// 在指定页写一个带**注册属性表句柄**的标记内容点：
+    /// `/tag <对象号> 0 R DP`（点标记无需 `EMC` 闭合）。
+    ///
+    /// 与 [`PdfBuilder::begin_marked_properties`] 同一句柄通路、同一装配期
+    /// 回填与同一零字节拒绝语义。
+    pub fn marked_point_properties(
+        &mut self,
+        page: usize,
+        tag: impl Into<String>,
+        handle: usize,
+    ) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.content.marked_content_point_properties(
+                tag,
+                MarkedContentProperties::pending_handle(handle),
+            );
+        }
+        self
+    }
+
     /// 在指定页开始一段可选内容：`/OC /OC<n> BDC`。
     ///
     /// 组句柄必须是 [`PdfBuilder::optional_content_group`] 的返回值；同页

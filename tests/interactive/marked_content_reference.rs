@@ -20,9 +20,17 @@
 //! 边界更新：文本抽取器（`src/core/reader/text/**`）自本链后已有引用形态，
 //! 故这一操作数形态的 `/ActualText` 与 `/OC` 可见性都参与抽取——本文件据此
 //! 断言「隐藏优先，页面文本为空」，不再断言原文照出。
+//!
+//! 写端注册句柄通路（`PdfBuilder::add_marked_content_properties` +
+//! `begin_marked_properties`/`marked_point_properties`）的整档往返也在本文件
+//! 收尾：装配期从共享游标取号、把内容流占位替换成 `<号> 0 R`、属性表字典
+//! 写成真正的间接对象；重新解析后声明式读 API 解回同一张字典、文本抽取按
+//! `/ActualText` 替换照常工作，共享句柄跨页跨形态只保留一个对象。
 
 use super::*;
+use pdf_engine::core::builder::{Font, PageSize, PdfBuilder};
 use pdf_engine::core::content::ContentStream;
+use pdf_engine::core::reader::content::Op as ReadOp;
 use pdf_engine::core::types::{Document, Trailer};
 use pdf_engine::core::writer;
 
@@ -269,5 +277,135 @@ fn unusable_reference_operands_degrade_without_losing_page_sections() {
             .and_then(Value::as_name),
         Some("XRef"),
         "对象号被 writer 复用时按解引用结果登记：与命名资源的口径一致"
+    );
+}
+
+/// 页面内容里 `BDC`/`DP` 的间接引用操作数 `(标签, 对象号, 代号)`，按出现顺序。
+fn reference_operands(doc: &Document, page: usize) -> Vec<(String, i64, i64)> {
+    doc.page_content_ops(page)
+        .expect("page content ops")
+        .iter()
+        .filter_map(|op| match op {
+            ReadOp::BeginMarkedContentWithProperties(tag, Value::Ref(object, generation))
+            | ReadOp::MarkedContentPointWithProperties(tag, Value::Ref(object, generation)) => {
+                Some((tag.clone(), *object, *generation))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// 写端注册句柄通路的整档往返：builder 装配期取号并把占位换成 `<号> 0 R`，
+/// 落盘字节里是真实引用；重新解析后属性表解回注册时那张字典，文本抽取按
+/// `/ActualText` 替换照常工作。
+#[test]
+fn builder_registered_property_handle_roundtrip_resolves_reference_and_text() {
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let registered = Dict::new().insert("ActualText", Value::String("actual via handle".into()));
+    let handle = builder.add_marked_content_properties(registered.clone());
+    builder.begin_marked_properties(page, "Span", handle);
+    builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, "shown literal");
+    builder.end_marked_properties(page);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("装配应成功");
+    let raw = String::from_utf8_lossy(&buf).into_owned();
+    assert!(!raw.contains("-1 R"), "未定型占位绝不落盘：{raw}");
+
+    let reparsed = parse_buf(&buf);
+    let references = reference_operands(&reparsed, page);
+    assert_eq!(references.len(), 1, "一段 BDC 引用：{references:?}");
+    let (tag, object, generation) = &references[0];
+    assert_eq!(tag, "Span");
+    assert_eq!(*generation, 0, "回填引用的代号与被写出的对象一致");
+    assert!(
+        raw.contains(&format!("/Span {object} 0 R BDC")),
+        "内容流应写成装配期分配的对象号引用：{raw}"
+    );
+
+    // 属性表作为间接对象真实存在，且逐字等于注册时那张字典。
+    assert_eq!(
+        reparsed
+            .get_object(*object)
+            .expect("object lookup")
+            .expect("属性表应是间接对象")
+            .value,
+        Value::Dict(registered.clone())
+    );
+
+    // 声明式读 API 解回引用；文本抽取器用 `/ActualText` 替换区段原文。
+    let sections = reparsed
+        .page_marked_content(page)
+        .expect("区段配对，页面无需整体降级");
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].properties, Some(registered));
+    assert_eq!(
+        sections[0].actual_text().as_deref(),
+        Some("actual via handle")
+    );
+    assert_eq!(
+        reparsed.extract_page_text(page).as_deref(),
+        Some("actual via handle"),
+        "引用形态属性表的 /ActualText 要参与文本抽取替换"
+    );
+}
+
+/// 共享句柄的整档往返：同一句柄被两页的 `BDC` 与 `DP` 引用时只分配一个对象
+/// 号、字典只写出一次；重新解析后三处引用都解回同一张属性表。
+#[test]
+fn builder_shared_property_handle_roundtrip_keeps_single_object_across_pages() {
+    let mut builder = PdfBuilder::new();
+    let first = builder.page(PageSize::A4);
+    let second = builder.page(PageSize::A4);
+    let registered = Dict::new().insert("ActualText", Value::String("shared across pages".into()));
+    let handle = builder.add_marked_content_properties(registered.clone());
+    builder.begin_marked_properties(first, "Span", handle);
+    builder.text(first, &Font::helvetica(12.0), 72.0, 700.0, "first page");
+    builder.end_marked_properties(first);
+    builder.marked_point_properties(second, "Figure", handle);
+
+    let mut buf = Vec::new();
+    builder
+        .build(&mut buf)
+        .expect("共享句柄跨页跨形态应装配成功");
+
+    let reparsed = parse_buf(&buf);
+    let first_refs = reference_operands(&reparsed, first);
+    let second_refs = reference_operands(&reparsed, second);
+    assert_eq!(first_refs.len(), 1);
+    assert_eq!(second_refs.len(), 1, "DP 点标记也是带引用的操作数");
+    assert_eq!(
+        first_refs[0].1, second_refs[0].1,
+        "共享句柄必须复用同一对象号：{first_refs:?} vs {second_refs:?}"
+    );
+    assert_eq!(second_refs[0].0, "Figure");
+
+    // 整档里值等于该字典的对象只有一个。
+    let object = first_refs[0].1;
+    let holders: Vec<i64> = (1..64)
+        .filter(|num| {
+            reparsed
+                .get_object(*num)
+                .ok()
+                .flatten()
+                .is_some_and(|obj| obj.value == Value::Dict(registered.clone()))
+        })
+        .collect();
+    assert_eq!(holders, vec![object], "共享句柄只产出一个间接对象");
+
+    // 两页的区段都解回同一张属性表。
+    assert_eq!(
+        reparsed.page_marked_content(first).expect("first page")[0].properties,
+        Some(registered.clone())
+    );
+    assert_eq!(
+        reparsed.page_marked_content(second).expect("second page")[0].properties,
+        Some(registered)
+    );
+    assert_eq!(
+        reparsed.extract_page_text(first).as_deref(),
+        Some("shared across pages"),
+        "BDC 区段的替换文本照常抽取"
     );
 }

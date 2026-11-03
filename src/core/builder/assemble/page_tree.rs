@@ -221,7 +221,13 @@ impl PdfBuilder {
             doc.set_object(Object::new(page_num, 0, Value::Dict(page_dict)));
 
             // 内容流序列化；透明度等特性已由 ExtGState 构建路径登记。
-            let content_bytes = p.content.to_bytes();
+            // 属性表占位若未被 `allocate_marked_property_objects` 替换，这里
+            // 类型化拒绝而非写出 `<句柄> -1 R`；本阶段失败时由 `build` 的
+            // 「未写出即返回 Err」保证零字节契约。
+            let content_bytes = p
+                .content
+                .try_to_bytes()
+                .map_err(|error| WriteError::InvalidObject(format!("page {i} content: {error}")))?;
             let len = content_bytes.len();
             doc.set_object(Object::new(
                 content_num,

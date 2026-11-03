@@ -184,6 +184,15 @@ impl PdfBuilder {
         // 门禁同样在任何对象号分配与写出之前完成，保持零字节失败契约。
         let reversed_characters = reversed_chars::validate(&self.pages, self.version)?;
 
+        // 标记内容属性表句柄通路（14.6）：内容流里的未定型占位必须在装配期被
+        // 替换成实际对象号的引用，因此句柄必须来自
+        // `PdfBuilder::add_marked_content_properties`。越界句柄在任何对象号
+        // 分配与写出之前拒绝，保持零字节契约；同一句柄多处引用合法（共享属性
+        // 表），不做重复检查。调用方手写的裸号引用不在此校验（存在性由调用方
+        // 自负，见 `assemble::marked_properties` 模块文档；其与池内对象号的
+        // 代数冲突在取号阶段校验）。
+        self.validate_marked_property_handles()?;
+
         // 交互表单（12.7.2–12.7.4）：先克隆出配置，避免后续与 `self`
         // 其他字段的借用冲突；字段树在任何对象写出前完成校验，非法输入
         // 保持零字节契约。AcroForm 自 PDF 1.2 起引入。

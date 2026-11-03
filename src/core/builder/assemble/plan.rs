@@ -122,3 +122,15 @@ pub(super) struct AnnotPlan<'a> {
     /// 3D artwork 的流 / 引用字典 / `/OnInstantiate` 对象号槽位。
     pub(super) three_d_slots: ThreeDObjectSlots,
 }
+
+/// 标记内容属性表（14.6）的对象号分配结果。
+///
+/// 只包含**被页面内容实际引用**的注册句柄：`entries` 按句柄首次出现顺序
+/// 记录「句柄 → 分配到的对象号」，装配期据此替换页面内容里的未定型占位并
+/// 把字典写成间接对象。注册但从未使用的句柄不出现在这里（不分配、不写出，
+/// 与可选内容组/渐变/图案的「只为实际引用取号」一致）。
+#[derive(Debug, Default)]
+pub(super) struct MarkedPropertiesPlan {
+    /// 句柄 → 实际对象号（首次出现顺序）。
+    pub(super) entries: Vec<(usize, i64)>,
+}

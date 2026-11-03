@@ -99,7 +99,7 @@ pub use types::{
 };
 
 use crate::core::content::ContentStream;
-use crate::core::types::PdfVersion;
+use crate::core::types::{Dict, PdfVersion};
 use crate::core::writer::StreamCompression;
 use std::cell::Cell;
 
@@ -227,6 +227,12 @@ pub struct PdfBuilder {
     /// 文档级 3D artwork 池（13.6）；`PdfBuilder::add_three_d_artwork`
     /// 返回其索引。
     three_d_artworks: Vec<ThreeDArtwork>,
+    /// 文档级标记内容属性表池（14.6）；
+    /// [`PdfBuilder::add_marked_content_properties`] 返回其索引（句柄）。
+    /// 装配期只为内容流实际引用的句柄从共享游标分配对象号，并把页面内容
+    /// 里的未定型占位替换成 `<实际号> 0 R` 引用（见
+    /// `assemble::marked_properties`）。
+    marked_properties: Vec<Dict>,
     /// 最近一次 assemble 分配的 Form XObject 对象号（下标即表单句柄）；
     /// 供大纲 `/A` 中 Rendition 动作的 media clip `/D` 解析。
     form_nums: Vec<i64>,
@@ -292,6 +298,7 @@ impl PdfBuilder {
             sounds: Vec::new(),
             sound_nums: Vec::new(),
             three_d_artworks: Vec::new(),
+            marked_properties: Vec::new(),
             form_nums: Vec::new(),
             embedded_nums: Vec::new(),
             rendition_nums: Vec::new(),
@@ -331,6 +338,7 @@ impl PdfBuilder {
             sounds: Vec::new(),
             sound_nums: Vec::new(),
             three_d_artworks: Vec::new(),
+            marked_properties: Vec::new(),
             form_nums: Vec::new(),
             embedded_nums: Vec::new(),
             rendition_nums: Vec::new(),

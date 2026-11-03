@@ -15,6 +15,8 @@
 //! - `sound`：声音对象流（13.3 Table 294）的分配、写出与注解 `/Sound` 引用；
 //! - `three_d`：3D artwork 流（13.6 Table 300）、引用字典（Table 303）与 `/OnInstantiate` 流的分配、写出与注解 `/3DD` 等条目；
 //! - `rendition`：media clip section 链（13.2.6 Table 277）的对象分配与写出；
+//! - `marked_properties`：标记内容属性表（14.6）注册句柄的对象分配、页面内容
+//!   占位替换与字典写出；
 //! - `separation`：页面 `/SeparationInfo` 分色字典（14.11.4 Table 364）的校验与写出；
 //! - `opi`：图像与表单 XObject 的 `/OPI` 代理字典（14.11.7 Table 368–370）校验与写出；
 //! - `output_intent`：目录 `/OutputIntents` 输出意图（14.11.5 Table 365）的校验、配置文件流分配与写出。
@@ -56,6 +58,7 @@ mod form_stream;
 mod graphics_state;
 mod images;
 mod indirect_objects;
+mod marked_properties;
 mod opi;
 mod output_intent;
 mod page_tree;
@@ -101,6 +104,9 @@ impl PdfBuilder {
         let forms = self.allocate_form_objects(&preflight, &mut pools, &mut num)?;
         let groups = self.allocate_group_objects(&forms, &mut num)?;
         let annot_plan = self.allocate_annotation_objects(&preflight, &mut num)?;
+        // 标记内容属性表（14.6）：注册句柄取号 + 把页面内容里的未定型占位
+        // 替换成 `<号> 0 R`，必须早于 `assemble_page_tree` 序列化内容字节。
+        let marked_properties = self.allocate_marked_property_objects(&mut num)?;
 
         // —— 构造 Document 并按主题写出各对象 ——
         let mut doc = self.assemble_feature_profile(&preflight, &groups);
@@ -125,6 +131,8 @@ impl PdfBuilder {
             pages_num,
         )?;
         self.assemble_indirect_objects(&mut doc, &pools, &forms, &groups, &annot_plan)?;
+        // 属性表字典作为间接对象落进对象表，与页面内容里回填的引用闭合。
+        self.write_marked_property_objects(&mut doc, &marked_properties);
         self.assemble_font_and_image_objects(&mut doc, &mut num, &pools)?;
         self.assemble_form_streams(&mut doc, &mut num, &forms, &groups)?;
         self.assemble_document_group_objects(&mut doc, &mut num, &groups)?;

@@ -140,6 +140,7 @@ mod image_color_space;
 mod image_entries;
 mod image_error;
 mod image_xobject;
+mod marked_properties;
 mod metadata;
 mod movie;
 mod navigation;
