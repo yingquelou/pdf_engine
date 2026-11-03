@@ -97,6 +97,15 @@ pub enum LinearizationIssue {
     HintTablePositionInvalid { key: String, problem: String },
     /// F.4：hint 表位流损坏（截断、非法位宽或 Table F.5 项 3/4 自相矛盾）。
     HintTableCorrupt { key: String, problem: String },
+    /// F.4.1：页偏移 hint 表（Table F.3/F.4）位流损坏——截断或声明位宽超过
+    /// 64 位原语上限。该表恒在主 hint 流偏移 0，故无键名可附。
+    PageOffsetTableCorrupt { problem: String },
+    /// F.4.1：Table F.3 声明「number of bits needed」的项越出原文范围
+    /// 「have values in the range 0 through 32」（项 13 是分母值，不在此列）。
+    PageOffsetWidthOutOfRange { item: &'static str, bits: u64 },
+    /// Table F.4 项 3：「For the first page, this number shall be 0; the next
+    /// two items start with the second page」——首页声明了共享对象引用数。
+    PageOffsetFirstPageSharedRefs { count: u64 },
 }
 
 impl fmt::Display for LinearizationIssue {
@@ -255,6 +264,18 @@ impl fmt::Display for LinearizationIssue {
             Self::HintTableCorrupt { key, problem } => write!(
                 f,
                 "F.4.2 (Table F.5/F.6): the hint table {key} is corrupt: {problem}"
+            ),
+            Self::PageOffsetTableCorrupt { problem } => write!(
+                f,
+                "F.4.1 (Table F.3/F.4): the page offset hint table at stream offset 0 is corrupt: {problem}"
+            ),
+            Self::PageOffsetWidthOutOfRange { item, bits } => write!(
+                f,
+                "F.4.1: the bit width declared by Table F.3 {item} shall be in the range 0 through 32, found {bits}; the raw value is kept and the table is read as declared"
+            ),
+            Self::PageOffsetFirstPageSharedRefs { count } => write!(
+                f,
+                "Table F.4 item 3: for the first page the number of shared objects referenced shall be 0 (the next two items start with the second page), found {count}"
             ),
         }
     }

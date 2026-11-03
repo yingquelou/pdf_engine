@@ -1,4 +1,4 @@
-//! 附录 F.4 hint 表读端解码（本切片只完整解析**共享对象 hint 表**一家）。
+//! 附录 F.4 hint 表读端解码（已完整解析**页偏移**与**共享对象**两家）。
 //!
 //! 消费上层已识别的 [`LinearizationInfo`]（Table F.1 `/H` 给出的 hint 流
 //! 范围由 [`HintStreams`]/[`HintRange`] 承载，本模块不重复定位，只做：
@@ -9,11 +9,14 @@
 //! - [`bits`]：F.4 前言的位流原语（任意宽度、高位在前；带符号形式与链式
 //!   增量表按 PDF Reference 1.4 F.2.2/F.2.3 字面实现，ISO 32000-1 的 F.4
 //!   各表未引用，属**待核**预留）；
+//! - [`page_offset`]：F.4.1 页偏移 hint 表（Table F.3 头部 13 项 + Table F.4
+//!   逐页条目 7 项，含 a)—g) 的项交错序）；该表没有 Table F.2 键，按前言
+//!   「shall be the first table in the stream and shall start at offset 0」
+//!   恒从流偏移 0 起读，页数取 Table F.1 `/N`；
 //! - [`shared`]：F.4.2 共享对象 hint 表（Table F.5 头部 + Table F.6 组
 //!   条目，两条序列、项交错序与 128 位 MD5 签名）。
 //!
-//! **未解析（诚实缺口）**：F.4 其余家族——page offset hint 表（F.4.1，
-//! Table F.3/F.4，恒在流偏移 0，本模块只跳过不解析其内容）、thumbnail
+//! **未解析（诚实缺口）**：F.4 其余家族——thumbnail
 //! hint 表（F.4.3，Table F.7/F.8）、generic hint 表（F.4.4，Table F.9，
 //! outline/thread-information/named-destination/information-dictionary/
 //! page-label 共用）、extended generic hint 表（F.4.5，Table F.10，
@@ -35,11 +38,13 @@ use super::dict::HintRange;
 use super::issues::LinearizationIssue;
 
 pub mod bits;
+mod page_offset;
 mod shared;
 
 #[cfg(test)]
 mod tests;
 
+pub use page_offset::{PageOffsetEntry, PageOffsetHeader, PageOffsetHintTable};
 pub use shared::{SharedObjectGroupEntry, SharedObjectHeader, SharedObjectHintTable};
 
 /// Table F.2 列出的标准 hint 表键（`S` 为 Required，其余按存在条件）。
@@ -64,6 +69,10 @@ const STANDARD_HINT_KEYS: [(&str, &str); 11] = [
     ("B", "embedded file stream hint table (F.4.6, PDF 1.5)"),
 ];
 
+/// F.4 前言：页偏移 hint 表「shall be the first table in the stream and shall
+/// start at offset 0」，没有 Table F.2 键，故位置常量而非字典条目。
+pub const PAGE_OFFSET_TABLE_POSITION: u64 = 0;
+
 /// 主 hint 流字典给出的一张表的位置条目（F.3.6：字节偏移，相对解码后的
 /// 流数据起点，溢出流已拼接）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +93,11 @@ pub struct LinearizationHints {
     pub stream_bytes: usize,
     /// 按 Table F.2 标准键列出的表位置（缺失键不列）。
     pub table_positions: Vec<HintTablePosition>,
+    /// 已完整解析的页偏移 hint 表（F.4.1）；该表无 Table F.2 键，恒在流偏移
+    /// 0（[`PAGE_OFFSET_TABLE_POSITION`]）。Table F.1 `/N` 不可用时为 `None`
+    /// 且不报错（结构层已就 `/N` 给诊断）；解析失败亦为 `None` 并在
+    /// [`Self::issues`] 给出类型化诊断。
+    pub page_offset: Option<PageOffsetHintTable>,
     /// 已完整解析的共享对象 hint 表（F.4.2）；解析失败为 `None` 并在
     /// [`Self::issues`] 给出类型化诊断。
     pub shared_object: Option<SharedObjectHintTable>,
@@ -117,11 +131,17 @@ impl LinearizationHints {
             position
         }
     }
+
+    /// F.4.1 页偏移 hint 表结束后的第一个字节，即后续 Table F.2 各表位置的
+    /// 下界；未解析成功时 `None`（F.4 前言：各表以字节边界开始且互不重叠）。
+    pub fn page_offset_end_byte(&self) -> Option<u64> {
+        self.page_offset.as_ref().map(PageOffsetHintTable::end_byte)
+    }
 }
 
 impl Document {
-    /// 类型化解析附录 F.4 的 hint 表（读端；当前只完整解析 F.4.2 共享
-    /// 对象 hint 表，其余家族见模块头的诚实缺口）。
+    /// 类型化解析附录 F.4 的 hint 表（读端；当前完整解析 F.4.1 页偏移表与
+    /// F.4.2 共享对象 hint 表，其余家族见模块头的诚实缺口）。
     ///
     /// 返回 `Ok(None)` 表示**无 hint 可解**：文档非线性化、缺 `/H`，或
     /// 主 hint 流对象完全不可读（此时不给诊断——[`Document::linearization`]
@@ -150,6 +170,7 @@ impl Document {
                     primary: streams.primary,
                     stream_bytes: 0,
                     table_positions: Vec::new(),
+                    page_offset: None,
                     shared_object: None,
                     issues,
                 });
@@ -167,15 +188,21 @@ impl Document {
                 }),
             }
         }
-        let table_positions = table_positions(&dict, data.len(), &mut issues);
+        let mut table_positions = table_positions(&dict, data.len(), &mut issues);
+        // F.4 前言：页偏移 hint 表恒为主流的第一张表、自偏移 0 开始，页数取
+        // Table F.1 `/N`（缺失/非正/超出 `usize` 即跳过，结构层已就 `/N` 报告）。
+        let page_offset =
+            parse_page_offset(info.page_count, &data, &mut table_positions, &mut issues);
         // 键存在但形态不符时不再叠加「缺 S」诊断。
         let s_declared = dict.get("S").is_some();
         let shared_object = parse_shared(&table_positions, s_declared, &data, &mut issues);
         check_header_consistency(shared_object.as_ref(), &mut issues);
+        check_page_offset_semantics(page_offset.as_ref(), &mut issues);
         Some(LinearizationHints {
             primary: streams.primary,
             stream_bytes: data.len(),
             table_positions,
+            page_offset,
             shared_object,
             issues,
         })
@@ -254,6 +281,82 @@ fn table_positions(
         });
     }
     positions
+}
+
+/// F.4.1 页偏移 hint 表：主流第一张表、恒自偏移 0 起，页数取 Table F.1 `/N`。
+///
+/// 该表没有 Table F.2 键（位置由 [`PAGE_OFFSET_TABLE_POSITION`] 固定），故不走
+/// 字典条目定位；但解析成功后其长度参与位置核对——F.4 前言规定「each hint
+/// table shall begin at a byte boundary」且 NOTE 2 要求按序读取，落进表体里的
+/// Table F.2 位置自相矛盾，由 [`drop_positions_inside_page_offset_table`] 剔除
+/// 并逐键给 [`LinearizationIssue::HintTablePositionInvalid`]。
+/// `/N` 缺失、非正或超出 `usize` 时整体跳过——结构层已就 `/N` 给出诊断，
+/// 这里不叠加假阳性。
+fn parse_page_offset(
+    page_count: Option<i64>,
+    data: &[u8],
+    positions: &mut Vec<HintTablePosition>,
+    issues: &mut Vec<LinearizationIssue>,
+) -> Option<PageOffsetHintTable> {
+    let pages = u64::try_from(page_count.filter(|count| *count > 0)?).ok()?;
+    let table = match PageOffsetHintTable::parse(data, PAGE_OFFSET_TABLE_POSITION as usize, pages) {
+        Ok(table) => table,
+        Err(problem) => {
+            issues.push(LinearizationIssue::PageOffsetTableCorrupt {
+                problem: problem.to_string(),
+            });
+            return None;
+        }
+    };
+    drop_positions_inside_page_offset_table(&table, positions, issues);
+    Some(table)
+}
+
+/// 剔除并报告落在页偏移表体内的 Table F.2 位置：表互不重叠，故这样的位置一旦
+/// 出现，对应键就没有可信的解析起点（[`parse_shared`] 因此只会给出
+/// [`LinearizationIssue::HintTablePositionInvalid`]，不再叠加解析失败诊断）。
+fn drop_positions_inside_page_offset_table(
+    table: &PageOffsetHintTable,
+    positions: &mut Vec<HintTablePosition>,
+    issues: &mut Vec<LinearizationIssue>,
+) {
+    let end = table.end_byte();
+    let inside = positions
+        .iter()
+        .filter(|entry| entry.position < end)
+        .cloned()
+        .collect::<Vec<_>>();
+    for entry in inside {
+        issues.push(LinearizationIssue::HintTablePositionInvalid {
+            key: entry.key,
+            problem: format!(
+                "position {} lies inside the page offset hint table, which occupies the first {end} byte(s)",
+                entry.position
+            ),
+        });
+    }
+    positions.retain(|entry| entry.position >= end);
+}
+
+/// F.4.1 声明的表内 shall：位宽项的 0—32 范围与「首页的共享对象引用数须为 0」。
+///
+/// 两者都不影响已读出的位（原值一律保留在 [`PageOffsetHintTable`] 里），只做
+/// 类型化报告。
+fn check_page_offset_semantics(
+    table: Option<&PageOffsetHintTable>,
+    issues: &mut Vec<LinearizationIssue>,
+) {
+    let Some(table) = table else { return };
+    for (item, bits) in table.width_problems() {
+        issues.push(LinearizationIssue::PageOffsetWidthOutOfRange { item, bits });
+    }
+    if let Some(entry) = table.pages.first()
+        && entry.shared_reference_count > 0
+    {
+        issues.push(LinearizationIssue::PageOffsetFirstPageSharedRefs {
+            count: entry.shared_reference_count,
+        });
+    }
 }
 
 /// Table F.2：`S` Required；缺失或解析失败按类型化诊断归入 issues，

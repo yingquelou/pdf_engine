@@ -1,7 +1,12 @@
 //! 附录 F.4 hint 表读端的集成验证：自己按 F.3 分部装配一个**真正线性化**的
-//! 最小文件，把位级手工组装的共享对象 hint 表（F.4.2，Table F.5/F.6）注入
-//! 主 hint 流，再从公开 API（`Document::linearization` / `Document::
-//! linearization_hints`）解析回类型化数据。
+//! 最小文件，把位级手工组装的页偏移 hint 表（F.4.1，Table F.3/F.4）与共享
+//! 对象 hint 表（F.4.2，Table F.5/F.6）注入主 hint 流，再从公开 API
+//! （`Document::linearization` / `Document::linearization_hints`）解析回
+//! 类型化数据。
+//!
+//! 页偏移表按 F.4 前言恒在流偏移 0、且没有 Table F.2 键，故它的字节长度就是
+//! 后面那张表 `/S` 的最小合法位置：本文件把两表按真实字节相邻装配，再用
+//! `hints.page_offset_end_byte()` 与 `position_of("S")` 相互印证。
 //!
 //! 本库写端尚不产出线性化布局（`docs/ROADMAP.md` 的 F5 缺口），`PdfBuilder`
 //! 也就无从直接造出 F.3.1 要求的两段交叉引用表形态，因此这里按分部顺序
@@ -26,11 +31,10 @@ const FONT: i64 = 9;
 const HINT: i64 = 10;
 /// 两段表的条目总数（首页表 6 条 + 主表 5 条）。
 const SIZE: i64 = 11;
-/// 首页表前的占位字节数：F.4.1 规定 page offset hint 表恒在流偏移 0，
-/// 本切片不解析它，用零字节占位，共享对象表由字典 `/S 4` 定位。
-const PAGE_OFFSET_PLACEHOLDER: usize = 4;
 /// 内容流载荷（不压缩，长度可预测）。
 const CONTENT: &[u8] = b"BT /F1 12 Tf 72 720 Td (Annex F hints) Tj ET";
+/// 字典 `/N` 与页偏移表的列长（两处须一致：读端按 `/N` 成列）。
+const PAGE_COUNT: usize = 2;
 
 /// 高位在前、任意宽度的定宽整数写入器（F.4 前言的位流形态）。
 #[derive(Default)]
@@ -69,6 +73,52 @@ impl BitWriter {
     }
 }
 
+/// 位级装配 Table F.3 头部（13 项，5×32 + 8×16 = 288 位）+ Table F.4 的
+/// `PAGE_COUNT` 个逐页条目，严格按 F.4.1 a)—g) 的项交错序（项 1—3、6—7 各
+/// 是「all pages, in page order」的一整列；项 4/5 自第二页起逐页成列）。
+///
+/// `first_page_refs` 驱动 Table F.4 项 3 的首页 shall（合规值 0）：非零时
+/// 项 4/5 的列里**不含**首页元素，原值只保留在类型化条目里。
+fn page_offset_table_bits(first_page_refs: u64) -> Vec<u8> {
+    let mut w = BitWriter::default();
+    // Table F.3：32/32/16/32/16/32/16/32/16/16/16/16/16。
+    w.unsigned(3, 32); // 项 1：一页的最少对象数
+    w.unsigned(700, 32); // 项 2：首页页对象的位置
+    w.unsigned(3, 16); // 项 3：对象数增量的位宽
+    w.unsigned(300, 32); // 项 4：一页的最小长度
+    w.unsigned(6, 16); // 项 5：页长增量的位宽
+    w.unsigned(20, 32); // 项 6：内容流起点偏移的最小值
+    w.unsigned(5, 16); // 项 7：内容流起点偏移增量的位宽
+    w.unsigned(50, 32); // 项 8：内容流长度的最小值
+    w.unsigned(8, 16); // 项 9：内容流长度增量的位宽
+    w.unsigned(2, 16); // 项 10：共享对象引用数的位宽
+    w.unsigned(4, 16); // 项 11：共享对象标识的位宽
+    w.unsigned(3, 16); // 项 12：分数位置分子位宽
+    w.unsigned(4, 16); // 项 13：分母（值，非位宽）
+    // a) 项 1 列（3 位）。
+    w.unsigned(0, 3);
+    w.unsigned(1, 3);
+    // b) 项 2 列（6 位）。
+    w.unsigned(10, 6);
+    w.unsigned(25, 6);
+    // c) 项 3 列（2 位）：首页 0（shall），第二页 2 个引用。
+    w.unsigned(first_page_refs, 2);
+    w.unsigned(2, 2);
+    // d) 项 4 列（4 位）：第二页的两个共享对象标识。
+    w.unsigned(1, 4);
+    w.unsigned(5, 4);
+    // e) 项 5 列（3 位）：与项 4 同序的分子。
+    w.unsigned(2, 3);
+    w.unsigned(0, 3);
+    // f) 项 6 列（5 位）。
+    w.unsigned(4, 5);
+    w.unsigned(7, 5);
+    // g) 项 7 列（8 位）。
+    w.unsigned(11, 8);
+    w.unsigned(13, 8);
+    w.finish()
+}
+
 /// 位级装配 Table F.5 头部 + Table F.6 组条目（首页 2 组，首组带 128 位
 /// MD5 签名；共享区 1 组）。
 fn shared_object_table_bits() -> Vec<u8> {
@@ -100,9 +150,20 @@ fn shared_object_table_bits() -> Vec<u8> {
     w.finish()
 }
 
-/// hint 流载荷：page offset 表占位 + 共享对象 hint 表位流。
-fn hint_payload() -> Vec<u8> {
-    let mut payload = vec![0u8; PAGE_OFFSET_PLACEHOLDER];
+/// 页偏移表占用的字节数（350 位 → 44 字节）：F.4 前言把本表钉在流偏移 0，
+/// 故它后面的第一张表的最小合法位置就是本值。
+fn page_offset_bytes() -> usize {
+    page_offset_table_bits(0).len()
+}
+
+/// Table F.2 键 `S` 的定位条目原文：紧跟页偏移表之后。
+fn hint_entries() -> String {
+    format!(" /S {}", page_offset_bytes())
+}
+
+/// hint 流载荷：偏移 0 的页偏移表 + 紧随其后的共享对象表。
+fn hint_payload(first_page_refs: u64) -> Vec<u8> {
+    let mut payload = page_offset_table_bits(first_page_refs);
     payload.extend(shared_object_table_bits());
     payload
 }
@@ -267,9 +328,136 @@ fn build(payload: &[u8], hint_entries: &str) -> Vec<u8> {
 }
 
 #[test]
+fn handbuilt_linearized_file_exposes_page_offset_hint_table() {
+    let payload = hint_payload(0);
+    let entries = hint_entries();
+    let bytes = build(&payload, &entries);
+    let document = parse_buf(&bytes);
+    let info = document
+        .linearization()
+        .expect("no I/O error")
+        .expect("recognized as linearized");
+    assert!(info.is_consistent(), "structure issues: {:?}", info.issues);
+
+    let hints = document
+        .linearization_hints()
+        .expect("no I/O error")
+        .expect("hint stream present");
+    assert!(hints.is_consistent(), "hint issues: {:?}", hints.issues);
+    let table = hints
+        .page_offset
+        .as_ref()
+        .expect("the page offset table sits at stream offset 0");
+
+    // Table F.3 头部 13 项逐项归位；本表没有 Table F.2 键，纯按前言定位。
+    assert_eq!(table.declared_pages, PAGE_COUNT as u64);
+    assert_eq!(table.header.least_objects_per_page, 3);
+    assert_eq!(table.header.first_page_object_location, 700);
+    assert_eq!(table.header.object_count_bits, 3);
+    assert_eq!(table.header.least_page_length, 300);
+    assert_eq!(table.header.page_length_bits, 6);
+    assert_eq!(table.header.least_content_offset, 20);
+    assert_eq!(table.header.content_offset_bits, 5);
+    assert_eq!(table.header.least_content_length, 50);
+    assert_eq!(table.header.content_length_bits, 8);
+    assert_eq!(table.header.shared_ref_count_bits, 2);
+    assert_eq!(table.header.shared_object_id_bits, 4);
+    assert_eq!(table.header.shared_position_numerator_bits, 3);
+    assert_eq!(table.header.shared_position_denominator, 4);
+    assert!(table.width_problems().is_empty());
+
+    // Table F.4 项 1/2/6/7 存的是**增量**：类型化访问器须加回头部最小值。
+    assert_eq!(table.pages.len(), PAGE_COUNT);
+    assert_eq!(table.pages[0].object_count_delta, 0);
+    assert_eq!(table.pages[0].page_length_delta, 10);
+    assert_eq!(table.pages[0].content_offset_delta, 4);
+    assert_eq!(table.pages[0].content_length_delta, 11);
+    assert_eq!(table.pages[0].object_count(&table.header), 3);
+    assert_eq!(table.pages[0].page_length(&table.header), 310);
+    assert_eq!(table.pages[0].content_offset(&table.header), 24);
+    assert_eq!(table.pages[0].content_length(&table.header), 61);
+    assert_eq!(table.pages[1].object_count(&table.header), 4);
+    assert_eq!(table.pages[1].page_length(&table.header), 325);
+    assert_eq!(table.pages[1].content_offset(&table.header), 27);
+    assert_eq!(table.pages[1].content_length(&table.header), 63);
+
+    // F.4.1 d)/e)：共享对象两列自第二页起，按页归位、不跨页混排。
+    assert_eq!(table.pages[0].shared_reference_count, 0);
+    assert!(table.pages[0].shared_object_ids.is_empty());
+    assert!(table.pages[0].shared_position_numerators.is_empty());
+    assert_eq!(table.pages[1].shared_reference_count, 2);
+    assert_eq!(table.pages[1].shared_object_ids, vec![1, 5]);
+    assert_eq!(table.pages[1].shared_position_numerators, vec![2, 0]);
+
+    // 表体长度即下一张表的下界：350 位补齐到 44 字节，`/S` 恰好落在其上。
+    assert_eq!(table.bits_consumed, 350);
+    assert_eq!(table.end_byte(), page_offset_bytes() as u64);
+    assert_eq!(hints.page_offset_end_byte(), Some(table.end_byte()));
+    assert_eq!(hints.position_of("S"), Some(table.end_byte()));
+    assert_eq!(hints.stream_bytes, payload.len());
+
+    // F.4.1 是 F.4.2 的前置：本表解析不挤掉后面的共享对象表。
+    assert!(hints.shared_object.is_some());
+
+    // 识别与解码都不改变普通路径：两页可读、零告警。
+    assert_eq!(document.page_count().expect("page count"), 2);
+    assert!(document.warnings().is_empty());
+}
+
+#[test]
+fn malformed_page_offset_table_is_a_typed_issue_not_a_panic() {
+    let full = hint_payload(0);
+    // 截在页偏移表体内（含空表）：一律类型化诊断，页偏移家族整体退回 `None`。
+    for prefix in [0usize, 1, 13, 43] {
+        let bytes = build(&full[..prefix], " /S 9999");
+        let document = parse_buf(&bytes);
+        let hints = document
+            .linearization_hints()
+            .expect("no I/O error")
+            .expect("hint stream present");
+        assert!(
+            hints
+                .issues
+                .iter()
+                .any(|issue| matches!(issue, LinearizationIssue::PageOffsetTableCorrupt { .. })),
+            "prefix {prefix}/{} must yield a typed page offset issue: {:#?}",
+            full.len(),
+            hints.issues
+        );
+        assert!(hints.page_offset.is_none());
+        // 解码失败不影响文档按普通路径读取。
+        assert_eq!(document.page_count().expect("page count"), 2);
+    }
+
+    // Table F.4 项 3 的首页 shall：非零值原样保留、列不错位读、给类型化诊断。
+    let payload = hint_payload(3);
+    let entries = hint_entries();
+    let bytes = build(&payload, &entries);
+    let document = parse_buf(&bytes);
+    let hints = document
+        .linearization_hints()
+        .expect("no I/O error")
+        .expect("hint stream present");
+    assert!(
+        hints
+            .issues
+            .contains(&LinearizationIssue::PageOffsetFirstPageSharedRefs { count: 3 }),
+        "{:#?}",
+        hints.issues
+    );
+    let table = hints.page_offset.as_ref().expect("violated value kept");
+    assert_eq!(table.pages[0].shared_reference_count, 3);
+    assert!(table.pages[0].shared_object_ids.is_empty());
+    assert_eq!(table.pages[1].shared_object_ids, vec![1, 5]);
+    // 违规值不影响后续家族的可读性。
+    assert!(hints.shared_object.is_some());
+}
+
+#[test]
 fn handbuilt_linearized_file_exposes_shared_object_hint_table() {
-    let payload = hint_payload();
-    let bytes = build(&payload, " /S 4");
+    let payload = hint_payload(0);
+    let entries = hint_entries();
+    let bytes = build(&payload, &entries);
     let document = parse_buf(&bytes);
     let info = document
         .linearization()
@@ -284,7 +472,8 @@ fn handbuilt_linearized_file_exposes_shared_object_hint_table() {
         .expect("hint stream present");
     assert!(hints.is_consistent(), "hint issues: {:?}", hints.issues);
     assert_eq!(hints.stream_bytes, payload.len());
-    assert_eq!(hints.position_of("S"), Some(4));
+    assert_eq!(hints.position_of("S"), Some(page_offset_bytes() as u64));
+    assert!(hints.page_offset.is_some());
 
     let table = hints.shared_object.as_ref().expect("parsed table");
     assert_eq!(table.header.first_object_number, 20);
@@ -310,7 +499,8 @@ fn handbuilt_linearized_file_exposes_shared_object_hint_table() {
 
     // F.4 前言 NOTE 1/NOTE 3 的分工：Table F.2 的 `/S` 是**流内**位置，
     // 原样使用；表内的对象位置（大于主流起点者）须补上主流长度。
-    assert_eq!(hints.adjust_position(4), 4);
+    let shared_at = page_offset_bytes() as u64;
+    assert_eq!(hints.adjust_position(shared_at), shared_at);
     assert_eq!(
         hints.adjust_position(hints.primary.offset),
         hints.primary.offset
@@ -333,10 +523,11 @@ fn handbuilt_linearized_file_exposes_shared_object_hint_table() {
 
 #[test]
 fn truncated_hint_bytes_are_a_typed_issue_not_a_panic() {
-    // 表位仍在流内（偏移 4，流长 10），但 Table F.5 头部只写出一半。
-    let full = hint_payload();
-    let payload = &full[..PAGE_OFFSET_PLACEHOLDER + 6];
-    let bytes = build(payload, " /S 4");
+    // 表位仍在流内（页偏移表之后），但 Table F.5 头部只写出一半。
+    let full = hint_payload(0);
+    let payload = &full[..page_offset_bytes() + 6];
+    let entries = hint_entries();
+    let bytes = build(payload, &entries);
     let document = parse_buf(&bytes);
     let hints = document
         .linearization_hints()
@@ -351,6 +542,12 @@ fn truncated_hint_bytes_are_a_typed_issue_not_a_panic() {
         hints.issues
     );
     assert!(hints.shared_object.is_none());
+    // 前一家族的完整字节不受后一表截断的影响。
+    assert!(hints.page_offset.is_some());
+    assert_eq!(
+        hints.page_offset_end_byte(),
+        Some(page_offset_bytes() as u64)
+    );
     // 解码失败不影响文档按普通路径读取。
     assert_eq!(document.page_count().expect("page count"), 2);
 }
@@ -358,7 +555,8 @@ fn truncated_hint_bytes_are_a_typed_issue_not_a_panic() {
 #[test]
 fn missing_required_shared_object_table_key_is_reported() {
     // Table F.2 的 `S` 是 Required：主 hint 流字典缺它即给类型化诊断。
-    let bytes = build(&hint_payload(), "");
+    let payload = hint_payload(0);
+    let bytes = build(&payload, "");
     let document = parse_buf(&bytes);
     let hints = document
         .linearization_hints()
@@ -373,4 +571,6 @@ fn missing_required_shared_object_table_key_is_reported() {
     );
     assert!(hints.table_positions.is_empty());
     assert_eq!(hints.shared_object, None::<SharedObjectHintTable>);
+    // 页偏移表不靠 Table F.2 键定位（前言钉死在偏移 0），故缺 `S` 也照常解析。
+    assert!(hints.page_offset.is_some());
 }
