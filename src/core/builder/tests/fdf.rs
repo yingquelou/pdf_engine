@@ -56,6 +56,7 @@ fn bare_fdf_dictionary() -> FdfDictionary {
         annots: None,
         differences: None,
         target: None,
+        target_frame: None,
         embedded_fdfs: None,
         javascript: None,
         dict: Dict::new(),
@@ -345,6 +346,92 @@ fn fdf_export_catalog_version_below_1_4_is_gated() {
     };
     assert!(matches!(
         PdfBuilder::new().export_fdf(&model, PdfVersion::V1_3),
+        Err(WriteError::UnsupportedVersion(_))
+    ));
+}
+
+#[test]
+fn fdf_export_target_frame_typed_wins_and_absent_not_materialized() {
+    // Table 243 续表（raw L24927）——`/Target` 类型化字段为准：Some 写成
+    // 十六进制文本串并覆盖原值（"main" → 6D61696E，PDFDocEncoding 优先）。
+    let mut fdf = bare_fdf_dictionary();
+    fdf.target_frame = Some("main".into());
+    fdf.target = Some(Value::String("stale".into()));
+    let model = FdfDocument {
+        catalog_version: None,
+        catalog: Dict::new(),
+        fdf,
+    };
+    let text = String::from_utf8(
+        PdfBuilder::new()
+            .export_fdf(&model, PdfVersion::V1_4)
+            .expect("类型化 /Target 导出"),
+    )
+    .expect("ASCII");
+    assert!(
+        text.contains("/Target <6D61696E>"),
+        "十六进制文本串：{text}"
+    );
+    assert!(!text.contains("stale"), "类型化字段应覆盖原值：{text}");
+
+    // 类型化为 None 时原值（串形态）透传，不丢弃。
+    let mut fdf = bare_fdf_dictionary();
+    fdf.target = Some(Value::String("_top".into()));
+    let model = FdfDocument {
+        catalog_version: None,
+        catalog: Dict::new(),
+        fdf,
+    };
+    let text = String::from_utf8(
+        PdfBuilder::new()
+            .export_fdf(&model, PdfVersion::V1_4)
+            .expect("原值透传"),
+    )
+    .expect("ASCII");
+    assert!(text.contains("/Target (_top)"), "原值串透传：{text}");
+
+    // 全缺省不物化：类型化与原值都 None 时删除原字典里的同名条目。
+    let mut fdf = bare_fdf_dictionary();
+    fdf.dict = fdf.dict.insert("Target", Value::String("ghost".into()));
+    let model = FdfDocument {
+        catalog_version: None,
+        catalog: Dict::new(),
+        fdf,
+    };
+    let text = String::from_utf8(
+        PdfBuilder::new()
+            .export_fdf(&model, PdfVersion::V1_4)
+            .expect("缺省导出"),
+    )
+    .expect("ASCII");
+    assert!(!text.contains("/Target"), "缺省条目不物化：{text}");
+}
+
+#[test]
+fn fdf_target_non_string_rejected_before_assembly() {
+    // Table 243——`/Target` 类型是 string：字典形态（Adobe FDF 2.0，
+    // 非本规范基线，待核）在装配前拒绝，零字节。
+    let dict_target = catalog_of(Dict::new().insert("Target", Value::Dict(Dict::new())));
+    assert!(matches!(
+        PdfBuilder::new().build_fdf(&dict_target, PdfVersion::V1_7),
+        Err(WriteError::InvalidObject(_))
+    ));
+    // 模型导出路径同样拒绝（类型化 None、原值为字典）。
+    let mut fdf = bare_fdf_dictionary();
+    fdf.target = Some(Value::Dict(Dict::new()));
+    let model = FdfDocument {
+        catalog_version: None,
+        catalog: Dict::new(),
+        fdf,
+    };
+    assert!(matches!(
+        PdfBuilder::new().export_fdf(&model, PdfVersion::V1_7),
+        Err(WriteError::InvalidObject(_))
+    ));
+    // 档位门禁先于类型校验：1.3 声明下的非串 /Target 仍报
+    // UnsupportedVersion（与既有门禁测试口径一致）。
+    assert!(matches!(
+        PdfBuilder::new().build_fdf(&dict_target, PdfVersion::V1_3),
         Err(WriteError::UnsupportedVersion(_))
     ));
 }

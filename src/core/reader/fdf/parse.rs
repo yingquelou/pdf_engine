@@ -102,6 +102,16 @@ pub(crate) fn fdf_document(document: &Document) -> Result<Option<FdfDocument>> {
                 .to_owned(),
         ),
     };
+    // Table 243 续表 — `/Target`（string；PDF 1.4；raw L24927–L24929：
+    // 打开底层 PDF 文档的浏览器框架名）。仅字面串/十六进制串做类型化
+    // 解码（与写端 `text_string_value` 的十六进制文本串策略配对）；
+    // 其余形态（如 Adobe FDF 2.0 的字典式 `/Target`，非 ISO 32000-1
+    // 基线，待核）读端宽容：类型化字段保持 None，原值仍保留在
+    // `target` 与 `dict`，不报错、不丢弃。
+    let target_frame = fdf_dict
+        .get("Target")
+        .filter(|value| matches!(value, Value::String(_) | Value::HexString(_)))
+        .and_then(text_value);
 
     Ok(Some(FdfDocument {
         catalog_version,
@@ -116,6 +126,7 @@ pub(crate) fn fdf_document(document: &Document) -> Result<Option<FdfDocument>> {
             annots: fdf_dict.get("Annots").cloned(),
             differences: fdf_dict.get("Differences").cloned(),
             target: fdf_dict.get("Target").cloned(),
+            target_frame,
             embedded_fdfs: fdf_dict.get("EmbeddedFDFs").cloned(),
             javascript: fdf_dict.get("JavaScript").cloned(),
             dict: fdf_dict,

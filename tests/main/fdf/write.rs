@@ -44,6 +44,7 @@ fn dictionary() -> FdfDictionary {
         annots: None,
         differences: None,
         target: None,
+        target_frame: None,
         embedded_fdfs: None,
         javascript: None,
         dict: Dict::new(),
@@ -262,4 +263,124 @@ fn fdf_writer_gates_and_conflicts_produce_zero_bytes() {
         matches!(err, WriteError::InvalidObject(_)),
         "错误形态：{err}"
     );
+}
+
+/// 单间接对象形态的最小 FDF 文件（目录 `/FDF` 为直接字典，`/Target`
+/// 值由调用方给出源码文本），供字典形态 `/Target` 的读端宽容测试。
+fn fdf_bytes_with_target(target: &str) -> Vec<u8> {
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(b"%FDF-1.4\n");
+    let object_at = buf.len();
+    buf.extend_from_slice(
+        format!("1 0 obj\n<< /FDF << /Target {target} >> >>\nendobj\n").as_bytes(),
+    );
+    let xref_at = buf.len();
+    buf.extend_from_slice(b"xref\n0 2\n0000000000 65535 f \n");
+    buf.extend_from_slice(format!("{object_at:010} 00000 n \n").as_bytes());
+    buf.extend_from_slice(b"trailer\n<< /Root 1 0 R /Size 2 >>\n");
+    buf.extend_from_slice(format!("startxref\n{xref_at}\n%%EOF\n").as_bytes());
+    buf
+}
+
+#[test]
+fn fdf_target_typed_roundtrip_restores_frame_and_fields() {
+    // Table 243 续表（raw L24927）确证条目全形态：类型化 `/Target`
+    // 浏览器框架名 + `/Status` `/Encoding` `/F` `/Fields` → 导出 →
+    // 真实 Parser 重解析，逐项还原且字段值仍可枚举。
+    let mut name = field("name");
+    name.value = Some(Value::String("Ada".into()));
+    let mut fdf = dictionary();
+    fdf.target_frame = Some("result frame".into());
+    fdf.status = Some("Imported".into());
+    fdf.encoding = Some("utf_16".into());
+    fdf.source_file = Some(Value::String("tax.pdf".into()));
+    fdf.fields = Some(vec![name]);
+    let bytes = PdfBuilder::new()
+        // Table 243 — `/Target` 需 PDF 1.4。
+        .export_fdf(&model(&fdf), PdfVersion::V1_4)
+        .expect("导出应成功");
+    assert!(!bytes.is_empty());
+    let document = parse_buf(&bytes);
+    let out = document
+        .fdf()
+        .expect("重解析不应报错")
+        .expect("应识别为 FDF");
+    // 类型化条目还原；原值为写端十六进制文本串形态。
+    assert_eq!(out.fdf.target_frame.as_deref(), Some("result frame"));
+    assert!(
+        matches!(out.fdf.target, Some(Value::HexString(_))),
+        "/Target 应写成十六进制文本串：{:?}",
+        out.fdf.target
+    );
+    assert_eq!(out.fdf.status.as_deref(), Some("Imported"));
+    assert_eq!(out.fdf.encoding.as_deref(), Some("utf_16"));
+    assert_eq!(out.fdf.source_file, Some(Value::String("tax.pdf".into())));
+    assert_eq!(
+        document.fdf_field_values().expect("枚举"),
+        vec![("name".to_string(), Some(Value::String("Ada".into())))]
+    );
+}
+
+#[test]
+fn fdf_target_absent_not_materialized_on_roundtrip() {
+    // 缺省条目不物化：模型不带 `/Target` 时导出字节里没有同名键，
+    // 重解析后类型化与原值都是 None。
+    let mut leaf = field("a");
+    leaf.value = Some(Value::String("1".into()));
+    let mut fdf = dictionary();
+    fdf.fields = Some(vec![leaf]);
+    let bytes = PdfBuilder::new()
+        .export_fdf(&model(&fdf), PdfVersion::V1_4)
+        .expect("导出");
+    let text = String::from_utf8(bytes.clone()).expect("ASCII");
+    assert!(!text.contains("/Target"), "缺省条目不应出现：{text}");
+    let document = parse_buf(&bytes);
+    let out = document.fdf().expect("重解析").expect("FDF");
+    assert_eq!(out.fdf.target, None);
+    assert_eq!(out.fdf.target_frame, None);
+}
+
+#[test]
+fn fdf_target_version_gate_and_shall_conflicts_reject_zero_bytes() {
+    // Table 243 — `/Target`：PDF 1.4。1.3 声明 → UnsupportedVersion；
+    // Err 在装配字节之前返回（emit 先 validate），即零字节。
+    let mut fdf = dictionary();
+    fdf.target_frame = Some("_top".into());
+    assert!(matches!(
+        PdfBuilder::new().export_fdf(&model(&fdf), PdfVersion::V1_3),
+        Err(WriteError::UnsupportedVersion(_))
+    ));
+    // Table 243 shall（`/Fields` 与 `/Pages` shall not 同现）与类型化
+    // `/Target` 共存时仍被 InvalidObject 拒绝，零字节。
+    let mut fdf = dictionary();
+    fdf.target_frame = Some("_top".into());
+    fdf.fields = Some(Vec::new());
+    fdf.pages = Some(Value::Array(Array::new()));
+    assert!(matches!(
+        PdfBuilder::new().export_fdf(&model(&fdf), PdfVersion::V1_7),
+        Err(WriteError::InvalidObject(_))
+    ));
+}
+
+#[test]
+fn fdf_target_dict_form_parses_leniently_and_export_rejects() {
+    // 字典式 `/Target`（Adobe FDF 2.0 形态，非 ISO 32000-1 基线，待核）：
+    // 未确证的形态原值保留不丢弃——读端宽容解析、类型化为 None；
+    // 该模型再导出时写端按 Table 243 的 string 类型装配前拒绝。
+    let bytes = fdf_bytes_with_target("<< /F (form.pdf) >>");
+    let document = parse_buf(&bytes);
+    let fdf = document
+        .fdf()
+        .expect("非串 /Target 读端应宽容")
+        .expect("应识别为 FDF");
+    assert_eq!(fdf.fdf.target_frame, None);
+    let raw = fdf.fdf.target.as_ref().expect("原值保留");
+    match raw.as_dict() {
+        Some(dict) => assert_eq!(dict.get("F"), Some(&Value::String("form.pdf".into()))),
+        None => panic!("字典形态原值应不丢弃: {raw:?}"),
+    }
+    assert!(matches!(
+        PdfBuilder::new().export_fdf(&fdf, PdfVersion::V1_4),
+        Err(WriteError::InvalidObject(_))
+    ));
 }

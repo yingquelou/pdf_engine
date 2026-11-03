@@ -12,9 +12,10 @@
 //! 类型化范围（对齐规范、不发明键）：
 //! - FDF 字典 Table 243：`/F`、`/ID`、`/Fields`、`/Status`、`/Pages`、
 //!   `/Encoding`、`/Annots`、`/Differences`、`/Target`、`/EmbeddedFDFs`、
-//!   `/JavaScript`。除 `/Fields` 展开为 [`FdfField`] 树、`/Status` 与
-//!   `/Encoding` 解码外，其余按原值保留（文件规范、数组与字典不在本
-//!   切片类型化，属剩余缺口）。
+//!   `/JavaScript`。除 `/Fields` 展开为 [`FdfField`] 树、`/Status`、
+//!   `/Encoding` 与 `/Target`（L24927：浏览器框架名字符串）解码外，
+//!   其余按原值保留（文件规范、数组与字典不在本切片类型化，属剩余
+//!   缺口）。
 //! - FDF 字段字典 Table 246（L24983 起）：`/Kids`（直接**或**间接子项）、
 //!   `/T`（必填文本串）、`/V`、`/Ff`、`/SetFf`、`/ClrFf`、`/F`（整型
 //!   widget 注解标志，与字段树 PDF 侧 `/F` 文件规范**不同名同义**）、
@@ -132,8 +133,17 @@ pub struct FdfDictionary {
     pub annots: Option<Value>,
     /// `/Differences` 增量更新流原值（PDF 1.4）。
     pub differences: Option<Value>,
-    /// `/Target` 浏览器框架名文本串原值（PDF 1.4）。
+    /// `/Target` 原值（保留全部形态，不丢弃；类型化解码见
+    /// [`Self::target_frame`]）。
     pub target: Option<Value>,
+    /// `/Target` 浏览器框架名（string；PDF 1.4；Table 243 续表，raw
+    /// L24927–L24929「The name of a browser frame in which the
+    /// underlying PDF document shall be opened」）。仅字面串/十六进制
+    /// 串经 `text_value` 解码；非串形态（如 Adobe FDF 2.0 的字典式
+    /// `/Target`，非 ISO 32000-1 基线，待核）保持 `None`，读端宽容，
+    /// 原值不丢弃（写端装配前按 Table 243 拒绝非串，见
+    /// `builder/navigation/fdf.rs`）。
+    pub target_frame: Option<String>,
     /// `/EmbeddedFDFs` 内嵌 FDF 文件规范数组原值（PDF 1.4）。
     pub embedded_fdfs: Option<Value>,
     /// `/JavaScript` 文档级脚本字典原值（PDF 1.4，Table 245）。

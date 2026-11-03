@@ -4,9 +4,10 @@
 //!
 //! 口径：未建模的原始条目按 [`FdfField::dict`] / [`FdfDictionary::dict`]
 //! 原样保留；已建模条目以类型化字段为准——`Some` 覆盖原值，`None`
-//! 删除字典里的同名条目。文本串（`/T`、`/Status`）统一写成十六进制串
-//! （[`PdfTextString::encode`]：PDFDocEncoding 优先，含不可映射字符时
-//! 回退 UTF-16BE 带 BOM），与读端 `content::text_value` 的解码口径配对。
+//! 删除字典里的同名条目。文本串（`/T`、`/Status`、类型化的 `/Target`）
+//! 统一写成十六进制串（[`PdfTextString::encode`]：PDFDocEncoding 优先，
+//! 含不可映射字符时回退 UTF-16BE 带 BOM），与读端
+//! `content::text_value` 的解码口径配对。
 //!
 //! 版本门禁与文件装配在 `builder/navigation/fdf.rs`。`PdfFeature` 新
 //! 变体需要同步 `types/version/feature_display.rs` 的穷尽 `Display`
@@ -96,6 +97,15 @@ pub(crate) fn field_value(field: &FdfField) -> Value {
 
 /// FDF 字典（Table 243）→ 直接对象值。
 pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
+    // Table 243 续表 — `/Target`（string；PDF 1.4；raw L24927–L24929）：
+    // 类型化字段为准，写成十六进制文本串（与读端 `text_value` 解码
+    // 配对）；`target_frame` 为 None 时透传原值，非串形态不丢弃、
+    // 由 `navigation/fdf.rs` 在装配前按 Table 243 的 string 类型拒绝。
+    let target = fdf
+        .target_frame
+        .as_deref()
+        .map(text_string_value)
+        .or_else(|| fdf.target.clone());
     let dict = overlay(
         fdf.dict.clone(),
         &[
@@ -125,8 +135,8 @@ pub(crate) fn fdf_dictionary_value(fdf: &FdfDictionary) -> Value {
             ("Annots", fdf.annots.clone()),
             // Table 243 — `/Differences` 增量更新流（原值；PDF 1.4）。
             ("Differences", fdf.differences.clone()),
-            // Table 243 — `/Target` 浏览器框架名（原值；PDF 1.4）。
-            ("Target", fdf.target.clone()),
+            // Table 243 — `/Target` 浏览器框架名（类型化优先，原值兜底；PDF 1.4）。
+            ("Target", target),
             // Table 243 — `/EmbeddedFDFs` 内嵌 FDF 文件规范数组（原值；PDF 1.4）。
             ("EmbeddedFDFs", fdf.embedded_fdfs.clone()),
             // Table 243 — `/JavaScript` 文档级脚本字典（原值；PDF 1.4，Table 245）。

@@ -140,11 +140,60 @@ fn fdf_dictionary_entries_typed_where_thin() {
     assert_eq!(fdf.fdf.encoding.as_deref(), Some("utf_16"));
     assert_eq!(fdf.fdf.status.as_deref(), Some("Saved"));
     assert_eq!(fdf.fdf.target, Some(Value::String("_top".to_string())));
+    // Table 243 续表 — `/Target`（raw L24927）本轮类型化：串形态解码。
+    assert_eq!(fdf.fdf.target_frame.as_deref(), Some("_top"));
     // /ID 与 /JavaScript 以原值保留（本切片不展开建模）
     assert!(fdf.fdf.identifier.is_some());
     assert!(fdf.fdf.javascript.is_some());
     // 全部条目同时可以从原始字典取回
     assert!(fdf.fdf.dict.get("JavaScript").is_some());
+}
+
+#[test]
+fn target_hex_text_string_decodes_to_typed_frame() {
+    // `/Target` 十六进制串形态（UTF-16BE 带 BOM 的 "_top"）：与写端
+    // `text_string_value` 的十六进制文本串策略配对解码，原值保留。
+    let fdf_entries = Dict::new().insert(
+        "Target",
+        Value::HexString("FEFF005F0074006F0070".to_string()),
+    );
+    let document = doc_from_objects(vec![
+        catalog_obj(Value::Ref(2, 0)),
+        fdf_dict_obj(fdf_entries, 2),
+    ]);
+    let fdf = document.fdf().expect("ok").expect("FDF");
+    assert_eq!(fdf.fdf.target_frame.as_deref(), Some("_top"));
+    assert_eq!(
+        fdf.fdf.target,
+        Some(Value::HexString("FEFF005F0074006F0070".to_string()))
+    );
+}
+
+#[test]
+fn target_non_string_form_is_tolerated_and_kept_raw() {
+    // 字典式 `/Target`（Adobe FDF 2.0 形态，非 ISO 32000-1 基线，待核）：
+    // 读端宽容——不报错、类型化字段为 None、原值不丢弃。
+    let dict_target = Dict::new().insert("F", Value::String("form.pdf".to_string()));
+    let fdf_entries = Dict::new().insert("Target", Value::Dict(dict_target.clone()));
+    let document = doc_from_objects(vec![
+        catalog_obj(Value::Ref(2, 0)),
+        fdf_dict_obj(fdf_entries, 2),
+    ]);
+    let fdf = document.fdf().expect("非串 /Target 不应报错").expect("FDF");
+    assert_eq!(fdf.fdf.target_frame, None);
+    assert_eq!(fdf.fdf.target, Some(Value::Dict(dict_target)));
+}
+
+#[test]
+fn target_absent_leaves_typed_and_raw_none() {
+    // 缺省条目不物化：`/Target` 缺失时类型化与原值都是 None。
+    let document = doc_from_objects(vec![
+        catalog_obj(Value::Ref(2, 0)),
+        fdf_dict_obj(Dict::new(), 2),
+    ]);
+    let fdf = document.fdf().expect("ok").expect("FDF");
+    assert_eq!(fdf.fdf.target_frame, None);
+    assert_eq!(fdf.fdf.target, None);
 }
 
 #[test]

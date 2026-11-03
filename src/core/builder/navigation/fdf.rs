@@ -21,7 +21,8 @@
 //! - Table 246 — 字段 `/APRef` `/IF`：PDF 1.3；`/RV`：PDF 1.5。
 //!
 //! 结构非法（`/FDF` 缺失、`/Fields` 与 `/Pages` 或 `/Status` 同现、
-//! 字段缺 `/T`、整型标志非整数、超出读端深度/数量上限等）返回
+//! `/Target` 非字符串（Table 243：string）、字段缺 `/T`、整型标志非整数、
+//! 超出读端深度/数量上限等）返回
 //! [`WriteError::InvalidObject`]，同样零字节。
 //!
 //! `PdfFeature` 新变体需同步 `types/version/feature_display.rs` 的穷尽
@@ -123,6 +124,17 @@ pub(super) fn validate(catalog: &Dict, version: PdfVersion) -> Result<(), WriteE
                 gate,
             ));
         }
+    }
+    // Table 243 续表 — `/Target` 类型是 string（浏览器框架名；raw
+    // L24927–L24929）：非串形态（含 Adobe FDF 2.0 的字典式 `/Target`，
+    // 非 ISO 32000-1 基线，待核）在装配字节之前拒绝。档位门禁先于
+    // 本校验，1.3 声明下的非串 `/Target` 仍报 UnsupportedVersion。
+    if let Some(value) = fdf.get("Target")
+        && !matches!(value, Value::String(_) | Value::HexString(_))
+    {
+        return Err(invalid(
+            "FDF dictionary /Target must be a string (Table 243)",
+        ));
     }
     // Table 243：`/Fields` 与 `/Pages`、`/Status` 与 `/Pages` shall not
     // both be present。
