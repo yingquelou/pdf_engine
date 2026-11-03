@@ -46,6 +46,7 @@ mod annotation_text_markup;
 mod annotation_trap_net;
 mod annotation_watermark;
 mod articles;
+mod ascii85_write;
 mod character_properties;
 mod collection;
 mod doc_requirements_write;

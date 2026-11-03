@@ -1,10 +1,21 @@
 //! PDF 值、对象与流的文本序列化。
+//!
+//! ASCII85 串（`<~ ... ~>`）body 的写出前门禁及其 ISO 32000-1 规范引文
+//! 在子模块 `ascii85`；本模块的各可失败写入口都调用同一实现。
+
+mod ascii85;
 
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use std::fmt::Write as _;
 
 use super::WriteError;
 use super::compression::StreamCompression;
+use ascii85::{
+    first_ascii85_body_error, first_ascii85_trailer_error, invalid_ascii85_error,
+    is_object_stream_container,
+};
+
+pub(crate) use ascii85::validate_ascii85_payloads;
 
 /// 序列化工作项：显式栈的元素。
 ///
@@ -27,6 +38,15 @@ enum Emit<'a> {
 ///
 /// 返回 `String` 是因为 PDF 对象的文本表示总是合法 UTF-8；
 /// 流的二进制内容由上层 `write_document` 单独处理。
+///
+/// **本函数是低层无错 channel 原语**：它按调用方给的字节逐字输出，
+/// 不校验 ASCII85 串 body（`<~` 与 `~>` 之间的原文）。所有**可失败**的
+/// 写入口（[`write_object`]、[`write_object_maybe_compressed`]、
+/// 装配期 [`Document`](crate::core::types::Document) 预检
+/// [`validate_ascii85_payloads`]）在调用它之前用同一实现做门禁，
+/// 因此「非法 body → 类型化拒绝、零字节」总是成立；直接用本函数拼字节的
+/// 调用方（内容流内联属性表、FDF 文本体）需自行先过
+/// [`validate_ascii85_payloads`] 或 `ascii85::ascii85_body_rejection` 口径。
 pub fn write_value(value: &Value, out: &mut String) {
     emit_all(vec![Emit::Value(value)], out);
 }
@@ -88,6 +108,9 @@ fn emit_all(mut stack: Vec<Emit<'_>>, out: &mut String) {
                     out.push('>');
                 }
                 Value::Ascii85String(s) => {
+                    // 逐字包裹 `<~` + body + `~>`：不转义、不剥离。合法性
+                    // 由写入口的门禁判定（`ascii85_body_rejection`），
+                    // 本分支只负责「原样输出调用方给的编码文本」。
                     out.push_str("<~");
                     out.push_str(s);
                     out.push_str("~>");
@@ -313,6 +336,9 @@ fn prepare_stream_dict_for_write(dict: &Dict, owned_bytes: &[u8]) -> Dict {
 /// 序列化单个间接对象到字节缓冲，返回该对象的字节。
 ///
 /// 流字节从 `doc.stream_bytes` 取（读端按需从文件读，写端用 Owned）。
+///
+/// 写出前在此过 ASCII85 body 门禁（见 `ascii85_body_rejection`），失败返回
+/// [`WriteError::InvalidObject`] 且不产出任何字节。
 pub fn write_object(obj: &Object, doc: &Document) -> Result<Vec<u8>, WriteError> {
     write_object_maybe_compressed(obj, doc, None)
 }
@@ -330,6 +356,30 @@ pub(crate) fn write_object_maybe_compressed(
             "object number must be positive, got {}",
             obj.num
         )));
+    }
+    // ASCII85 串（`<~ ... ~>`）body 门禁——本函数是所有可失败写出路径
+    // （`write_object` / 顶层对象 / 对象流容器 / 增量与混合引用段）的共同
+    // 咽喉点：body 含 EOD `~>`、含表外字符或 `z` 落在半组里时类型化拒绝，
+    // 不做转义或剥离（那会改变调用方要求的语义字节）。要存任意字节请用
+    // `Value::String` / `Value::HexString`，二进制负载走流对象或嵌入文件。
+    if let Some(reason) = first_ascii85_body_error(&obj.value) {
+        return Err(invalid_ascii85_error(
+            &format!("object {}", obj.num),
+            reason,
+        ));
+    }
+    // trailer 字典由 `serialize.rs` 的经典表用无错 channel 的 `write_value`
+    // 输出（≥1.5 时它并进 XRef 流字典、已被上面的逐对象检查覆盖）。此处
+    // 顺带核验 trailer——它只有几个条目，逐对象付出的常量代价换取
+    // 「写出即合法」的全覆盖。
+    if let Some((key, reason)) = first_ascii85_trailer_error(&doc.trailer.dict) {
+        return Err(invalid_ascii85_error(&format!("trailer /{key}"), reason));
+    }
+    // 对象流容器：被打包对象的文本已由 `write_value` 拼进容器流字节，
+    // 逐对象门禁看不到它们，容器是打包值最后一个可失败咽喉点，故在此
+    // 对整文档补一次预检（每次写出通常只有一个容器，代价 O(对象数)）。
+    if is_object_stream_container(&obj.value) {
+        validate_ascii85_payloads(doc)?;
     }
     let mut header = String::new();
     let _ = writeln!(&mut header, "{} {} obj", obj.num, obj.generation);

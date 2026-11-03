@@ -1,5 +1,5 @@
 use super::{PdfBuilder, navigation, types};
-use crate::core::writer::{DocumentWriter, WriteError};
+use crate::core::writer::{DocumentWriter, WriteError, validate_ascii85_payloads};
 use std::io::Write;
 
 /// 写端加密参数（ISO 32000-1 7.6.3 标准安全处理器）。
@@ -98,6 +98,12 @@ impl PdfBuilder {
                 self.rendition_nums.len()
             )));
         }
+        // ASCII85 串（`<~ ... ~>`）body 的装配期门禁（7.4.3 口径）：与
+        // `writer::value` 的逐对象咽喉点同一实现、同一理由
+        // （[`WriteError::InvalidObject`]），落在任何字节写出之前，保持本
+        // 模块上方的零字节契约；它额外覆盖打包进对象流、只经无错 channel
+        // 的 `write_value` 序列化的取值。
+        validate_ascii85_payloads(&doc)?;
         if let Some(spec) = encryption {
             // trailer /ID 首元素是 Algorithm 2 e 的输入，必须在派生密钥前
             // 定型；缺省时以未加密字节确定性补出（14.4）。

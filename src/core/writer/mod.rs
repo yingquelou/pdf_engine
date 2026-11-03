@@ -71,4 +71,4 @@ pub use hybrid::HybridReferencePolicy;
 pub use signature::{SignedIncremental, SigningSpec};
 pub use value::{write_object, write_value};
 
-pub(crate) use value::format_float;
+pub(crate) use value::{format_float, validate_ascii85_payloads};
