@@ -15,8 +15,13 @@
 //! 适配器接入、由 [`ImageModel::decode_image_with`] 分发，而不是伪装成
 //! 一个 `StreamFilter`；这沿用 `flate`/`jpeg` 模块内部后端适配器
 //! （`InflateBackend`/`JpegBackend`）「trait 只暴露 PDF 语义、不外泄
-//! 第三方类型」的先例。后续若需要，可在 `filters` 侧包一个把
-//! `DecodedBitmap` 展平成 `Vec<u8>` 的 `StreamFilter` 薄适配器，契约不变。
+//! 第三方类型」的先例。该接缝已落地：`filters` 侧的兄弟入口
+//! [`crate::core::filters::decode_bitmap_stream`]（便捷）与
+//! [`crate::core::filters::decode_bitmap_stream_with`]（注入文档声明版本
+//! 与 `/JBIG2Globals` 段链）把 `DecodedBitmap` 展平成 `Vec<u8>`，契约
+//! 不变；它不注册为 `StreamFilter`——步式签名携带不了后端集合与文档
+//! 版本，`DecodeError` 也会丢失类型化错误形态——[`ImageModel::samples`]
+//! 与 `decode_stream` 的行为均不受影响。
 //!
 //! # 分发语义（对齐 `decode_stream_with` 风格）
 //!

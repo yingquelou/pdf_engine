@@ -2,6 +2,8 @@
 //!
 //! 本模块按职责拆分为目录模块：
 //! - `ascii`：ASCIIHex / ASCII85 / RunLength；
+//! - `bitmap`：位图后端（JBIG2/JPX 像素解码）输出展平为 `Vec<u8>` 的
+//!   薄适配器（`decode_bitmap_stream` / `decode_bitmap_stream_with`）；
 //! - `flate`：FlateDecode 与第三方压缩后端适配器；
 //! - `jpeg`：DCTDecode 与第三方 JPEG 后端适配器；
 //! - `lzw`：LZWDecode；
@@ -14,6 +16,7 @@
 //! `InflateBackend`），对外只暴露 PDF 语义，不暴露任何第三方类型。
 
 mod ascii;
+mod bitmap;
 mod flate;
 mod jpeg;
 mod lzw;
@@ -21,6 +24,8 @@ mod predictor;
 
 use crate::core::types::{Dict, Value};
 use std::fmt;
+
+pub use bitmap::{BitmapStreamContext, decode_bitmap_stream, decode_bitmap_stream_with};
 
 use ascii::{Ascii85Filter, AsciiHexFilter, RunLengthFilter};
 use flate::FlateFilter;
