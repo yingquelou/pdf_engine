@@ -190,6 +190,8 @@ fn uses_well_known_values_for_standard_14_font_without_descriptor() {
             smallcap: Some(false),
             font_family: Some("Helvetica".to_owned()),
             generic_font_family: Some(GenericFontFamily::SansSerif),
+            // 字体级入口没有内容流上下文，Table 332 `FontSize` 不物化。
+            font_size: None,
             font_weight: Some(400.0),
             font_stretch: Some("Normal".to_owned()),
             font_style: Some(FontStyle::Normal),

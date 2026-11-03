@@ -49,6 +49,8 @@ mod artifact_attribution_tests;
 mod character_properties;
 mod character_properties_derive;
 #[cfg(test)]
+mod character_properties_font_size_tests;
+#[cfg(test)]
 mod character_properties_tests;
 mod description_source;
 mod language;

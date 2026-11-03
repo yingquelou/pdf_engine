@@ -1,6 +1,6 @@
 //! Page-level extraction entry points on [`Document`].
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::core::types::{Dict, Document, Value};
 
@@ -77,6 +77,25 @@ impl Document {
     /// Infallible variant of [`Document::try_extract_page_text_fragments`].
     pub fn extract_page_text_fragments(&self, page_index: usize) -> Option<Vec<TextFragment>> {
         self.try_extract_page_text_fragments(page_index).ok()
+    }
+
+    /// Show-time font sizes of one page, keyed by font resource name
+    /// (ISO 32000-1 14.8.2.4.3 Table 332 `FontSize`).
+    ///
+    /// The value per font is the `Tf` size scaled by the vertical factor
+    /// (`hypot(c, d)`) of the text matrix in effect when a show string was
+    /// drawn. Only fonts that actually showed text appear: a font selected by
+    /// `Tf` but never used for a show string, and any text replaced by
+    /// `/ActualText`, carry no character-level font size (14.8.2.4.3 limits the
+    /// derived characteristics to character codes in show strings). Where one
+    /// font is shown at several sizes the largest observed value is kept,
+    /// because the map is keyed by resource name only.
+    pub(crate) fn page_font_effective_sizes(
+        &self,
+        page_index: usize,
+    ) -> Result<BTreeMap<String, f64>, TextExtractionError> {
+        self.extract_page_state(page_index)
+            .map(|state| state.font_sizes)
     }
 
     /// Page-tree walk plus content extraction shared by the text and fragment

@@ -7,9 +7,12 @@
 //! 读端 `Document::page_font_character_properties` 按 `Tf` 选中的资源名
 //! 给出推导结果，特征画像登记 `PdfFeature::FontCharacteristics`（1.4）
 //! 与 `PdfFeature::FontSelectorAttributes`（1.5）。
+//! 第二个测试覆盖 Table 332 `FontSize`：写端产出的真实 `Tm` 操作符与
+//! 表单 `/Matrix`、绘制 `cm` 在往返后的取舍。
 
 use super::*;
-use pdf_engine::core::builder::{Font, FontDescriptor, PageSize, PdfBuilder};
+use pdf_engine::core::builder::{Font, FontDescriptor, FormXObject, PageSize, PdfBuilder};
+use pdf_engine::core::content::{ContentStream, Op};
 use pdf_engine::core::reader::accessibility::{
     CharacterPropertiesError, FontStyle, FontVariant, GenericFontFamily, NameDerivedAttribute,
 };
@@ -171,4 +174,85 @@ fn builder_font_characteristics_roundtrip_derives_from_descriptor_and_well_known
         features.contains(PdfFeature::FontSelectorAttributes),
         "解析含选择器条目的描述符应登记 Table 332 的 1.5 特征"
     );
+}
+
+/// 内含**真实** `Tm` 缩放操作的表单：
+/// `BT 2 0 0 2 0 0 Tm /F1 6 Tf 5 5 Td (…) Tj ET`。
+///
+/// 同时挂 `/Matrix [3 0 0 3 0 0]`，绘制时 `cm` 用 `[1.5 0 0 1.5 …]`：
+/// 两者都是设备/表单坐标空间变换，Table 332 的 `FontSize` 只说「取自当前
+/// 文本矩阵的 a、b、c、d」，故都不该折算进去。
+fn scaled_text_form(font_name: &str, size: f64) -> FormXObject {
+    let mut content = ContentStream::new();
+    content.begin_text();
+    content.push(Op::SetTextMatrix([2.0, 0.0, 0.0, 2.0, 0.0, 0.0]));
+    content.set_font(font_name, size);
+    content.show_text_raw(5.0, 5.0, "Scaled inside form");
+    content.end_text();
+    FormXObject::new([0.0, 0.0, 160.0, 40.0], content).with_matrix([3.0, 0.0, 0.0, 3.0, 0.0, 0.0])
+}
+
+#[test]
+fn builder_font_size_roundtrip_uses_text_matrix_and_ignores_form_and_ctm_scale() {
+    let mut builder = PdfBuilder::with_version(PdfVersion::V1_5);
+    // 页 0：`PdfBuilder::text` 产出 `BT /F1 11 Tf x y Td (…) Tj ET`，
+    // Tm 为恒等 → FontSize 就是 Tf 字号。
+    let plain = builder.page(PageSize::A4);
+    builder.text(
+        plain,
+        &Font::helvetica(11.0),
+        72.0,
+        720.0,
+        "Identity matrix",
+    );
+
+    // 页 1：页面上同一资源名以 Tf 6.0 显示（恒等 Tm → 6.0），表单内同一
+    // Tf 字号被真实 Tm 放大 2 倍 → 12.0；取页内观测到的最大值。
+    let scaled = builder.page(PageSize::A4);
+    builder.text(scaled, &Font::helvetica(6.0), 72.0, 720.0, "Small on page");
+    let form = builder.form_xobject(&scaled_text_form("F1", 6.0));
+    builder.draw_form(scaled, form, [1.5, 0.0, 0.0, 1.5, 72.0, 400.0]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let raw = String::from_utf8_lossy(&buf).into_owned();
+    assert!(
+        raw.contains("2.0 0.0 0.0 2.0 0.0 0.0 Tm"),
+        "写端应产出真实的文本矩阵操作符: {raw}"
+    );
+    assert!(
+        raw.contains("/F1 6.0 Tf"),
+        "表单内 Tf 字号须原样写出: {raw}"
+    );
+
+    let doc = parse_buf(&buf);
+
+    let plain_props = doc
+        .page_font_character_properties(0)
+        .expect("页 0 字体特征推导");
+    assert_eq!(
+        plain_props.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["F1"]
+    );
+    assert_eq!(
+        plain_props["F1"].font_size,
+        Some(11.0),
+        "恒等 Tm 下 FontSize = Tf 字号"
+    );
+
+    let scaled_props = doc
+        .page_font_character_properties(1)
+        .expect("页 1 字体特征推导");
+    assert_eq!(
+        scaled_props["F1"].font_size,
+        Some(12.0),
+        "Tf 6.0 × Tm 竖向缩放 2.0；表单 /Matrix(3) 与绘制 cm(1.5) 均不折算"
+    );
+
+    // 逐资源名查询与页面集合走同一推导，结果一致。
+    let single = doc
+        .page_font_character_property(1, "F1")
+        .expect("按资源名查询字号");
+    assert_eq!(single, scaled_props["F1"]);
+    assert_eq!(single.font_size, Some(12.0));
 }

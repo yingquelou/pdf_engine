@@ -169,6 +169,7 @@ impl<'a> ExtractionContext<'a> {
         // matrices start over because text objects cannot span streams.
         let form_matrix = form_matrix(self.document, dict.get("Matrix"));
         let saved_font_name = self.state.font_name.clone();
+        let saved_font_size = self.state.font_size;
         let saved_fonts = self.state.fonts.clone();
         // Marked-content sections are lexically scoped to one stream; an
         // unclosed `BMC` in a form must not leak into the caller.
@@ -194,6 +195,7 @@ impl<'a> ExtractionContext<'a> {
         self.state.text_matrix = saved_text_matrix;
         self.state.line_matrix = saved_line_matrix;
         self.state.font_name = saved_font_name;
+        self.state.font_size = saved_font_size;
         self.state.fonts = saved_fonts;
         self.state.marked = saved_marked;
         result

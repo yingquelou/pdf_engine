@@ -25,6 +25,12 @@
 //! into positioned runs ([`TextFragment`]), tracking the text matrix and the
 //! current transformation matrix instead of only inserting separators.
 //!
+//! The same walk keeps the `Tf` font size in the text state and records, for
+//! every font that draws a show string, the show-time typeface height (that
+//! size scaled by the vertical factor of the text matrix) so 14.8.2.4.3
+//! Table 332 `FontSize` can be derived; see the crate-internal
+//! `Document::page_font_effective_sizes`.
+//!
 //! The extractor uses an operand stack: non-operator tokens (numbers,
 //! strings, names, arrays) are pushed onto the stack; when an operator
 //! keyword is encountered, it consumes the relevant operands. This matches

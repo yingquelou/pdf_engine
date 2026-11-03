@@ -58,4 +58,16 @@ impl Matrix {
             self.b * x + self.d * y + self.f,
         )
     }
+
+    /// Vertical scaling of the linear part: the length of the image of the
+    /// text-space y axis, `hypot(c, d)`.
+    ///
+    /// A unit of height in text space becomes this many units of the matrix's
+    /// target space, so it is the factor that turns a font size (text space
+    /// units, 9.3.4) into a typeface height (14.8.2.4.3 Table 332, `FontSize`
+    /// "derived from the a, b, c, and d fields of the current text matrix").
+    /// Pure rotation yields `1.0`, so rotation alone never changes the height.
+    pub(super) fn vertical_scale(self) -> f64 {
+        self.c.hypot(self.d)
+    }
 }

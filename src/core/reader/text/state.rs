@@ -1,7 +1,7 @@
 //! Operand stack, font handles, marked-content frames and the per-page
 //! [`TextState`] accumulation machine that decodes shown strings.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::core::reader::content::parse_dictionary_inner;
 use crate::core::types::Dict;
@@ -82,6 +82,7 @@ pub(super) struct MarkedFrame {
 #[derive(Clone)]
 struct SavedState {
     font_name: Option<String>,
+    font_size: Option<f64>,
     ctm: Matrix,
     leading: f64,
     rise: f64,
@@ -89,9 +90,16 @@ struct SavedState {
 
 pub(super) struct TextState {
     pub(super) font_name: Option<String>,
+    /// Font size operand of the last `Tf` (text space units, 9.3.4), or `None`
+    /// when the operand was absent or not a number.
+    pub(super) font_size: Option<f64>,
     pub(super) fonts: HashMap<String, FontHandle>,
     pub(super) output: String,
     pub(super) fragments: Vec<TextFragment>,
+    /// Table 332 `FontSize`: the typeface height of every font that actually
+    /// showed a show string, keyed by font resource name (see
+    /// [`TextState::record_font_size`]).
+    pub(super) font_sizes: BTreeMap<String, f64>,
     /// Current run being accumulated; flushed when the position changes or a
     /// separator is emitted.
     pending_fragment: Option<TextFragment>,
@@ -114,9 +122,11 @@ impl TextState {
     pub(super) fn new() -> Self {
         Self {
             font_name: None,
+            font_size: None,
             fonts: HashMap::new(),
             output: String::new(),
             fragments: Vec::new(),
+            font_sizes: BTreeMap::new(),
             pending_fragment: None,
             saved_states: Vec::new(),
             marked: Vec::new(),
@@ -153,7 +163,8 @@ impl TextState {
         self.marked.last().is_some_and(|frame| frame.hidden)
     }
 
-    pub(super) fn set_font(&mut self, name: &str) {
+    pub(super) fn set_font(&mut self, name: &str, size: Option<f64>) {
+        self.font_size = size;
         if self.fonts.contains_key(name) {
             self.font_name = Some(name.to_owned());
         }
@@ -163,6 +174,7 @@ impl TextState {
         if self.saved_states.len() < MAX_STATE_DEPTH {
             self.saved_states.push(SavedState {
                 font_name: self.font_name.clone(),
+                font_size: self.font_size,
                 ctm: self.ctm,
                 leading: self.leading,
                 rise: self.rise,
@@ -173,6 +185,7 @@ impl TextState {
     pub(super) fn restore_state(&mut self) {
         if let Some(saved) = self.saved_states.pop() {
             self.font_name = saved.font_name;
+            self.font_size = saved.font_size;
             self.ctm = saved.ctm;
             self.leading = saved.leading;
             self.rise = saved.rise;
@@ -208,6 +221,51 @@ impl TextState {
     /// Text-space origin of the next shown run in default user space.
     fn position(&self) -> (f64, f64) {
         self.text_matrix.concat(self.ctm).transform(0.0, self.rise)
+    }
+
+    /// Table 332 `FontSize` for the current show: the font size set by `Tf`
+    /// (text space units, 9.3.4) scaled by the vertical factor of the current
+    /// text matrix `Tm`.
+    ///
+    /// ISO 32000-1 Table 332 words the derivation as "derived from the a, b,
+    /// c, and d fields of the current text matrix" and requires "a positive
+    /// number specifying the height of the typeface in points". The `a`/`b`/`c`/`d`
+    /// fields alone are not the height: 9.4.4 scales the glyph outline by the
+    /// `Tf` size *inside* text space, so a writer that emits
+    /// `1 0 0 1 x y Tm /F1 12 Tf` (the common idiom) would yield a `FontSize`
+    /// of `1.0` under a literal reading. This library therefore multiplies the
+    /// two factors and uses `hypot(c, d)` — the image of the text-space y axis,
+    /// i.e. the height direction, so a pure rotation keeps the size and
+    /// anisotropic `Tm` scaling follows the height rather than the width. The
+    /// value is magnitude only (a negative size or matrix mirrors the glyphs
+    /// without changing the height) and is not derivable — hence `None` — when
+    /// either factor is absent, zero or non-finite, because the table requires
+    /// a positive number. The CTM (`cm`, `q`/`Q`, a form's `/Matrix`) is
+    /// deliberately **not** folded in: the table names the text matrix.
+    fn effective_font_size(&self) -> Option<f64> {
+        let size = self.font_size?;
+        let scale = self.text_matrix.vertical_scale();
+        let height = (size * scale).abs();
+        (height > 0.0 && height.is_finite()).then_some(height)
+    }
+
+    /// Register the show-time `FontSize` of the font in the text state.
+    ///
+    /// Called only for decoded show strings: 14.8.2.4.3 states the
+    /// characteristics "do not exist for alternate description text (`/Alt`),
+    /// replacement text (`/ActualText`), or abbreviation expansion text (`/E`)",
+    /// so a section whose shown text was replaced never registers a size. A
+    /// font shown at several sizes on one page keeps the largest observed
+    /// value because the map is keyed by resource name only.
+    fn record_font_size(&mut self) {
+        let Some(name) = self.font_name.clone() else {
+            return;
+        };
+        let Some(size) = self.effective_font_size() else {
+            return;
+        };
+        let current = self.font_sizes.entry(name).or_insert(size);
+        *current = current.max(size);
     }
 
     pub(super) fn show_bytes(&mut self, bytes: &[u8]) {
@@ -254,6 +312,7 @@ impl TextState {
             text = text.chars().rev().collect();
         }
         self.output.push_str(&text);
+        self.record_font_size();
         let (x, y) = self.position();
         self.push_fragment_run(text, x, y);
     }

@@ -51,10 +51,23 @@
 //! [`CharacterProperties::name_derived`]，调用方据此区分规范值与库猜测，
 //! 不把这些默认值当作 ISO 32000-1 的规范推导。
 //!
-//! Table 332 的 `FontSize` 行「derived from the a, b, c, and d fields of
-//! the current text matrix」依赖字符显示时刻的文本矩阵，是文本显示状态而非
-//! 字体的静态属性，不由本模块的字体级模型给出（见仓库规划的语法/对象层
-//! 边界，渲染与布局层不在范围内）。
+//! Table 332 的 `FontSize`「a positive number specifying the height of the
+//! typeface in points. Derived from the a, b, c, and d fields of the current
+//! text matrix」是「字符显示时刻」的文本状态量而非字体的静态属性，故只由
+//! 页面级入口 [`Document::page_font_character_properties`] 与
+//! [`Document::page_font_character_property`] 给出：值取自既有文本抽取路径
+//! （`reader::text` 的 crate 内入口 `page_font_effective_sizes`），等于
+//! `Tf` 字号 × 文本矩阵 `Tm` 的纵向缩放 `hypot(c, d)`。
+//!
+//! 两处如实的取舍：① 规范只写「Tm 的 a/b/c/d」，但 9.4.4 把 `Tf` 字号作用在
+//! **文本空间内部**的字形缩放上，写作端最常见的
+//! `1 0 0 1 x y Tm /F1 12 Tf` 若严格只取 Tm 会得到 `FontSize = 1`，与「正数＝
+//! 字面高度」矛盾，故本库取两因子之积；② 规范点名的是文本矩阵，**不含** CTM
+//! （`cm`、`q`/`Q`、表单 XObject 的 `/Matrix`），本库遵此不折算 CTM 缩放；
+//! 横向缩放 `Tz`、字距 `Tc`、行距 `TL` 与 `Ts` 亦不影响字面高度，故不参与推导。
+//! 取值取模（负字号/镜像 `Tm` 只翻转不改变高度），非正或不可限时为 `None`——
+//! 规范要求正数。字体级入口 [`Document::font_character_properties`] 没有内容流
+//! 上下文，`font_size` 恒为 `None`。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -207,6 +220,18 @@ pub struct CharacterProperties {
     /// 是「FontFamily 未找到时使用」，本库在标志位可得时总是同时给出，
     /// 由调用方按 needs 取用。
     pub generic_font_family: Option<GenericFontFamily>,
+    /// Table 332 `FontSize`：字符显示时刻的字面高度（正数），
+    /// `Tf` 字号 × 文本矩阵 `Tm` 纵向缩放 `hypot(c, d)`。
+    ///
+    /// 只有页面级入口（[`Document::page_font_character_properties`] 与
+    /// [`Document::page_font_character_property`]）会填此值，且只在该字体
+    /// **确实显示过显示串**时给出：字体级入口 [`Document::font_character_properties`]
+    /// 没有内容流上下文，被 `Tf` 选中却从未显示的字体、以及文本被
+    /// `/ActualText` 替换的区段（14.8.2.4.3：特征不存在于 `/Alt`
+    /// `/ActualText` `/E` 文本）都是 `None`，不臆造。同一字体在一页内有多个
+    /// 字号时取**最大**观测值（本模型按资源名键控，无法逐次表达）；CTM
+    /// （`cm`、表单 `/Matrix`）按规范措辞不折算，见模块文档。
+    pub font_size: Option<f64>,
     /// Table 332 `FontWeight`：描述符 `/FontWeight`（Table 122 的 100–900）；
     /// 缺失时为名字扫描值（记入 `name_derived`）。规范「should not」条款：
     /// 不用 ForceBold 标志或 StemV 推导，本库遵从此建议。
@@ -261,6 +286,10 @@ impl Document {
     /// 字体都不参与。表单 XObject 的内容流不被递归（沿用
     /// [`Document::page_content_ops`] 的行为）。
     ///
+    /// Table 332 `FontSize` 由既有文本抽取路径的显示时刻文本矩阵给出（见
+    /// [`CharacterProperties::font_size`]）；该次抽取失败（内容超预算等）时
+    /// 只缺字号，其余条目仍按字体字典推导，不把整次查询降级为错误。
+    ///
     /// `Tf` 引用的名字不在页面 `/Resources /Font` 中时返回
     /// [`CharacterPropertiesError::MissingFontResource`]。
     pub fn page_font_character_properties(
@@ -276,12 +305,14 @@ impl Document {
                 selected.insert(name.clone());
             }
         }
+        let sizes = self
+            .page_font_effective_sizes(page_index)
+            .unwrap_or_default();
         let mut properties = BTreeMap::new();
         for name in selected {
-            properties.insert(
-                name.clone(),
-                self.page_font_character_property(page_index, &name)?,
-            );
+            let mut property = self.page_font_property_from_resource(page_index, &name)?;
+            property.font_size = sizes.get(&name).copied();
+            properties.insert(name, property);
         }
         Ok(properties)
     }
@@ -292,7 +323,26 @@ impl Document {
     /// 名字不存在于页面 `/Resources /Font` 时返回
     /// [`CharacterPropertiesError::MissingFontResource`]；字体字典形态
     /// 错误按 [`CharacterPropertiesError::Invalid`] 返回。
+    ///
+    /// Table 332 `FontSize` 同样按显示时刻取值，故该名字在本页未被显示串
+    /// 使用时为 `None`；与 [`Document::page_font_character_properties`] 中
+    /// 同名条目语义一致。
     pub fn page_font_character_property(
+        &self,
+        page_index: usize,
+        name: &str,
+    ) -> Result<CharacterProperties, CharacterPropertiesError> {
+        let mut properties = self.page_font_property_from_resource(page_index, name)?;
+        let sizes = self
+            .page_font_effective_sizes(page_index)
+            .unwrap_or_default();
+        properties.font_size = sizes.get(name).copied();
+        Ok(properties)
+    }
+
+    /// 页面资源名 → 字体字典 → Table 331/332 的字体级推导（不含显示时刻的
+    /// `FontSize`，由上面两个页面级入口各自补填）。
+    fn page_font_property_from_resource(
         &self,
         page_index: usize,
         name: &str,

@@ -6,8 +6,16 @@ use super::state::{BreakKind, Operand, TextState};
 pub(super) fn execute_operator(kw: &str, operands: &[Operand], state: &mut TextState) {
     match kw {
         "Tf" => {
-            if let Some(Operand::Name(name)) = operands.first() {
-                state.set_font(name);
+            if let Some(name) = name_operand(operands.first()) {
+                // The second operand is the font size in text space units
+                // (9.3.4); an absent or non-numeric operand leaves the size
+                // unset instead of guessing one, so no Table 332 `FontSize`
+                // is derived for shows made with this `Tf`.
+                let size = match operands.get(1) {
+                    Some(Operand::Number(number)) => Some(*number),
+                    _ => None,
+                };
+                state.set_font(name, size);
             }
         }
         "Tj" => {
