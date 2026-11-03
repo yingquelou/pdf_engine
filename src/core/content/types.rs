@@ -69,9 +69,10 @@ impl LineJoin {
 ///   properties 操作数。
 ///
 /// 因此 [`Self::Reference`]（`/Tag 5 0 R BDC`）**不是 ISO 32000-1 授权的操作数
-/// 形态**，而是对生产者实态的互操作支持（部分写出器把属性表字典本身作为间接
-/// 对象直接引用）：读端把它当作命名资源之外的容错解引用分支，写端只在调用方
-/// 显式构造时输出，不会由任何高层便捷入口自动产生。
+/// 形态**，而是对生产者实态的互操作容错/本库自有写法（部分写出器把属性表字典
+/// 本身作为间接对象直接引用）：读端把它当作命名资源之外的容错解引用分支，写端
+/// 由调用方显式构造，或由注册句柄通路在装配期回填对象号后产生（见
+/// `PdfBuilder::add_marked_content_properties`），两种来源都不是合规写法。
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkedContentProperties {
     /// 属性表资源名（不含前导 `/`），如 `"MC0"`。
@@ -86,14 +87,59 @@ pub enum MarkedContentProperties {
     /// **对象号由调用方给定**：本层只把操作数写成 `obj gen R`，不负责在文档
     /// 里分配对象号或登记那个间接对象。
     ///
-    /// TODO(后续增量)：由组装层（`src/core/builder/**`，本轮写集之外）在对象号
-    /// 分配阶段把字典落为间接对象并回填引用，使 `/Tag 5 0 R BDC` 自助闭合。
+    /// 装配期回填通路（注册句柄 → 占位 → 实际引用）借用 `generation` 的保留值
+    /// [`Self::PENDING_GENERATION`] 表达「句柄尚未定型」，见
+    /// [`Self::pending_handle`] 与 [`Self::as_pending_handle`]；正常装配完成后
+    /// 页面内容里不会剩下该形态（未替换即序列化会被类型化拒绝）。
     Reference {
-        /// 属性表字典所在对象的对象号。
+        /// 属性表字典所在对象的对象号；占位形态下是注册句柄。
         object: i64,
-        /// 引用中的代号（generation），惯例为 0。
+        /// 引用中的代号（generation），惯例为 0；[`Self::PENDING_GENERATION`]
+        /// 表示尚未定型的句柄。
         generation: i64,
     },
+}
+
+impl MarkedContentProperties {
+    /// 「属性表句柄尚未定型」的保留代号值。
+    ///
+    /// PDF 的 generation 非负，`-1` 既不可能出现在真实引用里，也不可能来自
+    /// 读端解析结果，因此可以安全地用作占位标记。
+    ///
+    /// **为什么不新增枚举变体**：只读参考层
+    /// `src/core/reader/content/mapping/from_op.rs` 对 `Op` 与本枚举都做
+    /// 无通配的穷尽匹配（写集之外，不可修改），添加变体会直接编译失败
+    /// （E0004）。占位形态因此编码在既有 `Reference` 变体内部。
+    pub const PENDING_GENERATION: i64 = -1;
+
+    /// 由注册句柄构造「未定型占位」形态：`object` 存句柄、`generation` 存
+    /// [`Self::PENDING_GENERATION`]。
+    ///
+    /// 占位只应在装配前存在于页面内容操作数里，装配期会把它换成实际对象号
+    /// （见 `PdfBuilder::add_marked_content_properties` 与
+    /// `PdfBuilder::begin_marked_properties`）。
+    pub fn pending_handle(handle: usize) -> Self {
+        Self::Reference {
+            object: handle as i64,
+            generation: Self::PENDING_GENERATION,
+        }
+    }
+
+    /// 若本值是未定型占位，返回其注册句柄；否则返回 `None`。
+    pub fn as_pending_handle(&self) -> Option<usize> {
+        match self {
+            Self::Reference {
+                object,
+                generation: Self::PENDING_GENERATION,
+            } if *object >= 0 => Some(*object as usize),
+            _ => None,
+        }
+    }
+
+    /// 本操作数携带的属性表是否为未定型占位（供序列化前置检查使用）。
+    pub(crate) fn is_pending_handle(&self) -> bool {
+        self.as_pending_handle().is_some()
+    }
 }
 
 /// 可选内容组（`/OC`、`/DP`）的简化表示。

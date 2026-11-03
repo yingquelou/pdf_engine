@@ -439,3 +439,79 @@ fn marked_content_reference_keeps_name_and_inline_forms_unchanged() {
         b"/P /MC0 BDC\n/Tag 12 0 R BDC\n/Span << /MCID 1 >> BDC\nEMC\nEMC\nEMC\n"
     );
 }
+
+/// 未定型的属性表占位（注册句柄）绝不输出成 `<句柄> -1 R`：`try_to_bytes`
+/// 类型化拒绝、`to_bytes` 整条操作符跳过且不留下半截操作数；同时确认手写
+/// 的 0/正数代号引用不会被误判成占位（14.6 裸号通路行为不变）。
+#[test]
+fn pending_properties_handle_is_never_emitted_as_a_reference() {
+    assert_eq!(MarkedContentProperties::PENDING_GENERATION, -1);
+    let pending = MarkedContentProperties::pending_handle(3);
+    assert_eq!(pending.as_pending_handle(), Some(3));
+    assert_eq!(
+        MarkedContentProperties::Reference {
+            object: 3,
+            generation: 0
+        }
+        .as_pending_handle(),
+        None
+    );
+    assert_eq!(
+        MarkedContentProperties::Reference {
+            object: 7,
+            generation: 2
+        }
+        .as_pending_handle(),
+        None
+    );
+    assert_eq!(
+        MarkedContentProperties::Name("MC0".into()).as_pending_handle(),
+        None
+    );
+    assert_eq!(
+        MarkedContentProperties::Dict(Dict::new().insert("MCID", Value::Integer(0)))
+            .as_pending_handle(),
+        None
+    );
+
+    let mut s = ContentStream::new();
+    s.begin_marked_content_properties("Tag", pending)
+        .end_marked_content();
+    assert_eq!(
+        s.try_to_bytes(),
+        Err(ContentWriteError::UnresolvedPropertiesHandle { handle: 3 })
+    );
+
+    // 兜底入口：既不写出该操作符（无 BDC、无假引用），也保留配对的 EMC。
+    let skipped = String::from_utf8_lossy(&s.to_bytes()).into_owned();
+    assert!(!skipped.contains("BDC"));
+    assert!(!skipped.contains("-1"));
+    assert_eq!(skipped, "EMC\n");
+}
+
+/// 装配期替换占位走 `ops_mut`：替换成实际对象号后同一内容流正常序列化，
+/// 且替换后的引用与调用方手写的裸号通路输出完全一致。
+#[test]
+fn resolved_handle_through_ops_mut_serializes_as_allocated_reference() {
+    let mut s = ContentStream::new();
+    s.begin_marked_content_properties("Tag", MarkedContentProperties::pending_handle(0))
+        .marked_content_point_properties("Fig", MarkedContentProperties::pending_handle(1))
+        .end_marked_content();
+    for op in s.ops_mut() {
+        match op {
+            Op::BeginMarkedContentProperties { properties, .. }
+            | Op::MarkedContentPointProperties { properties, .. } => {
+                let handle = properties.as_pending_handle().expect("pending");
+                *properties = MarkedContentProperties::Reference {
+                    object: 40 + handle as i64,
+                    generation: 0,
+                };
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        s.try_to_bytes().expect("resolved"),
+        b"/Tag 40 0 R BDC\n/Fig 41 0 R DP\nEMC\n"
+    );
+}

@@ -6,6 +6,49 @@ use crate::core::writer::format_float;
 use super::stream::ContentStream;
 use super::types::{MarkedContentProperties, Op, TextArrayItem};
 
+/// 内容流序列化失败。
+///
+/// 目前只有一种失败：标记内容属性表仍是「注册句柄」的未定型占位，却没有被
+/// 装配层替换成实际对象号引用（即占位形态绕过了 `assemble` 直达序列化）。
+/// 本库选择**类型化拒绝**而不是输出 `<句柄> -1 R` 这种假引用，让未接线的通路
+/// 必然可见。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentWriteError {
+    /// 属性表句柄未解析（`generation` 仍是
+    /// [`MarkedContentProperties::PENDING_GENERATION`]）。
+    UnresolvedPropertiesHandle {
+        /// 注册时返回、但从未被替换成对象号的句柄。
+        handle: usize,
+    },
+}
+
+impl std::fmt::Display for ContentWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnresolvedPropertiesHandle { handle } => write!(
+                f,
+                "marked-content property list handle {handle} was never resolved to an object number"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ContentWriteError {}
+
+/// 操作符携带的属性表若为未定型占位，返回其注册句柄；否则 `None`。
+///
+/// 只检查 `BDC`/`DP` 两个带属性表的操作符；供 [`ContentStream::to_bytes`]
+/// （跳过该操作符）与 [`ContentStream::try_to_bytes`]（类型化报错）在写出
+/// **整条操作符之前**拦截，避免留下 `/Tag ` 这类半截操作数。
+pub(super) fn pending_properties_handle(op: &Op) -> Option<usize> {
+    let properties = match op {
+        Op::BeginMarkedContentProperties { properties, .. }
+        | Op::MarkedContentPointProperties { properties, .. } => properties,
+        _ => return None,
+    };
+    properties.as_pending_handle()
+}
+
 impl ContentStream {
     pub(super) fn serialize_one(op: &Op, out: &mut Vec<u8>) {
         let mut w = Writer(out);
@@ -443,9 +486,15 @@ impl<'a> Writer<'a> {
         self.0.push(b'\n');
     }
     /// 输出标记内容属性表：资源名 `/name`、内联字典 `<< ... >>`，或间接引用
-    /// 操作数 `obj gen R`（后一形态非 ISO 32000-1 授权，见
-    /// [`MarkedContentProperties`] 文档；只写操作数，不登记被引用对象）。
+    /// 操作数 `obj gen R`（后一形态非 ISO 32000-1 授权，是互操作容错/本库自有
+    /// 写法，见 [`MarkedContentProperties`] 文档；只写操作数，不登记被引用对象）。
     fn emit_properties(&mut self, properties: &MarkedContentProperties) {
+        // 未定型占位（句柄尚未被装配层替换）兜底：调用方 `to_bytes` /
+        // `try_to_bytes` 已在写出整条操作符前拦截，这里宁可不写，也绝不输出
+        // `<句柄> -1 R` 这种看起来像引用的假操作数。
+        if properties.is_pending_handle() {
+            return;
+        }
         match properties {
             MarkedContentProperties::Name(name) => {
                 self.0.push(b'/');

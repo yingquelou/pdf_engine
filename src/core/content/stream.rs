@@ -1,5 +1,6 @@
 //! `ContentStream` 容器与链式高层绘制 API。
 
+use super::serialize::ContentWriteError;
 use super::types::{
     LineCap, LineJoin, MarkedContentProperties, Op, OptionalContent, TextArrayItem,
 };
@@ -31,6 +32,14 @@ impl ContentStream {
         &self.ops
     }
 
+    /// 可变引用当前操作符序列。
+    ///
+    /// 供装配期把「未定型的属性表占位」原地替换成实际对象号引用
+    /// （见 `MarkedContentProperties::pending_handle`）；业务代码不必使用。
+    pub fn ops_mut(&mut self) -> &mut Vec<Op> {
+        &mut self.ops
+    }
+
     /// 操作符序列是否为空。
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
@@ -40,12 +49,37 @@ impl ContentStream {
     ///
     /// 每个操作符输出其参数（经 `format_float` 格式化）+ 操作符关键字，
     /// 后跟一个换行。
+    ///
+    /// 属性表仍是未定型占位（句柄没被装配层替换）的操作符**整条不写出**：
+    /// 本入口受既有调用方约束（`&self` 接收者上也要能调，故签名不变、无法
+    /// 返回错误），宁可不写也不会写出 `<句柄> -1 R` 这种假引用。需要
+    /// 「占位即类型化拒绝」的语义请用 [`Self::try_to_bytes`]，页面内容流
+    /// 走的正是它。
     pub fn to_bytes(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         for op in self.ops.iter() {
+            if super::serialize::pending_properties_handle(op).is_some() {
+                continue;
+            }
             Self::serialize_one(op, &mut out);
         }
         out
+    }
+
+    /// 序列化为字节，遇到未替换的属性表占位句柄就类型化报错且不产出任何字节。
+    ///
+    /// 与 [`Self::to_bytes`] 的唯一差别是错误语义：占位形态绕过装配替换直达
+    /// 序列化时，这里返回 [`ContentWriteError::UnresolvedPropertiesHandle`]，
+    /// 而不是静默丢弃操作符。
+    pub fn try_to_bytes(&mut self) -> Result<Vec<u8>, ContentWriteError> {
+        let mut out = Vec::new();
+        for op in self.ops.iter() {
+            if let Some(handle) = super::serialize::pending_properties_handle(op) {
+                return Err(ContentWriteError::UnresolvedPropertiesHandle { handle });
+            }
+            Self::serialize_one(op, &mut out);
+        }
+        Ok(out)
     }
 
     // ── 链式高层绘制 API ────────────────────────────
@@ -390,6 +424,13 @@ impl ContentStream {
     /// 对象不在本层创建，对象号与间接对象登记都由调用方负责。该形态不是
     /// ISO 32000-1 授权的操作数形态（见 [`MarkedContentProperties`] 文档），
     /// 仅供与写出该形态的生产者互操作时使用。
+    ///
+    /// **对象号不在本层校验**：`object`/`generation` 原样写入，本层不知道文档
+    /// 里是否真有那个对象，也不与装配期的对象号分配游标做冲突检查（写出裸号
+    /// 是调用方的显式选择，校验它只会把「调用方自己负责」的通路变成猜疑）。
+    /// 需要「注册属性表 → 装配期自动分配对象号 → 回填真实引用」的可用通路，
+    /// 请用 `PdfBuilder::add_marked_content_properties` +
+    /// `PdfBuilder::begin_marked_properties`。
     pub fn begin_marked_content_reference(
         &mut self,
         tag: impl Into<String>,
