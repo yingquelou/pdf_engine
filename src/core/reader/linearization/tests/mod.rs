@@ -24,6 +24,7 @@ use crate::core::types::Document;
 
 mod conform;
 mod fixture;
+mod hints;
 mod parts;
 mod structure;
 mod typing;
@@ -51,7 +52,8 @@ const PAGE_TOTAL: i64 = 2;
 /// `/Length` 为间接引用的对象号（F.3.3 反例与 hint 开销计算用）。
 const INDIRECT_LENGTH: i64 = 12;
 
-/// hint 流载荷：本模块**不**解码它（F.4 二进制解码不在范围内）。
+/// 主 hint 流的缺省载荷（`linearization()` 不解码它；hint 表用例经
+/// `hint_payload` 旋钮换成位级手工装配的表字节）。
 const HINT_PAYLOAD: &[u8] = b"hint-table-bytes-never-decoded";
 /// 内容流载荷（未压缩，便于夹具长度可预测）。
 const CONTENT_PAYLOAD: &[u8] = b"BT /F1 12 Tf 72 720 Td (Annex F) Tj ET";
@@ -109,6 +111,11 @@ struct Knobs<'a> {
     omit: &'a [&'a str],
     /// 条目的字面量替换（类型化与越界诊断用）。
     replaced: &'a [(&'a str, &'a str)],
+    /// 主 hint 流的载荷字节（缺省用 [`HINT_PAYLOAD`]；hint 表用例换成
+    /// 位级手工装配的表字节）。
+    hint_payload: Option<&'a [u8]>,
+    /// 追加进主 hint 流字典的条目原文（如 `" /S 4"`，Table F.2 键位）。
+    hint_entries: &'a str,
 }
 
 /// 默认形态即「附录 F 严格合规」的线性化文件：版本取一个 1.2 之后的常见值
@@ -141,6 +148,8 @@ impl Default for Knobs<'_> {
             missing_page_attribute: "",
             omit: &[],
             replaced: &[],
+            hint_payload: None,
+            hint_entries: "",
         }
     }
 }

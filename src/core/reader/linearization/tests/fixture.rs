@@ -96,16 +96,18 @@ pub(super) fn build_once(knobs: &Knobs, g: Guess) -> (Vec<u8>, Guess) {
 
     // part 5（F.3.6：hint 表封装在流对象里，取最后一个对象号）。
     let hint_at = buf.len() as u64;
+    let payload = knobs.hint_payload.unwrap_or(HINT_PAYLOAD);
+    let entries = knobs.hint_entries;
     let hint_overhead = if knobs.indirect_length() {
-        format!("{HINT} 0 obj\n<< /Length {INDIRECT_LENGTH} 0 R >>\nstream\n")
+        format!("{HINT} 0 obj\n<< /Length {INDIRECT_LENGTH} 0 R{entries} >>\nstream\n")
     } else {
         format!(
-            "{HINT} 0 obj\n<< /Length {} >>\nstream\n",
-            HINT_PAYLOAD.len()
+            "{HINT} 0 obj\n<< /Length {}{entries} >>\nstream\n",
+            payload.len()
         )
     };
     push(&mut buf, &hint_overhead);
-    buf.extend_from_slice(HINT_PAYLOAD);
+    buf.extend_from_slice(payload);
     push(&mut buf, "\nendstream\nendobj\n");
     if knobs.indirect_length() {
         length_at = buf.len() as u64;
@@ -113,7 +115,7 @@ pub(super) fn build_once(knobs: &Knobs, g: Guess) -> (Vec<u8>, Guess) {
             &mut buf,
             &format!(
                 "{INDIRECT_LENGTH} 0 obj\n{}\nendobj\n",
-                (HINT_PAYLOAD.len() as i64) + hint_overhead.len() as i64 + 21
+                (payload.len() as i64) + hint_overhead.len() as i64 + 21
             ),
         );
     }

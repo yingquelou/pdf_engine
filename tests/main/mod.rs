@@ -47,6 +47,7 @@ mod font_truetype;
 mod font_type1;
 mod font_type1_builtin;
 mod hybrid_reference;
+mod linearization_hints;
 mod outline_language_escape;
 mod xref_streams;
 
