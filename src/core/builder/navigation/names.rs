@@ -26,13 +26,19 @@ use super::PdfBuilder;
 /// and the corresponding value is either an array defining the destination,
 /// using the syntax shown in Table 151, or a dictionary with a D entry whose
 /// value is such an array.」两种形态同属 PDF 1.1 通道，字典形态**不**需要更高
-/// 版本，故与 [`PdfBuilder::legacy_named_destination`] 共用 1.1 版本门。
+/// 版本，故与 [`PdfBuilder::legacy_named_destination`] 共用 1.1 版本门；NOTE 2
+/// 授权的第三种 go-to 动作形态（[`LegacyDestinationForm::Action`]）同样落在
+/// 这条 PDF 1.1 通道内、共用同一版本门（不新增 `PdfFeature` 变体）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::core::builder) enum LegacyDestinationForm {
     /// Table 151 的目标数组：`/name [ page_ref /Fit … ]`。
     Array,
     /// 字典形态：`/name << /D [ page_ref /Fit … ] >>`（NOTE 2 的附加属性载体）。
     Dict,
+    /// go-to 动作形态：`/name << /A << /S /GoTo /D [ … ] >> >>`（NOTE 2 末句
+    /// 授权的「a go-to action … that shall be used as the target of a named
+    /// destination」；本库写出的 `/D` 恒为 Table 151 数组）。
+    Action,
 }
 
 /// 旧式条目的名字与目标（形态见 [`LegacyDestinationForm`]）。
@@ -99,8 +105,9 @@ impl PdfBuilder {
     /// 规范同一段落并列两种形态（原文见 `LegacyDestinationForm` 的文档），
     /// NOTE 2：「The latter form allows additional attributes to be associated
     /// with the destination, as well as enabling a go-to action (…) that shall
-    /// be used as the target of a named destination.」本库只写 `/D` 条目，
-    /// 附加属性与 `/A` 目标动作尚未建模。
+    /// be used as the target of a named destination.」本库在此字典形态只写
+    /// `/D` 条目；附加属性（additional attributes）规范未给属性表、属待核，
+    /// go-to 动作形态见 [`Self::legacy_named_destination_go_to`]。
     ///
     /// 与 [`Self::legacy_named_destination`] 共用一条通道，故校验、错误与版本
     /// 门完全一致（字典形态不需要更高版本）：名字空/含 NUL/非可打印 ASCII、
@@ -119,6 +126,39 @@ impl PdfBuilder {
             name.into(),
             destination,
             LegacyDestinationForm::Dict,
+        ));
+        self
+    }
+
+    /// 注册一个**旧式**命名目标的 **go-to 动作形态**条目（12.3.2.3，PDF 1.1），
+    /// 写出目录 `/Dests` 字典为 `<< /A << /S /GoTo /D <Table 151 目标数组> >> >>`
+    /// 语义结构（动作字典是排序 `BTreeMap`，故字节序上 `/D` 先于 `/S`，键序无
+    /// 语义影响）。
+    ///
+    /// 规范依据 NOTE 2（PDF32000_2008.pdf `pdftotext -raw` L20525–L20526）原文
+    /// 「The latter form allows additional attributes to be associated with the
+    /// destination, as well as **enabling a go-to action (see 12.6.4.2,
+    /// "Go-To Actions") that shall be used as the target of a named
+    /// destination**.」本方法写的正是这句授权的 go-to 动作目标；`/D` 恒为本库
+    /// 的显式目的地序列化成的 Table 151 数组（间接页号、坐标、`null` 值的处理
+    /// 与数组形态、`/D` 字典形态走**同一条** `destination_value` 装配路径）。
+    ///
+    /// 与前两个方法共用同一条旧式通道，故校验、重名与版本门完全一致：名字
+    /// 空/含 NUL/非可打印 ASCII、在本通道内重名——**含与数组/字典形态同名**
+    /// ——以及页码越界、非有限操作数均返回 [`WriteError::InvalidObject`]，低于
+    /// PDF 1.1 返回 [`WriteError::UnsupportedVersion`]，两类失败均零字节输出。
+    ///
+    /// 与名称树通道（[`Self::named_destination`]）同名共存不判重名，读端按
+    /// 名称树优先解析。
+    pub fn legacy_named_destination_go_to(
+        &mut self,
+        name: impl Into<String>,
+        destination: Destination,
+    ) -> &mut Self {
+        self.navigation.legacy_named_destinations.push((
+            name.into(),
+            destination,
+            LegacyDestinationForm::Action,
         ));
         self
     }
@@ -142,9 +182,10 @@ pub(in crate::core::builder) fn name_tree(entries: Vec<(String, Value)>) -> Valu
 /// 字符串，**不**走名称树的 `text_string_value` 编码路径。键按名字字节序
 /// 升序（`Dict` 底层是 `BTreeMap<String, _>`，插入前再显式排序一次）。
 ///
-/// 值按条目的 [`LegacyDestinationForm`] 分两形态：数组形态复用
+/// 值按条目的 [`LegacyDestinationForm`] 分三形态：数组形态复用
 /// [`destination_value`]（与名称树通道共享同一套 Table 151 装配），字典形态
-/// 把同一个数组包进 `<< /D … >>`。两种形态混排进同一个字典、按同一套键序
+/// 把同一个数组包进 `<< /D … >>`，go-to 动作形态再套一层
+/// `<< /A << /S /GoTo /D … >> >>`。三形态混排进同一个字典、按同一套键序
 /// 写出，因此重名校验也必须跨形态做一次（见 `validate::legacy_named_destinations`）。
 pub(in crate::core::builder) fn legacy_dests_dict(
     entries: &[LegacyDestinationEntry],
@@ -158,6 +199,16 @@ pub(in crate::core::builder) fn legacy_dests_dict(
         let value = match form {
             LegacyDestinationForm::Array => array,
             LegacyDestinationForm::Dict => Value::Dict(Dict::new().insert("D", array)),
+            LegacyDestinationForm::Action => Value::Dict(
+                Dict::new().insert(
+                    "A",
+                    Value::Dict(
+                        Dict::new()
+                            .insert("S", Value::Name("GoTo".into()))
+                            .insert("D", array),
+                    ),
+                ),
+            ),
         };
         dict = dict.insert(name.clone(), value);
     }

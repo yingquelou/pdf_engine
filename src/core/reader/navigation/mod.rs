@@ -152,7 +152,7 @@ impl Document {
     ///
     /// 先查 `/Names /Dests` 名称树（PDF 1.2+），再查目录旧式 `/Dests`
     /// 字典（PDF 1.1）；名称不存在返回 `None`。两条通道的条目值都可为
-    /// Table 151 数组或含 `/D` 数组的字典（见
+    /// Table 151 数组，或含 `/D` 数组、或含 `/A` go-to 动作的字典（见
     /// `destination::parse_named_destination`）。
     ///
     /// 通道**共存是规范允许的**，不是重名错误：12.3.2.3 NOTE 3

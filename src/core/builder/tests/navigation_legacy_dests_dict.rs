@@ -393,3 +393,138 @@ fn legacy_named_dests_dict_yields_to_the_name_tree_channel_when_reparsed() {
     assert!(dests.get("legacy-only").is_some(), "{dests:?}");
     assert!(dests.get("shared").is_some(), "{dests:?}");
 }
+
+// ---- go-to 动作形态（12.3.2.3 NOTE 2）：写出、往返、跨形态校验、版本门 ----
+
+/// `/Dests` 字典条目是否为 `<< /A << /S /GoTo /D … >> >>` go-to 动作形态。
+fn go_to_builder_with_forms() -> PdfBuilder {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    b.page(PageSize::A4);
+    b.page(PageSize::A4);
+    // 三种形态混排进同一个间接 `/Dests` 字典（'a' < 'b' < 'c'）。
+    b.legacy_named_destination("alpha", Destination::Fit { page: 0 });
+    b.legacy_named_destination_dict(
+        "beta",
+        Destination::Xyz {
+            page: 1,
+            left: Some(5.0),
+            top: None,
+            zoom: Some(3.0),
+        },
+    );
+    b.legacy_named_destination_go_to("gamma", Destination::FitB { page: 1 });
+    b
+}
+
+#[test]
+fn legacy_named_destination_go_to_writes_action_dict_in_indirect_dests() {
+    let mut b = go_to_builder_with_forms();
+    let s = render(&mut b);
+
+    // Table 28：go-to 形态不改变通道载体，目录条目仍是间接引用。
+    assert!(dests_entry_is_reference(&s), "{s}");
+    let num = catalog_dests_object_number(&s);
+    let dests = indirect_object(&s, &num);
+
+    // 外层 `<< /A << … >> >>`，内层动作字典是排序 `BTreeMap`，故 `/D` 先于
+    // `/S`；`/D` 数组的页面引用与另两形态走同一条装配路径（第 2 页是 5 号对象）。
+    assert!(
+        dests.contains("/gamma << /A << /D [5 0 R /FitB] /S /GoTo >> >>"),
+        "{dests}"
+    );
+    // 同字典里数组形态与 `/D` 字典形态原样共存，互不干扰。
+    assert!(dests.contains("/alpha [3 0 R /Fit]"), "{dests}");
+    assert!(
+        dests.contains("/beta << /D [5 0 R /XYZ 5.0 null 3.0] >>"),
+        "{dests}"
+    );
+}
+
+#[test]
+fn legacy_named_dests_go_to_roundtrips_both_forms_through_the_parser() {
+    // 实际跑过的写出→重解析往返：go-to 形态条目经 reader 的 `/A` 分支解析后，
+    // `Document::named_destination` 返回值与写入时完全一致。
+    let mut b = go_to_builder_with_forms();
+    let doc = build_and_parse(&mut b);
+
+    assert_eq!(
+        doc.named_destination("gamma").unwrap(),
+        Some(Destination::FitB { page: 1 })
+    );
+    // 与数组形态、`/D` 字典形态同处一个 `/Dests` 字典，三形态各自解析正确。
+    assert_eq!(
+        doc.named_destination("alpha").unwrap(),
+        Some(Destination::Fit { page: 0 })
+    );
+    assert_eq!(
+        doc.named_destination("beta").unwrap(),
+        Some(Destination::Xyz {
+            page: 1,
+            left: Some(5.0),
+            top: None,
+            zoom: Some(3.0),
+        })
+    );
+    assert_eq!(doc.named_destination("absent").unwrap(), None);
+}
+
+#[test]
+fn legacy_named_destination_go_to_shares_name_validation_and_duplicate_rejection() {
+    // 与数组/字典形态跨形态重名 → InvalidObject 零字节（共用同一套校验）。
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.legacy_named_destination("dup", Destination::Fit { page: 0 });
+    b.legacy_named_destination_go_to("dup", Destination::FitB { page: 0 });
+    let (error, len) = build_error(&mut b);
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert_eq!(len, 0);
+
+    // 两个 go-to 形态同名。
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.legacy_named_destination_go_to("dup", Destination::Fit { page: 0 });
+    b.legacy_named_destination_go_to("dup", Destination::FitB { page: 0 });
+    let (error, len) = build_error(&mut b);
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert_eq!(len, 0);
+
+    // 非法名字（非可打印 ASCII）与越界页码同样零字节拒绝。
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.legacy_named_destination_go_to("附录", Destination::Fit { page: 0 });
+    let (error, len) = build_error(&mut b);
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert_eq!(len, 0);
+
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.legacy_named_destination_go_to("bad", Destination::Fit { page: 1 });
+    let (error, len) = build_error(&mut b);
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert_eq!(len, 0);
+}
+
+#[test]
+fn legacy_named_destination_go_to_uses_the_same_pdf_1_1_gate() {
+    // go-to 形态仍属 PDF 1.1 通道：低于 1.1 拒绝、1.1 即可写出（无新门）。
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_0);
+    b.page(PageSize::A4);
+    b.legacy_named_destination_go_to("intro", Destination::Fit { page: 0 });
+    let (error, len) = build_error(&mut b);
+    assert!(
+        matches!(error, WriteError::UnsupportedVersion(_)),
+        "{error}"
+    );
+    assert_eq!(len, 0);
+
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_1);
+    b.page(PageSize::A4);
+    b.legacy_named_destination_go_to("intro", Destination::Fit { page: 0 });
+    let mut out = Vec::new();
+    b.build(&mut out).expect("PDF 1.1 go-to form should build");
+    let s = String::from_utf8_lossy(&out).into_owned();
+    assert!(
+        s.contains("/intro << /A << /D [3 0 R /Fit] /S /GoTo >> >>"),
+        "{s}"
+    );
+}

@@ -2,7 +2,20 @@
 
 use crate::core::types::{Array, Document, Value};
 
-use super::{NavigationError, PageTreeIndex, malformed, name_tree::string_key, resolve};
+use super::{NavigationError, PageTreeIndex, catalog, malformed, name_tree::string_key, resolve};
+
+/// 命名目标经 `/A` go-to 动作间接引用（`/D` 为名称/文本串）时的最大跳数。
+///
+/// 与结构属性继承（`MAX_STRUCTURE_DEPTH`）同用 64 惯例：环检测已能拒掉
+/// 自环与互环，此上限是防御畸形文件里“互不相同但极长”的间接链导致的深递归。
+const MAX_NAMED_TARGET_HOPS: usize = 64;
+
+/// 命名目标间接引用的解析上下文：跳数上限 + 已见名称环检测。
+#[derive(Default)]
+struct TargetContext {
+    hops: usize,
+    seen: std::collections::BTreeSet<String>,
+}
 
 /// 本地显式目的地（12.3.2.2）。
 ///
@@ -59,7 +72,7 @@ impl Destination {
     }
 }
 
-/// 命名目标值 → 目的地；值可为目的地数组或含 `/D` 的字典。
+/// 命名目标值 → 目的地；值可为目的地数组或含 `/D`/`/A` 的字典。
 ///
 /// 两条命名目标通道共用本函数，取值形态由同一句规范授权（12.3.2.3，
 /// PDF32000_2008.pdf `pdftotext -raw` L20522–L20524）：「The value of this
@@ -67,7 +80,11 @@ impl Destination {
 /// corresponding value is either an array defining the destination, using the
 /// syntax shown in Table 151, or a dictionary with a D entry whose value is
 /// such an array.」紧随其后的 NOTE 2（L20525–L20526）说明字典形态用于附加
-/// 属性与 go-to 动作目标；本库只读 `/D`，其余条目不参与目的地解析。
+/// 属性与 go-to 动作目标，原文「The latter form allows additional attributes
+/// to be associated with the destination, as well as enabling a go-to action
+/// (…) that shall be used as the target of a named destination.」。因此字典
+/// 分支按此取值：有 `/D` 用 `/D`；无 `/D` 但有 `/A` 时按 go-to 动作解析其
+/// `/D`；字典里未知的额外键只做到不解析、不报错、原样保留。
 /// 1.2+ 名称树段落的「The destination value associated with a key in the name
 /// tree may be either an array or a dictionary, as described in the preceding
 /// paragraph.」（L20530–L20531）把同一套形态也给了名称树通道。
@@ -76,16 +93,133 @@ pub(crate) fn parse_named_destination(
     value: &Value,
     pages: &PageTreeIndex,
 ) -> Result<Destination, NavigationError> {
+    let mut context = TargetContext::default();
+    parse_named_destination_inner(document, value, pages, &mut context)
+}
+
+/// [`parse_named_destination`] 的递归内核，携带跳数/环检测上下文。
+fn parse_named_destination_inner(
+    document: &Document,
+    value: &Value,
+    pages: &PageTreeIndex,
+    context: &mut TargetContext,
+) -> Result<Destination, NavigationError> {
     let value = resolve(document, value)?;
     if let Value::Dict(dict) = &value {
-        // 字典形态：目的地在 `/D` 之下，缺 `/D` 即形态不合（上面那句
-        // 规定 `/D` 的值是 such an array，没有可选性）。
-        let dest = dict
-            .get("D")
-            .ok_or_else(|| malformed("named destination dictionary is missing /D"))?;
-        return parse_destination(document, dest, pages);
+        // `/D` 优先。规范对 `/D`、`/A` 并存未给 shall 排序，故此优先级属
+        // **库策略**：Table 151 句只保证 `/D` 形态，`/A` 仅由 informative 的
+        // NOTE 2 引入，取显式 `/D` 更贴近规范性那句。
+        if let Some(dest) = dict.get("D") {
+            return parse_destination(document, dest, pages);
+        }
+        // 无 `/D`：NOTE 2 授权 go-to 动作作为命名目标的载体。
+        if let Some(action) = dict.get("A") {
+            return parse_go_to_action_target(document, action, pages, context);
+        }
+        return Err(malformed(
+            "named destination dictionary is missing /D and /A",
+        ));
     }
     parse_destination(document, &value, pages)
+}
+
+/// 解析 `<< /A <动作> >>` 形态的目的地：只接受 `/S /GoTo`，取其 `/D`。
+///
+/// NOTE 2 只点名 go-to 动作，故其它 `/S` 返回 `Malformed`（**库策略**，
+/// 规范未对附加属性字典的 `/A`  subtype 作 shall）。`/D` 的数组形态复用
+/// [`parse_destination`]（Table 151），名称/文本串形态递归解析命名目标。
+fn parse_go_to_action_target(
+    document: &Document,
+    action: &Value,
+    pages: &PageTreeIndex,
+    context: &mut TargetContext,
+) -> Result<Destination, NavigationError> {
+    let action = resolve(document, action)?;
+    let dict = action
+        .as_dict()
+        .ok_or_else(|| malformed("named destination /A is not an action dictionary"))?;
+    let subtype = dict
+        .get("S")
+        .and_then(Value::as_name)
+        .ok_or_else(|| malformed("named destination /A action is missing a name /S"))?;
+    if subtype != "GoTo" {
+        return Err(malformed(format!(
+            "named destination /A action must be /GoTo, got /{subtype}"
+        )));
+    }
+    let target = dict
+        .get("D")
+        .ok_or_else(|| malformed("named destination /A GoTo action is missing /D"))?;
+    let target = resolve(document, target)?;
+    match &target {
+        Value::Array(_) => parse_destination(document, &target, pages),
+        Value::Name(_) | Value::String(_) | Value::HexString(_) => {
+            let name = go_to_target_name(&target)?;
+            follow_named_target(document, &name, pages, context)
+        }
+        _ => Err(malformed(
+            "named destination /A GoTo /D is neither a destination array nor a name",
+        )),
+    }
+}
+
+/// go-to 动作 `/D` 的名称形态目标名（名字对象或文本串）。
+fn go_to_target_name(value: &Value) -> Result<String, NavigationError> {
+    if let Value::Name(name) = value {
+        return Ok(name.clone());
+    }
+    string_key(value).ok_or_else(|| malformed("named destination /A GoTo /D string is malformed"))
+}
+
+/// 按名跳转解析一个命名目标：做环检测与跳数上限后递归进入条目值解析。
+fn follow_named_target(
+    document: &Document,
+    name: &str,
+    pages: &PageTreeIndex,
+    context: &mut TargetContext,
+) -> Result<Destination, NavigationError> {
+    if !context.seen.insert(name.to_owned()) {
+        return Err(malformed(format!(
+            "named destination go-to action references /{name} in a cycle"
+        )));
+    }
+    context.hops += 1;
+    if context.hops > MAX_NAMED_TARGET_HOPS {
+        return Err(malformed(format!(
+            "named destination go-to action chain exceeds {MAX_NAMED_TARGET_HOPS} hops"
+        )));
+    }
+    let entry = named_destination_entry(document, name)?
+        .ok_or_else(|| malformed(format!("named destination /{name} is not defined")))?;
+    parse_named_destination_inner(document, &entry, pages, context)
+}
+
+/// 按名在两条命名目标通道取值：先 `/Names /Dests` 名称树，再目录旧式
+/// `/Dests` 字典（键既接受名字对象也接受带转义的名字），与
+/// [`Document::named_destination`] 的优先级一致。
+fn named_destination_entry(
+    document: &Document,
+    name: &str,
+) -> Result<Option<Value>, NavigationError> {
+    if let Some(value) = document.name_tree("Dests")?.get(name) {
+        return Ok(Some(value.clone()));
+    }
+    let catalog = catalog(document)?;
+    let Some(dests) = catalog.get("Dests") else {
+        return Ok(None);
+    };
+    let dests = resolve(document, dests)?;
+    let dests = dests
+        .as_dict()
+        .ok_or_else(|| malformed("catalog /Dests is not a dictionary"))?;
+    if let Some(entry) = dests.get(name) {
+        return Ok(Some(entry.clone()));
+    }
+    Ok(dests
+        .0
+        .iter()
+        .find(|(key, _)| crate::core::reader::page_content::decode_name_escapes(key) == name)
+        .map(|(_, value)| value.clone()))
 }
 
 /// 解析本地显式目的地的目的地数组。
