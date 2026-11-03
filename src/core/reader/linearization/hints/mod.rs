@@ -1,4 +1,5 @@
-//! 附录 F.4 hint 表读端解码（已完整解析**页偏移**与**共享对象**两家）。
+//! 附录 F.4 hint 表读端解码（已完整解析**页偏移**、**共享对象**与**缩略图**
+//! 三家）。
 //!
 //! 消费上层已识别的 [`LinearizationInfo`]（Table F.1 `/H` 给出的 hint 流
 //! 范围由 [`HintStreams`]/[`HintRange`] 承载，本模块不重复定位，只做：
@@ -14,10 +15,13 @@
 //!   「shall be the first table in the stream and shall start at offset 0」
 //!   恒从流偏移 0 起读，页数取 Table F.1 `/N`；
 //! - [`shared`]：F.4.2 共享对象 hint 表（Table F.5 头部 + Table F.6 组
-//!   条目，两条序列、项交错序与 128 位 MD5 签名）。
+//!   条目，两条序列、项交错序与 128 位 MD5 签名）；
+//! - [`thumbnail`]：F.4.3 缩略图 hint 表（Table F.7 头部 12 项 + Table F.8
+//!   逐页条目 3 项，三列各自按页序）；本表由 Table F.2 键 `T` 定位，键
+//!   「Present only if thumbnail images exist」，**缺失是合法形态**，故不
+//!   因缺键给诊断。
 //!
-//! **未解析（诚实缺口）**：F.4 其余家族——thumbnail
-//! hint 表（F.4.3，Table F.7/F.8）、generic hint 表（F.4.4，Table F.9，
+//! **未解析（诚实缺口）**：F.4 其余家族——generic hint 表（F.4.4，Table F.9，
 //! outline/thread-information/named-destination/information-dictionary/
 //! page-label 共用）、extended generic hint 表（F.4.5，Table F.10，
 //! interactive form/logical structure/renditions name tree 共用）、
@@ -40,18 +44,20 @@ use super::issues::LinearizationIssue;
 pub mod bits;
 mod page_offset;
 mod shared;
+mod thumbnail;
 
 #[cfg(test)]
 mod tests;
 
 pub use page_offset::{PageOffsetEntry, PageOffsetHeader, PageOffsetHintTable};
 pub use shared::{SharedObjectGroupEntry, SharedObjectHeader, SharedObjectHintTable};
+pub use thumbnail::{ThumbnailEntry, ThumbnailHeader, ThumbnailHintTable};
 
 /// Table F.2 列出的标准 hint 表键（`S` 为 Required，其余按存在条件）。
 /// 注册键（Annex E）不在标准集合内，按未知键跳过、不报错。
 const STANDARD_HINT_KEYS: [(&str, &str); 11] = [
     ("S", "shared object hint table (F.4.2, Table F.5/F.6)"),
-    ("T", "thumbnail hint table (F.4.3)"),
+    ("T", "thumbnail hint table (F.4.3, Table F.7/F.8)"),
     ("O", "outline hint table (F.4.4 generic)"),
     ("A", "thread information hint table (F.4.4 generic)"),
     ("E", "named destination hint table (F.4.4 generic)"),
@@ -101,6 +107,10 @@ pub struct LinearizationHints {
     /// 已完整解析的共享对象 hint 表（F.4.2）；解析失败为 `None` 并在
     /// [`Self::issues`] 给出类型化诊断。
     pub shared_object: Option<SharedObjectHintTable>,
+    /// 已完整解析的缩略图 hint 表（F.4.3）；Table F.2 键 `T` 缺失（文档没有
+    /// 缩略图）是合法形态，此时为 `None` 且**不给诊断**；键在而解析失败亦为
+    /// `None`，并在 [`Self::issues`] 给出类型化诊断。
+    pub thumbnail: Option<ThumbnailHintTable>,
     /// hint 层一致性诊断；`LinearizationInfo::issues` 的文档结构诊断
     /// 不在此列（由 [`Document::linearization`] 报告）。
     pub issues: Vec<LinearizationIssue>,
@@ -137,11 +147,19 @@ impl LinearizationHints {
     pub fn page_offset_end_byte(&self) -> Option<u64> {
         self.page_offset.as_ref().map(PageOffsetHintTable::end_byte)
     }
+
+    /// F.4.3 缩略图 hint 表结束后的第一个字节（流内绝对位置，起点是 Table
+    /// F.2 键 `T` 的值）；本表未解析成功时 `None`。F.4 前言要求各表以字节边界
+    /// 开始且互不重叠，故其他键的位置落进 `[T, 本值)` 即自相矛盾。
+    pub fn thumbnail_end_byte(&self) -> Option<u64> {
+        self.thumbnail.as_ref().map(ThumbnailHintTable::end_byte)
+    }
 }
 
 impl Document {
-    /// 类型化解析附录 F.4 的 hint 表（读端；当前完整解析 F.4.1 页偏移表与
-    /// F.4.2 共享对象 hint 表，其余家族见模块头的诚实缺口）。
+    /// 类型化解析附录 F.4 的 hint 表（读端；当前完整解析 F.4.1 页偏移表、
+    /// F.4.2 共享对象 hint 表与 F.4.3 缩略图 hint 表，其余家族见模块头的诚实
+    /// 缺口）。
     ///
     /// 返回 `Ok(None)` 表示**无 hint 可解**：文档非线性化、缺 `/H`，或
     /// 主 hint 流对象完全不可读（此时不给诊断——[`Document::linearization`]
@@ -172,6 +190,7 @@ impl Document {
                     table_positions: Vec::new(),
                     page_offset: None,
                     shared_object: None,
+                    thumbnail: None,
                     issues,
                 });
             }
@@ -193,6 +212,10 @@ impl Document {
         // Table F.1 `/N`（缺失/非正/超出 `usize` 即跳过，结构层已就 `/N` 报告）。
         let page_offset =
             parse_page_offset(info.page_count, &data, &mut table_positions, &mut issues);
+        // F.4.3 缩略图表排在 F.4.2 之前：本表体的字节范围同样参与「表互不
+        // 重叠」的位置剔除，须在其余 Table F.2 键被用作解析起点之前完成。
+        let thumbnail = parse_thumbnail(&mut table_positions, &data, &mut issues);
+        check_thumbnail_semantics(thumbnail.as_ref(), &mut issues);
         // 键存在但形态不符时不再叠加「缺 S」诊断。
         let s_declared = dict.get("S").is_some();
         let shared_object = parse_shared(&table_positions, s_declared, &data, &mut issues);
@@ -204,6 +227,7 @@ impl Document {
             table_positions,
             page_offset,
             shared_object,
+            thumbnail,
             issues,
         })
     }
@@ -356,6 +380,83 @@ fn check_page_offset_semantics(
         issues.push(LinearizationIssue::PageOffsetFirstPageSharedRefs {
             count: entry.shared_reference_count,
         });
+    }
+}
+
+/// Table F.2 键 `T`：F.4.3 缩略图 hint 表。
+///
+/// 键「Present only if thumbnail images exist」（35324）是**条件存在**，缺失即
+/// 文档没有缩略图，属合法形态，不给诊断（与 Required 的 `S` 不同）；键存在但
+/// 形态不符的已由 [`table_positions`] 报 [`LinearizationIssue::HintTablePositionInvalid`]
+/// 并从位置表里剔除，这里不再叠加诊断。
+///
+/// 读出后仍要核对两条 shall：F.4.3「shall include one or more per-page entries
+/// (Table F.8)」（35693—35694）——头部项 3 声明 0 条即「`T` 声称有表、表里却
+/// 没有任何条目」，落 [`LinearizationIssue::ThumbnailHintTableMissing`]；位流
+/// 截断/非法位宽落 [`LinearizationIssue::ThumbnailTableCorrupt`]。
+fn parse_thumbnail(
+    positions: &mut Vec<HintTablePosition>,
+    data: &[u8],
+    issues: &mut Vec<LinearizationIssue>,
+) -> Option<ThumbnailHintTable> {
+    let entry = positions.iter().find(|entry| entry.key == "T")?;
+    let start = usize::try_from(entry.position).ok()?;
+    let table = match ThumbnailHintTable::parse(data, start) {
+        Ok(table) => table,
+        Err(problem) => {
+            issues.push(LinearizationIssue::ThumbnailTableCorrupt {
+                problem: problem.to_string(),
+            });
+            return None;
+        }
+    };
+    if table.entries.is_empty() {
+        issues.push(LinearizationIssue::ThumbnailHintTableMissing);
+    }
+    drop_positions_inside_thumbnail_table(&table, positions, issues);
+    Some(table)
+}
+
+/// F.4 前言：「each hint table shall begin at a byte boundary」（35482—35483）
+/// 且各表按 [`ThumbnailHintTable::bits_consumed`] 依次排布，互不重叠。落进
+/// 缩略图表体里的 Table F.2 位置自相矛盾（键 `T` 自身给的就是本表起点，不在
+/// 此列），剔除后对应表就没有可信的解析起点。
+fn drop_positions_inside_thumbnail_table(
+    table: &ThumbnailHintTable,
+    positions: &mut Vec<HintTablePosition>,
+    issues: &mut Vec<LinearizationIssue>,
+) {
+    let start = table.start_byte;
+    let end = table.end_byte();
+    let inside = positions
+        .iter()
+        .filter(|entry| entry.key != "T" && (start..end).contains(&entry.position))
+        .cloned()
+        .collect::<Vec<_>>();
+    for entry in inside {
+        issues.push(LinearizationIssue::HintTablePositionInvalid {
+            key: entry.key,
+            problem: format!(
+                "position {} lies inside the thumbnail hint table, which occupies bytes {start}..{end}",
+                entry.position
+            ),
+        });
+    }
+    positions.retain(|entry| entry.key == "T" || !(start..end).contains(&entry.position));
+}
+
+/// F.4.3 声明的表内 shall：Table F.7 位宽项的期望范围（0—32，由 Table F.3 的
+/// 35524—35525 按同一措辞类比外推，属**待核**，见 [`thumbnail`] 模块头）。
+///
+/// 越界的声明值一律保留在 [`ThumbnailHintTable`] 里、表也按声明值读取完毕，
+/// 这里只做类型化报告；不猜默认值、不设版本门。
+fn check_thumbnail_semantics(
+    table: Option<&ThumbnailHintTable>,
+    issues: &mut Vec<LinearizationIssue>,
+) {
+    let Some(table) = table else { return };
+    for (item, bits) in table.width_problems() {
+        issues.push(LinearizationIssue::ThumbnailWidthOutOfRange { item, bits });
     }
 }
 

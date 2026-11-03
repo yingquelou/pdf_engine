@@ -106,6 +106,19 @@ pub enum LinearizationIssue {
     /// Table F.4 项 3：「For the first page, this number shall be 0; the next
     /// two items start with the second page」——首页声明了共享对象引用数。
     PageOffsetFirstPageSharedRefs { count: u64 },
+    /// Table F.2 键 `T` + F.4.3：字典用 `T` 声称有缩略图 hint 表，但 Table F.7
+    /// 项 3「The number of pages that have thumbnail images」声明 0，与「the
+    /// thumbnails section … shall include one or more per-page entries
+    /// (Table F.8)」矛盾——条目整段缺失。
+    ThumbnailHintTableMissing,
+    /// F.4.3：缩略图 hint 表（Table F.7/F.8）位流损坏——截断、起点超出流长，
+    /// 或声明位宽超过 64 位原语上限。本表由 Table F.2 键 `T` 定位，故不像
+    /// 页偏移表那样恒在偏移 0。
+    ThumbnailTableCorrupt { problem: String },
+    /// F.4.3：Table F.7 声明「number of bits needed」的项（项 4/6/8）越出期望
+    /// 范围 0—32。该范围的原文只写在 Table F.3 名下（**待核**类比外推，见
+    /// `hints::thumbnail` 模块头）；声明值一律保留，表也按声明值读取。
+    ThumbnailWidthOutOfRange { item: &'static str, bits: u64 },
 }
 
 impl fmt::Display for LinearizationIssue {
@@ -276,6 +289,18 @@ impl fmt::Display for LinearizationIssue {
             Self::PageOffsetFirstPageSharedRefs { count } => write!(
                 f,
                 "Table F.4 item 3: for the first page the number of shared objects referenced shall be 0 (the next two items start with the second page), found {count}"
+            ),
+            Self::ThumbnailHintTableMissing => write!(
+                f,
+                "F.4.3: the primary hint stream dictionary declares the thumbnail hint table under key T, but Table F.7 item 3 declares 0 pages that have thumbnail images although the thumbnails section shall include one or more per-page entries (Table F.8)"
+            ),
+            Self::ThumbnailTableCorrupt { problem } => write!(
+                f,
+                "F.4.3 (Table F.7/F.8): the thumbnail hint table is corrupt: {problem}"
+            ),
+            Self::ThumbnailWidthOutOfRange { item, bits } => write!(
+                f,
+                "F.4.3: the bit width declared by Table F.7 {item} is expected to be in the range 0 through 32 (the wording of F.4.1 for Table F.3, applied by analogy), found {bits}; the raw value is kept and the table is read as declared"
             ),
         }
     }

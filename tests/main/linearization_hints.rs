@@ -17,6 +17,10 @@ use pdf_engine::core::reader::linearization::hints::SharedObjectHintTable;
 
 use super::*;
 
+/// F.4.3 缩略图 hint 表的集成用例（同目录子模块，复用本文件的位写手与装配器；
+/// 本文件已逼近 600 行/25600 字节的上限，故新家族独立成文件）。
+mod thumbnail;
+
 /// 第二组对象号（F.3.1：其余对象自 1 起顺序编号）。
 const PAGES: i64 = 1;
 const PAGE2: i64 = 2;

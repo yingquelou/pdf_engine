@@ -44,8 +44,10 @@
 
 use super::bits::{BitReader, HintBitError};
 
-/// 原文允许声明的最大位宽（35524—35525 的 0—32）。
-const MAX_DECLARED_WIDTH: u32 = 32;
+/// Table F.3 里声明「number of bits needed」的项在原文允许的最大位宽
+/// （35524—35525 的 0—32）。该句字面只约束 Table F.3；[`super::thumbnail`] 按
+/// 同一措辞与同一 16 位存储约定**类比**沿用本上限，越界只报告不猜默认值。
+pub(super) const MAX_DECLARED_WIDTH: u32 = 32;
 
 /// 不可信计数在「该项不占位、位流里没有任何页数/引用数证据」时的分配上限。
 ///
@@ -53,8 +55,9 @@ const MAX_DECLARED_WIDTH: u32 = 32;
 /// 对应条目不消费任何位，位预算无法再为声明的条数背书（`/N` 与项 3 都来自
 /// 不可信输入），故按本上限拒绝超出者——属库策略而非规范条款（**待核**：原文
 /// 只规定页数取 `/N`、引用数取 Table F.4 项 3，未给上限）。上限之下的文档
-/// （6.5 万页）按类型化错误处理，绝不无限分配或死循环。
-const MAX_UNEVIDENCED_ITEMS: u64 = 65_536;
+/// （6.5 万页）按类型化错误处理，绝不无限分配或死循环。Table F.7 项 3 的
+/// 条目数同样在三项位宽全为 0 时复用本上限（见 [`super::thumbnail`]）。
+pub(super) const MAX_UNEVIDENCED_ITEMS: u64 = 65_536;
 
 /// Table F.3：页偏移 hint 表头部（13 项，定宽）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,8 +298,9 @@ impl PageOffsetHintTable {
     }
 }
 
-/// Table F.3 位宽项：16 位原值最大 65535，转 `u32` 无信息损失。
-fn width(raw: u64) -> u32 {
+/// Table F.3 位宽项：16 位原值最大 65535，转 `u32` 无信息损失。同样形态的
+/// 16 位「number of bits needed」字段（Table F.7 项 4/6/8）复用本函数。
+pub(super) fn width(raw: u64) -> u32 {
     raw.min(u32::MAX as u64) as u32
 }
 
@@ -326,7 +330,14 @@ fn fits_shared(header: &PageOffsetHeader, total: u64, remaining_bits: u64) -> bo
 }
 
 /// 读取一列 `count` 个 `bits` 位宽的值（F.4.1 交错序里的一列）。
-fn column(reader: &mut BitReader<'_>, count: usize, bits: u32) -> Result<Vec<u64>, HintBitError> {
+///
+/// F.4.3 的 Table F.8 三列同形（「Item 1 for all pages, in page order」
+/// 35740—35743），故 [`super::thumbnail`] 复用本原语。
+pub(super) fn column(
+    reader: &mut BitReader<'_>,
+    count: usize,
+    bits: u32,
+) -> Result<Vec<u64>, HintBitError> {
     let mut values = Vec::with_capacity(count);
     for _ in 0..count {
         values.push(reader.unsigned(bits)?);
