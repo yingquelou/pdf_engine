@@ -39,7 +39,7 @@ pub use embedded_program::{EmbeddedFontProgram, FontProgramSource};
 pub use encoding::{EncodingMapping, PredefinedEncoding, SimpleFontEncoding, strip_subset_tag};
 pub use mmtype1::MultipleMasterFont;
 pub(crate) use simple::SimpleFontToUnicode;
-pub use simple::Type1Font;
+pub use simple::{SimpleFontWidths, Type1Font};
 pub use truetype::{
     CmapFormat, GlyphPoint, SfntFlavor, TrueTypeFont, TrueTypeGlyph, subset_truetype,
     subset_truetype_with_mapping,
@@ -116,3 +116,5 @@ fn number(value: &Value) -> Option<f64> {
 mod tests;
 #[cfg(test)]
 mod tests_mmtype1;
+#[cfg(test)]
+mod tests_simple_widths;

@@ -18,6 +18,9 @@
 //!   `/FontFile3 /Type1C`。故本模块复用 Type 1 程序解析路径。
 //! - Table 121 要求 Type 0 的 `/DescendantFonts` 指向 CIDFont 字典，MMType1
 //!   不是合法的 composite descendant，因此 composite `/FD` 路径不识别 MMType1。
+//! - 因为条目与 Table 111 同构，`Document::simple_font_widths` 在 `/Type1`
+//!   未命中时转调 [`Document::mmtype1_font`]，`reader/text` 的 `Tf` 解析据此
+//!   取到 MM 实例的 `/Widths`（与 `/Encoding`、`/ToUnicode` 一致可用）。
 //!
 //! 写端（把 MM 实例字典写出 PDF）不在本增量范围内。
 
@@ -81,6 +84,8 @@ impl MultipleMasterFont {
     ///
     /// 与 [`super::Type1Font::width_for`] 一致：`code` 小于 `/FirstChar` 或超出
     /// 数组长度都视为「不在宽度数组内」，回退 `/MissingWidth`。
+    ///
+    /// 文本提取的 `Tf` 宽度查找经 [`Document::simple_font_widths`] 走到这里。
     pub fn width_for(&self, code: u8) -> Option<f64> {
         if let Some(index) = usize::from(code).checked_sub(usize::from(self.first_char))
             && let Some(width) = self.widths.get(index)

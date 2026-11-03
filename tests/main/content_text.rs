@@ -338,3 +338,130 @@ fn builder_form_roundtrip_restores_text_matrix_across_save_restore() {
         "往返后文本仍可提取: {text:?}"
     );
 }
+
+/// 9.6.2.3 往返：写出的 MMType1 实例字典重新解析后，页面文本仍按 `/Encoding`
+/// 提取、片段起点仍由 `Tm`/`Td` 决定（位置模型不因宽度改变），且 `Tf` 用的
+/// 同一条简单字体宽度入口能取到该实例的 `/Widths` 与 `/MissingWidth` 回退。
+#[test]
+fn writer_parser_roundtrip_extracts_mmtype1_text_and_resolves_its_widths() {
+    use pdf_engine::core::reader::font::SimpleFontWidths;
+
+    let mut widths = Array::new();
+    for code in 65..=69 {
+        widths = widths.push(Value::Integer(100 + code));
+    }
+
+    let mut doc = Document::new();
+    doc.set_object(Object::new(
+        1,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Catalog".into()))
+                .insert("Pages", Value::Ref(2, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        2,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Pages".into()))
+                .insert("Kids", Value::Array(Array::new().push(Value::Ref(3, 0))))
+                .insert("Count", Value::Integer(1)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        3,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Page".into()))
+                .insert("Parent", Value::Ref(2, 0))
+                .insert("Contents", Value::Ref(4, 0))
+                .insert(
+                    "Resources",
+                    Value::Dict(Dict::new().insert(
+                        "Font",
+                        Value::Dict(Dict::new().insert("F1", Value::Ref(5, 0))),
+                    )),
+                ),
+        ),
+    ));
+    doc.set_object(Object::new(
+        4,
+        0,
+        Value::Stream(
+            Dict::new(),
+            StreamData::Owned(
+                b"BT /F1 12 Tf 1 0 0 1 72 700 Tm (AB) Tj 0 -20 Td (C) Tj ET".to_vec(),
+            ),
+        ),
+    ));
+    // MM 实例字典：`/BaseFont` 以下划线代替实例名中的空格，条目与 Table 111 同构。
+    doc.set_object(Object::new(
+        5,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("Font".into()))
+                .insert("Subtype", Value::Name("MMType1".into()))
+                .insert("BaseFont", Value::Name("MinionMM_366_465_11_".into()))
+                .insert("Encoding", Value::Name("WinAnsiEncoding".into()))
+                .insert("FirstChar", Value::Integer(65))
+                .insert("LastChar", Value::Integer(69))
+                .insert("Widths", Value::Array(widths))
+                .insert("FontDescriptor", Value::Ref(6, 0)),
+        ),
+    ));
+    doc.set_object(Object::new(
+        6,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", Value::Name("FontDescriptor".into()))
+                .insert("FontName", Value::Name("MinionMM_366_465_11_".into()))
+                .insert("MissingWidth", Value::Integer(500)),
+        ),
+    ));
+    doc.trailer = Trailer {
+        dict: Dict::new()
+            .insert("Root", Value::Ref(1, 0))
+            .insert("Size", Value::Integer(7)),
+    };
+
+    let mut buf = Vec::new();
+    core::writer::write_document(&doc, &mut buf).expect("写出 MMType1 页面");
+    let reparsed = parse_buf(&buf);
+
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("AB\nC"));
+    assert_eq!(
+        positioned(&reparsed),
+        vec![
+            ("AB".to_owned(), 72.0, 700.0),
+            ("C".to_owned(), 72.0, 680.0)
+        ],
+        "MM 字体的片段起点仍只由文本矩阵决定"
+    );
+
+    let font = Value::Ref(5, 0);
+    let resolved = reparsed
+        .simple_font_widths(&font)
+        .expect("MMType1 宽度解析")
+        .expect("MMType1 实例字典");
+    assert!(
+        matches!(resolved, SimpleFontWidths::MultipleMaster(_)),
+        "MM 字典应落在 MultipleMaster 分支: {resolved:?}"
+    );
+    assert_eq!(resolved.base_font(), "MinionMM_366_465_11_");
+    assert_eq!(resolved.width_for(65), Some(165.0));
+    assert_eq!(resolved.width_for(69), Some(169.0));
+    // Table 111：`/FirstChar`..`/LastChar` 之外的字符码取 /MissingWidth。
+    assert_eq!(resolved.width_for(20), Some(500.0));
+
+    assert_eq!(
+        reparsed.type1_font(&font).unwrap(),
+        None,
+        "Type 1 入口不认领 MMType1 字典"
+    );
+}

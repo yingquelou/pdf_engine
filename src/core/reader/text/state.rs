@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::core::reader::content::parse_dictionary_inner;
 use crate::core::types::Dict;
 
-use super::super::font::{SimpleFontEncoding, SimpleFontToUnicode, Type0Font, Type1Font};
+use super::super::font::{SimpleFontEncoding, SimpleFontToUnicode, SimpleFontWidths, Type0Font};
 use super::MAX_STATE_DEPTH;
 use super::matrix::Matrix;
 use super::tokenizer::CsToken;
@@ -52,8 +52,13 @@ pub(super) fn token_to_operand(token: &CsToken) -> Option<Operand> {
 pub(super) enum FontHandle {
     Type0(Type0Font),
     Simple {
-        #[allow(dead_code)]
-        font: Option<Type1Font>,
+        /// `/Widths` metrics of the Table 111 subtypes — `/Type1` and, per
+        /// 9.6.2.3, `/MMType1` — as resolved by the `Tf` font lookup.
+        ///
+        /// Read through [`TextState::font_width`]; the decoder itself does not
+        /// consume it (see [`TextFragment`] for why runs are not advanced
+        /// glyph-by-glyph).
+        font: Option<SimpleFontWidths>,
         encoding: Option<SimpleFontEncoding>,
         builtin: Option<Vec<Option<char>>>,
         to_unicode: Option<SimpleFontToUnicode>,
@@ -176,6 +181,26 @@ impl TextState {
         self.font_size = size;
         if self.fonts.contains_key(name) {
             self.font_name = Some(name.to_owned());
+        }
+    }
+
+    /// Advance width of one character code in a page font resource, as
+    /// resolved by the `Tf` lookup ([`super::fonts::resolve_fonts`]).
+    ///
+    /// Only the Table 111 subtypes carry this model: `/Type1` and `/MMType1`
+    /// (9.6.2.3). `/TrueType`, `/Type3` and composite fonts report `None`
+    /// because their advances come from the embedded program or the CID `/W`
+    /// array instead, and an unknown resource name reports `None` as well.
+    ///
+    /// The decoder never calls this: shown strings are not advanced
+    /// glyph-by-glyph, so every run on a line keeps one origin (see
+    /// [`TextFragment`]). It is the width entry point for consumers that lay
+    /// the extracted text out.
+    #[allow(dead_code)]
+    pub(super) fn font_width(&self, name: &str, code: u8) -> Option<f64> {
+        match self.fonts.get(name)? {
+            FontHandle::Type0(_) => None,
+            FontHandle::Simple { font, .. } => font.as_ref()?.width_for(code),
         }
     }
 

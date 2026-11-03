@@ -21,7 +21,10 @@ pub(super) fn resolve_fonts(resources: &Dict, document: &Document, state: &mut T
         if let Ok(Some(type0)) = document.type0_font(&font_val) {
             state.fonts.insert(name.clone(), FontHandle::Type0(type0));
         } else {
-            let font = document.type1_font(&font_val).ok().flatten();
+            // Table 111 layout (`/Type1` plus the `/MMType1` instances of
+            // 9.6.2.3) is the simple-font width lane; other subtypes report
+            // `None` here and keep the encoding-only handle below.
+            let font = document.simple_font_widths(&font_val).ok().flatten();
             let encoding = document.simple_font_encoding(&font_val).ok().flatten();
             let builtin = true_type_builtin_encoding(document, &font_val);
             let to_unicode = document.simple_font_to_unicode(&font_val);

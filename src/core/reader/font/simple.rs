@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use crate::core::types::{Array, Dict, Document, Value};
 
 use super::{
-    FontDescriptorMetrics, FontError, FontResult, PredefinedEncoding, SimpleFontEncoding,
-    cid_cmap::ToUnicodeMap, default_encoding, number, parse_descriptor, predefined_encoding,
-    standard14_metrics,
+    FontDescriptorMetrics, FontError, FontResult, MultipleMasterFont, PredefinedEncoding,
+    SimpleFontEncoding, cid_cmap::ToUnicodeMap, default_encoding, number, parse_descriptor,
+    predefined_encoding, standard14_metrics,
 };
 
 /// Resolved metrics from a simple Type 1 font dictionary.
@@ -37,6 +37,49 @@ impl Type1Font {
             .as_ref()
             .and_then(|descriptor| descriptor.missing_width)
             .or_else(|| standard14_width(&self.base_font, code))
+    }
+}
+
+/// Glyph advance widths of a simple font that uses the Type 1 dictionary
+/// layout (Table 111).
+///
+/// ISO 32000-1 §9.6.2.3 states that a Multiple Master instance dictionary
+/// "may contain the same entries as a Type 1 font dictionary (see Table 111)",
+/// so `/MMType1` shares this width lane with `/Type1`; the two are kept as
+/// separate variants because their validation differs — the standard 14
+/// exemption of §9.6.2.2 covers `/Type1` names only, so an MMType1 dictionary
+/// without `/Widths` is an error rather than a fallback to built-in metrics.
+///
+/// `/TrueType`, `/Type3` and composite fonts have their own metric models and
+/// are not represented here.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SimpleFontWidths {
+    /// `/Subtype /Type1` metrics, exactly as [`Document::type1_font`] returns them.
+    Type1(Type1Font),
+    /// `/Subtype /MMType1` instance metrics, exactly as
+    /// [`Document::mmtype1_font`] returns them.
+    MultipleMaster(MultipleMasterFont),
+}
+
+impl SimpleFontWidths {
+    /// Return the glyph width for a one-byte character code when available.
+    ///
+    /// Each variant defers to its own model, so the out-of-range fallbacks stay
+    /// subtype-specific: `/MissingWidth` then the standard 14 tables for
+    /// [`Self::Type1`], `/MissingWidth` only for [`Self::MultipleMaster`].
+    pub fn width_for(&self, code: u8) -> Option<f64> {
+        match self {
+            Self::Type1(font) => font.width_for(code),
+            Self::MultipleMaster(font) => font.width_for(code),
+        }
+    }
+
+    /// Font dictionary `/BaseFont` of the underlying font.
+    pub fn base_font(&self) -> &str {
+        match self {
+            Self::Type1(font) => &font.base_font,
+            Self::MultipleMaster(font) => &font.base_font,
+        }
     }
 }
 
@@ -119,6 +162,23 @@ impl Document {
             widths,
             descriptor,
         }))
+    }
+
+    /// Resolve the `/Widths` metrics of a simple font that shares the Type 1
+    /// dictionary layout: `/Type1` and `/MMType1` (PDF 32000-1 §9.6.2.3).
+    ///
+    /// This is the width sibling of [`Document::simple_font_encoding`]. A
+    /// `/Type1` dictionary is resolved by [`Document::type1_font`] and returned
+    /// unchanged; only when that lane reports no Type 1 font is
+    /// [`Document::mmtype1_font`] consulted. `/TrueType`, `/Type3`, composite
+    /// and non-dictionary values therefore keep the previous result of the
+    /// Type 1 lane, errors included.
+    pub fn simple_font_widths(&self, value: &Value) -> FontResult<Option<SimpleFontWidths>> {
+        if let Some(font) = self.type1_font(value)? {
+            return Ok(Some(SimpleFontWidths::Type1(font)));
+        }
+        self.mmtype1_font(value)
+            .map(|font| font.map(SimpleFontWidths::MultipleMaster))
     }
 
     /// Resolve a simple font's predefined `/Encoding` and `/Differences`.
