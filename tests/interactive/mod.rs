@@ -29,6 +29,7 @@ mod action_goto3d;
 mod action_gotoe;
 mod action_ocg;
 mod action_thread;
+mod alt_text_sources;
 mod alternate_presentation;
 mod annotation;
 mod annotation_appearance;

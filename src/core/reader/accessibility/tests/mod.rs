@@ -15,6 +15,7 @@
 //!
 //! 断言、夹具与注释自原单文件逐行搬运，测试叶名零改动。
 
+mod alt_sources;
 mod artifact_properties;
 mod document_language;
 mod language_identifier;

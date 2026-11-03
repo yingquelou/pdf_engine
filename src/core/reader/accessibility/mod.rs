@@ -34,11 +34,22 @@
 //! （[`Document::page_marked_content_word_breaks`]）；[`description_source`]
 //! 按 14.9.3 与 12.5.6.2 给出注解 `/Contents` 的来源优先级
 //! （[`Annotation::alternate_description`]）。
+//!
+//! [`alt_sources`] 与 [`alt_sources_carriers`] 在此之上做 14.9.3 的**来源
+//! 解析**：把一个载体（标记内容区段、注解、字段、media clip）的多路候选
+//! （结构元素/Span 的 `/Alt` 与 `/ActualText`、注解 `/Contents`、字段
+//! `/TU`、media clip `/Alt`）一起解出「生效文本 + 出处
+//! [`AlternativeTextSource`] + 生效语言」，`/ActualText`（14.9.4 替换）与
+//! `/Alt`（14.9.3 描述）分列两个槽位不混同；空串/纯空白/形态非法的候选
+//! 降级为 [`AlternativeTextProblem`] 而非胜出（[`Document::page_marked_content_alternatives`]、
+//! [`Annotation::resolved_alternative_text`]、[`Field::resolved_alternative_text`]）。
 
 use std::collections::BTreeSet;
 
 use crate::core::types::Document;
 
+mod alt_sources;
+mod alt_sources_carriers;
 mod annotation_ordering;
 #[cfg(test)]
 mod annotation_ordering_tests;
@@ -68,6 +79,11 @@ mod word_break;
 #[cfg(test)]
 mod word_break_tests;
 
+pub use alt_sources::{
+    AlternativeCandidate, AlternativeTextProblem, AlternativeTextRole, AlternativeTextSource,
+    AlternativesResolution, ResolvedAlternative, resolve_alternatives,
+};
+pub use alt_sources_carriers::media_clip_alternatives;
 pub use annotation_ordering::{
     AnnotationOrderBasis, AnnotationOrderingError, AnnotationPosition, ContentOrderItem,
     MarkedContentPosition,
