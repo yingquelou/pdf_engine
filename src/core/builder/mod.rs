@@ -48,6 +48,9 @@ pub(crate) use types::OpenTypeFlavor;
 pub(crate) use types::Pattern;
 pub(crate) use types::SeparationGroup;
 pub(crate) use types::mesh_component_ranges;
+pub use types::requirements::{
+    DocumentRequirement, DocumentRequirementType, RequirementHandler, RequirementHandlerType,
+};
 pub use types::{
     AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,

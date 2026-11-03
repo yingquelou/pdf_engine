@@ -48,6 +48,7 @@ mod annotation_watermark;
 mod articles;
 mod character_properties;
 mod collection;
+mod doc_requirements_write;
 mod embedded;
 mod extensions;
 mod form;

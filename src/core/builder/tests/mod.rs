@@ -156,6 +156,7 @@ mod page_presentation;
 mod pattern;
 mod render;
 mod rendition;
+mod requirements;
 mod reversed_chars;
 mod separation;
 mod shading;

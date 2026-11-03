@@ -30,6 +30,7 @@ use super::types::ActionRefs;
 use super::types::PageSize;
 use super::types::StructureMarkInfo;
 use super::types::StructureTree;
+use super::types::requirements::DocumentRequirement;
 use outline::{OutlineContext, outline_has_actions, write_outline};
 use pages::{catalog_dict, page_labels_dict, page_refs};
 use structure::StructureTargets;
@@ -42,6 +43,7 @@ mod fdf;
 mod names;
 mod outline;
 mod pages;
+pub(in crate::core::builder) mod requirements;
 pub(in crate::core::builder) mod structure;
 pub(super) mod structure_content;
 mod structure_layout;
@@ -80,6 +82,8 @@ pub(crate) struct NavigationState {
     collection: Option<Collection>,
     /// 扩展字典条目（7.12 `/Extensions`）：前缀 + BaseVersion + ExtensionLevel。
     extensions: Vec<extensions::RegisteredExtension>,
+    /// 文档需求条目（12.10 目录 `/Requirements`）；空时不写出。
+    document_requirements: Vec<DocumentRequirement>,
     /// 逻辑结构树（14.7.2）；None 时目录不写 `/StructTreeRoot`。
     structure_tree: Option<StructureTree>,
     /// 目录 `/MarkInfo`（14.7.1 Table 321）；None 时不写出。
@@ -241,6 +245,11 @@ pub(super) fn apply(
             "extensions dictionaries (catalog /Extensions)",
         ),
         (
+            !navigation.document_requirements.is_empty(),
+            requirements::MINIMUM_VERSION,
+            "document requirements (catalog /Requirements, 12.10.1)",
+        ),
+        (
             navigation.structure_tree.is_some(),
             PdfVersion::V1_3,
             "structure trees",
@@ -274,6 +283,9 @@ pub(super) fn apply(
         collection::validate(collection)?;
     }
     extensions::validate(&navigation.extensions, version)?;
+    if !navigation.document_requirements.is_empty() {
+        requirements::validate(&navigation.document_requirements)?;
+    }
 
     let (catalog_num, catalog_generation, mut catalog) = catalog_dict(doc)?;
     let page_refs = page_refs(doc, &catalog)?;
@@ -418,6 +430,15 @@ pub(super) fn apply(
         doc.features
             .borrow_mut()
             .insert(PdfFeature::ExtensionsDictionary);
+    }
+
+    if !navigation.document_requirements.is_empty() {
+        // 12.10.1：`/Requirements` 是 requirement 字典数组，全部以直接对象
+        // 嵌套写出，不分配对象号；`/RH` 已由 validate 拒绝（raw L26125）。
+        catalog = catalog.insert(
+            "Requirements",
+            requirements::catalog_value(&navigation.document_requirements)?,
+        );
     }
 
     let structure = structure::write(

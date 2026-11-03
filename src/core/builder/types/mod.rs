@@ -56,6 +56,7 @@ mod page_box;
 mod pattern;
 mod program;
 mod rendition;
+pub(crate) mod requirements;
 pub(crate) mod reversed_chars;
 mod separation;
 mod shading;
