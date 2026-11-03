@@ -5,5 +5,6 @@
 
 mod bits;
 mod page_offset;
+mod page_offset_derive;
 mod shared;
 mod thumbnail;

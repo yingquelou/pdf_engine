@@ -43,6 +43,7 @@ use super::issues::LinearizationIssue;
 
 pub mod bits;
 mod page_offset;
+mod page_offset_derive;
 mod shared;
 mod thumbnail;
 
@@ -50,6 +51,7 @@ mod thumbnail;
 mod tests;
 
 pub use page_offset::{PageOffsetEntry, PageOffsetHeader, PageOffsetHintTable};
+pub use page_offset_derive::SharedObjectPosition;
 pub use shared::{SharedObjectGroupEntry, SharedObjectHeader, SharedObjectHintTable};
 pub use thumbnail::{ThumbnailEntry, ThumbnailHeader, ThumbnailHintTable};
 
@@ -95,6 +97,9 @@ pub struct LinearizationHints {
     /// 主 hint 流的对象范围（Table F.1 `/H` 第一对；复制自
     /// [`LinearizationInfo::hint_streams`]，供位置修正与溯源）。
     pub primary: HintRange,
+    /// Table F.1 `/O`（复制自 [`LinearizationInfo::first_page_object`]）：
+    /// Table F.4 项 1 的首页首对象号；负值/非整数为 `None`。
+    pub first_page_object: Option<u64>,
     /// 解码并拼接溢出流后的位流总字节数。
     pub stream_bytes: usize,
     /// 按 Table F.2 标准键列出的表位置（缺失键不列）。
@@ -177,6 +182,10 @@ impl Document {
     fn hint_data(&self, info: &LinearizationInfo) -> Option<LinearizationHints> {
         let streams = info.hint_streams?;
         let mut issues = Vec::new();
+        // Table F.4 项 1 的锚点：参数字典已解析的 `/O`，这里只做类型收敛。
+        let first_page_object = info
+            .first_page_object
+            .and_then(|number| u64::try_from(number).ok());
         let (dict, mut data) = match self.read_hint_stream(streams.primary) {
             Ok(part) => part,
             Err(problem) => {
@@ -186,6 +195,7 @@ impl Document {
                 });
                 return Some(LinearizationHints {
                     primary: streams.primary,
+                    first_page_object,
                     stream_bytes: 0,
                     table_positions: Vec::new(),
                     page_offset: None,
@@ -221,8 +231,14 @@ impl Document {
         let shared_object = parse_shared(&table_positions, s_declared, &data, &mut issues);
         check_header_consistency(shared_object.as_ref(), &mut issues);
         check_page_offset_semantics(page_offset.as_ref(), &mut issues);
+        page_offset_derive::check_page_offset_derivations(
+            page_offset.as_ref(),
+            first_page_object,
+            &mut issues,
+        );
         Some(LinearizationHints {
             primary: streams.primary,
+            first_page_object,
             stream_bytes: data.len(),
             table_positions,
             page_offset,

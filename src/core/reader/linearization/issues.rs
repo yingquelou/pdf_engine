@@ -106,6 +106,19 @@ pub enum LinearizationIssue {
     /// Table F.4 项 3：「For the first page, this number shall be 0; the next
     /// two items start with the second page」——首页声明了共享对象引用数。
     PageOffsetFirstPageSharedRefs { count: u64 },
+    /// Table F.4 项 1 与 F.3.1：首页首对象号（参数字典 `/O`）与「第二页首对象号
+    /// 恒为 1」的累加链相撞——`/O` 不大于第二对象组用到的最大对象号。
+    PageOffsetObjectNumberConflict {
+        first_page_object: u64,
+        second_group_max: u64,
+    },
+    /// Table F.4 项 4 ＋ F.4.2（35604）：共享对象标识是共享对象 hint 表的顺序
+    /// 下标（自 0 起），越出该表实际条目数即无从定位。每页报一条，携带该页
+    /// 越界标识符的最大值。
+    PageOffsetSharedObjectIndexOutOfRange { page: u64, index: u64, entries: u64 },
+    /// Table F.3 项 13（分母）为 0，而 Table F.4 项 3 声明了共享对象引用：分数
+    /// 位置类别无从判定。读端**不做任何除法**，派生访问器退回头 `None`。
+    PageOffsetSharedFractionDenominatorZero { references: u64 },
     /// Table F.2 键 `T` + F.4.3：字典用 `T` 声称有缩略图 hint 表，但 Table F.7
     /// 项 3「The number of pages that have thumbnail images」声明 0，与「the
     /// thumbnails section … shall include one or more per-page entries
@@ -289,6 +302,25 @@ impl fmt::Display for LinearizationIssue {
             Self::PageOffsetFirstPageSharedRefs { count } => write!(
                 f,
                 "Table F.4 item 3: for the first page the number of shared objects referenced shall be 0 (the next two items start with the second page), found {count}"
+            ),
+            Self::PageOffsetObjectNumberConflict {
+                first_page_object,
+                second_group_max,
+            } => write!(
+                f,
+                "Table F.4 item 1: the first object of the second page shall have an object number of 1 and subsequent pages accumulate, so the pages from the second one use object numbers up to {second_group_max}; /O {first_page_object} does not start after them (F.3.1)"
+            ),
+            Self::PageOffsetSharedObjectIndexOutOfRange {
+                page,
+                index,
+                entries,
+            } => write!(
+                f,
+                "Table F.4 item 4: page {page} refers to shared object hint table entry {index}, but F.4.2 requires an index that is a sequential position in that table counting from 0 and the table holds {entries} entry(ies)"
+            ),
+            Self::PageOffsetSharedFractionDenominatorZero { references } => write!(
+                f,
+                "Table F.3 item 13: the denominator of the fractional position is 0 while the pages reference {references} shared object(s), so Table F.4 item 5 gives no decidable position class; the reader performs no division and the typed position degrades to None"
             ),
             Self::ThumbnailHintTableMissing => write!(
                 f,
