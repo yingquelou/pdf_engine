@@ -14,12 +14,14 @@
 //!   is available.
 //!
 //! Marked content (14.6) affects the output: `BMC`/`BDC` sections resolve
-//! their property lists (inline dictionary or `/Properties` name), a section
-//! whose optional-content group (8.11) is off by the default configuration
-//! is not extracted, `/ActualText` replaces the section's shown text, a
-//! `/ReversedChars` section (14.8.2.3.3) has each shown string's characters
-//! reversed back to natural order, and `/Artifact` sections (14.8.2.2.1) are
-//! skipped entirely. Unbalanced `EMC` is ignored.
+//! their property lists (inline dictionary, `/Properties` name, or — as
+//! interoperability tolerance for producers that write it, including this
+//! crate's own content-stream builder — an indirect reference operand
+//! `num gen R`), a section whose optional-content group (8.11) is off by the
+//! default configuration is not extracted, `/ActualText` replaces the
+//! section's shown text, a `/ReversedChars` section (14.8.2.3.3) has each shown
+//! string's characters reversed back to natural order, and `/Artifact` sections
+//! (14.8.2.2.1) are skipped entirely. Unbalanced `EMC` is ignored.
 //!
 //! [`Document::try_extract_page_text_fragments`] returns the same text split
 //! into positioned runs ([`TextFragment`]), tracking the text matrix and the
@@ -35,6 +37,9 @@
 //! strings, names, arrays) are pushed onto the stack; when an operator
 //! keyword is encountered, it consumes the relevant operands. This matches
 //! the PDF content stream model where operands precede their operator.
+//! The lone exception is the `num gen R` triplet, folded back into a single
+//! `Operand::Reference` by `state::fold_reference_operand` rather than treated
+//! as an operator.
 
 use crate::core::types::{Dict, Document};
 

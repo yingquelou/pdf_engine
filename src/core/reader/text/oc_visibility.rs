@@ -11,7 +11,8 @@ use super::state::Operand;
 
 impl<'a> ExtractionContext<'a> {
     /// Open a marked-content section for `BMC` (no operand) or `BDC`
-    /// (inline dictionary or `/Properties` resource name).
+    /// (inline dictionary, `/Properties` resource name, or — interoperability
+    /// tolerance, see [`Operand::Reference`] — an indirect reference).
     ///
     /// `/Artifact` sections are pagination or layout decorations and are
     /// excluded from extracted text (ISO 32000-1 14.8.2.2.1), as are sections
@@ -25,6 +26,9 @@ impl<'a> ExtractionContext<'a> {
         let properties = match property_operand {
             Some(Operand::Dict(dict)) => Some(dict.clone()),
             Some(Operand::Name(name)) => resolve_property_list(self.document, resources, name),
+            Some(Operand::Reference { object, generation }) => {
+                resolve_property_ref(self.document, *object, *generation)
+            }
             _ => None,
         };
         let hidden = self.operand_visibility(property_operand, resources) == Some(false);
@@ -42,10 +46,11 @@ impl<'a> ExtractionContext<'a> {
     /// Resolve the optional-content visibility of a `BDC`/`DP` property
     /// operand (ISO 32000-1 14.6.2, 8.11.2).
     ///
-    /// The operand is an inline property list or a `/Properties` resource
-    /// name. A named entry may be the OCG dictionary itself (the pattern
-    /// written by this crate's builder) or a property list carrying `/OC`.
-    /// `/OC` values may be OCG references, inline OCMDs, or indirect
+    /// The operand is an inline property list, a `/Properties` resource name,
+    /// or (interoperability tolerance) an indirect reference to a property
+    /// list. A named or referenced entry may be the OCG dictionary itself (the
+    /// pattern written by this crate's builder) or a property list carrying
+    /// `/OC`. `/OC` values may be OCG references, inline OCMDs, or indirect
     /// references to either; OCMDs are evaluated through their `/P` policy or
     /// `/VE` expression against the default configuration.
     fn operand_visibility(&self, operand: Option<&Operand>, resources: &Dict) -> Option<bool> {
@@ -66,6 +71,18 @@ impl<'a> ExtractionContext<'a> {
                     };
                 }
                 self.oc_visibility(&entry, resources, 0)
+            }
+            // 间接引用属性表：与 `/OC 5 0 R` 共用同一条解引用通路（裸 OCG /
+            // OCMD / 带 `/OC` 的属性表三种落点、`MAX_OC_DEPTH` 深度与环检测
+            // 上限都不变）。落点是普通属性表且不带 `/OC` 时不给可见性结论，
+            // 与声明式读端 `crate::core::reader::content::marked` 的
+            // `Value::Ref` 分支同口径；解不到也返回 `None` 按可见降级。
+            Operand::Reference { object, generation } => {
+                let dict = resolve_property_ref(self.document, *object, *generation)?;
+                if is_ocg_property_dictionary(&dict) {
+                    return self.group_visible(*object);
+                }
+                self.dictionary_visibility(&dict, resources, 0)
             }
             _ => None,
         }
@@ -160,6 +177,20 @@ fn resolve_property_list(document: &Document, resources: &Dict, name: &str) -> O
     resolve_value(document, &entry).and_then(|value| value.as_dict().cloned())
 }
 
+/// Resolve a `BDC` property *indirect reference* operand by its object number
+/// (interoperability tolerance for `/Tag 5 0 R BDC`; see
+/// [`Operand::Reference`] for why this form is not ISO 32000-1 authorized).
+///
+/// 按对象号取最新修订、忽略引用里的代号（与 [`resolve_value`] 同一口径）。
+/// 落点接受属性表字典与本 crate 写端产出的裸 OCG 字典；对象缺失、目标不是
+/// 字典时返回 `None`，只降级为「无属性、可见」，绝不报错——与
+/// `crate::core::reader::content::marked` 里 `section_from` 的 `Value::Ref`
+/// 分支（声明式读端）同构。
+fn resolve_property_ref(document: &Document, object: i64, generation: i64) -> Option<Dict> {
+    let value = resolve_value(document, &Value::Ref(object, generation))?;
+    value.as_dict().cloned()
+}
+
 /// Whether a dictionary is an optional content membership dictionary
 /// (8.11.2.2, Table 100) rather than an OCG or a property list.
 fn is_membership_dictionary(dict: &Dict) -> bool {
@@ -170,4 +201,11 @@ fn is_membership_dictionary(dict: &Dict) -> bool {
 
 fn is_ocg_dictionary(dict: &Dict) -> bool {
     dict.get("Type").and_then(Value::as_name) == Some("OCG")
+}
+
+/// Whether a dereferenced operand *is* the OCG dictionary itself (rather than
+/// a property list carrying `/OC`) — the pattern both this crate's writer and
+/// common producers emit for `/Tag 5 0 R BDC`.
+fn is_ocg_property_dictionary(dict: &Dict) -> bool {
+    is_ocg_dictionary(dict) && dict.get("OC").is_none()
 }

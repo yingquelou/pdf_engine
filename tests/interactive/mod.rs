@@ -75,6 +75,7 @@ mod structure_content;
 mod structure_content_model;
 mod structure_standard;
 mod templates;
+mod text_marked_content_reference;
 mod three_d;
 mod viewer_preferences;
 

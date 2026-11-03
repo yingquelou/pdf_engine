@@ -17,9 +17,9 @@
 //! 可见性、`/ActualText`、`/Alt`、`/Lang`）。解引用失败只降级为
 //! `properties: None`，页面其余区段照常返回、绝不报错。
 //!
-//! 已知边界：文本抽取器（`src/core/reader/text/**`，本轮写集之外）自身的
-//! `Operand` 模型没有引用形态，所以这一操作数形态的 `/ActualText` 仍不参与
-//! 抽取替换——本文件把该行为断言为「原文照出」，而不是假装替换生效。
+//! 边界更新：文本抽取器（`src/core/reader/text/**`）自本链后已有引用形态，
+//! 故这一操作数形态的 `/ActualText` 与 `/OC` 可见性都参与抽取——本文件据此
+//! 断言「隐藏优先，页面文本为空」，不再断言原文照出。
 
 use super::*;
 use pdf_engine::core::content::ContentStream;
@@ -196,9 +196,11 @@ fn indirect_reference_property_operand_roundtrips_through_a_written_page() {
     );
     assert_eq!(
         reparsed.extract_page_text(0).as_deref(),
-        Some("shown"),
-        "文本抽取器（reader/text，本轮写集之外）尚无引用形态，\
-         故 /ActualText 不参与替换：断言原文照出，留作后续增量"
+        Some(""),
+        "抽取器已能解引用该操作数：属性表的 `/OC` 属默认 OFF，\
+         隐藏优先于 `/ActualText` 替换，故该区段不出字\
+         （同一页声明式读端 `visibility == Some(false)` 且 `actual_text` 有值，\
+         见 `tests/interactive/text_marked_content_reference.rs`）"
     );
 }
 

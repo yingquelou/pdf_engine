@@ -35,6 +35,23 @@ pub(super) enum Operand {
     Name(String),
     Array(Vec<Operand>),
     Dict(Dict),
+    /// `object generation R` 折叠出的间接引用操作数，见
+    /// [`fold_reference_operand`]。
+    ///
+    /// 折叠口径与已落地的声明式读端一致
+    /// （`crate::core::reader::content::parser::stream` 的 `fold_reference`）：
+    /// `num gen R` 是操作数而不是算符。
+    ///
+    /// 这是**互操作容错**，不是合规声明：ISO 32000-1 Table 320（`pdftotext
+    /// -raw` 输出 L29075–29078）只授权 `BDC`/`DP` 的属性操作数为内联字典或
+    /// 当前资源 `/Properties` 子字典里的名称，14.6.2（同输出 L29087–29091）
+    /// 进一步要求「值中含间接引用的属性表字典 **shall** 定义为命名资源并按
+    /// 名称引用」。把整张属性表写成 `/Span 5 0 R BDC` 因此属生产端实态
+    /// （本 crate 写端也这样产），本变体只为读出这类文件而存在。
+    Reference {
+        object: i64,
+        generation: i64,
+    },
 }
 
 pub(super) fn token_to_operand(token: &CsToken) -> Option<Operand> {
@@ -45,6 +62,42 @@ pub(super) fn token_to_operand(token: &CsToken) -> Option<Operand> {
         CsToken::Dictionary(inner) => Some(Operand::Dict(parse_dictionary_inner(inner))),
         _ => None,
     }
+}
+
+/// 把操作数栈尾部的 `object generation` 两个数折成一个
+/// [`Operand::Reference`]（`num gen R` 是间接引用操作数，不是算符）。
+///
+/// 返回 `false` 时操作数栈一字不动，调用方把 `R` 当作普通（未建模的）算符
+/// 处理，与折叠前的行为一致：`5 R`（元数不足）、`5.5 0 R` 与 `-1 0 R`
+/// （非整数/负号，7.3.10 的对象号与代号都是非负整数）、`5 0 foo R`
+/// （`foo` 已把这些数当作别的算符的操作数消费掉）都不会被读成引用，也不
+/// panic。栈尾是数组或字典时同样不折叠——显示数组里的引用不在本提取器的
+/// 建模范围内。
+pub(super) fn fold_reference_operand(operands: &mut Vec<Operand>) -> bool {
+    let count = operands.len();
+    if count < 2 {
+        return false;
+    }
+    let pair = (&operands[count - 2], &operands[count - 1]);
+    let (Operand::Number(object), Operand::Number(generation)) = pair else {
+        return false;
+    };
+    let (Some(object), Some(generation)) =
+        (reference_integer(object), reference_integer(generation))
+    else {
+        return false;
+    };
+    operands.truncate(count - 2);
+    operands.push(Operand::Reference { object, generation });
+    true
+}
+
+/// 一个可作为对象号/代号的数：有限、非负、整数，且落在 `i64` 可表示范围内。
+fn reference_integer(number: &f64) -> Option<i64> {
+    if !number.is_finite() || *number < 0.0 || number.fract() != 0.0 {
+        return None;
+    }
+    (*number <= i64::MAX as f64).then_some(*number as i64)
 }
 
 #[derive(Clone)]

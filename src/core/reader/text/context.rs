@@ -11,7 +11,7 @@ use super::fonts::resolve_fonts;
 use super::matrix::Matrix;
 use super::operator::{execute_operator, name_operand};
 use super::resolve::{form_matrix, resolve_value};
-use super::state::{Operand, TextState, token_to_operand};
+use super::state::{Operand, TextState, fold_reference_operand, token_to_operand};
 use super::tokenizer::{CsToken, tokenize_content_stream};
 use super::{MAX_CONTENT_BYTES, MAX_CONTENT_STREAMS, MAX_FORM_DEPTH};
 
@@ -67,6 +67,13 @@ impl<'a> ExtractionContext<'a> {
                     operands.push(array);
                 }
                 CsToken::Keyword(kw) => {
+                    // `num gen R` 折叠出的间接引用是**操作数**，不是算符：折叠
+                    // 成功后直接继续收集，绝不落到下面那个无条件
+                    // `operands.clear()`——否则 `BDC` 会把整张属性表连同标签
+                    // 一起丢掉（`/Span 5 0 R BDC` 曾因此完全不登记属性）。
+                    if kw == "R" && fold_reference_operand(&mut operands) {
+                        continue;
+                    }
                     match kw.as_str() {
                         "Do" => {
                             if let Some(Operand::Name(name)) = operands.last() {
