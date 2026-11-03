@@ -30,6 +30,9 @@ mod page_offset;
 /// F.4.2 共享对象 hint 表家族。
 mod shared_object;
 
+/// F.4.4 generic hint 表家族。
+mod generic;
+
 use support::{
     BitWriter, PAGE_COUNT, build, hint_entries, hint_payload, page_offset_bytes,
     page_offset_table_bits, shared_object_table_bits,

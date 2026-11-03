@@ -132,6 +132,11 @@ pub enum LinearizationIssue {
     /// 范围 0—32。该范围的原文只写在 Table F.3 名下（**待核**类比外推，见
     /// `hints::thumbnail` 模块头）；声明值一律保留，表也按声明值读取。
     ThumbnailWidthOutOfRange { item: &'static str, bits: u64 },
+    /// F.4.4：Table F.2 键 `O`/`A`/`E`/`I`/`L` 给出的 generic hint 表
+    /// （Table F.9）位流损坏——自键给出的起点起读不满 4×32 位，或声明项宽越出
+    /// 位数类条目的 0—32 范围（35524—35525）。缺键是**合法**形态（各类对象
+    /// 「Present only if …」），不因缺键给诊断。
+    GenericHintTableCorrupt { key: String, problem: String },
 }
 
 impl fmt::Display for LinearizationIssue {
@@ -333,6 +338,10 @@ impl fmt::Display for LinearizationIssue {
             Self::ThumbnailWidthOutOfRange { item, bits } => write!(
                 f,
                 "F.4.3: the bit width declared by Table F.7 {item} is expected to be in the range 0 through 32 (the wording of F.4.1 for Table F.3, applied by analogy), found {bits}; the raw value is kept and the table is read as declared"
+            ),
+            Self::GenericHintTableCorrupt { key, problem } => write!(
+                f,
+                "F.4.4 (Table F.9): the generic hint table for key {key} is corrupt: {problem}"
             ),
         }
     }

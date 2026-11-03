@@ -132,6 +132,7 @@ fn hints(
         page_offset,
         shared_object,
         thumbnail: None,
+        generic: Vec::new(),
         issues: Vec::new(),
     }
 }
