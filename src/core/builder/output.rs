@@ -2,6 +2,23 @@ use super::{PdfBuilder, navigation, types};
 use crate::core::writer::{DocumentWriter, WriteError};
 use std::io::Write;
 
+/// 写端加密参数（ISO 32000-1 7.6.3 标准安全处理器）。
+///
+/// 由 `assemble::encryption` 的类型化入口在校验通过后构造，交给
+/// [`PdfBuilder::emit`]；`None` 表示普通（不加密）输出。
+pub(super) struct EncryptionSpec<'a> {
+    /// 用户口令（Algorithm 4/5 的输入）。
+    pub user_password: &'a [u8],
+    /// 所有者口令（Algorithm 3 的输入）；`None` 时按 7.6.3.4.1 a 用用户口令代替。
+    pub owner_password: Option<&'a [u8]>,
+    /// 加密字典 `/P`（Table 22 权限位）。
+    pub permissions: i32,
+    /// 加密字典 `/V`（Table 20：`1` = RC4-40，`2` = RC4-128）。
+    pub handler_version: u8,
+    /// 密钥位宽（Table 20 `/Length`，仅 `/V 2` 写盘）。
+    pub key_bits: u8,
+}
+
 impl PdfBuilder {
     /// 每个 Form XObject 句柄在哪些页上被绘制（页资源 `/Fm<n>` 登记表）；
     /// 供结构树 OBJR 的 Form 目标复核 `/Pg` 是否谎报渲染页（14.7.4.3）。
@@ -23,6 +40,16 @@ impl PdfBuilder {
     /// 内部按固定顺序分配对象号、构造底层 `Document`，再交给
     /// [`DocumentWriter`] 输出。xref/trailer 由 writer 自动生成。
     pub fn build<W: Write>(&mut self, w: &mut W) -> Result<(), WriteError> {
+        self.emit(w, None)
+    }
+
+    /// [`PdfBuilder::build`] 的实现主体，`encryption` 为 `Some` 时在写出
+    /// 前按 7.6.3 加密整个文档（校验已由各类型化入口完成，此处只执行）。
+    pub(super) fn emit<W: Write>(
+        &mut self,
+        w: &mut W,
+        encryption: Option<EncryptionSpec<'_>>,
+    ) -> Result<(), WriteError> {
         if let Some(length) = self.pages.iter().find_map(|page| page.invalid_code_length) {
             return Err(WriteError::InvalidObject(format!(
                 "invalid CID character code length {length} in text_code_bytes (expected 1 to 4 bytes)"
@@ -70,6 +97,20 @@ impl PdfBuilder {
                 self.rendition_cursor.get(),
                 self.rendition_nums.len()
             )));
+        }
+        if let Some(spec) = encryption {
+            // trailer /ID 首元素是 Algorithm 2 e 的输入，必须在派生密钥前
+            // 定型；缺省时以未加密字节确定性补出（14.4）。
+            let file_id = self.ensure_standard_file_id(&mut doc)?;
+            doc.encrypt_with_standard_handler(
+                spec.user_password,
+                spec.owner_password,
+                spec.permissions,
+                spec.handler_version,
+                spec.key_bits,
+                &file_id,
+            )
+            .map_err(WriteError::InvalidObject)?;
         }
         let mut writer = DocumentWriter::new().with_version(self.version);
         if let Some(compression) = self.compression.clone() {

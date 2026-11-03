@@ -48,6 +48,7 @@ mod cid;
 mod cmap;
 mod colorspace;
 mod embedded_file;
+mod encryption;
 mod feature_profile;
 mod fonts;
 mod form_field;

@@ -1,5 +1,7 @@
 use super::*;
 
+mod write;
+
 fn rc4_5(key: &[u8], input: &[u8]) -> Vec<u8> {
     let mut cipher = Rc4::<U5>::new_from_slice(key).unwrap();
     let mut output = input.to_vec();

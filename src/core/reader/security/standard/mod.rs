@@ -7,6 +7,8 @@
 //! - `filters`：7.6.5 crypt filter（`/CF` `/StrF` `/StmF` `/EFF` 与
 //!   流上显式 `/Crypt`）到 [`CryptMethod`] 的选择；
 //! - `decrypt`：对象值/字节串的按对象密钥解密；
+//! - `encrypt`：**写端**加密（Algorithm 1/3/4/5 的正向路径、Table 20/Table 21
+//!   加密字典构造与 `Document::encrypt_with_standard_handler`）；
 //! - `strings`：加密字典 PDF 字面串与十六进制串的编解码辅助。
 //!
 //! 本文件只保留入口类型 [`SecurityHandler`]、聚合状态
@@ -23,6 +25,7 @@ use filters::explicit_crypt_filter;
 
 mod auth;
 mod decrypt;
+mod encrypt;
 mod filters;
 mod key;
 mod strings;
