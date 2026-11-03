@@ -93,7 +93,7 @@ fn slotted(table: &[u8]) -> Vec<u8> {
 /// 页偏移表 → 键 `B` 的表 → 共享对象表，三段字节相邻（F.4 前言：各表以字节边界
 /// 开始且互不重叠，故相邻位置即后一张表的下界）。
 fn b_payload(table: &[u8]) -> Vec<u8> {
-    let mut payload = page_offset_table_bits(0);
+    let mut payload = page_offset_table_bits(0, 2);
     payload.extend_from_slice(table);
     payload.extend(shared_object_table_bits());
     payload
@@ -211,7 +211,7 @@ fn handbuilt_linearized_file_exposes_the_embedded_file_hint_table() {
 fn absent_embedded_file_key_is_none_rather_than_an_empty_table() {
     // 只有 `S` 的载荷（脚手架的既有形态）：`B` 标「Present only if embedded file
     // streams exist」，缺键既不给位置、也不给诊断，字段退回 `None` 而非空表。
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let document = parse_buf(&build(&payload, &hint_entries()));
     let hints = document
         .linearization_hints()
@@ -256,7 +256,7 @@ fn embedded_file_parser_is_reachable_from_the_public_api_with_the_same_bits() {
 fn embedded_file_table_truncated_at_the_stream_end_is_a_typed_issue() {
     // 把 `B` 的表放到流尾并只写头部加两列半：项主序的第三列越过流尾 ⇒ 整表拒绝，
     // 其余表照旧。
-    let mut payload = hint_payload(0);
+    let mut payload = hint_payload(0, 2);
     let shared_end = payload.len();
     let truncated = b_table_bits(HEADER, WIDTHS, &[ITEM1, ITEM2, &[], &[]], &[]);
     assert_eq!(truncated.len(), 23, "181 位：头部 + 项 1/项 2 两列");

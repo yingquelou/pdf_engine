@@ -64,7 +64,11 @@ impl BitWriter {
 ///
 /// `first_page_refs` 驱动 Table F.4 项 3 的首页 shall（合规值 0）：非零时
 /// 项 4/5 的列里**不含**首页元素，原值只保留在类型化条目里。
-pub(super) fn page_offset_table_bits(first_page_refs: u64) -> Vec<u8> {
+///
+/// `last_shared_id` 驱动 Table F.4 项 4 的 F.4.2 shall（标识符须是共享对象
+/// hint 表自 0 起的顺序下标；本脚手架的共享对象表有 3 个条目，合规值 2）：
+/// 取 5 时越界，原值保留并落类型化诊断。
+pub(super) fn page_offset_table_bits(first_page_refs: u64, last_shared_id: u64) -> Vec<u8> {
     let mut w = BitWriter::default();
     // Table F.3：32/32/16/32/16/32/16/32/16/16/16/16/16。
     w.unsigned(3, 32); // 项 1：一页的最少对象数
@@ -89,9 +93,9 @@ pub(super) fn page_offset_table_bits(first_page_refs: u64) -> Vec<u8> {
     // c) 项 3 列（2 位）：首页 0（shall），第二页 2 个引用。
     w.unsigned(first_page_refs, 2);
     w.unsigned(2, 2);
-    // d) 项 4 列（4 位）：第二页的两个共享对象标识。
+    // d) 项 4 列（4 位）：第二页的两个共享对象标识（末位由 `last_shared_id` 驱动）。
     w.unsigned(1, 4);
-    w.unsigned(5, 4);
+    w.unsigned(last_shared_id, 4);
     // e) 项 5 列（3 位）：与项 4 同序的分子。
     w.unsigned(2, 3);
     w.unsigned(0, 3);
@@ -138,7 +142,7 @@ pub(super) fn shared_object_table_bits() -> Vec<u8> {
 /// 页偏移表占用的字节数（350 位 → 44 字节）：F.4 前言把本表钉在流偏移 0，
 /// 故它后面的第一张表的最小合法位置就是本值。
 pub(super) fn page_offset_bytes() -> usize {
-    page_offset_table_bits(0).len()
+    page_offset_table_bits(0, 2).len()
 }
 
 /// Table F.2 键 `S` 的定位条目原文：紧跟页偏移表之后。
@@ -147,8 +151,8 @@ pub(super) fn hint_entries() -> String {
 }
 
 /// hint 流载荷：偏移 0 的页偏移表 + 紧随其后的共享对象表。
-pub(super) fn hint_payload(first_page_refs: u64) -> Vec<u8> {
-    let mut payload = page_offset_table_bits(first_page_refs);
+pub(super) fn hint_payload(first_page_refs: u64, last_shared_id: u64) -> Vec<u8> {
+    let mut payload = page_offset_table_bits(first_page_refs, last_shared_id);
     payload.extend(shared_object_table_bits());
     payload
 }

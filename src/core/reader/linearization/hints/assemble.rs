@@ -130,6 +130,13 @@ impl Document {
             first_page_object,
             &mut issues,
         );
+        // F.4.2（35604）：Table F.4 项 4 的标识符须是共享对象 hint 表的顺序
+        // 下标（自 0 起）；两张表都在上面就绪，越界者逐页并入 `issues`。
+        page_offset_derive::check_shared_object_indices(
+            page_offset.as_ref(),
+            shared_object.as_ref(),
+            &mut issues,
+        );
         Some(LinearizationHints {
             primary: streams.primary,
             first_page_object,

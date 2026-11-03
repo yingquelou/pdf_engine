@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn handbuilt_linearized_file_exposes_shared_object_hint_table() {
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let entries = hint_entries();
     let bytes = build(&payload, &entries);
     let document = parse_buf(&bytes);
@@ -74,7 +74,7 @@ fn handbuilt_linearized_file_exposes_shared_object_hint_table() {
 #[test]
 fn truncated_hint_bytes_are_a_typed_issue_not_a_panic() {
     // 表位仍在流内（页偏移表之后），但 Table F.5 头部只写出一半。
-    let full = hint_payload(0);
+    let full = hint_payload(0, 2);
     let payload = &full[..page_offset_bytes() + 6];
     let entries = hint_entries();
     let bytes = build(payload, &entries);
@@ -105,7 +105,7 @@ fn truncated_hint_bytes_are_a_typed_issue_not_a_panic() {
 #[test]
 fn missing_required_shared_object_table_key_is_reported() {
     // Table F.2 的 `S` 是 Required：主 hint 流字典缺它即给类型化诊断。
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let bytes = build(&payload, "");
     let document = parse_buf(&bytes);
     let hints = document

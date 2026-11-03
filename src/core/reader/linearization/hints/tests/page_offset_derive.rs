@@ -3,7 +3,9 @@
 //! 的降级形态一律 `None` 而非 panic。位级解析本身由 [`super::page_offset`] 覆盖，
 //! 这里只对「解析出来的增量如何累加」下断言。
 
-use super::super::page_offset_derive::{SharedObjectPosition, check_page_offset_derivations};
+use super::super::page_offset_derive::{
+    SharedObjectPosition, check_page_offset_derivations, check_shared_object_indices,
+};
 use crate::core::reader::linearization::hints::LinearizationHints;
 use crate::core::reader::linearization::hints::bits::BitWriter;
 use crate::core::reader::linearization::hints::page_offset::{
@@ -373,10 +375,46 @@ fn shared_identifiers_beyond_the_shared_object_table_are_typed_issues() {
     // 共享对象 hint 表没读出来时不做该核对（不叠加假阳性）。
     let blind = hints(Some(table), None, Some(10), range(0, 0));
     assert!(blind.shared_object_index_issues().is_empty());
-    // 且它不进装配期 `issues`（附录 F 夹具的项 4 越界，见方法文档）。
+    // 装配期核对与该方法同源：`check_shared_object_indices` 给出同一批诊断。
+    let mut merged = Vec::new();
+    check_shared_object_indices(
+        host.page_offset.as_ref(),
+        host.shared_object.as_ref(),
+        &mut merged,
+    );
+    assert_eq!(merged, host.shared_object_index_issues());
+    // 项 1/5 的派生核对不因此叠加（各管各的 shall）。
     let mut derived = Vec::new();
     check_page_offset_derivations(Some(&parsed_three_pages(4)), Some(10), &mut derived);
     assert!(derived.is_empty());
+}
+
+#[test]
+fn assembly_check_folds_out_of_range_identifiers_into_issues() {
+    // 夹具改正后的合规形态：标识符 1/2/3 全在 4 个条目内，装配期不出诊断。
+    let table = parsed_three_pages(4);
+    let mut clean = Vec::new();
+    check_shared_object_indices(Some(&table), Some(&shared_table(4)), &mut clean);
+    assert!(clean.is_empty(), "{:#?}", clean);
+    // 条目数收缩到 3：标识符 3 越界，逐页一条、携带该页最大值。
+    let mut merged = Vec::new();
+    check_shared_object_indices(Some(&table), Some(&shared_table(3)), &mut merged);
+    assert_eq!(
+        merged,
+        vec![LinearizationIssue::PageOffsetSharedObjectIndexOutOfRange {
+            page: 2,
+            index: 3,
+            entries: 3
+        }],
+        "装配期并入的是同一条类型化诊断"
+    );
+    // 任一张表缺席都不核对（不叠加假阳性）。
+    let mut no_shared = Vec::new();
+    check_shared_object_indices(Some(&table), None, &mut no_shared);
+    assert!(no_shared.is_empty());
+    let mut no_page = Vec::new();
+    check_shared_object_indices(None, Some(&shared_table(3)), &mut no_page);
+    assert!(no_page.is_empty());
 }
 
 #[test]

@@ -20,7 +20,12 @@ const PAGES: usize = 2;
 ///
 /// `first_page_refs` 驱动 Table F.4 项 3 的首页 shall（合规值 0）：非零时
 /// 项 4/5 的列里**不含**首页元素，原值只保留在类型化条目里。
-fn page_offset_table_bits(first_page_refs: u64) -> Vec<u8> {
+///
+/// `last_shared_id` 驱动 Table F.4 项 4 的 F.4.2（35604）shall（合规值 2：
+/// 夹具的共享对象 hint 表有 3 个条目，标识符须是自 0 起的顺序下标）：取 5
+/// 时越界，原值保留在类型化条目里并落
+/// [`LinearizationIssue::PageOffsetSharedObjectIndexOutOfRange`]。
+fn page_offset_table_bits(first_page_refs: u64, last_shared_id: u64) -> Vec<u8> {
     let mut w = BitWriter::default();
     w.unsigned(3, 32); // 项 1
     w.unsigned(700, 32); // 项 2
@@ -44,9 +49,10 @@ fn page_offset_table_bits(first_page_refs: u64) -> Vec<u8> {
     // c) 项 3 列（2 位）：首页 0（shall），第二页 2 个引用。
     w.unsigned(first_page_refs, 2);
     w.unsigned(2, 2);
-    // d) 项 4 列（4 位）：第二页的两个标识。
+    // d) 项 4 列（4 位）：第二页的两个标识符（合规形态按 F.4.2 是 0—2 的下标，
+    // 末位由 `last_shared_id` 驱动）。
     w.unsigned(1, 4);
-    w.unsigned(5, 4);
+    w.unsigned(last_shared_id, 4);
     // e) 项 5 列（3 位）：与项 4 同序的分子。
     w.unsigned(2, 3);
     w.unsigned(0, 3);
@@ -90,7 +96,7 @@ fn shared_table_bits() -> Vec<u8> {
 /// 页偏移表占用的字节数：F.4 前言把本表钉在流偏移 0，故它后面的第一张表
 /// 的最小合法位置就是本值（350 位 → 44 字节）。
 fn page_offset_bytes() -> usize {
-    page_offset_table_bits(0).len()
+    page_offset_table_bits(0, 2).len()
 }
 
 /// Table F.2 键 `S` 的定位条目原文：紧跟页偏移表之后。
@@ -99,8 +105,8 @@ fn hint_entries() -> String {
 }
 
 /// hint 流载荷：偏移 0 的页偏移表 + 紧随其后的共享对象表。
-fn hint_payload(first_page_refs: u64) -> Vec<u8> {
-    let mut payload = page_offset_table_bits(first_page_refs);
+fn hint_payload(first_page_refs: u64, last_shared_id: u64) -> Vec<u8> {
+    let mut payload = page_offset_table_bits(first_page_refs, last_shared_id);
     payload.extend(shared_table_bits());
     payload
 }
@@ -113,13 +119,18 @@ fn crafted<'a>(knobs: &mut Knobs<'a>, payload: &'a [u8], entries: &'a str) {
 
 #[test]
 fn page_offset_table_decodes_through_document() {
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let entries = hint_entries();
     let mut knobs = Knobs::default();
     crafted(&mut knobs, &payload, &entries);
     let document = open(&super::build(&knobs), "page-offset-ok");
     let hints = document.linearization_hints().expect("io").expect("hints");
     assert!(hints.is_consistent(), "unexpected {:#?}", hints.issues);
+    assert!(
+        hints.shared_object_index_issues().is_empty(),
+        "clean fixture must also leave the standalone item-4 view empty: {:?}",
+        hints.shared_object_index_issues()
+    );
     let table = hints
         .page_offset
         .as_ref()
@@ -155,7 +166,7 @@ fn page_offset_table_decodes_through_document() {
     assert_eq!(table.pages[1].page_length(&table.header), 325);
     // d)/e) 两列按页归位，不跨页混排。
     assert_eq!(table.pages[1].shared_reference_count, 2);
-    assert_eq!(table.pages[1].shared_object_ids, vec![1, 5]);
+    assert_eq!(table.pages[1].shared_object_ids, vec![1, 2]);
     assert_eq!(table.pages[1].shared_position_numerators, vec![2, 0]);
     assert_eq!(table.pages[1].content_offset(&table.header), 27);
     assert_eq!(table.pages[1].content_length(&table.header), 63);
@@ -173,7 +184,7 @@ fn page_offset_table_decodes_through_document() {
 
 #[test]
 fn shared_hint_table_decodes_through_document() {
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let entries = hint_entries();
     let mut knobs = Knobs::default();
     crafted(&mut knobs, &payload, &entries);
@@ -182,6 +193,10 @@ fn shared_hint_table_decodes_through_document() {
     assert!(info.is_consistent(), "fixture must stay clean: {info:?}");
     let hints = document.linearization_hints().expect("io").expect("hints");
     assert!(hints.is_consistent(), "unexpected {:#?}", hints.issues);
+    assert!(
+        hints.shared_object_index_issues().is_empty(),
+        "Table F.4 项 4 的合规标识符在独立视图里同样无诊断"
+    );
     assert_eq!(hints.stream_bytes, payload.len());
     assert_eq!(hints.position_of("S"), Some(page_offset_bytes() as u64));
     let table = hints.shared_object.as_ref().expect("parsed shared table");
@@ -232,7 +247,7 @@ fn shared_hint_table_missing_key_is_reported() {
 
 #[test]
 fn every_truncation_of_hint_payload_is_a_typed_issue() {
-    let full = hint_payload(0);
+    let full = hint_payload(0, 2);
     let page_offset_len = page_offset_bytes();
     // 截在页偏移表内：该家族给 PageOffsetTableCorrupt；`/S` 位置超出流长另给
     // HintTablePositionInvalid（由 [`hint_table_position_beyond_stream_is_reported`]
@@ -275,7 +290,7 @@ fn every_truncation_of_hint_payload_is_a_typed_issue() {
 
 #[test]
 fn hint_table_position_beyond_stream_is_reported() {
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let mut knobs = Knobs::default();
     crafted(&mut knobs, &payload, " /S 9999");
     let document = open(&super::build(&knobs), "hint-pos");
@@ -301,7 +316,7 @@ fn hint_table_position_beyond_stream_is_reported() {
 #[test]
 fn hint_table_position_inside_page_offset_table_is_reported() {
     // F.4 前言：表以字节边界开始且按序读取，故 `/S 3` 落进页偏移表体内自相矛盾。
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let mut knobs = Knobs::default();
     crafted(&mut knobs, &payload, " /S 3");
     let document = open(&super::build(&knobs), "hint-inside");
@@ -339,7 +354,7 @@ fn hint_table_position_inside_page_offset_table_is_reported() {
 #[test]
 fn first_page_shared_ref_count_is_reported() {
     // Table F.4 项 3：首页的共享对象引用数 shall 为 0；原值保留、列不被错位读。
-    let payload = hint_payload(3);
+    let payload = hint_payload(3, 2);
     let entries = hint_entries();
     let mut knobs = Knobs::default();
     crafted(&mut knobs, &payload, &entries);
@@ -355,8 +370,45 @@ fn first_page_shared_ref_count_is_reported() {
     let table = hints.page_offset.expect("table still decoded");
     assert_eq!(table.pages[0].shared_reference_count, 3);
     assert!(table.pages[0].shared_object_ids.is_empty());
-    assert_eq!(table.pages[1].shared_object_ids, vec![1, 5]);
+    assert_eq!(table.pages[1].shared_object_ids, vec![1, 2]);
     // 首页的违规值不改变后续家族的可读性。
+    assert!(hints.shared_object.is_some());
+}
+
+#[test]
+fn out_of_range_shared_object_id_is_reported() {
+    // Table F.4 项 4 的 F.4.2 shall（35604）：标识符须是共享对象 hint 表的
+    // 顺序下标（自 0 起）；夹具的共享对象表有 3 个条目，5 越界——这一形态由
+    // `last_shared_id` 旋钮**刻意**装配（缺省夹具取合规值 2）。
+    let payload = hint_payload(0, 5);
+    let entries = hint_entries();
+    let mut knobs = Knobs::default();
+    crafted(&mut knobs, &payload, &entries);
+    let document = open(&super::build(&knobs), "hint-shared-index");
+    let hints = document.linearization_hints().expect("io").expect("hints");
+    assert!(
+        hints
+            .issues
+            .contains(&LinearizationIssue::PageOffsetSharedObjectIndexOutOfRange {
+                page: 1,
+                index: 5,
+                entries: 3
+            }),
+        "装配期 issues 必须自带越界诊断: {:#?}",
+        hints.issues
+    );
+    assert_eq!(
+        hints.shared_object_index_issues(),
+        vec![LinearizationIssue::PageOffsetSharedObjectIndexOutOfRange {
+            page: 1,
+            index: 5,
+            entries: 3
+        }],
+        "独立视图与装配结果同源"
+    );
+    // 原值保留在类型化条目里，家族不硬失败。
+    let table = hints.page_offset.expect("violated id kept");
+    assert_eq!(table.pages[1].shared_object_ids, vec![1, 5]);
     assert!(hints.shared_object.is_some());
 }
 
@@ -450,7 +502,7 @@ fn header_item4_smaller_than_item3_is_reported() {
     for _ in 0..2 {
         w.unsigned(0, 8);
     }
-    let mut payload = page_offset_table_bits(0);
+    let mut payload = page_offset_table_bits(0, 2);
     payload.extend_from_slice(&w.bytes);
     let entries = hint_entries();
     let mut knobs = Knobs::default();
@@ -475,7 +527,7 @@ fn header_item4_smaller_than_item3_is_reported() {
 #[test]
 fn overflow_stream_concatenates_hint_bytes() {
     // F.3.6：溢出 hint 流（解码后）无缝拼接到主流尾部再定位各表。
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let entries = hint_entries();
     let knobs = Knobs {
         overflow_hint: true,

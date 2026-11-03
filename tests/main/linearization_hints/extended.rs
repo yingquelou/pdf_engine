@@ -82,7 +82,7 @@ fn slotted(tables: &[Vec<u8>]) -> Vec<u8> {
 /// 页偏移表 → 三张 extended 表 → 共享对象表，三段字节相邻（F.4 前言：各表以
 /// 字节边界开始且互不重叠，故相邻位置即后一张表的下界）。
 fn extended_payload(tables: &[u8]) -> Vec<u8> {
-    let mut payload = page_offset_table_bits(0);
+    let mut payload = page_offset_table_bits(0, 2);
     payload.extend_from_slice(tables);
     payload.extend(shared_object_table_bits());
     payload
@@ -197,7 +197,7 @@ fn handbuilt_linearized_file_exposes_three_extended_hint_tables() {
 fn absent_extended_keys_are_none_rather_than_empty_groups() {
     // 只有 `S` 的载荷（脚手架的既有形态）：F.4.5 的三键都是条件存在，缺键既
     // 不给位置、也不给诊断，取组退回 `None` 而非空组。
-    let payload = super::hint_payload(0);
+    let payload = super::hint_payload(0, 2);
     let bytes = build(&payload, &super::hint_entries());
     let document = parse_buf(&bytes);
     let hints = document
@@ -241,7 +241,7 @@ fn pre_1_5_document_keeps_the_three_keys_on_the_generic_path() {
     assert_eq!(tables.len(), 3 * 16, "Table F.9 恒 16 字节");
     // 槽位换成 generic 形态的 16 字节：`V`/`C`/`R` 各自的首字节与末字节。
     let generic_slot = |index: usize| page_offset_bytes() + index * 16;
-    let mut payload = page_offset_table_bits(0);
+    let mut payload = page_offset_table_bits(0, 2);
     payload.extend_from_slice(&tables);
     payload.extend(shared_object_table_bits());
     let entries = format!(

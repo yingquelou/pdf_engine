@@ -36,14 +36,16 @@
 //!   object numbers」，35588—35589）。
 //!
 //! 累加一律 `saturating_add`：不可信的位流与头部值绝不 panic、绝不回绕。跨页
-//! 核对（项 1 的对象号相撞、项 13 分母为 0）只落 [`LinearizationIssue`] 类型化
-//! 诊断，绝不硬失败；项 4 的下标越界同型，但要读者显式调用
-//! [`LinearizationHints::shared_object_index_issues`]（理由记在该方法的文档）。
+//! 核对——项 1 的对象号相撞、项 13 分母为 0、项 4 的下标越界——同型地只落
+//! [`LinearizationIssue`] 类型化诊断，绝不硬失败；三者在装配期一并汇入
+//! [`LinearizationHints::issues`]（项 4 走 [`check_shared_object_indices`]），
+//! 后者另有 [`LinearizationHints::shared_object_index_issues`] 视图可单独取用。
 
 use crate::core::reader::linearization::issues::LinearizationIssue;
 
 use super::LinearizationHints;
 use super::page_offset::PageOffsetHintTable;
+use super::shared::SharedObjectHintTable;
 
 /// Table F.4 项 5 ＋ Table F.3 项 13：共享对象引用的**分数位置类别**。
 ///
@@ -220,18 +222,39 @@ impl LinearizationHints {
             .shared_object_position(page_index, reference_index)
     }
 
-    /// Table F.4 item 4 ＋ F.4.2 – 标识符不是共享对象 hint 表顺序位置时的类型化
-    /// 诊断（不硬失败）。按需调用，**未**并入
-    /// [`LinearizationHints::issues`]：附录 F 夹具
-    /// （`reader::linearization::tests::hints`）的项 4 用了越过其共享对象 hint 表
-    /// 条目数的下标，装配期报它会与既有的「夹具干净」断言冲突；夹具改正后可并入。
+    /// Table F.4 项 4 ＋ F.4.2 – 标识符不是共享对象 hint 表顺序位置时的类型化
+    /// 诊断（不硬失败）。装配期已由 [`check_shared_object_indices`] 把同一批
+    /// 诊断并入 [`LinearizationHints::issues`]；本方法是**只列这一类诊断**的
+    /// 独立视图，与装配结果同源（同一实现）。
     pub fn shared_object_index_issues(&self) -> Vec<LinearizationIssue> {
-        let (Some(table), Some(shared)) = (self.page_offset.as_ref(), self.shared_object.as_ref())
-        else {
-            return Vec::new();
-        };
-        let entries =
-            shared.first_page_groups.len() as u64 + shared.shared_section_groups.len() as u64;
+        let mut issues = Vec::new();
+        check_shared_object_indices(
+            self.page_offset.as_ref(),
+            self.shared_object.as_ref(),
+            &mut issues,
+        );
+        issues
+    }
+}
+
+/// Table F.4 项 4 ＋ F.4.2（35604）——装配期的共享对象下标越界核对：标识符
+/// 须是共享对象 hint 表的顺序下标（自 0 起），越过条目数即逐页落一条
+/// [`LinearizationIssue::PageOffsetSharedObjectIndexOutOfRange`]（携带该页
+/// 越界标识符的最大值），不硬失败。
+///
+/// 由装配层在两张表都就绪后调用，结果并入 [`LinearizationHints::issues`]；
+/// [`LinearizationHints::shared_object_index_issues`] 与本函数同源。任一张表
+/// 缺席时不核对（不叠加假阳性）。
+pub(super) fn check_shared_object_indices(
+    page_offset: Option<&PageOffsetHintTable>,
+    shared_object: Option<&SharedObjectHintTable>,
+    issues: &mut Vec<LinearizationIssue>,
+) {
+    let (Some(table), Some(shared)) = (page_offset, shared_object) else {
+        return;
+    };
+    let entries = shared.first_page_groups.len() as u64 + shared.shared_section_groups.len() as u64;
+    issues.extend(
         table
             .shared_index_problems(entries)
             .into_iter()
@@ -241,16 +264,15 @@ impl LinearizationHints {
                     index,
                     entries,
                 },
-            )
-            .collect()
-    }
+            ),
+    );
 }
 
 /// 项 1/5 的跨页核对：只落类型化诊断，派生值本身仍照常给出（原值一律保留）。
 ///
 /// 两条都不硬失败：读者仍可拿派生结果尽力定位，规范层面对照 [`super::LinearizationHints`]
-/// 的其他页偏移诊断一样处理。项 4 的下标越界见
-/// [`LinearizationHints::shared_object_index_issues`]。
+/// 的其他页偏移诊断一样处理。项 4 的下标越界是同类核对，由
+/// [`check_shared_object_indices`] 在装配期单独执行（见其文档）。
 pub(super) fn check_page_offset_derivations(
     table: Option<&PageOffsetHintTable>,
     first_page_object: Option<u64>,

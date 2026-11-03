@@ -57,7 +57,7 @@ fn generic_payload(tables: &[u8]) -> Vec<u8> {
 /// 页偏移表的字节（恒在流偏移 0，长度即后一张表的最小合法位置）。
 fn page_offset_table() -> Vec<u8> {
     use super::page_offset_table_bits;
-    page_offset_table_bits(0)
+    page_offset_table_bits(0, 2)
 }
 
 /// Table F.2 键位条目：五个 generic 键依次紧跟页偏移表，`S` 紧跟最后一张表。
@@ -155,7 +155,7 @@ fn handbuilt_linearized_file_exposes_five_generic_hint_tables() {
 fn absent_generic_keys_are_none_rather_than_empty_groups() {
     // 只有 `S` 的载荷（`hint_entries`/`hint_payload` 的既有形态）：F.4.4 的五键
     // 全是条件存在，缺键既不给位置、也不给诊断，取组退回 `None` 而非空组。
-    let payload = hint_payload(0);
+    let payload = hint_payload(0, 2);
     let entries = hint_entries();
     let bytes = build(&payload, &entries);
     let document = parse_buf(&bytes);

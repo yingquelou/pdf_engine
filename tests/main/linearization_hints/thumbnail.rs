@@ -66,7 +66,7 @@ fn empty_thumbnail_table_bits() -> Vec<u8> {
 /// 页偏移表 → 缩略图表 → 共享对象表，三表字节相邻（F.4 前言：各表以字节边界
 /// 开始且互不重叠，故相邻位置即后一张表的下界）。
 fn thumbnail_payload(table: &[u8]) -> Vec<u8> {
-    let mut payload = page_offset_table_bits(0);
+    let mut payload = page_offset_table_bits(0, 2);
     payload.extend_from_slice(table);
     payload.extend(shared_object_table_bits());
     payload
