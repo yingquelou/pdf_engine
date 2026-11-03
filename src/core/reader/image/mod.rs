@@ -36,7 +36,14 @@
 //! 像素**（无算术/Huffman 熵解码、无符号字典重建、无区域合成），
 //! [`ImageModel::samples`] 对 JBIG2 图像返回类型化 `Unsupported`。
 //! 边界详见 [`jbig2`] 模块文档。
+//!
+//! **像素解码的后端契约位于 [`backend`]**（阶段 D3 第一环）：
+//! [`backend::Jbig2Backend`] / [`backend::JpxBackend`] 定义可替换适配器、
+//! 显式传入的后端集合与契约层版本门禁（JBIG2 需 PDF 1.4、JPX 需 PDF 1.5）。
+//! 本库默认注册表为空（`ImageBackends::NONE`），不引入任何第三方依赖，
+//! 未注册后端时上述 `Unsupported` 行为保持不变。
 
+mod backend;
 mod entries;
 mod error;
 mod model;
@@ -47,6 +54,12 @@ mod tests;
 
 mod jbig2;
 mod jpx;
+
+pub use backend::{
+    DecodedBitmap, ImageBackends, ImageCodec, Jbig2Backend, Jbig2DecodeRequest, JpxBackend,
+    JpxDecodeRequest, builtin_image_backends, check_codec_version, decode_jbig2_with,
+    decode_jpx_with,
+};
 
 pub use error::ImageError;
 pub use jbig2::{
