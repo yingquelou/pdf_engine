@@ -49,6 +49,8 @@ pub(crate) fn scan_value_features(features: &mut FeatureProfile, value: &Value) 
 /// - `/Threads` 键存在（目录）→ ArticleThreads
 /// - `/Collection` 键存在（目录）→ Collection
 /// - `/Extensions` 键存在（目录）→ ExtensionsDictionary
+/// - `/Requirements` 键存在（目录）→ DocumentRequirements（1.7，12.10
+///   Table 264/265）
 /// - `/ViewerPreferences` 键存在（目录）→ ViewerPreferences 基档（1.2），并按键
 ///   登记 1.3–1.7 各档；`/Enforce` 为 PDF 2.0 扩展档（32000-1 无此条目）
 /// - `/Templates` 键存在（名称字典）→ PageTemplates

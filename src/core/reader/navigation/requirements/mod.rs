@@ -45,7 +45,20 @@
 //! - `/Script` 只做文本串解码与「仅 `S == JS` 合法」的判定，**不**回查名称
 //!   字典 `/JavaScript` 里是否真有该动作（本轮范围外）。解码失败时保留原始
 //!   串内容（库策略，同 `templates.rs` 的 `decode_name`）。
-//! - 写端与 PDF 1.7 版本门禁本轮不做，故不新增 `PdfFeature` 变体。
+//! - 写端已落地（12.10）：类型化写端在 `builder/types/requirements.rs`
+//!   （唯一序列化路径），目录写出与构建期校验在
+//!   `builder/navigation/requirements.rs`，入口是
+//!   `PdfBuilder::add_document_requirement`。requirement / handler 字典一律按
+//!   **直接对象**嵌套写进目录 `/Requirements`，不分配任何间接对象号。
+//! - PDF 1.7 版本门禁走 `PdfFeature::DocumentRequirements` 能力模型
+//!   （`min_version()` 即 Table 28 raw L3692 的 1.7）：低于 1.7 仍携带
+//!   `/Requirements` → `WriteError::UnsupportedVersion`，零字节。任何非空
+//!   `/RH` 由构建期校验拒为 `WriteError::InvalidObject`——raw L26125「The RH
+//!   entry shall not be used in PDF 1.7」与 1.7 门槛互斥，故本库没有能写出
+//!   `/RH` 的版本。写出时同步将 `DocumentRequirements` 登记进文档特征画像
+//!   （`builder/navigation/mod.rs`），与读端 `features/inspect.rs` 扫到目录
+//!   `/Requirements` 时的登记同口径；两端都**不**回查名称字典，因此上一条
+//!   「不回查 `/JavaScript`」是读写一致的库边界，而非读端单侧的宽容。
 
 mod issues;
 mod parse;
