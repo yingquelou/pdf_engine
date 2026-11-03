@@ -16,7 +16,10 @@
 //! 版本门控（构建期返回 [`WriteError::UnsupportedVersion`]，零字节输出）：
 //! 大纲与旧式命名目标（目录 `/Dests`，12.3.2.3 的 PDF 1.1 形态）自 1.1 起、
 //! 命名目标自 1.2 起、页面标签、命名页面与命名模板页
-//! 自 1.3 起、备用演示自 1.4 起、扩展字典（目录 `/Extensions`）自 1.7 起。输入非法（页码越界、名称重复、标签起点
+//! 自 1.3 起、备用演示自 1.4 起、扩展字典（目录 `/Extensions`）与文档需求
+//! （目录 `/Requirements`，12.10）自 1.7 起。文档需求的门槛走
+//! `PdfVersion::supports(PdfFeature::DocumentRequirements)` 能力模型，写出
+//! 时同步登记该特征。输入非法（页码越界、名称重复、标签起点
 //! 乱序、颜色越界、未知嵌入文件等）返回 [`WriteError::InvalidObject`]，
 //! 同样零字节输出。
 
@@ -196,6 +199,7 @@ pub(super) fn apply(
     structure_targets: StructureTargets<'_>,
 ) -> Result<(), WriteError> {
     let has_actions = outline_has_actions(&navigation.outline);
+    let has_requirements = !navigation.document_requirements.is_empty();
     let required = [
         (
             !navigation.page_labels.is_empty(),
@@ -245,11 +249,6 @@ pub(super) fn apply(
             "extensions dictionaries (catalog /Extensions)",
         ),
         (
-            !navigation.document_requirements.is_empty(),
-            requirements::MINIMUM_VERSION,
-            "document requirements (catalog /Requirements, 12.10.1)",
-        ),
-        (
             navigation.structure_tree.is_some(),
             PdfVersion::V1_3,
             "structure trees",
@@ -268,7 +267,16 @@ pub(super) fn apply(
             )));
         }
     }
-    if required.iter().all(|(present, ..)| !present) {
+    // 文档需求（12.10）的版本门走 `PdfFeature::DocumentRequirements` 能力
+    // 模型（Table 28 raw L3692 把目录 `/Requirements` 标为 PDF 1.7），与
+    // 读端画像、`PdfVersion::supports` 共用同一阈值，不再直接比常量。
+    if has_requirements && !version.supports(PdfFeature::DocumentRequirements) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "document requirements (catalog /Requirements, 12.10.1) require PDF {}, got {version}",
+            PdfFeature::DocumentRequirements.min_version().as_str()
+        )));
+    }
+    if required.iter().all(|(present, ..)| !present) && !has_requirements {
         return Ok(());
     }
 
@@ -283,7 +291,7 @@ pub(super) fn apply(
         collection::validate(collection)?;
     }
     extensions::validate(&navigation.extensions, version)?;
-    if !navigation.document_requirements.is_empty() {
+    if has_requirements {
         requirements::validate(&navigation.document_requirements)?;
     }
 
@@ -432,13 +440,16 @@ pub(super) fn apply(
             .insert(PdfFeature::ExtensionsDictionary);
     }
 
-    if !navigation.document_requirements.is_empty() {
+    if has_requirements {
         // 12.10.1：`/Requirements` 是 requirement 字典数组，全部以直接对象
         // 嵌套写出，不分配对象号；`/RH` 已由 validate 拒绝（raw L26125）。
         catalog = catalog.insert(
             "Requirements",
             requirements::catalog_value(&navigation.document_requirements)?,
         );
+        doc.features
+            .borrow_mut()
+            .insert(PdfFeature::DocumentRequirements);
     }
 
     let structure = structure::write(

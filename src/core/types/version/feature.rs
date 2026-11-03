@@ -243,6 +243,11 @@ pub enum PdfFeature {
     /// 扩展字典（目录 `/Extensions` 与各前缀开发者扩展字典，7.12 与
     /// Table 50），随 ISO 32000-1（PDF 1.7）引入。
     ExtensionsDictionary,
+    /// 文档需求数组（目录 `/Requirements`，12.10；需求字典与处理器字典
+    /// 见 Table 264/265，目录条目见 Table 28「Requirements array
+    /// (Optional; PDF 1.7)」）。12.10.1 以「Beginning with PDF 1.7」开头，
+    /// PDF 1.7 唯一定义的 requirement 类型是 `EnableJavaScripts`。
+    DocumentRequirements,
     /// 查看器首选项字典（目录 `/ViewerPreferences`，12.2 Table 150 的
     /// 1.2 档位条目：五个界面开关布尔与 `/NonFullScreenPageMode`），
     /// PDF 1.2 引入。
@@ -380,6 +385,7 @@ impl PdfFeature {
             | PdfFeature::ArtifactSubtype
             | PdfFeature::ThreeDMarkup
             | PdfFeature::ExtensionsDictionary
+            | PdfFeature::DocumentRequirements
             | PdfFeature::ViewerPrintDialogPreferences => PdfVersion::V1_7,
             PdfFeature::ViewerEnforcement => PdfVersion::V2_0,
             PdfFeature::FreeTextQuadding => PdfVersion::V1_4,

@@ -233,6 +233,16 @@ pub(super) fn inspect_dict_features(features: &mut FeatureProfile, d: &Dict) {
     if d.0.contains_key("Extensions") {
         features.insert(PdfFeature::ExtensionsDictionary);
     }
+    // 文档需求（PDF 1.7）：目录 /Requirements（12.10、Table 264/265；
+    // Table 28 raw L3692 标 (Optional; PDF 1.7)）。与相邻的 Collection /
+    // Extensions 同口径：**按键存在登记，不校验值形态**——非数组、元素非
+    // 字典等畸形同样把文件推高到 1.7（画像的职责是版本下限，不是合规
+    // 判定），类型化违例由读端 `Document::requirements` 的
+    // `RequirementsIssue` 负责。`/Requirements` 只出现在目录（Table 28），
+    // 故无需子类型上下文。
+    if d.0.contains_key("Requirements") {
+        features.insert(PdfFeature::DocumentRequirements);
+    }
     // 查看器首选项（12.2 Table 150）：/ViewerPreferences 按 1.2 基档登记，
     // 条目按键登记各自引入档位。
     if d.0.contains_key("ViewerPreferences") {

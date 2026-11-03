@@ -5,7 +5,7 @@
 use super::*;
 use crate::core::builder::navigation::requirements;
 use crate::core::builder::types::requirements::{handler_value, requirement_value};
-use crate::core::types::{Array, PdfTextString, PdfVersion};
+use crate::core::types::{Array, PdfFeature, PdfTextString, PdfVersion};
 
 fn hex_of(text: &str) -> String {
     PdfTextString::from(text)
@@ -82,6 +82,11 @@ fn js_requirement() -> DocumentRequirement {
     DocumentRequirement::enable_javascripts()
 }
 
+/// 解析后文档的特征画像集合（读端在解析时按 inspect 口径填充）。
+fn features(doc: &Document) -> Vec<PdfFeature> {
+    doc.features.borrow().iter().copied().collect()
+}
+
 fn builder_with(version: PdfVersion) -> PdfBuilder {
     let mut b = PdfBuilder::with_version(version);
     b.page(PageSize::A4);
@@ -143,6 +148,48 @@ fn requirements_absent_writes_no_catalog_entry() {
 }
 
 #[test]
+fn requirements_write_registers_document_requirements_feature() {
+    // 写出目录 `/Requirements` ⇒ 特征画像登记 `DocumentRequirements`
+    // （写端 `navigation::apply` 显式 insert，读端 inspect 按键存在复核）。
+    let mut b = builder_with(PdfVersion::V1_7);
+    b.add_document_requirement(js_requirement());
+    let doc = build_and_parse(&mut b);
+    // 懒加载：画像在对象真正载入时填充，故先取目录再断言画像。
+    assert!(
+        matches!(catalog(&doc).get("Requirements"), Some(Value::Array(_))),
+        "目录里应有 `/Requirements` 数组"
+    );
+
+    let registered = features(&doc);
+    assert!(
+        registered.contains(&PdfFeature::DocumentRequirements),
+        "特性画像应登记 DocumentRequirements：{registered:?}"
+    );
+    assert_eq!(
+        PdfFeature::DocumentRequirements.to_string(),
+        "document requirements (catalog /Requirements)",
+        "Display 口径与 feature_display 表一致"
+    );
+}
+
+#[test]
+fn requirements_absent_does_not_register_feature() {
+    // 负向（同 `tests/extensions.rs` 的「未使用则不含」写法）：不配置
+    // `/Requirements` 时画像不得凭空含该特征。
+    let mut b = builder_with(PdfVersion::V1_7);
+    let doc = build_and_parse(&mut b);
+    assert!(
+        catalog(&doc).get("Requirements").is_none(),
+        "无配置不写目录条目"
+    );
+    assert!(
+        !features(&doc).contains(&PdfFeature::DocumentRequirements),
+        "未写 /Requirements 不应登记特性：{:?}",
+        features(&doc)
+    );
+}
+
+#[test]
 fn requirements_serialize_requirement_and_handler_dicts() {
     // 唯一序列化路径的类型化输出：requirement 字典（Table 264）。
     let Value::Dict(dict) = requirement_value(&js_requirement()) else {
@@ -193,7 +240,18 @@ fn requirements_gate_rejects_versions_below_minimum_with_zero_bytes() {
         }
         assert!(out.is_empty(), "版本门禁失败必须零字节");
     }
-    assert_eq!(requirements::MINIMUM_VERSION, PdfVersion::V1_7);
+    // 门禁阈值改由 PdfFeature::DocumentRequirements 能力模型给出（Table 28
+    // raw L3692 把目录 `/Requirements` 标为 PDF 1.7），写端不再直接比常量。
+    assert_eq!(
+        PdfFeature::DocumentRequirements.min_version(),
+        PdfVersion::V1_7,
+        "12.10 门起版本即 Table 28 的 PDF 1.7"
+    );
+    assert!(
+        !PdfVersion::V1_6.supports(PdfFeature::DocumentRequirements),
+        "1.6 及更低版本不支持 `/Requirements`"
+    );
+    assert!(PdfVersion::V1_7.supports(PdfFeature::DocumentRequirements));
 }
 
 #[test]

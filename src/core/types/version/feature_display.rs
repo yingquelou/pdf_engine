@@ -102,6 +102,7 @@ impl fmt::Display for PdfFeature {
             PdfFeature::TagSuspects => "tag suspects",
             PdfFeature::ReversedCharacters => "reversed show strings",
             PdfFeature::ExtensionsDictionary => "extensions dictionary",
+            PdfFeature::DocumentRequirements => "document requirements (catalog /Requirements)",
             PdfFeature::ViewerPreferences => "viewer preferences dictionary",
             PdfFeature::ViewerReadingDirection => "viewer preferences reading direction",
             PdfFeature::ViewerDisplayDocTitle => "viewer preferences display doc title",

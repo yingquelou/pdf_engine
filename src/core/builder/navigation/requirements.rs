@@ -8,9 +8,11 @@
 //!
 //! - 全部 requirement / handler 字典按**直接对象**嵌套写出（规范未要求间接
 //!   引用，Table 264/265 只给字典条目），不分配任何对象号；
-//! - 目标版本低于 [`MINIMUM_VERSION`]（1.7）携带 `/Requirements` →
-//!   [`WriteError::UnsupportedVersion`]（直接比 [`PdfVersion`] 常量，与
-//!   `mod.rs` 其余门控同式，不新增 `PdfFeature` 变体）；
+//! - 目标版本低于 PDF 1.7 携带 `/Requirements` →
+//!   [`WriteError::UnsupportedVersion`]：门槛由 `mod.rs` 用
+//!   `version.supports(PdfFeature::DocumentRequirements)` 判定（该变体的
+//!   `min_version()` 即 Table 28 raw L3692 的 1.7），写出时同步把该特征
+//!   登记进文档画像，读写共用同一口径；
 //! - 默认写出路径**一律拒绝 `/RH`** → [`WriteError::InvalidObject`]：
 //!   raw L26125「The RH entry shall not be used in PDF 1.7」，而低于 1.7
 //!   又携带不了 `/Requirements`，两者互斥 ⇒ 没有任何合法版本能写出 `/RH`。
@@ -35,13 +37,10 @@ use crate::core::builder::types::requirements::{
     DocumentRequirement, DocumentRequirementType, HANDLER_TYPE, REQUIREMENT_TYPE,
     RequirementHandler, RequirementHandlerType, requirement_value,
 };
-use crate::core::types::{Array, Dict, PdfVersion, Value};
+use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
 use super::PdfBuilder;
-
-/// Table 28（raw L3692）：目录 `/Requirements` 的引入版本。
-pub(in crate::core::builder) const MINIMUM_VERSION: PdfVersion = PdfVersion::V1_7;
 
 /// [`WriteError::InvalidObject`] 加统一前缀，便于区分车道来源。
 fn invalid(message: impl Into<String>) -> WriteError {
