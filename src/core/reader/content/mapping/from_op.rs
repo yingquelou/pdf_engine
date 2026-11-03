@@ -122,5 +122,9 @@ fn from_properties(properties: &MarkedContentProperties) -> Value {
     match properties {
         MarkedContentProperties::Name(name) => Value::Name(name.clone()),
         MarkedContentProperties::Dict(dict) => Value::Dict(dict.clone()),
+        // 间接引用操作数保持 `Value::Ref`，与读端 `BDC`/`DP` 的引用形态对齐。
+        MarkedContentProperties::Reference { object, generation } => {
+            Value::Ref(*object, *generation)
+        }
     }
 }

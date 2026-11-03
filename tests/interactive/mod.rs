@@ -53,6 +53,7 @@ mod extensions;
 mod form;
 mod image_jbig2;
 mod incremental;
+mod marked_content_reference;
 mod metadata;
 mod movie;
 mod navigation;

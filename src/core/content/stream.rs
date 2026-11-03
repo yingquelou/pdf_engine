@@ -384,6 +384,25 @@ impl ContentStream {
         self
     }
 
+    /// 开始以**间接引用**为属性表的标记内容序列：`/tag obj gen R BDC`。
+    ///
+    /// 只写出 `obj gen R` 操作数（形如 `/Tag 5 0 R BDC`）；被引用的属性表字典
+    /// 对象不在本层创建，对象号与间接对象登记都由调用方负责。该形态不是
+    /// ISO 32000-1 授权的操作数形态（见 [`MarkedContentProperties`] 文档），
+    /// 仅供与写出该形态的生产者互操作时使用。
+    pub fn begin_marked_content_reference(
+        &mut self,
+        tag: impl Into<String>,
+        object: i64,
+        generation: i64,
+    ) -> &mut Self {
+        self.push(Op::BeginMarkedContentProperties {
+            tag: tag.into(),
+            properties: MarkedContentProperties::Reference { object, generation },
+        });
+        self
+    }
+
     /// 标记内容点：`/tag MP`（PDF 14.6）。
     pub fn marked_content_point(&mut self, tag: impl Into<String>) -> &mut Self {
         self.push(Op::MarkedContentPoint { tag: tag.into() });
@@ -399,6 +418,23 @@ impl ContentStream {
         self.push(Op::MarkedContentPointProperties {
             tag: tag.into(),
             properties,
+        });
+        self
+    }
+
+    /// 以**间接引用**为属性表的标记内容点：`/tag obj gen R DP`。
+    ///
+    /// 与 [`Self::begin_marked_content_reference`] 同一操作数形态与同一约束：
+    /// 只写 `obj gen R`，被引用对象由调用方登记；非 ISO 32000-1 授权形态。
+    pub fn marked_content_point_reference(
+        &mut self,
+        tag: impl Into<String>,
+        object: i64,
+        generation: i64,
+    ) -> &mut Self {
+        self.push(Op::MarkedContentPointProperties {
+            tag: tag.into(),
+            properties: MarkedContentProperties::Reference { object, generation },
         });
         self
     }

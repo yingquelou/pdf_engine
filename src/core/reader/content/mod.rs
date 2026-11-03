@@ -28,7 +28,7 @@ mod tests;
 pub use mapping::{OpMappingError, from_content_op, serialize_ops, to_content_op};
 pub use marked::{
     MAX_MARKED_DEPTH, MarkedContentError, MarkedSection, collect_marked_sections,
-    resolve_marked_visibility,
+    collect_marked_sections_with_references, resolve_marked_visibility,
 };
 pub use parser::{ContentStreamError, parse_content_stream};
 

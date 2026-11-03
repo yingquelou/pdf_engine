@@ -1,51 +1,50 @@
 use super::dict::parse_dictionary_inner;
 use super::error::{ContentStreamError, Result};
+use super::operand::OperandToken;
 use crate::core::reader::text::tokenizer::CsToken;
 use crate::core::types::{Array, Value};
 
-/// Convert a run of operand tokens into PDF values, coalescing structure.
+/// Convert a run of operands into PDF values, coalescing structure.
 ///
 /// Used for unmodeled operators so their operands survive a
 /// parse → serialize → parse roundtrip: `[ ... ]` spans (with nesting)
-/// become [`Value::Array`], `num gen R` triplets become [`Value::Ref`],
+/// become [`Value::Array`], `num gen R` triplets become [`Value::Ref`]
+/// (already folded into [`OperandToken::Reference`] by the operator boundary),
 /// and `true`/`false`/`null` keywords become their typed values.
-pub(super) fn tokens_to_values(tokens: &[CsToken]) -> Result<Vec<Value>> {
+pub(super) fn operands_to_values(operands: &[OperandToken]) -> Result<Vec<Value>> {
     let mut values = Vec::new();
     let mut pos = 0;
-    while pos < tokens.len() {
-        if let (
-            Some(CsToken::Number(num)),
-            Some(CsToken::Number(generation)),
-            Some(CsToken::Keyword(kw)),
-        ) = (tokens.get(pos), tokens.get(pos + 1), tokens.get(pos + 2))
-            && kw == "R"
-        {
-            values.push(Value::Ref(*num as i64, *generation as i64));
-            pos += 3;
+    while pos < operands.len() {
+        if let OperandToken::Reference { object, generation } = &operands[pos] {
+            values.push(Value::Ref(*object, *generation));
+            pos += 1;
             continue;
         }
-        if matches!(tokens[pos], CsToken::ArrayOpen) {
-            let end = array_close_index(tokens, pos).unwrap_or(tokens.len());
-            values.push(Value::Array(Array(tokens_to_values(
-                &tokens[pos + 1..end.min(tokens.len())],
+        if matches!(operands[pos], OperandToken::Token(CsToken::ArrayOpen)) {
+            let end = array_close_index(operands, pos).unwrap_or(operands.len());
+            values.push(Value::Array(Array(operands_to_values(
+                &operands[pos + 1..end.min(operands.len())],
             )?)));
             pos = end + 1;
             continue;
         }
-        values.push(token_to_value(&tokens[pos])?);
+        // 其余操作数都是 token（`Reference` 与数组跨度已在上面处理完）。
+        if let Some(token) = operands[pos].token() {
+            values.push(token_to_value(token)?);
+        }
         pos += 1;
     }
     Ok(values)
 }
 
 /// Index of the `ArrayClose` matching the `ArrayOpen` at `open`.
-fn array_close_index(tokens: &[CsToken], open: usize) -> Option<usize> {
+fn array_close_index(operands: &[OperandToken], open: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut pos = open;
-    while pos < tokens.len() {
-        match &tokens[pos] {
-            CsToken::ArrayOpen => depth += 1,
-            CsToken::ArrayClose => {
+    while pos < operands.len() {
+        match &operands[pos] {
+            OperandToken::Token(CsToken::ArrayOpen) => depth += 1,
+            OperandToken::Token(CsToken::ArrayClose) => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(pos);

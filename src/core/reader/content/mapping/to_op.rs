@@ -250,9 +250,17 @@ fn to_properties(operator: &str, value: &Value) -> Result<MarkedContentPropertie
     match value {
         Value::Name(name) => Ok(MarkedContentProperties::Name(name.clone())),
         Value::Dict(dict) => Ok(MarkedContentProperties::Dict(dict.clone())),
+        // 间接引用属性表（`/Tag 5 0 R BDC`）：写端模型可表达，故映射后仍能
+        // 走写端序列化器回写 `obj gen R`，不必退回原始字节。
+        Value::Ref(object, generation) => Ok(MarkedContentProperties::Reference {
+            object: *object,
+            generation: *generation,
+        }),
         other => Err(not_representable(
             operator,
-            format!("property operand must be a name or inline dict, got {other:?}"),
+            format!(
+                "property operand must be a name, inline dict or indirect reference, got {other:?}"
+            ),
         )),
     }
 }

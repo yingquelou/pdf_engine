@@ -375,3 +375,51 @@ fn truncated_inline_image_returns_error() {
     let error = parse_content_stream(b"BI /W 1 /H 1").unwrap_err();
     assert_eq!(error, ContentStreamError::MalformedInlineImage);
 }
+
+/// 14.6.2 属性表的间接引用操作数（`/Tag 5 0 R BDC`）：`num gen R` 三元组在
+/// 操作符边界被折叠成**一个**操作数，于是 `BDC`/`DP` 拿到 `Value::Ref`，
+/// 整条内容流不再因为一个 `R` 关键字被判为解析失败（ISO 32000-1 Table 320
+/// 只列内联字典与 `/Properties` 名称两种形态，此处按生产者实态容错读取）。
+#[test]
+fn bdc_and_dp_accept_indirect_reference_property_operands() {
+    use crate::core::types::Value;
+    let ops = parse_content_stream(b"/Tag 5 0 R BDC BT (x) Tj ET EMC /Fig 7 2 R DP").unwrap();
+    assert_eq!(
+        ops[0],
+        Op::BeginMarkedContentWithProperties("Tag".into(), Value::Ref(5, 0))
+    );
+    assert_eq!(
+        ops[ops.len() - 1],
+        Op::MarkedContentPointWithProperties("Fig".into(), Value::Ref(7, 2))
+    );
+}
+
+/// 折叠只发生在 `R` 前面确实是两个数字时；孤立的 `R` 仍是（未建模的）操作符，
+/// 不会被伪造成一个间接引用操作数。
+#[test]
+fn stray_r_keyword_stays_an_operator() {
+    let ops = parse_content_stream(b"(a) R /P BMC EMC").unwrap();
+    match &ops[0] {
+        Op::Unmodeled { operator, operands } => {
+            assert_eq!(operator, "R");
+            assert_eq!(operands.len(), 1);
+        }
+        other => panic!("孤立的 R 应保持为操作符，实际 {other:?}"),
+    }
+    assert_eq!(ops.len(), 3);
+}
+
+/// 未建模操作符的操作数里，引用三元组同样折叠为一个 `Value::Ref`。
+#[test]
+fn unmodeled_operands_keep_a_single_reference_operand() {
+    use crate::core::types::Value;
+    let ops = parse_content_stream(b"3 0 R CustomOp").unwrap();
+    assert_eq!(ops.len(), 1);
+    match &ops[0] {
+        Op::Unmodeled { operator, operands } => {
+            assert_eq!(operator, "CustomOp");
+            assert_eq!(operands.as_slice(), [Value::Ref(3, 0)]);
+        }
+        other => panic!("期望未建模操作符，实际 {other:?}"),
+    }
+}

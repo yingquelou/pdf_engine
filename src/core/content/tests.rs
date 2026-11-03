@@ -395,3 +395,47 @@ fn optional_content_enum_serializes_through_marked_content_operators() {
         .optional_content(OptionalContent::End);
     assert_eq!(s.to_bytes(), b"/OC /Layer1 BDC\n/P /Props1 DP\nEMC\n");
 }
+
+/// 14.6.2 属性表的间接引用操作数形态：写端只输出 `obj gen R`（形如
+/// `/Tag 5 0 R BDC`），既不展开成内联字典也不退化成名称；代号原样保留。
+#[test]
+fn marked_content_reference_operand_serializes_as_obj_gen_r() {
+    let mut s = ContentStream::new();
+    s.begin_marked_content_reference("Tag", 5, 0);
+    s.marked_content_point_reference("Fig", 7, 2);
+    s.end_marked_content();
+    assert_eq!(s.to_bytes(), b"/Tag 5 0 R BDC\n/Fig 7 2 R DP\nEMC\n");
+
+    // 链式入口与直接构造 `MarkedContentProperties::Reference` 走同一条模型通路。
+    let mut direct = ContentStream::new();
+    direct.begin_marked_content_properties(
+        "Tag",
+        MarkedContentProperties::Reference {
+            object: 5,
+            generation: 0,
+        },
+    );
+    let mut chained = ContentStream::new();
+    chained.begin_marked_content_reference("Tag", 5, 0);
+    assert_eq!(direct.ops(), chained.ops());
+}
+
+/// 间接引用操作数不影响其余标记内容操作数形态的序列化（名称与内联字典仍
+/// 各自成立），保证新增变体是纯增量。
+#[test]
+fn marked_content_reference_keeps_name_and_inline_forms_unchanged() {
+    let mut s = ContentStream::new();
+    s.begin_marked_content_properties("P", MarkedContentProperties::Name("MC0".into()));
+    s.begin_marked_content_reference("Tag", 12, 0);
+    s.begin_marked_content_properties(
+        "Span",
+        MarkedContentProperties::Dict(Dict::new().insert("MCID", Value::Integer(1))),
+    );
+    s.end_marked_content()
+        .end_marked_content()
+        .end_marked_content();
+    assert_eq!(
+        s.to_bytes(),
+        b"/P /MC0 BDC\n/Tag 12 0 R BDC\n/Span << /MCID 1 >> BDC\nEMC\nEMC\nEMC\n"
+    );
+}

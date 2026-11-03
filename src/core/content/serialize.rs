@@ -442,7 +442,9 @@ impl<'a> Writer<'a> {
         self.0.extend_from_slice(kw);
         self.0.push(b'\n');
     }
-    /// 输出标记内容属性表：资源名 `/name` 或内联字典 `<< ... >>`。
+    /// 输出标记内容属性表：资源名 `/name`、内联字典 `<< ... >>`，或间接引用
+    /// 操作数 `obj gen R`（后一形态非 ISO 32000-1 授权，见
+    /// [`MarkedContentProperties`] 文档；只写操作数，不登记被引用对象）。
     fn emit_properties(&mut self, properties: &MarkedContentProperties) {
         match properties {
             MarkedContentProperties::Name(name) => {
@@ -453,6 +455,13 @@ impl<'a> Writer<'a> {
                 let mut out = String::new();
                 crate::core::writer::write_value(&Value::Dict(dict.clone()), &mut out);
                 self.0.extend_from_slice(out.as_bytes());
+            }
+            MarkedContentProperties::Reference { object, generation } => {
+                self.emit_int(*object);
+                self.emit_byte(b' ');
+                self.emit_int(*generation);
+                self.emit_byte(b' ');
+                self.emit(b"R");
             }
         }
     }

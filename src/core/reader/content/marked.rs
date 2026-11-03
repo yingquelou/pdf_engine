@@ -2,7 +2,9 @@
 //!
 //! [`collect_marked_sections`] walks a parsed content stream's [`Op`] sequence,
 //! pairs `BMC/BDC … EMC` nesting, resolves property lists (inline dictionary
-//! or `/Properties` resource name), and reports typed errors for unbalanced
+//! or `/Properties` resource name; the sibling
+//! [`collect_marked_sections_with_references`] additionally dereferences an
+//! indirect reference operand), and reports typed errors for unbalanced
 //! sections. Each section exposes `/ActualText` and `/E` text and — through a
 //! visibility callback — whether its optional-content group (8.11) is on.
 
@@ -186,6 +188,14 @@ pub fn resolve_marked_visibility(
     }
 }
 
+/// Whether a resolved property operand *is* an optional-content group
+/// dictionary rather than a property list carrying `/OC` — the pattern written
+/// by this crate's optional-content builder, where the `/Properties` entry (or
+/// the indirect reference target) is the OCG itself.
+fn is_ocg_property_dictionary(dict: &Dict) -> bool {
+    dict.get("Type").and_then(Value::as_name) == Some("OCG") && dict.get("OC").is_none()
+}
+
 /// Visibility for a `BDC`/`DP` *name* operand whose `/Properties` entry is
 /// the OCG dictionary itself rather than a property list carrying `/OC`
 /// (the pattern written by this crate's optional-content builder).
@@ -195,10 +205,7 @@ fn visibility_from_named_group(
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
     is_visible: &dyn Fn(i64) -> Option<bool>,
 ) -> Option<bool> {
-    let is_ocg_dictionary = properties.is_some_and(|dict| {
-        dict.get("Type").and_then(Value::as_name) == Some("OCG") && dict.get("OC").is_none()
-    });
-    if !is_ocg_dictionary {
+    if !properties.is_some_and(is_ocg_property_dictionary) {
         return None;
     }
     resolve_ocg_name(name).and_then(is_visible)
@@ -209,9 +216,45 @@ fn visibility_from_named_group(
 /// `resolve_property_name` maps a `BDC`/`DP` property *name* to its property
 /// list dictionary through the `/Properties` resource (already dereferenced).
 /// `resolve_ocg_name` and `is_visible` feed [`resolve_marked_visibility`].
+///
+/// Indirect reference operands (`/Tag 5 0 R BDC`) are **not** dereferenced by
+/// this entry point — see [`collect_marked_sections_with_references`] for the
+/// variant that resolves them. This signature is stable public API; the newer
+/// entry point is a sibling, not a change to it.
 pub fn collect_marked_sections(
     ops: &[Op],
     resolve_property_name: &dyn Fn(&str) -> Option<Dict>,
+    resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
+    is_visible: &dyn Fn(i64) -> Option<bool>,
+) -> Result<Vec<MarkedSection>, MarkedContentError> {
+    let no_reference_resolution = |_object: i64, _generation: i64| -> Option<Dict> { None };
+    collect_marked_sections_with_references(
+        ops,
+        resolve_property_name,
+        &no_reference_resolution,
+        resolve_ocg_name,
+        is_visible,
+    )
+}
+
+/// [`collect_marked_sections`] plus indirect reference property operands.
+///
+/// `resolve_property_ref` dereferences a `BDC`/`DP` operand written as
+/// `object generation R` (ISO 32000-1 Table 320, raw lines 29067–29078, only
+/// authorizes an inline dictionary or a `/Properties` name, and 14.6.2 raw
+/// lines 29087–29091 *requires* the named-resource form once the list holds
+/// indirect references; the reference operand is read here for
+/// interoperability with producers that emit `/Tag 5 0 R BDC` anyway).
+///
+/// Degradation is typed and local: when the reference cannot be resolved —
+/// object missing, target not a dictionary, or the resolution budget is
+/// exhausted — the section keeps `properties: None`, exactly like an
+/// unresolvable `/Properties` name. The stream is never reported as broken
+/// because of one operand, and no section is dropped.
+pub fn collect_marked_sections_with_references(
+    ops: &[Op],
+    resolve_property_name: &dyn Fn(&str) -> Option<Dict>,
+    resolve_property_ref: &dyn Fn(i64, i64) -> Option<Dict>,
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
     is_visible: &dyn Fn(i64) -> Option<bool>,
 ) -> Result<Vec<MarkedSection>, MarkedContentError> {
@@ -232,6 +275,7 @@ pub fn collect_marked_sections(
                     None,
                     index,
                     resolve_property_name,
+                    resolve_property_ref,
                     resolve_ocg_name,
                     is_visible,
                 )?;
@@ -245,6 +289,7 @@ pub fn collect_marked_sections(
                     Some(properties),
                     index,
                     resolve_property_name,
+                    resolve_property_ref,
                     resolve_ocg_name,
                     is_visible,
                 )?;
@@ -258,6 +303,7 @@ pub fn collect_marked_sections(
                     index + 1,
                     true,
                     resolve_property_name,
+                    resolve_property_ref,
                     resolve_ocg_name,
                     is_visible,
                 ));
@@ -273,6 +319,7 @@ pub fn collect_marked_sections(
                     index + 1,
                     true,
                     resolve_property_name,
+                    resolve_property_ref,
                     resolve_ocg_name,
                     is_visible,
                 ));
@@ -319,6 +366,7 @@ fn open_section(
     properties_operand: Option<&Value>,
     index: usize,
     resolve_property_name: &dyn Fn(&str) -> Option<Dict>,
+    resolve_property_ref: &dyn Fn(i64, i64) -> Option<Dict>,
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
     is_visible: &dyn Fn(i64) -> Option<bool>,
 ) -> Result<(), MarkedContentError> {
@@ -332,6 +380,7 @@ fn open_section(
         index,
         false,
         resolve_property_name,
+        resolve_property_ref,
         resolve_ocg_name,
         is_visible,
     );
@@ -350,6 +399,7 @@ fn section_from(
     end: usize,
     point: bool,
     resolve_property_name: &dyn Fn(&str) -> Option<Dict>,
+    resolve_property_ref: &dyn Fn(i64, i64) -> Option<Dict>,
     resolve_ocg_name: &dyn Fn(&str) -> Option<i64>,
     is_visible: &dyn Fn(i64) -> Option<bool>,
 ) -> MarkedSection {
@@ -360,6 +410,16 @@ fn section_from(
             let dict = resolve_property_name(name);
             visibility =
                 visibility_from_named_group(name, dict.as_ref(), resolve_ocg_name, is_visible);
+            dict
+        }
+        // 间接引用操作数：解引用后与内联字典走同一条登记通路。引用直接指向
+        // OCG 字典时对象号已知，可见性按默认配置判定（与 `/Properties` 名称
+        // 指向 OCG 的既有分支同构）；解引用失败则保持 properties = None。
+        Value::Ref(object, generation) => {
+            let dict = resolve_property_ref(*object, *generation);
+            if dict.as_ref().is_some_and(is_ocg_property_dictionary) {
+                visibility = is_visible(*object);
+            }
             dict
         }
         _ => None,
@@ -383,8 +443,12 @@ impl Document {
     ///
     /// Property lists are resolved through the page `/Properties` resource
     /// and optional-content visibility is evaluated against the catalog
-    /// `/OCProperties` default configuration. Form XObject content is not
-    /// recursed into; callers expand `Op::PaintXObject` themselves.
+    /// `/OCProperties` default configuration. A `BDC`/`DP` operand written as
+    /// an indirect reference (`/Tag 5 0 R BDC`) is dereferenced to its
+    /// property dictionary as well; when that dereference fails the section
+    /// keeps `properties: None` (the same degradation an unresolvable
+    /// `/Properties` name produces), never an error. Form XObject content is
+    /// not recursed into; callers expand `Op::PaintXObject` themselves.
     pub fn page_marked_content(
         &self,
         page_index: usize,
@@ -424,8 +488,22 @@ impl Document {
                 .as_ref()
                 .and_then(|props| props.is_visible(object))
         };
-        let sections =
-            collect_marked_sections(&ops, &resolve_property_name, &resolve_ocg_name, &is_visible)?;
+        // 间接引用属性表操作数（`/Tag 5 0 R BDC`）：按对象号解引用，失败
+        // （对象缺失、目标非字典、预算耗尽）时返回 None 走类型化降级，
+        // 与 `/Properties` 名称解析不到的行为一致。
+        let resolve_property_ref = |object: i64, generation: i64| -> Option<Dict> {
+            let value = self
+                .resolve_graphics_state_value(&Value::Ref(object, generation))
+                .ok()?;
+            value.as_dict().cloned()
+        };
+        let sections = collect_marked_sections_with_references(
+            &ops,
+            &resolve_property_name,
+            &resolve_property_ref,
+            &resolve_ocg_name,
+            &is_visible,
+        )?;
         self.record_marked_content_features(&sections);
         Ok(sections)
     }

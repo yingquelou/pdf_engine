@@ -269,3 +269,26 @@ fn inline_image_variant_serializes_and_reparses() {
         vec![op]
     );
 }
+
+/// 属性表的间接引用操作数（`/Tag 5 0 R BDC`，Table 320 前缀序）在读端模型与
+/// 写端模型之间双向可达，且 `parse → serialize → parse` 保持同一模型：
+/// 走的是写端序列化器（`emit_properties` 输出 `obj gen R`），不是原始回退。
+#[test]
+fn bdc_reference_operand_roundtrips_through_the_writer_model() {
+    let bytes = b"/Tag 5 0 R BDC EMC /Fig 7 2 R DP";
+    let ops = assert_model_roundtrip(bytes);
+    assert_eq!(serialize_ops(&ops), b"/Tag 5 0 R BDC\nEMC\n/Fig 7 2 R DP\n");
+
+    let mapped = to_content_op(&ops[0]).expect("引用属性表操作数可映射到写端模型");
+    assert_eq!(
+        mapped,
+        WriteOp::BeginMarkedContentProperties {
+            tag: "Tag".into(),
+            properties: MarkedContentProperties::Reference {
+                object: 5,
+                generation: 0,
+            },
+        }
+    );
+    assert_eq!(from_content_op(&mapped), ops[0]);
+}

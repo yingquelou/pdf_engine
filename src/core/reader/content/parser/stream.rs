@@ -1,10 +1,11 @@
 use super::dict::parse_dictionary_inner;
 use super::error::{ContentStreamError, Result};
 use super::operand::{
-    expect_integer, expect_name, expect_number, expect_number_array, expect_numbers_exact,
-    expect_numbers_variadic, expect_properties, expect_string, expect_text_array,
+    OperandToken, expect_integer, expect_name, expect_number, expect_number_array,
+    expect_numbers_exact, expect_numbers_variadic, expect_properties, expect_string,
+    expect_text_array,
 };
-use super::value::tokens_to_values;
+use super::value::operands_to_values;
 use crate::core::reader::content::{InlineImage, Op};
 use crate::core::reader::text::tokenizer::{CsToken, tokenize_content_stream};
 use crate::core::types::Value;
@@ -36,22 +37,53 @@ pub fn parse_content_stream(input: &[u8]) -> Result<Vec<Op>> {
         }
 
         // Collect operands until we hit an operator
-        let mut operands = Vec::new();
+        let mut operands: Vec<OperandToken> = Vec::new();
         while pos < tokens.len() {
             if let CsToken::Keyword(kw) = &tokens[pos] {
+                // `num gen R` is an indirect reference *operand*, not an
+                // operator: fold the triplet into one operand and keep
+                // collecting. This is what lets a `BDC`/`DP` property operand
+                // written as `/Tag 5 0 R BDC` reach the marked-content
+                // operators instead of truncating the `BDC` (see
+                // [`OperandToken::Reference`] for the normative background).
+                if kw == "R" && fold_reference(&mut operands) {
+                    pos += 1;
+                    continue;
+                }
                 // This is the operator
                 let op = parse_operator(kw, &operands)?;
                 ops.push(op);
                 pos += 1;
                 break;
             } else {
-                operands.push(tokens[pos].clone());
+                operands.push(OperandToken::Token(tokens[pos].clone()));
                 pos += 1;
             }
         }
     }
 
     Ok(ops)
+}
+
+/// Fold a trailing `object generation` number pair into one reference operand.
+///
+/// Returns `false` — leaving the operands untouched — when the `R` keyword is
+/// not preceded by exactly two numeric operands, so a stray `R` stays an
+/// (unmodeled) operator and is reported as such rather than inventing a
+/// reference.
+fn fold_reference(operands: &mut Vec<OperandToken>) -> bool {
+    let count = operands.len();
+    if count < 2 {
+        return false;
+    }
+    let pair = (operands[count - 2].token(), operands[count - 1].token());
+    let (Some(CsToken::Number(object)), Some(CsToken::Number(generation))) = pair else {
+        return false;
+    };
+    let (object, generation) = (*object as i64, *generation as i64);
+    operands.truncate(count - 2);
+    operands.push(OperandToken::Reference { object, generation });
+    true
 }
 
 /// Parse the raw inline image dictionary bytes into ordered key/value pairs.
@@ -63,7 +95,7 @@ fn inline_image_dict_entries(dict: &[u8]) -> Vec<(String, Value)> {
     parse_dictionary_inner(dict).0.into_iter().collect()
 }
 
-fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
+fn parse_operator(keyword: &str, operands: &[OperandToken]) -> Result<Op> {
     match keyword {
         // Graphics state
         "q" => Ok(Op::SaveState),
@@ -207,7 +239,7 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         "cs" => Ok(Op::SetFillColorSpace(expect_name(operands, "cs", 0)?)),
         "SC" => Ok(Op::SetStrokeColor(expect_numbers_variadic(operands, "SC")?)),
         "SCN" => {
-            if let Some(CsToken::Name(pattern)) = operands.last() {
+            if let Some(CsToken::Name(pattern)) = operands.last().and_then(OperandToken::token) {
                 let components = expect_numbers_variadic(&operands[..operands.len() - 1], "SCN")?;
                 if components.is_empty() {
                     Ok(Op::SetStrokeColorPattern(pattern.clone()))
@@ -225,7 +257,7 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         }
         "sc" => Ok(Op::SetFillColor(expect_numbers_variadic(operands, "sc")?)),
         "scn" => {
-            if let Some(CsToken::Name(pattern)) = operands.last() {
+            if let Some(CsToken::Name(pattern)) = operands.last().and_then(OperandToken::token) {
                 let components = expect_numbers_variadic(&operands[..operands.len() - 1], "scn")?;
                 if components.is_empty() {
                     Ok(Op::SetFillColorPattern(pattern.clone()))
@@ -286,7 +318,7 @@ fn parse_operator(keyword: &str, operands: &[CsToken]) -> Result<Op> {
         // Unmodeled operator
         _ => Ok(Op::Unmodeled {
             operator: keyword.into(),
-            operands: tokens_to_values(operands)?,
+            operands: operands_to_values(operands)?,
         }),
     }
 }

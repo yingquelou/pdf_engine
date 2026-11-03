@@ -2,7 +2,7 @@
 
 use crate::core::reader::content::{
     MAX_MARKED_DEPTH, MarkedContentError, MarkedSection, Op, collect_marked_sections,
-    resolve_marked_visibility,
+    collect_marked_sections_with_references, resolve_marked_visibility,
 };
 use crate::core::types::{
     Array, Dict, Document, Object, StartXref, StreamData, Trailer, Value, Xref,
@@ -345,4 +345,208 @@ fn page_marked_content_resolves_properties_and_visibility() {
     assert_eq!(section.tag, "P");
     assert_eq!(section.visibility, Some(false));
     assert_eq!(section.actual_text().as_deref(), Some("secret-replacement"));
+}
+
+// ── 14.6.2 属性表的间接引用操作数（`/Tag 5 0 R BDC`）───────────
+//
+// ISO 32000-1 Table 320 只授权「内联字典」与「`/Properties` 名称」两种
+// properties 操作数（`pdftotext -raw docs/PDF32000_2008.pdf -` 的
+// L29067–29069、L29075–29078），14.6.2 L29087–29091 更要求值里含间接引用
+// 时**必须**改写成命名资源。因此下面的解引用是对生产者实态的互操作支持，
+// 降级行为与名称解析不到完全一致：区段保留、`properties` 置空、不报错。
+
+#[test]
+fn bdc_resolves_indirect_reference_operand_through_the_reference_callback() {
+    let ops = vec![
+        Op::BeginMarkedContentWithProperties("Span".into(), Value::Ref(9, 0)),
+        Op::EndMarkedContent,
+    ];
+    let resolve_property_name = Box::new(|_: &str| -> Option<Dict> { None });
+    let resolve_property_ref = Box::new(|object: i64, generation: i64| -> Option<Dict> {
+        (object == 9 && generation == 0)
+            .then(|| Dict::new().insert("ActualText", Value::String("from reference".into())))
+    });
+    let resolve_ocg_name = Box::new(|_: &str| -> Option<i64> { None });
+    let is_visible = Box::new(|_: i64| -> Option<bool> { None });
+    let sections = collect_marked_sections_with_references(
+        &ops,
+        &resolve_property_name,
+        &resolve_property_ref,
+        &resolve_ocg_name,
+        &is_visible,
+    )
+    .expect("balanced");
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].actual_text().as_deref(), Some("from reference"));
+}
+
+#[test]
+fn legacy_entry_point_leaves_reference_operand_unresolved() {
+    // 旧公开签名不变：没有引用解析回调时，间接引用操作数只会被丢弃。
+    let ops = vec![
+        Op::BeginMarkedContentWithProperties("Span".into(), Value::Ref(9, 0)),
+        Op::EndMarkedContent,
+    ];
+    let sections = collect(&ops).expect("balanced");
+    assert_eq!(sections.len(), 1);
+    assert!(sections[0].properties.is_none());
+    assert_eq!(sections[0].visibility, None);
+}
+
+#[test]
+fn unresolved_reference_operand_degrades_without_error() {
+    let ops = vec![
+        Op::BeginMarkedContentWithProperties("Span".into(), Value::Ref(9, 0)),
+        Op::EndMarkedContent,
+        Op::BeginMarkedContentWithProperties("P".into(), Value::Ref(12, 1)),
+        Op::EndMarkedContent,
+    ];
+    let resolve_property_name = Box::new(|_: &str| -> Option<Dict> { None });
+    let resolve_property_ref = Box::new(|_: i64, _: i64| -> Option<Dict> { None });
+    let resolve_ocg_name = Box::new(|_: &str| -> Option<i64> { None });
+    let is_visible = Box::new(|_: i64| -> Option<bool> { None });
+    let sections = collect_marked_sections_with_references(
+        &ops,
+        &resolve_property_name,
+        &resolve_property_ref,
+        &resolve_ocg_name,
+        &is_visible,
+    )
+    .expect("a dead reference never invalidates the page");
+    assert_eq!(sections.len(), 2);
+    assert!(sections.iter().all(|section| section.properties.is_none()));
+    assert_eq!(sections[0].tag, "Span");
+    assert_eq!(sections[1].tag, "P");
+}
+
+#[test]
+fn reference_operand_to_ocg_dictionary_sets_visibility() {
+    // `/OC /OC2 BDC` 的实态变体：引用直接指向 OCG 字典本身。
+    let ops = vec![Op::MarkedContentPointWithProperties(
+        "OC".into(),
+        Value::Ref(7, 0),
+    )];
+    let resolve_property_name = Box::new(|_: &str| -> Option<Dict> { None });
+    let resolve_property_ref = Box::new(|object: i64, _generation: i64| -> Option<Dict> {
+        (object == 7).then(|| {
+            Dict::new()
+                .insert("Type", Value::Name("OCG".into()))
+                .insert("Name", Value::String("Layer".into()))
+        })
+    });
+    let resolve_ocg_name = Box::new(|_: &str| -> Option<i64> { None });
+    let is_visible = Box::new(|object: i64| -> Option<bool> { (object == 7).then_some(false) });
+    let sections = collect_marked_sections_with_references(
+        &ops,
+        &resolve_property_name,
+        &resolve_property_ref,
+        &resolve_ocg_name,
+        &is_visible,
+    )
+    .expect("points never need EMC");
+    assert_eq!(sections[0].visibility, Some(false));
+}
+
+fn reference_page_document(content: &[u8], property_object: Value) -> Document {
+    let objects = vec![
+        Object::new(
+            1,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("Catalog".into()))
+                    .insert("Pages", Value::Ref(2, 0))
+                    .insert(
+                        "OCProperties",
+                        Value::Dict(
+                            Dict::new()
+                                .insert("OCGs", Value::Array(Array::new().push(Value::Ref(6, 0))))
+                                .insert(
+                                    "D",
+                                    Value::Dict(
+                                        Dict::new()
+                                            .insert("BaseState", Value::Name("ON".into()))
+                                            .insert(
+                                                "OFF",
+                                                Value::Array(Array::new().push(Value::Ref(6, 0))),
+                                            ),
+                                    ),
+                                ),
+                        ),
+                    ),
+            ),
+        ),
+        Object::new(
+            2,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("Pages".into()))
+                    .insert("Kids", Value::Array(Array::new().push(Value::Ref(3, 0))))
+                    .insert("Count", Value::Integer(1)),
+            ),
+        ),
+        Object::new(
+            3,
+            0,
+            Value::Dict(
+                Dict::new()
+                    .insert("Type", Value::Name("Page".into()))
+                    .insert(
+                        "Contents",
+                        Value::Stream(Dict::new(), StreamData::Owned(content.to_vec())),
+                    ),
+            ),
+        ),
+        Object::new(5, 0, property_object),
+        Object::new(6, 0, ocg_object()),
+    ];
+    let mut trailer = Trailer::new();
+    trailer.dict = Dict::new().insert("Root", Value::Ref(1, 0));
+    Document::from_objects(objects, Xref::new(), trailer, StartXref(0))
+}
+
+#[test]
+fn page_marked_content_dereferences_indirect_property_operand() {
+    let property_dict = Value::Dict(
+        Dict::new()
+            .insert("OC", Value::Ref(6, 0))
+            .insert(
+                "ActualText",
+                Value::String("replacement via reference".into()),
+            )
+            .insert("Alt", Value::String("alternate via reference".into()))
+            .insert("Lang", Value::Name("en-GB".into())),
+    );
+    let document =
+        reference_page_document(b"q /Span 5 0 R BDC BT (shown) Tj ET EMC Q", property_dict);
+    let sections = document.page_marked_content(0).expect("balanced page");
+    assert_eq!(sections.len(), 1);
+    let section = &sections[0];
+    assert_eq!(section.tag, "Span");
+    assert_eq!(section.visibility, Some(false));
+    assert_eq!(
+        section.actual_text().as_deref(),
+        Some("replacement via reference")
+    );
+    assert_eq!(
+        section.alternate_text().as_deref(),
+        Some("alternate via reference")
+    );
+    assert_eq!(section.language().as_deref(), Some("en-GB"));
+}
+
+#[test]
+fn page_marked_content_degrades_for_unusable_reference_operands() {
+    // 对象 5 存在但不是字典，对象 9 完全缺失：两种情况都只是降级。
+    let document =
+        reference_page_document(b"/Span 5 0 R BDC EMC /P 9 0 R BDC EMC", Value::Integer(7));
+    let sections = document
+        .page_marked_content(0)
+        .expect("page stays readable");
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].tag, "Span");
+    assert_eq!(sections[1].tag, "P");
+    assert!(sections.iter().all(|section| section.properties.is_none()));
+    assert!(sections.iter().all(|section| section.visibility.is_none()));
 }

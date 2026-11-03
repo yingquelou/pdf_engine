@@ -4,13 +4,61 @@ use crate::core::reader::content::TextElement;
 use crate::core::reader::text::tokenizer::CsToken;
 use crate::core::types::Value;
 
+/// One content-stream operand: a tokenizer token, or a `num gen R` triplet
+/// that has already been coalesced into an indirect reference.
+///
+/// The tokenizer emits the three pieces of an indirect reference separately
+/// and treats every keyword — `R` included — as a potential operator, so a
+/// `BDC`/`DP` property operand written as `/Tag 5 0 R BDC` would otherwise
+/// abort the whole stream parse with a bogus `R` operator plus a truncated
+/// `BDC`. Folding happens at the operand-collection boundary so the
+/// `expect_*` helpers below see one operand, never a stray `R` keyword.
+///
+/// ISO 32000-1 14.6.2 (raw text lines 29087–29091 of
+/// `docs/PDF32000_2008.pdf`) only authorizes an inline dictionary or a
+/// `/Properties` resource *name* as the property operand; the indirect
+/// reference form is read here for interoperability with producers that emit
+/// it and is reported as an unresolved operand when it cannot be
+/// dereferenced (see [`crate::core::reader::content::MarkedSection`]).
+#[derive(Clone, Debug)]
+pub(super) enum OperandToken {
+    /// A token taken straight from the content-stream tokenizer.
+    Token(CsToken),
+    /// A coalesced `object generation R` indirect reference operand.
+    Reference { object: i64, generation: i64 },
+}
+
+impl OperandToken {
+    /// The underlying token, or `None` for a coalesced reference.
+    pub(super) fn token(&self) -> Option<&CsToken> {
+        match self {
+            Self::Token(token) => Some(token),
+            Self::Reference { .. } => None,
+        }
+    }
+
+    /// Whether this operand opens an array literal.
+    fn is_array_open(&self) -> bool {
+        matches!(self, Self::Token(CsToken::ArrayOpen))
+    }
+
+    /// Whether this operand closes an array literal.
+    fn is_array_close(&self) -> bool {
+        matches!(self, Self::Token(CsToken::ArrayClose))
+    }
+}
+
 /// Borrow the operand at `index`, or report a truncated operator.
 ///
 /// Content streams are untrusted input: an operator may be written with fewer
 /// operands than its arity, so every positional access must answer with the
 /// existing [`ContentStreamError::InvalidOperandCount`] instead of indexing
 /// panic.
-fn operand<'a>(tokens: &'a [CsToken], operator: &str, index: usize) -> Result<&'a CsToken> {
+fn operand<'a>(
+    tokens: &'a [OperandToken],
+    operator: &str,
+    index: usize,
+) -> Result<&'a OperandToken> {
     tokens
         .get(index)
         .ok_or_else(|| ContentStreamError::InvalidOperandCount {
@@ -20,68 +68,66 @@ fn operand<'a>(tokens: &'a [CsToken], operator: &str, index: usize) -> Result<&'
         })
 }
 
-pub(super) fn expect_number(tokens: &[CsToken], operator: &str, index: usize) -> Result<f64> {
+pub(super) fn expect_number(tokens: &[OperandToken], operator: &str, index: usize) -> Result<f64> {
     number_value(operand(tokens, operator, index)?, operator, index)
 }
 
-pub(super) fn expect_integer(tokens: &[CsToken], operator: &str, index: usize) -> Result<i64> {
+pub(super) fn expect_integer(tokens: &[OperandToken], operator: &str, index: usize) -> Result<i64> {
     integer_value(operand(tokens, operator, index)?, operator, index)
 }
 
-pub(super) fn expect_name(tokens: &[CsToken], operator: &str, index: usize) -> Result<String> {
+pub(super) fn expect_name(tokens: &[OperandToken], operator: &str, index: usize) -> Result<String> {
     name_value(operand(tokens, operator, index)?, operator, index)
 }
 
-pub(super) fn expect_string(tokens: &[CsToken], operator: &str, index: usize) -> Result<Vec<u8>> {
+pub(super) fn expect_string(
+    tokens: &[OperandToken],
+    operator: &str,
+    index: usize,
+) -> Result<Vec<u8>> {
     string_value(operand(tokens, operator, index)?, operator, index)
 }
 
-fn number_value(token: &CsToken, operator: &str, index: usize) -> Result<f64> {
-    match token {
-        CsToken::Number(n) => Ok(*n),
-        _ => Err(ContentStreamError::InvalidOperandValue {
-            operator: operator.into(),
-            operand_index: index,
-            message: "expected number".into(),
-        }),
+/// Invalid-operand error for an operand that is not the requested shape
+/// (including a coalesced indirect reference).
+fn invalid_operand(operator: &str, index: usize, message: &str) -> ContentStreamError {
+    ContentStreamError::InvalidOperandValue {
+        operator: operator.into(),
+        operand_index: index,
+        message: message.into(),
     }
 }
 
-fn integer_value(token: &CsToken, operator: &str, index: usize) -> Result<i64> {
-    match token {
-        CsToken::Number(n) => Ok(*n as i64),
-        _ => Err(ContentStreamError::InvalidOperandValue {
-            operator: operator.into(),
-            operand_index: index,
-            message: "expected integer".into(),
-        }),
+fn number_value(operand: &OperandToken, operator: &str, index: usize) -> Result<f64> {
+    match operand.token() {
+        Some(CsToken::Number(n)) => Ok(*n),
+        _ => Err(invalid_operand(operator, index, "expected number")),
     }
 }
 
-fn name_value(token: &CsToken, operator: &str, index: usize) -> Result<String> {
-    match token {
-        CsToken::Name(n) => Ok(n.clone()),
-        _ => Err(ContentStreamError::InvalidOperandValue {
-            operator: operator.into(),
-            operand_index: index,
-            message: "expected name".into(),
-        }),
+fn integer_value(operand: &OperandToken, operator: &str, index: usize) -> Result<i64> {
+    match operand.token() {
+        Some(CsToken::Number(n)) => Ok(*n as i64),
+        _ => Err(invalid_operand(operator, index, "expected integer")),
     }
 }
 
-fn string_value(token: &CsToken, operator: &str, index: usize) -> Result<Vec<u8>> {
-    match token {
-        CsToken::LiteralString(s) | CsToken::HexString(s) => Ok(s.clone()),
-        _ => Err(ContentStreamError::InvalidOperandValue {
-            operator: operator.into(),
-            operand_index: index,
-            message: "expected string".into(),
-        }),
+fn name_value(operand: &OperandToken, operator: &str, index: usize) -> Result<String> {
+    match operand.token() {
+        Some(CsToken::Name(n)) => Ok(n.clone()),
+        _ => Err(invalid_operand(operator, index, "expected name")),
+    }
+}
+
+fn string_value(operand: &OperandToken, operator: &str, index: usize) -> Result<Vec<u8>> {
+    match operand.token() {
+        Some(CsToken::LiteralString(s)) | Some(CsToken::HexString(s)) => Ok(s.clone()),
+        _ => Err(invalid_operand(operator, index, "expected string")),
     }
 }
 
 pub(super) fn expect_numbers_exact(
-    tokens: &[CsToken],
+    tokens: &[OperandToken],
     operator: &str,
     count: usize,
 ) -> Result<Vec<f64>> {
@@ -99,7 +145,7 @@ pub(super) fn expect_numbers_exact(
         .collect()
 }
 
-pub(super) fn expect_numbers_variadic(tokens: &[CsToken], operator: &str) -> Result<Vec<f64>> {
+pub(super) fn expect_numbers_variadic(tokens: &[OperandToken], operator: &str) -> Result<Vec<f64>> {
     tokens
         .iter()
         .enumerate()
@@ -109,37 +155,29 @@ pub(super) fn expect_numbers_variadic(tokens: &[CsToken], operator: &str) -> Res
 
 /// Split one `[ ... ]` array literal off the front of `tokens`.
 ///
-/// Returns the tokens between the brackets and the index just past `]`.
+/// Returns the operands between the brackets and the index just past `]`.
 /// Nested arrays are not valid PDF content-stream operands, so the first
 /// `ArrayClose` ends the array.
 fn take_array<'a>(
-    tokens: &'a [CsToken],
+    tokens: &'a [OperandToken],
     operator: &str,
     index: usize,
-) -> Result<(&'a [CsToken], usize)> {
-    if !matches!(tokens.first(), Some(CsToken::ArrayOpen)) {
-        return Err(ContentStreamError::InvalidOperandValue {
-            operator: operator.into(),
-            operand_index: index,
-            message: "expected array".into(),
-        });
+) -> Result<(&'a [OperandToken], usize)> {
+    if !tokens.first().is_some_and(OperandToken::is_array_open) {
+        return Err(invalid_operand(operator, index, "expected array"));
     }
     let close = tokens[1..]
         .iter()
-        .position(|t| matches!(t, CsToken::ArrayClose))
+        .position(OperandToken::is_array_close)
         .map(|p| p + 1)
-        .ok_or_else(|| ContentStreamError::InvalidOperandValue {
-            operator: operator.into(),
-            operand_index: index,
-            message: "unterminated array".into(),
-        })?;
+        .ok_or_else(|| invalid_operand(operator, index, "unterminated array"))?;
     Ok((&tokens[1..close], close + 1))
 }
 
 /// Parse a leading numeric array operand; returns the values and the index
 /// just past the closing bracket.
 pub(super) fn expect_number_array(
-    tokens: &[CsToken],
+    tokens: &[OperandToken],
     operator: &str,
     index: usize,
 ) -> Result<(Vec<f64>, usize)> {
@@ -153,7 +191,7 @@ pub(super) fn expect_number_array(
 }
 
 pub(super) fn expect_text_array(
-    tokens: &[CsToken],
+    tokens: &[OperandToken],
     operator: &str,
     index: usize,
 ) -> Result<Vec<TextElement>> {
@@ -168,25 +206,37 @@ pub(super) fn expect_text_array(
     inner
         .iter()
         .enumerate()
-        .map(|(i, t)| match t {
-            CsToken::LiteralString(s) | CsToken::HexString(s) => Ok(TextElement::String(s.clone())),
-            CsToken::Number(n) => Ok(TextElement::Adjustment(*n)),
-            _ => Err(ContentStreamError::InvalidOperandValue {
-                operator: operator.into(),
-                operand_index: i,
-                message: "expected string or number in text array".into(),
-            }),
+        .map(|(i, t)| match t.token() {
+            Some(CsToken::LiteralString(s)) | Some(CsToken::HexString(s)) => {
+                Ok(TextElement::String(s.clone()))
+            }
+            Some(CsToken::Number(n)) => Ok(TextElement::Adjustment(*n)),
+            _ => Err(invalid_operand(
+                operator,
+                i,
+                "expected string or number in text array",
+            )),
         })
         .collect()
 }
 
-pub(super) fn expect_properties(tokens: &[CsToken], operator: &str, index: usize) -> Result<Value> {
-    if index >= tokens.len() {
-        return Err(ContentStreamError::InvalidOperandCount {
+/// The property operand of `BDC`/`DP` (ISO 32000-1 14.6.2): an inline
+/// dictionary, a `/Properties` resource name, or — tolerated for
+/// interoperability — an indirect reference to the property dictionary.
+pub(super) fn expect_properties(
+    tokens: &[OperandToken],
+    operator: &str,
+    index: usize,
+) -> Result<Value> {
+    match tokens.get(index) {
+        Some(OperandToken::Reference { object, generation }) => {
+            Ok(Value::Ref(*object, *generation))
+        }
+        Some(OperandToken::Token(token)) => token_to_value(token),
+        None => Err(ContentStreamError::InvalidOperandCount {
             operator: operator.into(),
             expected: "at least 2".into(),
             actual: tokens.len(),
-        });
+        }),
     }
-    token_to_value(&tokens[index])
 }
