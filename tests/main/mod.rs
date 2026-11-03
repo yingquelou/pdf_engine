@@ -43,6 +43,7 @@ mod builder_transparency;
 mod builder_type3;
 mod content_text;
 mod crypto;
+mod fdf;
 mod font_truetype;
 mod font_type1;
 mod font_type1_builtin;
