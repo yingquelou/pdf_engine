@@ -31,7 +31,11 @@
 //! - PDF 1.4 的 `/Differences`（stream；raw L24906–L24926）与
 //!   `/EmbeddedFDFs`（file specification 数组；raw L24930–L24932）另有
 //!   类型化只读视图：[`Document::fdf_differences`] 确证「它是流」并原值
-//!   保留流字典条目（`/Length`、`/Filter` 等），[`Document::fdf_embedded_fdfs`]
+//!   保留流字典条目（`/Length`、`/Filter` 等），其上的
+//!   [`FdfDifferences::replay`] 再把增量更新字节按 §7.5.6 重放成对象序列
+//!   （[`FdfDifferencesReplay`]：文件序保留每一副本、同一 `(对象号, 代数)`
+//!   按「最近一份生效」暴露；只报告 `xref`/`trailer`/`%%EOF` 的存在性、
+//!   不还原相对底层文档的交叉引用偏移），[`Document::fdf_embedded_fdfs`]
 //!   逐项按 7.11 文件规范解析（复用 `reader/embedded.rs`）、识别
 //!   Table 244 的 `/EncryptionRevision` 并递归解析可解出的子 FDF 文档
 //!   （递归受层数、单数组条目数与**跨层全局条目预算**三重上限约束，子文档
@@ -76,7 +80,9 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-pub use embedded::{FdfDifferences, FdfEmbeddedFdf, FdfEmbeddedFdfs};
+pub use embedded::{
+    FdfDifferences, FdfDifferencesReplay, FdfEmbeddedFdf, FdfEmbeddedFdfs, FdfReplayedObject,
+};
 pub(crate) use pages::MAX_FDF_PAGES_ARRAY_ENTRIES;
 pub use pages::{
     FdfAnnotation, FdfAnnots, FdfFieldNameConflict, FdfImportMerge, FdfNamedPage, FdfPage,

@@ -10,11 +10,16 @@
 //! - raw L24906–L24926 — `Differences`：**stream**，「A stream containing
 //!   all the bytes in all incremental updates made to the underlying PDF
 //!   document since it was opened (see 7.5.6, Incremental Updates)」；同段
+//!   L24909–L24916 说明 submit-form 的 `IncludeAppendSaves` 标志会把本流
+//!   纳入提交、提交前自动做一次增量更新以捕获全部改动；L24917–L24920 要求
+//!   提交须含「回到文档首次打开时刻的**全部**增量更新」；L24921–L24926
 //!   明文「Although a Fields or Annots entry (or both) may be present
 //!   along with Differences, there is no requirement that their contents
 //!   will be consistent with each other」，且 `/Differences` 含数字签名时
 //!   只有该流里给出的字段值可信。⇒ 本视图**不做** Differences ↔ Fields
-//!   一致性校验（规范不要求，做了反而是错误断言）。
+//!   一致性校验（规范不要求，做了反而是错误断言）。增量更新字节按 §7.5.6
+//!   重放成对象序列的读端视图见 [`FdfDifferences::replay`]（形态类型
+//!   [`FdfDifferencesReplay`]，装配见 [`replay`]）。
 //! - raw L24930–L24932 — `EmbeddedFDFs`：**array**，「An array of file
 //!   specifications (see 7.11, File Specifications) representing other FDF
 //!   files embedded within this one (7.11.4, Embedded File Streams)」。
@@ -41,8 +46,13 @@
 //!    （`src/core/builder/tests/fdf/mod.rs`、`tests/main/fdf/{javascript,write}.rs`），
 //!    这些文件超出本车道写集；且递归子树与字节解码本就依赖 `&Document`
 //!    上下文，惰性方法形态与之匹配。字段化留给后续增量统一收口。
-//! 2. `/Differences` 的增量更新字节**不参与**本文件的对象视图合并（7.5.6
-//!    的增量重放属写端/签名车道范围）。
+//! 2. `/Differences` 的增量更新字节**已**按 §7.5.6 语义在本模块内重放成
+//!    类型化对象序列（[`FdfDifferences::replay`]，同一 `(对象号, 代数)` 的
+//!    多副本按「最近一份生效」暴露且较早副本不丢弃），但重放结果**不参与**
+//!    本 FDF 文件 `Document` 的对象视图合并，也不还原增量的交叉引用段——
+//!    片段里的 `xref`/`trailer`/`Prev` 偏移是相对**底层 PDF 文档**的，脱离
+//!    原文件不可解引用（§7.5.6 raw L2221–L2224），删除对象的 `f` 标记语义
+//!    同理不在本轮（与写端/签名车道的完整文档合并分开收口）。
 //!
 //! 防护（库策略，非规范数值）：`/EmbeddedFDFs` 数组长度与内层流字节数都是
 //! 不可信输入，故单次数组展开的条目数、递归层数、内层对象数与内联字节量
@@ -70,6 +80,7 @@ pub(crate) mod scan;
 pub(crate) mod crypto;
 
 mod expand;
+pub(crate) mod replay;
 mod view;
 
 type Result<T> = std::result::Result<T, FdfError>;
@@ -84,6 +95,12 @@ pub(crate) const MAX_FDF_EMBEDDED_ENTRIES: usize = 256;
 /// 只约束一条链，两者相乘仍是 `breadth^depth` 量级；载体流可压缩时解码字节
 /// 也远超文件字节，故再加一道跨层共享的总条目预算兜住放大。
 pub(crate) const MAX_FDF_EMBEDDED_TOTAL_ENTRIES: usize = 512;
+/// `/Differences` 增量更新字节可重放出的间接对象上限（库策略，与
+/// [`scan::MAX_FDF_EMBEDDED_OBJECTS`] 同一口径，防护不可信输入）。
+pub(crate) const MAX_FDF_DIFFERENCE_OBJECTS: usize = 2048;
+/// `/Differences` 解码后重放窗口上限（库策略）：增量片段本身可压缩，
+/// 解码字节远大于文件字节，故只重放前若干字节，超出记诊断而非 panic。
+pub(crate) const MAX_FDF_DIFFERENCE_SCAN_BYTES: usize = 8 * 1024 * 1024;
 
 /// 一次顶层 `/EmbeddedFDFs` 展开的全局条目预算（跨所有递归层共享，
 /// 见 [`MAX_FDF_EMBEDDED_TOTAL_ENTRIES`]）。
@@ -104,6 +121,7 @@ impl ExpansionBudget {
     }
 }
 
+pub use replay::{FdfDifferencesReplay, FdfReplayedObject};
 pub use view::{FdfDifferences, FdfEmbeddedFdf, FdfEmbeddedFdfs};
 
 impl Document {
@@ -111,7 +129,8 @@ impl Document {
     ///
     /// 非 FDF 文件或该条目缺失返回 `Ok(None)`；条目存在时**总是**返回
     /// `Some`（形态不符只记诊断，不报错），口径与 [`Document::fdf`] 的
-    /// 读端宽容一致。
+    /// 读端宽容一致。返回的 [`FdfDifferences`] 上另可按 §7.5.6 语义把增量
+    /// 更新字节**重放**成对象序列（[`FdfDifferences::replay`]）。
     pub fn fdf_differences(&self) -> Result<Option<FdfDifferences>> {
         let Some(fdf) = self.fdf()? else {
             return Ok(None);

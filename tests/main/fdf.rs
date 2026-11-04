@@ -8,6 +8,7 @@
 use super::*;
 
 mod embedded;
+mod differences_replay;
 /// ASCII85 载荷门禁（7.4.3）的写出→重解析往返与零字节拒绝。
 mod gate;
 mod javascript;
