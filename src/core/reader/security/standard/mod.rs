@@ -33,6 +33,8 @@ mod strings;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use encrypt::{StandardCryptFilter, StandardEncryptionRequest};
+
 struct SecurityOptions {
     pub revision: u8,
     pub version: u8,

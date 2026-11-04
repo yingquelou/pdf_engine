@@ -15,7 +15,10 @@
 //!   因而 `/P` 一律是负整数（例：`/R 2` 下 `-44` = 允许打印与复制）；
 //!   读端只解释位 3、4、5、6、9、10、11、12；
 //! - 7.5.7：加密字典**不得**存入对象流 ⇒ 本 writer 的对象流布局由
-//!   目标版本 `>= 1.5` 触发，故加密输出锁定 1.0–1.4 的经典布局；
+//!   目标版本 `>= 1.5` 触发，故加密输出锁定 1.0–1.4 的经典布局；`/V 4` 的
+//!   真实符合版本（PDF 1.5/1.6 条目，Table 20/Table 25）经 catalog
+//!   `/Version` 名字条目声明（7.5.2 与 Table 28：该覆盖机制自 PDF 1.4 起
+//!   有效，且值须为名字对象）；
 //! - 7.6.1：加密是 PDF 1.1 特性；trailer `/ID`、加密字典内的串、以及
 //!   已加密流内部的串不参与逐对象加密。
 
@@ -24,6 +27,7 @@ use std::io::Write;
 use crate::core::builder::PdfBuilder;
 use crate::core::builder::metadata::FileIdentifier;
 use crate::core::builder::output::EncryptionSpec;
+use crate::core::reader::security::StandardCryptFilter;
 use crate::core::types::{Document, PdfVersion};
 use crate::core::writer::{DocumentWriter, WriteError};
 
@@ -80,6 +84,7 @@ impl PdfBuilder {
             permissions,
             handler_version: 1,
             key_bits: 40,
+            crypt_filter: None,
         };
         self.validate_encryption(&spec)?;
         self.emit(w, Some(spec))
@@ -105,6 +110,43 @@ impl PdfBuilder {
             permissions,
             handler_version: 2,
             key_bits,
+            crypt_filter: None,
+        };
+        self.validate_encryption(&spec)?;
+        self.emit(w, Some(spec))
+    }
+
+    /// 以标准安全处理器 `/V 4 /R 4`（crypt filter `StdCF`，`CFM /V2`，即
+    /// Table 25 的 RC4 筛选器；规范名是 `/V2`，不是 `/RC4V2`）加密并序列化
+    /// 文档；`key_bits` 为顶层 `/Length`（40–128 且为 8 的倍数，Table 20），
+    /// `StdCF` 的 `/Length` 按 Table 25 的标准处理器口径以字节表达
+    /// （「expresses the length in multiples of 8 (16 means 128)」）。
+    ///
+    /// 字典形态即 Table 20 的 `/CF << /StdCF .. >>` 与 `/StmF` `/StrF`
+    /// 选择器，catalog `/Version` 声明 `/1.5`（`/V 4` 与 `/CF` 侧条目均为
+    /// PDF 1.5，Table 20）。校验条件同
+    /// [`PdfBuilder::build_encrypted_rc4_128`]。
+    ///
+    /// **`CFM /AESV2` 无对应入口**：Table 25（raw L3340–L3342）要求 AES-CBC
+    /// 的初始化向量「shall be randomly generated」，本 crate 无 CSPRNG 依赖
+    /// 也不新增依赖，故构造层不产出该 `CFM`（`validate_encryption` 里的拒绝
+    /// 是 `EncryptionSpec` 侧的契约守卫，接入随机源时一并移除）；读端仍完整
+    /// 支持解密 AESV2 文档。
+    pub fn build_encrypted_v4_rc4v2<W: Write>(
+        &mut self,
+        w: &mut W,
+        user_password: &[u8],
+        owner_password: Option<&[u8]>,
+        permissions: i32,
+        key_bits: u8,
+    ) -> Result<(), WriteError> {
+        let spec = EncryptionSpec {
+            user_password,
+            owner_password,
+            permissions,
+            handler_version: 4,
+            key_bits,
+            crypt_filter: Some(StandardCryptFilter::Rc4V2),
         };
         self.validate_encryption(&spec)?;
         self.emit(w, Some(spec))
@@ -119,12 +161,19 @@ impl PdfBuilder {
                     .to_string(),
             ));
         }
-        if !matches!(spec.handler_version, 1 | 2) {
+        if !matches!(spec.handler_version, 1 | 2 | 4) {
             return Err(WriteError::InvalidObject(format!(
-                "encryption dictionary /V {} is not supported when writing: only 1 (RC4-40) \
-                 and 2 (RC4 with a longer key) are handled",
+                "encryption dictionary /V {} is not supported when writing: only 1 (RC4-40), \
+                 2 (RC4 with a longer key) and 4 (crypt filters) are handled",
                 spec.handler_version
             )));
+        }
+        if (spec.handler_version == 4) != spec.crypt_filter.is_some() {
+            return Err(WriteError::InvalidObject(
+                "crypt filters (/CF /StmF /StrF) are only defined for /V 4 (7.6.5: the value \
+                 of the V entry shall be 4 to use crypt filters)"
+                    .to_string(),
+            ));
         }
         if spec.handler_version == 1 && spec.key_bits != 40 {
             return Err(WriteError::InvalidObject(format!(
@@ -132,7 +181,7 @@ impl PdfBuilder {
                 spec.key_bits
             )));
         }
-        if spec.handler_version == 2
+        if matches!(spec.handler_version, 2 | 4)
             && (!spec.key_bits.is_multiple_of(8) || !(40..=128).contains(&spec.key_bits))
         {
             return Err(WriteError::InvalidObject(format!(
@@ -140,6 +189,17 @@ impl PdfBuilder {
                  (Table 20)",
                 spec.key_bits
             )));
+        }
+        if spec.crypt_filter == Some(StandardCryptFilter::AesV2) {
+            return Err(WriteError::InvalidObject(
+                "CFM /AESV2 cannot be written: Table 25 (raw L3340-L3342) requires the AES-CBC \
+                 initialization vector to be randomly generated and placed as the first 16 \
+                 bytes, and this crate has no cryptographically secure random source (adding \
+                 one would mean a new third-party dependency). RC4 (/V 1, /V 2) and the /V 4 \
+                 CFM /V2 filter are written instead; reading AESV2-encrypted documents is \
+                 fully supported"
+                    .to_string(),
+            ));
         }
         check_password(spec.user_password, "user")?;
         if let Some(owner) = spec.owner_password {
@@ -187,6 +247,15 @@ impl PdfBuilder {
         if spec.handler_version == 2 && self.version < PdfVersion::V1_4 {
             return Err(WriteError::UnsupportedVersion(format!(
                 "encryption dictionary /V 2 is a PDF 1.4 feature (Table 20), got target {}",
+                self.version.as_str()
+            )));
+        }
+        if spec.handler_version == 4 && self.version < PdfVersion::V1_4 {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "writing /V 4 output at target {} relies on the catalog /Version override, \
+                 which is a PDF 1.4 mechanism (7.5.2: \u{201c}Beginning with PDF 1.4, the \
+                 Version entry in the document's catalog dictionary \u{2026} shall be used \
+                 instead of the version specified in the Header\u{201d}; Table 28)",
                 self.version.as_str()
             )));
         }

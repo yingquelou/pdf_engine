@@ -1,4 +1,5 @@
 use super::{PdfBuilder, navigation, types};
+use crate::core::reader::security::{StandardCryptFilter, StandardEncryptionRequest};
 use crate::core::writer::{DocumentWriter, WriteError, validate_ascii85_payloads};
 use std::io::Write;
 
@@ -13,10 +14,13 @@ pub(super) struct EncryptionSpec<'a> {
     pub owner_password: Option<&'a [u8]>,
     /// 加密字典 `/P`（Table 22 权限位）。
     pub permissions: i32,
-    /// 加密字典 `/V`（Table 20：`1` = RC4-40，`2` = RC4-128）。
+    /// 加密字典 `/V`（Table 20：`1` = RC4-40，`2` = RC4-128，`4` = crypt filter）。
     pub handler_version: u8,
-    /// 密钥位宽（Table 20 `/Length`，仅 `/V 2` 写盘）。
+    /// 密钥位宽（Table 20 `/Length`，`/V ≥ 2` 写盘）。
     pub key_bits: u8,
+    /// `/V 4` 的 `StdCF` 筛选器（Table 25 `CFM`，7.6.3.1 限定 `V2`/`AESV2`）；
+    /// `/V ≤ 2` 必须为 `None`（crypt filter 要求 `/V` 为 4，7.6.5）。
+    pub crypt_filter: Option<StandardCryptFilter>,
 }
 
 impl PdfBuilder {
@@ -108,14 +112,15 @@ impl PdfBuilder {
             // trailer /ID 首元素是 Algorithm 2 e 的输入，必须在派生密钥前
             // 定型；缺省时以未加密字节确定性补出（14.4）。
             let file_id = self.ensure_standard_file_id(&mut doc)?;
-            doc.encrypt_with_standard_handler(
-                spec.user_password,
-                spec.owner_password,
-                spec.permissions,
-                spec.handler_version,
-                spec.key_bits,
-                &file_id,
-            )
+            doc.encrypt_with_standard_handler(StandardEncryptionRequest {
+                user_password: spec.user_password,
+                owner_password: spec.owner_password,
+                permissions: spec.permissions,
+                handler_version: spec.handler_version,
+                key_bits: spec.key_bits,
+                crypt_filter: spec.crypt_filter,
+                file_id: &file_id,
+            })
             .map_err(WriteError::InvalidObject)?;
         }
         let mut writer = DocumentWriter::new().with_version(self.version);

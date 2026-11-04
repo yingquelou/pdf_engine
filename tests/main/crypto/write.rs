@@ -341,6 +341,151 @@ fn invalid_encryption_key_length_is_rejected() {
     }
 }
 
+/// 写出 `/V 4 /R 4`（`StdCF`，`CFM /V2`，即 Table 25 的 RC4 筛选器）文档。
+fn write_v4_rc4v2(user: &[u8], owner: Option<&[u8]>, permissions: i32, key_bits: u8) -> Vec<u8> {
+    let mut builder = text_builder();
+    let mut buf = Vec::new();
+    builder
+        .build_encrypted_v4_rc4v2(&mut buf, user, owner, permissions, key_bits)
+        .expect("/V 4 CFM /V2 加密输出应可写出");
+    buf
+}
+
+/// 验收主用例：`/V 4 /CF` 写出的文档由**本 crate 读端**重解析、以用户口令
+/// 认证（Algorithm 6）、按 `/StmF` `/StrF` 解析到 `StdCF`（7.6.5）并解密后，
+/// 提取文本与 `/Info` 字符串同明文一致；字典带 Table 20/25 的 `StdCF` 条目
+/// 与选择器，catalog 带 Table 28 的 `/Version /1.5` 名字条目（7.5.2 覆盖
+/// header）。
+///
+/// **`CFM /AESV2` 没有写端入口**：Table 25（raw L3340—L3342）要求 CBC 的
+/// 初始化向量「shall be randomly generated and placed as the first 16
+/// bytes」，本 crate 无 CSPRNG 依赖也不新增依赖，故构造层不产出该 `CFM`；
+/// `/AESV2` 的**解密**侧覆盖见 `tests/main/filters_indirect.rs` 与
+/// `tests/main/crypto.rs`。
+#[test]
+fn encrypted_v4_roundtrip_extracts_plaintext_through_cf_filters() {
+    let buf = write_v4_rc4v2(USER_PASSWORD, Some(OWNER_PASSWORD), ALL_ALLOWED, 128);
+    let doc = parse_buf_with_password(&buf, USER_PASSWORD);
+
+    assert!(doc.is_encrypted(), "读端应识别出加密处理器");
+    assert_eq!(doc.extract_page_text(0).as_deref(), Some(PAGE_TEXT));
+    assert_eq!(info_title_bytes(&doc), INFO_TITLE.as_bytes());
+    let raw = String::from_utf8_lossy(&buf);
+    assert!(
+        !raw.contains(PAGE_TEXT) && !raw.contains(INFO_TITLE),
+        "密文里不应残留明文内容"
+    );
+    assert!(
+        raw.contains("/V 4") && raw.contains("/R 4"),
+        "字典应为 /V 4 /R 4：{raw}"
+    );
+    assert!(
+        raw.contains("/CF") && raw.contains("/StdCF") && raw.contains("/CFM /V2"),
+        "应写出 /CF 的 StdCF（CFM /V2）：{raw}"
+    );
+    assert!(
+        raw.contains("/StmF /StdCF") && raw.contains("/StrF /StdCF"),
+        "应写出 /StmF /StrF 选择器：{raw}"
+    );
+    assert!(raw.contains("/Version /1.5"), "catalog 应声明 /1.5：{raw}");
+}
+
+/// 镜像用例：`/V 4` 文档上错误口令必须被拒绝（Algorithm 6 比对 `/U`），
+/// 不得静默产出乱码；所有者口令则按 Algorithm 7 恢复用户口令后解密成功。
+#[test]
+fn encrypted_v4_wrong_password_fails_and_owner_password_succeeds() {
+    let buf = write_v4_rc4v2(USER_PASSWORD, Some(OWNER_PASSWORD), ALL_ALLOWED, 128);
+    for wrong in [b"wrong-pw".as_slice(), b"user-PW".as_slice()] {
+        assert!(
+            parse_buf_result(&buf, Some(wrong)).is_err(),
+            "错误口令不应通过 /U 校验"
+        );
+    }
+    assert!(
+        parse_buf_result(&buf, None).is_err(),
+        "非空用户口令的文档不应免密打开"
+    );
+    let doc = parse_buf_with_password(&buf, OWNER_PASSWORD);
+    assert_eq!(doc.extract_page_text(0).as_deref(), Some(PAGE_TEXT));
+}
+
+/// Table 21：`/R 4` 下 Table 22 位 9–12 可自由清零——`/V 4` 的字典能表达
+/// `/V ≤ 3` 表达不了的受限权限，且读端按同一 `/P` 认证成功解密。
+#[test]
+fn encrypted_v4_rc4v2_carries_revision_four_permission_bits() {
+    let restrictive: i32 = -0x104; // 位 9 清零：只有 /R ≥ 3 的字典能表达。
+    let buf = write_v4_rc4v2(USER_PASSWORD, Some(OWNER_PASSWORD), restrictive, 128);
+    let doc = parse_buf_with_password(&buf, USER_PASSWORD);
+    assert_eq!(doc.extract_page_text(0).as_deref(), Some(PAGE_TEXT));
+    assert_eq!(info_title_bytes(&doc), INFO_TITLE.as_bytes());
+}
+
+/// Table 20 `/Length` + Table 25：`/V 4` 的 RC4 筛选器在 40–128 全部合法
+/// 位宽下都能被读端按 `StdCF` 的字节制 `Length` 还原并解密。
+#[test]
+fn encrypted_v4_rc4v2_accepts_every_permitted_key_length() {
+    for key_bits in [40u8, 48, 56, 64, 80, 96, 112, 128] {
+        let buf = write_v4_rc4v2(USER_PASSWORD, Some(OWNER_PASSWORD), ALL_ALLOWED, key_bits);
+        let doc = parse_buf_with_password(&buf, USER_PASSWORD);
+        assert_eq!(
+            doc.extract_page_text(0).as_deref(),
+            Some(PAGE_TEXT),
+            "/V 4 下 {key_bits} 位 CFM /V2 密钥应能解密"
+        );
+    }
+}
+
+/// `/V 4` 的目标版本门：低于 1.4 时 catalog `/Version` 覆盖机制不存在
+/// （7.5.2「Beginning with PDF 1.4」），高于 1.4 时对象流布局与 7.5.7
+/// 冲突，两端都应在任何字节写出前返回 [`WriteError::UnsupportedVersion`]。
+#[test]
+fn encrypted_v4_output_is_locked_to_the_classic_layout_with_version_override() {
+    for version in [PdfVersion::V1_3, PdfVersion::V1_7] {
+        let mut builder = PdfBuilder::with_version(version);
+        let page = builder.page(PageSize::A4);
+        builder.text(page, &Font::helvetica(12.0), 72.0, 700.0, PAGE_TEXT);
+        let mut buf = Vec::new();
+        let error = builder
+            .build_encrypted_v4_rc4v2(
+                &mut buf,
+                USER_PASSWORD,
+                Some(OWNER_PASSWORD),
+                ALL_ALLOWED,
+                128,
+            )
+            .expect_err("目标版本 {version} 不应接受 /V 4 加密输出");
+        assert!(buf.is_empty(), "版本门禁拒绝时不得写出字节");
+        assert!(
+            matches!(error, WriteError::UnsupportedVersion(_)),
+            "应返回类型化的版本错误：{error:?}"
+        );
+    }
+}
+
+/// Table 20 `/Length` 的语法门在 `/V 4` 侧同样生效：非 8 的倍数或越出
+/// 40–128 的 `key_bits` 在任何字节写出前零字节拒绝。
+#[test]
+fn v4_rc4v2_still_validates_the_key_length_syntax() {
+    for key_bits in [39u8, 41, 136] {
+        let mut builder = text_builder();
+        let mut buf = Vec::new();
+        let error = builder
+            .build_encrypted_v4_rc4v2(
+                &mut buf,
+                USER_PASSWORD,
+                Some(OWNER_PASSWORD),
+                ALL_ALLOWED,
+                key_bits,
+            )
+            .expect_err("{key_bits} 位不是合法的 /Length");
+        assert!(buf.is_empty());
+        assert!(
+            error.to_string().contains("multiple of 8"),
+            "错误应引用 /Length 约束：{error}"
+        );
+    }
+}
+
 /// 目标版本门：加密是 PDF 1.1 特性（7.6.1），`/V 2` 是 PDF 1.4 特性
 /// （Table 20），而 PDF 1.5 起本 writer 的对象流布局与 7.5.7 冲突。
 #[test]

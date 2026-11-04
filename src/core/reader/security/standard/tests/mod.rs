@@ -29,6 +29,11 @@ impl CryptoBackend for CountingBackend {
         self.calls.fetch_add(1, Ordering::Relaxed);
         RustCryptoBackend.aes128_cbc_decrypt(key, iv, input)
     }
+
+    fn aes128_cbc_encrypt(&self, key: &[u8], iv: &[u8], input: &[u8]) -> Result<Vec<u8>, String> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        RustCryptoBackend.aes128_cbc_encrypt(key, iv, input)
+    }
 }
 
 #[test]
@@ -587,5 +592,6 @@ fn hex(bytes: &[u8]) -> String {
 mod crypt_filter_references;
 mod encrypt_dict_references;
 mod helpers;
+mod v4_write;
 
 use helpers::authenticate_without_references;

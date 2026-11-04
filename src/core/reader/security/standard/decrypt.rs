@@ -104,25 +104,9 @@ pub(super) fn decrypt_bytes(
     match method {
         CryptMethod::Identity => Ok(encrypted.to_vec()),
         CryptMethod::Rc4 { .. } | CryptMethod::Aes128 => {
-            let mut input = Zeroizing::new(Vec::with_capacity(file_key.len() + 9));
-            input.extend_from_slice(file_key);
-            let object = u32::try_from(object_num)
-                .map_err(|_| "invalid encrypted object number".to_string())?;
-            let generation = u16::try_from(generation)
-                .map_err(|_| "invalid encrypted object generation".to_string())?;
-            input.extend_from_slice(&object.to_le_bytes()[..3]);
-            input.extend_from_slice(&generation.to_le_bytes());
-            if method == CryptMethod::Aes128 {
-                input.extend_from_slice(b"sAlT");
-            }
-            let digest = crypto.md5(&input);
-            let file_key_len = match method {
-                CryptMethod::Rc4 { key_len } => key_len,
-                CryptMethod::Aes128 => file_key.len(),
-                CryptMethod::Identity => unreachable!(),
-            };
-            let key_len = (file_key_len + 5).min(16);
-            let object_key = Zeroizing::new(digest[..key_len].to_vec());
+            let object_key = Zeroizing::new(object_encryption_key(
+                file_key, object_num, generation, method, crypto,
+            )?);
             match method {
                 CryptMethod::Rc4 { .. } => crypto.rc4(&object_key, encrypted),
                 CryptMethod::Aes128 => {
@@ -152,4 +136,39 @@ pub(super) fn decrypt_bytes(
             }
         }
     }
+}
+
+/// Algorithm 1 b–d（7.6.2）——按对象把文件密钥扩展成对象密钥。
+///
+/// 写端 `encrypt::encrypt_bytes` 与读端 `decrypt_bytes` 共用：7.6.2
+/// 「Because the RC4 algorithm and AES algorithms are symmetric, this same
+/// sequence of steps shall be used both to encrypt and to decrypt data」。
+/// AES 路径额外拼上 `"sAlT"`（Algorithm 1 b 括注），密钥取
+/// 「(n + 5) 字节，至多 16」（Algorithm 1 d）。
+pub(super) fn object_encryption_key(
+    file_key: &[u8],
+    object_num: i64,
+    generation: i64,
+    method: CryptMethod,
+    crypto: &dyn CryptoBackend,
+) -> Result<Vec<u8>, String> {
+    let mut input = Zeroizing::new(Vec::with_capacity(file_key.len() + 9));
+    input.extend_from_slice(file_key);
+    let object =
+        u32::try_from(object_num).map_err(|_| "invalid encrypted object number".to_string())?;
+    let generation =
+        u16::try_from(generation).map_err(|_| "invalid encrypted object generation".to_string())?;
+    input.extend_from_slice(&object.to_le_bytes()[..3]);
+    input.extend_from_slice(&generation.to_le_bytes());
+    if method == CryptMethod::Aes128 {
+        input.extend_from_slice(b"sAlT");
+    }
+    let digest = crypto.md5(&input);
+    let file_key_len = match method {
+        CryptMethod::Rc4 { key_len } => key_len,
+        CryptMethod::Aes128 => file_key.len(),
+        CryptMethod::Identity => unreachable!(),
+    };
+    let key_len = (file_key_len + 5).min(16);
+    Ok(digest[..key_len].to_vec())
 }

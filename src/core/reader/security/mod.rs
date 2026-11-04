@@ -18,3 +18,4 @@ pub use permissions::Permissions;
 
 pub(super) use crypto::RustCryptoBackend;
 pub(super) use standard::SecurityHandler;
+pub(crate) use standard::{StandardCryptFilter, StandardEncryptionRequest};
