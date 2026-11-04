@@ -1,8 +1,10 @@
 //! 外部文件流读端测试（ISO 32000-1 7.3.8 / 7.4.1 + Table 5，文件规格
 //! 见 7.11.2–7.11.3 Table 44）。
 
-use crate::core::reader::file_stream::ExternalFileStreamError;
-use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
+use crate::core::reader::file_stream::{
+    ExternalFileStream, ExternalFileStreamError, ExternalFileStreamProblem,
+};
+use crate::core::types::{Array, Dict, Document, Object, PdfVersion, StreamData, Value};
 
 fn arr(values: Vec<Value>) -> Value {
     Value::Array(Array(values))
@@ -42,6 +44,17 @@ fn filespec_dict(entries: &[(&str, Value)]) -> Value {
 
 fn stream_value(doc: &Document) -> Value {
     doc.get_object(1).unwrap().unwrap().value
+}
+
+/// 带内联字节的流对象（`/F` 场景下这些字节按 Table 5 一律忽略）。
+fn document_with_inline(dict: Dict, bytes: &[u8]) -> Document {
+    let document = Document::new();
+    document.set_object(Object::new(
+        1,
+        0,
+        Value::Stream(dict, StreamData::Owned(bytes.to_vec())),
+    ));
+    document
 }
 
 /// 解析成功场景的公共流字典：`/F` 字典形态 + `/FFilter` 单名。
@@ -331,6 +344,190 @@ fn dangling_ffilter_reference_is_a_typed_problem_not_a_silent_default() {
         matches!(error, ExternalFileStreamError::Malformed(_)),
         "got {error:?}"
     );
+}
+
+/// 取模型（交叉核对不得影响构造），失败即 panic 便于定位。
+fn model_of(doc: &Document) -> ExternalFileStream {
+    doc.external_file_stream(&stream_value(doc))
+        .expect("结构合法")
+        .expect("应识别为外部文件流")
+}
+
+/// 只带 `/F`＋`/FFilter`＋给定 `/Length` 的流字典。
+fn f_stream_dict(length: Value) -> Dict {
+    stream_dict(&[
+        ("F", string("a.bin")),
+        ("FFilter", name("FlateDecode")),
+        ("Length", length),
+    ])
+}
+
+#[test]
+fn clean_external_stream_carries_no_problems() {
+    let doc = document_with(valid_stream_dict());
+    let model = model_of(&doc);
+    assert!(
+        model.problems.is_empty(),
+        "合法外部文件流不得被报不符：{:?}",
+        model.problems
+    );
+    assert!(!model.has_problems());
+}
+
+#[test]
+fn pdf_1_1_declaration_gates_the_pdf_1_2_entries_but_keeps_values() {
+    let mut doc = document_with(stream_dict(&[
+        ("F", string("a.bin")),
+        ("FFilter", name("FlateDecode")),
+        ("FDecodeParms", Value::Null),
+        ("Length", Value::Integer(0)),
+    ]));
+    doc.source_version = PdfVersion::V1_1;
+    let model = model_of(&doc);
+    assert_eq!(model.display_name(), "a.bin");
+    assert_eq!(model.filters, vec!["FlateDecode"], "门禁不拦读取");
+    assert_eq!(
+        model.problems,
+        vec![ExternalFileStreamProblem::VersionGate {
+            entries: vec!["F", "FFilter"],
+            declared: PdfVersion::V1_1,
+        }],
+        "/FDecodeParms 为 null 按 7.3.9 等同省略，不进清单"
+    );
+
+    // 恰好 1.2 不报；非外部文件流也不报（Ok(None)）。
+    let mut ok = document_with(valid_stream_dict());
+    ok.source_version = PdfVersion::V1_2;
+    assert!(model_of(&ok).problems.is_empty());
+}
+
+#[test]
+fn crypt_ffilter_on_external_data_is_a_shall_problem_not_a_failure() {
+    let doc = document_with(stream_dict(&[
+        ("F", string("a.bin")),
+        ("FFilter", arr(vec![name("ASCIIHexDecode"), name("Crypt")])),
+        ("Length", Value::Integer(0)),
+    ]));
+    let model = model_of(&doc);
+    assert_eq!(model.filters, vec!["ASCIIHexDecode", "Crypt"]);
+    assert_eq!(
+        model.problems,
+        vec![ExternalFileStreamProblem::EncryptedExternalData {
+            filter: "Crypt".to_owned()
+        }],
+        "数组里的 Crypt 同样命中"
+    );
+    assert!(!model.problems[0].is_advisory(), "shall 级不该被当提示");
+
+    let plain = document_with(valid_stream_dict());
+    assert!(model_of(&plain).problems.is_empty());
+}
+
+#[test]
+fn inline_bytes_are_reported_ignored_and_length_should_match_them() {
+    // 一致：只报「已忽略」（提示级），不报 should 违例。
+    let consistent = document_with_inline(f_stream_dict(Value::Integer(5)), b"12345");
+    let model = model_of(&consistent);
+    assert_eq!(
+        model.problems,
+        vec![ExternalFileStreamProblem::InlineBytesIgnored { bytes: 5 }]
+    );
+    assert!(model.problems[0].is_advisory());
+
+    // 少报：提示 + should 两条并存。
+    let short = document_with_inline(f_stream_dict(Value::Integer(3)), b"12345");
+    assert_eq!(
+        model_of(&short).problems,
+        vec![
+            ExternalFileStreamProblem::InlineBytesIgnored { bytes: 5 },
+            ExternalFileStreamProblem::LengthMismatch {
+                declared: 3,
+                actual: 5
+            },
+        ]
+    );
+
+    // 空内联 + /Length 0：两条都不报（Table 5「usually, there are no bytes」）。
+    let empty = document_with_inline(f_stream_dict(Value::Integer(0)), b"");
+    assert!(model_of(&empty).problems.is_empty());
+
+    // 缺 /Length：不猜声明值，只报已忽略的字节。
+    let no_length = document_with_inline(
+        stream_dict(&[("F", string("a.bin")), ("FFilter", name("FlateDecode"))]),
+        b"12345",
+    );
+    assert_eq!(
+        model_of(&no_length).problems,
+        vec![ExternalFileStreamProblem::InlineBytesIgnored { bytes: 5 }]
+    );
+}
+
+#[test]
+fn indirect_length_is_resolved_for_the_should_check() {
+    let document = Document::new();
+    document.set_object(Object::new(2, 0, Value::Integer(9)));
+    document.set_object(Object::new(
+        1,
+        0,
+        Value::Stream(
+            f_stream_dict(Value::Ref(2, 0)),
+            StreamData::Owned(b"12345".to_vec()),
+        ),
+    ));
+    let model = model_of(&document);
+    assert!(
+        model
+            .problems
+            .contains(&ExternalFileStreamProblem::LengthMismatch {
+                declared: 9,
+                actual: 5
+            }),
+        "引用形态的 /Length 应按 7.3.10 解一层：{:?}",
+        model.problems
+    );
+}
+
+#[test]
+fn problem_messages_carry_their_spec_anchors() {
+    let cases = [
+        (
+            ExternalFileStreamProblem::VersionGate {
+                entries: vec!["F", "FDecodeParms"],
+                declared: PdfVersion::V1_0,
+            },
+            "L1095",
+            false,
+        ),
+        (
+            ExternalFileStreamProblem::EncryptedExternalData {
+                filter: "Crypt".to_owned(),
+            },
+            "L2743",
+            false,
+        ),
+        (
+            ExternalFileStreamProblem::InlineBytesIgnored { bytes: 7 },
+            "L1096",
+            true,
+        ),
+        (
+            ExternalFileStreamProblem::LengthMismatch {
+                declared: 3,
+                actual: 7,
+            },
+            "L1097",
+            true,
+        ),
+    ];
+    for (problem, anchor, advisory) in cases {
+        let text = problem.to_string();
+        assert!(text.contains(anchor), "{text} 应带 raw 行号 {anchor}");
+        assert_eq!(problem.is_advisory(), advisory, "{text}");
+        assert!(
+            text.contains("/F") || text.contains("Length") || text.contains("Crypt"),
+            "{text} 应点明条目"
+        );
+    }
 }
 
 #[test]
