@@ -2,7 +2,7 @@
 //! Widget、Rendition、3D 视图 `/O`）与各表单自有字体/图片资源的并入。
 
 use crate::core::builder::types::ThreeDViewSelection;
-use crate::core::builder::{Action, GoTo3DViewSelection, PdfBuilder, same_font};
+use crate::core::builder::{Action, GoTo3DViewSelection, PdfBuilder};
 use crate::core::writer::WriteError;
 
 use super::form_field;
@@ -187,7 +187,7 @@ impl PdfBuilder {
                 let pooled = pools
                     .font_pool
                     .iter()
-                    .position(|(g, _)| same_font(g, &font));
+                    .position(|(g, _)| font.same_dedup_key(g));
                 let obj_num = match pooled {
                     Some(i) => pools.font_pool[i].1,
                     None => {

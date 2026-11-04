@@ -32,7 +32,7 @@
 //!   [`WriteError::UnsupportedVersion`]。
 
 use crate::core::builder::types::Font;
-use crate::core::builder::{PageBuild, PdfBuilder, same_font};
+use crate::core::builder::{PageBuild, PdfBuilder};
 use crate::core::content::{MarkedContentProperties, Op, TextArrayItem};
 use crate::core::types::{Dict, PdfFeature, PdfVersion, Value};
 use crate::core::writer::WriteError;
@@ -189,8 +189,9 @@ impl PdfBuilder {
         strings: &[String],
     ) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
-            // 字体去重与 PdfBuilder::text 同规则：同 BaseFont + 字号 + 编码。
-            let fidx = match p.fonts.iter().position(|f| same_font(f, font)) {
+            // 字体去重与 PdfBuilder::text 同规则：同 BaseFont + 字号 + 编码，
+            // 再额外区分 Multiple Master 标记（[`Font::same_dedup_key`]）。
+            let fidx = match p.fonts.iter().position(|f| f.same_dedup_key(font)) {
                 Some(index) => index,
                 None => {
                     p.fonts.push(font.clone());

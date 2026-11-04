@@ -1,7 +1,7 @@
 //! 对象号分配（一）：页面字典/内容流槽位与字体、图片、缩略图、CIDFont、
 //! ExtGState 的跨页去重池，以及软蒙版 `/G` 引用的表单存在性校验。
 
-use crate::core::builder::{CidFont, Font, GraphicsState, ImageData, PdfBuilder, same_font};
+use crate::core::builder::{CidFont, Font, GraphicsState, ImageData, PdfBuilder};
 use crate::core::writer::WriteError;
 
 use super::images::{ImageObjectNums, allocate_image_objects, validate_thumbnail};
@@ -28,7 +28,9 @@ impl PdfBuilder {
             page_slots.push((pn, cn));
         }
 
-        // 字体去重池：跨页合并同一 (name,size,encoding) 字体，复用同一对象号。
+        // 字体去重池：跨页合并同一 (name,size,encoding) 字体，复用同一对象号；
+        // §9.6.2.3 的 MMType1 标记也须一致，否则 MM 实例会与同名 Type 1 字体
+        // 挤占同一字体对象（`/Subtype` 只跟随先注册者）。
         let mut font_pool: Vec<(Font, i64)> = Vec::new();
         // 每页用到的字体在页内是 1-based 索引；映射到全局对象号。
         // 页内字体列表顺序即 text() 调用首次出现顺序；同一对象号在
@@ -37,7 +39,7 @@ impl PdfBuilder {
         for p in &self.pages {
             let mut v = Vec::with_capacity(p.fonts.len());
             for f in &p.fonts {
-                let pos = font_pool.iter().position(|(g, _)| same_font(g, f));
+                let pos = font_pool.iter().position(|(g, _)| f.same_dedup_key(g));
                 let obj_num = match pos {
                     Some(i) => font_pool[i].1,
                     None => {

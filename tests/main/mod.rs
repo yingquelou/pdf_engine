@@ -36,6 +36,7 @@ mod builder_gstate_functions;
 mod builder_image;
 mod builder_image_model;
 mod builder_mesh;
+mod builder_mmtype1;
 mod builder_pattern;
 mod builder_separation_intent;
 mod builder_shading;

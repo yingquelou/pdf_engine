@@ -6,8 +6,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::core::builder::GraphicsStateFunctions;
 use crate::core::builder::types::{AcroForm, Font, validate_name_value};
-use crate::core::builder::{GraphicsStateFunctions, same_font};
 use crate::core::types::{Array, Dict, Document, Value};
 use crate::core::writer::WriteError;
 
@@ -74,7 +74,7 @@ pub(super) fn default_resources(
     if !form.default_fonts().is_empty() {
         let mut fonts = Dict::new();
         for (name, font) in form.default_fonts() {
-            let obj_num = match font_pool.iter().position(|(g, _)| same_font(g, font)) {
+            let obj_num = match font_pool.iter().position(|(g, _)| font.same_dedup_key(g)) {
                 Some(index) => font_pool[index].1,
                 None => {
                     let n = *num;

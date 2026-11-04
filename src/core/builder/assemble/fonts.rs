@@ -7,6 +7,8 @@ use crate::core::reader::font::{
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 use crate::core::writer::WriteError;
 
+use super::mmtype1;
+
 /// 构造普通（非 Type 3）字体字典，并在 `doc` 中写出描述符与字体程序流。
 ///
 /// `/Subtype` 由嵌入程序类型决定：TrueType 轮廓（含 TrueType-flavored
@@ -19,12 +21,23 @@ use crate::core::writer::WriteError;
 /// [`FontDescriptor::fill_required_defaults`](crate::core::builder::FontDescriptor)
 /// 补齐。子集请求与程序类型不匹配、编码名未知、`/Widths` 非法、
 /// 嵌入程序的非标准 14 字体缺少 `/Widths` 时返回 [`WriteError::InvalidObject`]。
+///
+/// [`Font::mmtype1`](crate::core::builder::Font::mmtype1) 标记的字体走同一条
+/// 通路写出 §9.6.2.3 的 MM 实例字典：`/Subtype` 取 `MMType1`，`/BaseFont`
+/// 按实例名把空格换成下划线，`/Widths` 与 `/FontDescriptor` 一律必需
+/// （标准 14 豁免只覆盖 `/Type1`），嵌入程序只接受 Table 126 许可的
+/// `/FontFile` 与 `/FontFile3 /Type1C`；校验集中在
+/// [`super::mmtype1`]，MMType1 自 PDF 1.0 起可用（Table 110 无 `(PDF 1.x)`
+/// 标注），因此没有新的 `PdfFeature` 门禁。非 MM 字体的既有输出逐字节不变。
 pub(super) fn font_dict(
     doc: &mut Document,
     f: &Font,
     num_out: &mut i64,
 ) -> Result<Dict, WriteError> {
     let mut num = *num_out;
+    // MMType1 的嵌入程序格式（Table 126 + §9.6.2.3 快照）先于其他校验，
+    // 保证拒绝理由指向 MM 而不是程序细节。
+    mmtype1::check_program_format(f)?;
     // 未知编码名无法写出合法的 `/Encoding`：读端会拒绝整份字体，构建期即报错。
     if let Some(name) = f.encoding.unknown_name() {
         return Err(WriteError::InvalidObject(format!(
@@ -47,10 +60,15 @@ pub(super) fn font_dict(
     };
     // 嵌入程序决定字体 `/Subtype`：TrueType 轮廓（含 TrueType-flavored
     // OpenType）为 TrueType；Type 1、CFF 与 CFF-flavored OpenType 为 Type1。
-    let subtype = match (&f.font_program, open_type_flavor) {
-        (Some(FontProgram::TrueType(_)), _) => "TrueType",
-        (Some(FontProgram::OpenType(_)), Some(OpenTypeFlavor::TrueType)) => "TrueType",
-        _ => "Type1",
+    // MM 实例按 §9.6.2.3（raw 13974）写 MMType1，条目与 Type 1 同构。
+    let subtype = if f.mmtype1 {
+        mmtype1::SUBTYPE
+    } else {
+        match (&f.font_program, open_type_flavor) {
+            (Some(FontProgram::TrueType(_)), _) => "TrueType",
+            (Some(FontProgram::OpenType(_)), Some(OpenTypeFlavor::TrueType)) => "TrueType",
+            _ => "Type1",
+        }
     };
     // 三种子集字形列表互斥：分别针对 TrueType gid、Type 1 字形名与
     // name-keyed CFF 字形名。
@@ -150,26 +168,38 @@ pub(super) fn font_dict(
     }
     // 子集字体：BaseFont 加六字母标签前缀（PDF 32000-1 §9.6.4）。
     // 标签同时纳入子集列表，确保同一程序的不同子集得到不同标签。
+    // MM 实例的 `/BaseFont` 先按 §9.6.2.3 把实例名的空格换成下划线，
+    // 其余字符按字面写出（raw 13975–13977）。
+    let literal_name = if f.mmtype1 {
+        mmtype1::base_font_for(&f.name)
+    } else {
+        f.name.clone()
+    };
     let base_font = match (&f.font_program, f.subset) {
         (Some(program), true) => format!(
             "{}+{}",
-            program.subset_tag_for_name(&f.name, &subset_discriminator(f)),
-            f.name
+            program.subset_tag_for_name(&literal_name, &subset_discriminator(f)),
+            literal_name
         ),
-        _ => f.name.clone(),
+        _ => literal_name,
     };
     // `/Widths` 的构建期校验：非空、落在单字节码空间、宽度有限且非负。
     if let Some(widths) = &f.widths {
         validate_widths(f, widths)?;
     }
     // 非标准 14 简单字体必须给出 `/Widths`（Table 111 必需项），
-    // 无论是否嵌入字体程序。
-    if f.widths.is_none() && !is_standard_14(&base_font) {
-        return Err(WriteError::InvalidObject(format!(
-            "/BaseFont {} is not one of the standard 14 fonts \
-             and requires explicit /Widths; call Font::with_widths",
-            f.name
-        )));
+    // 无论是否嵌入字体程序；MMType1 不享受标准 14 豁免（§9.6.2.2 只列
+    // Type 1 字体），缺 `/Widths` 同样在构建期拒绝。
+    if f.widths.is_none() && !mmtype1::may_omit_widths(f, &base_font) {
+        return Err(if f.mmtype1 {
+            mmtype1::missing_widths(f)
+        } else {
+            WriteError::InvalidObject(format!(
+                "/BaseFont {} is not one of the standard 14 fonts \
+                 and requires explicit /Widths; call Font::with_widths",
+                f.name
+            ))
+        });
     }
     let mut font_dict = Dict::new()
         .insert("Type", Value::Name("Font".into()))
@@ -197,8 +227,11 @@ pub(super) fn font_dict(
             f.name
         )));
     }
-    // 写入字体描述符（如果提供或有字体程序）
-    if f.descriptor.is_some() || f.font_program.is_some() {
+    // 写入字体描述符（如果提供或有字体程序）；MMType1 必须有 /FontDescriptor
+    // （Table 111 必需项，标准 14 豁免不覆盖 MM 实例）。
+    let writes_descriptor = f.descriptor.is_some() || f.font_program.is_some();
+    mmtype1::check_descriptor(f, writes_descriptor)?;
+    if writes_descriptor {
         let descriptor_ref = num;
         num += 1;
         font_dict = font_dict.insert("FontDescriptor", Value::Ref(descriptor_ref, 0));
@@ -362,7 +395,8 @@ fn validate_widths(f: &Font, widths: &FontWidths) -> Result<(), WriteError> {
 /// `/BaseFont`（去子集标签后）是否为 PDF 标准 14 字体之一。
 ///
 /// 标准 14 字体允许省略 `/Widths` 与嵌入程序（PDF 32000-1 §9.6.2.2）。
-fn is_standard_14(base_font: &str) -> bool {
+/// 该豁免只覆盖 Type 1 字体，因此 [`super::mmtype1`] 会为 MM 实例绕过它。
+pub(super) fn is_standard_14(base_font: &str) -> bool {
     matches!(
         strip_subset_tag(base_font),
         "Courier"

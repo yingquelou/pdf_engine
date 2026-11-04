@@ -2,6 +2,8 @@
 //!
 //! 主流程保留在本模块；具体对象构造按类别拆分为子模块：
 //! - `fonts`：普通字体字典与字体程序嵌入（含 TrueType / Type 1 子集）；
+//! - `mmtype1`：Multiple Master（MMType1）实例字典的写端门禁与 `/BaseFont`
+//!   命名规则（9.6.2.3）；
 //! - `type3`：Type 3 字体字典与字符过程流；
 //! - `cid`：CIDFont 后代字典、Type 0 父字体与相关流；
 //! - `cmap`：嵌入编码 CMap 与 ToUnicode CMap；
@@ -59,6 +61,7 @@ mod graphics_state;
 mod images;
 mod indirect_objects;
 mod marked_properties;
+mod mmtype1;
 mod opi;
 mod output_intent;
 mod page_tree;

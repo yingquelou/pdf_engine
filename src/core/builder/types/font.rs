@@ -31,7 +31,8 @@ pub struct FontWidths {
 /// [`Font::with_subset_glyphs`] 请求嵌入程序按字形子集化、
 /// [`Font::with_subset_type1_glyphs`] 请求嵌入的 Type 1 程序按字形名子集化、
 /// [`Font::with_subset_cff_glyphs`] 请求嵌入的 name-keyed CFF 程序按字形名子集化，
-/// [`Font::with_widths`] 给出简单字体的 `/Widths`。
+/// [`Font::with_widths`] 给出简单字体的 `/Widths`，
+/// [`Font::mmtype1`] 将字体作为 §9.6.2.3 的 Multiple Master 实例写出。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Font {
     /// BaseFont 名（不含前导 `/`），如 `Helvetica`。
@@ -95,6 +96,53 @@ pub struct Font {
     /// `None`（否则构建时报错），[`Font::subset`] 无效果（Type 3 没有
     /// `/BaseFont` 可加子集标签）。
     pub type3: Option<Type3Font>,
+    /// §9.6.2.3 多重母版（MMType1）实例标记。
+    ///
+    /// 为 `true` 时写出 `/Subtype /MMType1` 实例字典。§9.6.2.3（raw 第
+    /// 13972–13973 行）说 MM 实例字典「may contain the same entries as a
+    /// Type 1 font dictionary (see Table 111)」，差异**只有**规范列出的两条
+    /// （raw 13974–13977）：`/Subtype` shall 为 `MMType1`；实例 PostScript 名
+    /// 中的空格（20h）shall 在 `/BaseFont` 里写成 LOW LINE（下划线，5Fh）。
+    /// 因此 [`Font::name`] 按**实例名原文**给出（可含空格），`/BaseFont` 由写端
+    /// 换成下划线形式，其余条目按字面写出——与读端
+    /// [`MultipleMasterFont::instance_name_with_spaces`](crate::core::reader::font::MultipleMasterFont::instance_name_with_spaces)
+    /// 互逆。
+    ///
+    /// 比 Type 1 更严的必需项（构建期拒绝，不写出读端会报 `FontError::Invalid`
+    /// 的文件）：
+    /// - `/Widths`（连同 `/FirstChar`/`/LastChar`）必需：Table 111 的
+    ///   「Required except for the standard 14 fonts」（raw 13862、13869、13876、
+    ///   13891）只对 Type 1 生效——§9.6.2.2 的标准 14 名单（raw 13953–13956）
+    ///   是「14 Type 1 fonts」，MM 实例不在其列，故 [`Font::name`] 取
+    ///   `Helvetica` 之类的名字也不豁免。
+    /// - `/FontDescriptor` 必需：同上，须显式给出 [`Font::descriptor`]，或由
+    ///   [`Font::font_program`] 触发描述符写出。
+    ///
+    /// 嵌入程序按 §9.6.2.3 的快照要求（raw 14000–14002：MM 实例程序 shall 是
+    /// 「an ordinary Type 1 font program, not a multiple master font program」）
+    /// 只接受 Table 126 允许 `Type1 or MMType1` 的两种表示：`/FontFile`
+    /// （[`FontProgram::Type1`]，raw 15529–15531）与 `/FontFile3`
+    /// `/Subtype /Type1C`（[`FontProgram::CFF`]，raw 15536–15540）；
+    /// [`FontProgram::TrueType`] 的 `/FontFile2`（raw 15532–15535 只列
+    /// TrueType/CIDFontType2）与 [`FontProgram::OpenType`] 的
+    /// `/FontFile3 /Subtype /OpenType`（续表 raw 15569–15572 只列
+    /// Type1/CIDFontType0）都构建报错。
+    ///
+    /// 版本门：**不需要新的 `PdfFeature`**。Table 110（raw 13801–13810）把
+    /// `MMType1`（raw 13807–13809）与 `Type1`/`Type3`/`TrueType` 并列且**没有**
+    /// `(PDF 1.x)` 标注——对照同表 `Type0` 标注了 `(PDF 1.2)`（raw 13803）——
+    /// 故 MMType1 自 PDF 1.0 起可用。
+    ///
+    /// 不写任何 MM 私有键：ISO 32000-1 未定义 MM 专有字体字典条目，设计轴
+    /// （weight/width）、`/RS`、blend 机制属 Adobe TN 5015（读端亦未建模）。
+    /// Type 0 的 `/DescendantFonts` 只接受 CIDFont（Table 121，raw
+    /// 15097–15098），故 MM 实例不作为 composite 后代写出。
+    ///
+    /// [`FontProgram::Type1`]: super::FontProgram::Type1
+    /// [`FontProgram::CFF`]: super::FontProgram::CFF
+    /// [`FontProgram::TrueType`]: super::FontProgram::TrueType
+    /// [`FontProgram::OpenType`]: super::FontProgram::OpenType
+    pub mmtype1: bool,
 }
 
 impl Font {
@@ -112,6 +160,45 @@ impl Font {
             subset_cff_glyphs: None,
             widths: None,
             type3: None,
+            mmtype1: false,
+        }
+    }
+
+    /// Multiple Master 实例字体（PDF 32000-1 §9.6.2.3，`/Subtype /MMType1`）。
+    ///
+    /// `instance_name` 是 MM 实例的 PostScript 名**原文**（可含空格，如
+    /// `MinionMM 366 465 11 `）；写出的 `/BaseFont` 按规范把空格（20h）换成
+    /// 下划线（5Fh），即 `/MinionMM_366_465_11_`（raw 13975–13977 与其后的
+    /// EXAMPLE 2，raw 13980–13981）。除 `/Subtype` 与这条命名规则外，字典条目
+    /// 与 Type 1 同构（Table 111），因此 `/Widths` 经 [`Font::with_widths`]、
+    /// `/FontDescriptor` 经 [`Font::with_descriptor`]（或经
+    /// [`Font::with_font_program`] 嵌入快照时自动写出）、`/Encoding` 经
+    /// [`Font::with_encoding`] 配置，快照程序只接受 [`FontProgram::Type1`]
+    /// （`/FontFile`）与 [`FontProgram::CFF`]（`/FontFile3 /Type1C`）；
+    /// 缺 `/Widths` 或缺 `/FontDescriptor`、或嵌入其他格式程序都会在
+    /// [`PdfBuilder::build`](super::super::PdfBuilder::build) 阶段报
+    /// [`WriteError::InvalidObject`](crate::core::writer::WriteError::InvalidObject)
+    /// 且不写出任何字节。
+    ///
+    /// MMType1 自 PDF 1.0 起可用（Table 110 raw 13807–13809 无 `(PDF 1.x)`
+    /// 标注），因此不登记新的 `PdfFeature` 门禁。
+    ///
+    /// [`FontProgram::Type1`]: super::FontProgram::Type1
+    /// [`FontProgram::CFF`]: super::FontProgram::CFF
+    pub fn mmtype1(size: f64, instance_name: &str) -> Self {
+        Self {
+            name: instance_name.to_string(),
+            size,
+            encoding: FontEncoding::default(),
+            descriptor: None,
+            font_program: None,
+            subset: false,
+            subset_glyphs: None,
+            subset_type1_glyphs: None,
+            subset_cff_glyphs: None,
+            widths: None,
+            type3: None,
+            mmtype1: true,
         }
     }
 
@@ -143,6 +230,7 @@ impl Font {
             subset_cff_glyphs: None,
             widths: None,
             type3: Some(font),
+            mmtype1: false,
         }
     }
 
@@ -241,5 +329,27 @@ impl Font {
         self.subset_cff_glyphs = Some(glyphs.iter().map(|name| (*name).to_string()).collect());
         self.subset = true;
         self
+    }
+
+    /// 字体去重键是否一致。
+    ///
+    /// **对称、参数顺序无关**：既有的 `same_font`（`builder/mod.rs`）是纯粹
+    /// 的逐字段 `==` 合取（`name`、`size` 位模式、`encoding`、`font_program`、
+    /// `subset`、三种子集字形列表、`widths`、`type3`），本方法只在其后追加
+    /// `self.mmtype1 == other.mmtype1`，因此
+    /// `a.same_dedup_key(b) == b.same_dedup_key(a)`；池在「已注册字体」一侧、
+    /// 候选在「新来字体」一侧的既有调用点（`assemble/alloc_pools.rs`、
+    /// `assemble/alloc_forms.rs`、`assemble/acro_form.rs`、
+    /// `assemble/graphics_state.rs`、`types/reversed_chars.rs`、
+    /// `page.rs`、`marked_content.rs`）无论写成
+    /// `pooled.same_dedup_key(candidate)` 还是
+    /// `candidate.same_dedup_key(pooled)` 都命中同一结果，去重语义与原
+    /// `same_font` 完全一致，只是额外多比 MM 标记。
+    ///
+    /// 用途：供跨页字体池**与**页内 `/F<n>` 字体资源列表使用，避免 MM 实例与
+    /// 同名、同编码、同宽度的 Type 1 字体共用一个字体对象，导致 `/Subtype`
+    /// 只跟随先注册者（Table 110 里两者是不同的字体类型）。
+    pub(crate) fn same_dedup_key(&self, other: &Self) -> bool {
+        super::super::same_font(self, other) && self.mmtype1 == other.mmtype1
     }
 }

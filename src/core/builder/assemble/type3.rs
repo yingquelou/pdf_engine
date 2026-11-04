@@ -17,7 +17,8 @@ use super::cmap::to_unicode_cmap;
 /// 补齐必需默认值，不写 `/FontFile*`）与 `/ToUnicode`（来自
 /// [`Type3Font::to_unicode`]，经 ToUnicode CMap 生成器写出）。
 ///
-/// 以下情况返回 [`WriteError::InvalidObject`]：嵌入字体程序、请求
+/// 以下情况返回 [`WriteError::InvalidObject`]：嵌入字体程序、同时标记为
+/// MMType1 实例（`Font::mmtype1`）、请求
 /// `subset_glyphs`/`subset_type1_glyphs`/`subset_cff_glyphs`、显式设置
 /// `Font::widths`、未知编码名、字形列表为空、字符码或字形名重复、
 /// `/Encoding` 缺失、`/Resources` 不是字典或间接引用、`/Name` 不是
@@ -31,6 +32,17 @@ pub(super) fn type3_font_dict(
     if font.font_program.is_some() {
         return Err(WriteError::InvalidObject(format!(
             "Type 3 font {} must not embed a font program",
+            font.name
+        )));
+    }
+    // Table 110 把 Type3 与 MMType1 列为两种字体类型：§9.6.2.3 只说 MM 实例
+    // 字典可含 Type 1 字体字典的条目，Type 3 字典没有 `/BaseFont`，无从套用
+    // 实例命名规则，故两个标记互斥。
+    if font.mmtype1 {
+        return Err(WriteError::InvalidObject(format!(
+            "Type 3 font {} cannot also be marked as a /Subtype /MMType1 instance: \
+             9.6.2.3 gives the multiple master instance dictionary the entries of a \
+             Type 1 font dictionary (Table 111)",
             font.name
         )));
     }

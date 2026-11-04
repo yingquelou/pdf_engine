@@ -1,6 +1,6 @@
 use super::{
     AnnotationEntry, ArtifactProperties, GraphicsState, PdfAnnotation, PdfBuilder, Sound,
-    SpanProperties, ThreeDArtwork, same_font,
+    SpanProperties, ThreeDArtwork,
 };
 use crate::core::content::MarkedContentProperties;
 use crate::core::types::{Dict, Value};
@@ -322,7 +322,10 @@ impl PdfBuilder {
             None => return self,
         };
         if let Some(gs_font) = &state.font
-            && !p.fonts.iter().any(|font| same_font(font, &gs_font.font))
+            && !p
+                .fonts
+                .iter()
+                .any(|font| font.same_dedup_key(&gs_font.font))
         {
             p.fonts.push(gs_font.font.clone());
         }

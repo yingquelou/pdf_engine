@@ -1,7 +1,7 @@
 //! ExtGState 对象写出：先按引用写出函数类条目（`/TR` `/BG` `/BG2` `/UCR`
 //! `/UCR2`、`/SMask /TR` 与 `/HT` 内函数），再写图形状态参数字典。
 
-use crate::core::builder::{GraphicsStateFunctions, PdfBuilder, same_font};
+use crate::core::builder::{GraphicsStateFunctions, PdfBuilder};
 use crate::core::types::{Document, Object, PdfFeature, Value};
 use crate::core::writer::WriteError;
 
@@ -71,7 +71,7 @@ impl PdfBuilder {
                     pools
                         .font_pool
                         .iter()
-                        .find(|(font, _)| same_font(font, &gs_font.font))
+                        .find(|(font, _)| font.same_dedup_key(&gs_font.font))
                         .map(|(_, font_num)| *font_num)
                         .ok_or_else(|| {
                             WriteError::InvalidObject(format!(

@@ -1,6 +1,6 @@
 use super::{
     Font, FormXObject, GroupXObject, ImageData, PageBoundaries, PageBuild, PageSize, PdfBuilder,
-    Transition, Viewport, same_font,
+    Transition, Viewport,
 };
 use crate::core::content::ContentStream;
 
@@ -45,8 +45,10 @@ impl PdfBuilder {
             Some(p) => p,
             None => return self,
         };
-        // 字体去重：同 BaseFont 名 + 同字号 + 同编码 视为同一字体对象。
-        let fidx = match p.fonts.iter().position(|f| same_font(f, font)) {
+        // 字体去重：同 BaseFont 名 + 同字号 + 同编码 视为同一字体对象，
+        // 再额外区分 §9.6.2.3 的 Multiple Master 标记（[`Font::same_dedup_key`]），
+        // 否则页内的 MM 实例会被同名同字号的 Type 1 字体吃掉 `/F<n>` 资源槽。
+        let fidx = match p.fonts.iter().position(|f| f.same_dedup_key(font)) {
             Some(i) => i,
             None => {
                 p.fonts.push(font.clone());
