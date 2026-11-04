@@ -46,6 +46,7 @@ mod content_text;
 mod crypto;
 mod document_requirements;
 mod fdf;
+mod filters_indirect;
 mod font_truetype;
 mod font_type1;
 mod font_type1_builtin;

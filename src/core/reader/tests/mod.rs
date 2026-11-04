@@ -7,6 +7,7 @@ use std::process::id;
 mod ascii85_string;
 mod basic;
 mod document;
+mod filters_indirect;
 mod linearized;
 mod support;
 

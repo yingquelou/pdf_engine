@@ -5,6 +5,8 @@
 //! - `bitmap`：位图后端（JBIG2/JPX 像素解码）输出展平为 `Vec<u8>` 的
 //!   薄适配器（`decode_bitmap_stream` / `decode_bitmap_stream_with`）；
 //! - `flate`：FlateDecode 与第三方压缩后端适配器；
+//! - `indirect`：7.4.1 / Table 5 的 `/Filter`、`/DecodeParms` **间接引用形态**
+//!   规范化（解引用 + shall 个数核对），由 `Document` 侧提供解引用器；
 //! - `jpeg`：DCTDecode 与第三方 JPEG 后端适配器；
 //! - `lzw`：LZWDecode；
 //! - `predictor`：LZW/Flate 共用的 Predictor；
@@ -18,9 +20,12 @@
 mod ascii;
 mod bitmap;
 mod flate;
+mod indirect;
 mod jpeg;
 mod lzw;
 mod predictor;
+
+pub(crate) use indirect::normalize_filter_entries;
 
 use crate::core::types::{Dict, Value};
 use std::fmt;
@@ -122,8 +127,10 @@ pub fn builtin_filters() -> &'static [&'static dyn StreamFilter] {
 /// - 多过滤器：按数组顺序**依次**解码，前一步的输出作为后一步的输入；
 /// - 任一过滤器不支持或解码失败：返回 [`DecodeError`]。
 ///
-/// 注意：`/Filter` 与 `/DecodeParms` 若为间接引用（`Value::Ref`）无法在
-/// 无 `Document` 上下文时解引用，按「不支持」处理。
+/// 注意：`/Filter` 与 `/DecodeParms` 按 7.3.10 允许写成间接引用。本函数只有
+/// 字典、没有 `Document` 上下文，无法解引用，故此类字典须先经
+/// [`normalize_filter_entries`]（`Document::decode_stream_bytes` 已自动调用）
+/// 规范化；残留的引用仍按「不支持」报错，不会静默返回未解码字节。
 pub fn decode_stream(dict: &Dict, data: &[u8]) -> Result<Vec<u8>> {
     decode_stream_with(builtin_filters(), dict, data)
 }

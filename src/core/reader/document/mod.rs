@@ -129,7 +129,8 @@ impl Document {
             return Err("value is not a PDF stream".to_string());
         };
         let raw = self.try_stream_bytes(value)?;
-        let dict = Self::remove_crypt_filter(dict, self.is_encrypted())?;
+        let dict = self.normalize_filter_dict(dict);
+        let dict = Self::remove_crypt_filter(&dict, self.is_encrypted())?;
         decode_stream(&dict, &raw).map_err(|error| error.to_string())
     }
 
@@ -148,8 +149,38 @@ impl Document {
             return Err("value is not a PDF stream".to_string());
         };
         let raw = self.try_stream_bytes(value)?;
-        let dict = Self::remove_crypt_filter(dict, self.is_encrypted())?;
+        let dict = self.normalize_filter_dict(dict);
+        let dict = Self::remove_crypt_filter(&dict, self.is_encrypted())?;
         decode_stream_except(&dict, &raw, skip).map_err(|error| error.to_string())
+    }
+
+    /// 7.4.1 / Table 5：把流字典里 `/Filter`、`/DecodeParms`（含缩写 `/DP`）的
+    /// 间接引用形态解引用成规范形态，再交给筛选器调度。
+    ///
+    /// 解引用一律走既有懒加载设施 [`Document::get_object`]（缓存 → xref →
+    /// 对象流），本方法不读 xref；跳数上限与环检测在
+    /// [`crate::core::filters::normalize_filter_entries`] 内完成。
+    /// 失败时**保留原值**（解码随即按「不支持」失败，绝不静默丢字节），
+    /// 并把诊断并入 `warnings`。
+    fn normalize_filter_dict(&self, dict: &crate::core::types::Dict) -> crate::core::types::Dict {
+        let resolve = |value: &Value| -> std::result::Result<Option<Value>, String> {
+            let Value::Ref(num, _) = value else {
+                return Err(format!(
+                    "expected an indirect reference, got {}",
+                    value.type_name()
+                ));
+            };
+            // 按对象号取最新修订，忽略引用中的代号（与 `reader::text::resolve`
+            // 同口径：增量更新后引用可能仍写旧代）。
+            self.get_object(*num)
+                .map(|object| object.map(|object| object.value))
+                .map_err(|error| error.to_string())
+        };
+        let (normalized, issues) = crate::core::filters::normalize_filter_entries(dict, &resolve);
+        for issue in issues {
+            self.push_warning(format!("stream filter dictionary (7.4.1): {issue}"));
+        }
+        normalized
     }
 
     fn remove_crypt_filter(
