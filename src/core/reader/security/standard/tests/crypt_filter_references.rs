@@ -58,7 +58,7 @@ fn direct_crypt_entries() -> Dict {
 fn crypt_filter_selection_is_identical_for_direct_and_indirect_filter_entries() {
     let crypto = RustCryptoBackend;
     let (dict, id, _file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
 
     let expected = explicit_crypt_filter(
         &direct_crypt_entries(),
@@ -106,7 +106,7 @@ fn crypt_filter_selection_is_identical_for_direct_and_indirect_filter_entries() 
 fn decrypt_stream_decrypts_with_a_reference_valued_crypt_filter_array() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let plaintext = b"R4 indirect crypt filter stream";
     let encrypted = encrypt_aes_stream(plaintext, &file_key, 12, 0, &crypto);
     let (stream_dict, table) = mixed_reference_crypt_entries();
@@ -123,7 +123,7 @@ fn decrypt_stream_decrypts_with_a_reference_valued_crypt_filter_array() {
 fn absent_crypt_filter_reference_is_an_error_instead_of_identity() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let stream_dict = Dict::new()
         .insert("Filter", Value::Name("Crypt".into()))
         .insert("DecodeParms", Value::Ref(8, 0));
@@ -143,7 +143,7 @@ fn absent_crypt_filter_reference_is_an_error_instead_of_identity() {
 fn crypt_filter_reference_to_a_wrong_type_is_an_error() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let stream_dict = Dict::new()
         .insert("Filter", Value::Name("Crypt".into()))
         .insert("DecodeParms", Value::Ref(8, 0));
@@ -169,7 +169,7 @@ fn crypt_filter_reference_to_a_wrong_type_is_an_error() {
 fn cyclic_crypt_filter_reference_is_an_error() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let stream_dict = Dict::new()
         .insert("Filter", Value::Ref(7, 0))
         .insert("DecodeParms", Value::Dict(Dict::new()));
@@ -195,7 +195,7 @@ fn cyclic_crypt_filter_reference_is_an_error() {
 fn crypt_filter_cf_entry_reference_selects_the_same_method_as_the_direct_entry() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let mut handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let mut handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let params = Dict::new()
         .insert("CFM", Value::Name("AESV2".into()))
         .insert("Length", Value::Integer(16));
@@ -213,7 +213,8 @@ fn crypt_filter_cf_entry_reference_selects_the_same_method_as_the_direct_entry()
         .expect("直接 /CF 条目应照常选中 StdCF");
     assert_eq!(direct, plaintext);
 
-    handler.options.crypt_filters = Some(Dict::new().insert("StdCF", Value::Ref(11, 0)));
+    handler.options.crypt_filters =
+        Some(Value::Dict(Dict::new().insert("StdCF", Value::Ref(11, 0))));
     assert_eq!(
         handler
             .decrypt_stream(
@@ -233,7 +234,7 @@ fn crypt_filter_cf_entry_reference_selects_the_same_method_as_the_direct_entry()
     )
     .expect("/CF 条目是引用时应解引用后选中同一 filter");
     assert_eq!(reference_form, Some(CryptMethod::Aes128));
-    let direct_form = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let direct_form = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     assert_eq!(
         reference_form,
         explicit_crypt_filter(&stream_dict, &indirect_resolver(&[]), &direct_form.options).unwrap(),
@@ -246,8 +247,9 @@ fn crypt_filter_cf_entry_reference_selects_the_same_method_as_the_direct_entry()
 fn unresolvable_cf_entry_reference_is_an_error() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let mut handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
-    handler.options.crypt_filters = Some(Dict::new().insert("StdCF", Value::Ref(11, 0)));
+    let mut handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
+    handler.options.crypt_filters =
+        Some(Value::Dict(Dict::new().insert("StdCF", Value::Ref(11, 0))));
     let stream_dict = Dict::new()
         .insert("Filter", Value::Name("Crypt".into()))
         .insert(
@@ -255,24 +257,26 @@ fn unresolvable_cf_entry_reference_is_an_error() {
             Value::Dict(Dict::new().insert("Name", Value::Name("StdCF".into()))),
         );
     let encrypted = encrypt_aes_stream(b"unresolvable CF", &file_key, 14, 0, &crypto);
+    let absent = handler
+        .decrypt_stream(14, 0, &stream_dict, &encrypted, &indirect_resolver(&[]))
+        .expect_err("/CF 条目引用缺失必须报错");
     assert!(
-        handler
-            .decrypt_stream(14, 0, &stream_dict, &encrypted, &indirect_resolver(&[]))
-            .expect_err("/CF 条目引用缺失必须报错")
-            .contains("/CF entry references an absent object"),
+        absent.contains("/CF entry: references an absent object"),
+        "{absent}"
     );
     // 指向非字典同样报错。
+    let non_dict = handler
+        .decrypt_stream(
+            14,
+            0,
+            &stream_dict,
+            &encrypted,
+            &indirect_resolver(&[((11, 0), Value::Integer(4))]),
+        )
+        .expect_err("/CF 条目引用指向非字典必须报错");
     assert!(
-        handler
-            .decrypt_stream(
-                14,
-                0,
-                &stream_dict,
-                &encrypted,
-                &indirect_resolver(&[((11, 0), Value::Integer(4))]),
-            )
-            .expect_err("/CF 条目引用指向非字典必须报错")
-            .contains("did not resolve to a dictionary"),
+        non_dict.contains("/CF entry: must be a dictionary"),
+        "{non_dict}"
     );
 }
 
@@ -282,7 +286,7 @@ fn unresolvable_cf_entry_reference_is_an_error() {
 fn stream_without_crypt_filter_keeps_the_file_default_despite_broken_array_element() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let plaintext = b"ordinary encrypted content stream";
     let encrypted = encrypt_aes_stream(plaintext, &file_key, 15, 0, &crypto);
     for stream_dict in [
@@ -332,7 +336,7 @@ fn stream_without_crypt_filter_keeps_the_file_default_despite_broken_array_eleme
 fn dangling_filter_reference_cannot_be_proved_free_of_crypt_and_errors() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let stream_dict = Dict::new().insert("Filter", Value::Ref(7, 0));
     let encrypted = encrypt_aes_stream(b"dangling filter", &file_key, 16, 0, &crypto);
     let error = handler

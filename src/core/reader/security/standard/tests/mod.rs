@@ -36,7 +36,7 @@ fn security_handler_uses_an_injectable_crypto_backend() {
     let reference = RustCryptoBackend;
     let (dict, id, expected_key) = revision_three_dictionary(&reference);
     let backend = CountingBackend::default();
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &backend).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &backend).unwrap();
     assert_eq!(handler.file_key(), &*expected_key);
     assert!(backend.calls.load(Ordering::Relaxed) > 0);
 }
@@ -70,11 +70,25 @@ fn crypt_filter_names_select_supported_methods() {
         .insert("StrF", Value::Name("StdCF".into()))
         .insert("StmF", Value::Name("Rc4CF".into()));
     assert_eq!(
-        crypt_filter(&dict, "StrF", CryptMethod::Identity, 16).unwrap(),
+        crypt_filter(
+            &dict,
+            "StrF",
+            CryptMethod::Identity,
+            16,
+            &indirect_resolver(&[])
+        )
+        .unwrap(),
         CryptMethod::Aes128
     );
     assert_eq!(
-        crypt_filter(&dict, "StmF", CryptMethod::Identity, 16).unwrap(),
+        crypt_filter(
+            &dict,
+            "StmF",
+            CryptMethod::Identity,
+            16,
+            &indirect_resolver(&[])
+        )
+        .unwrap(),
         CryptMethod::Rc4 { key_len: 16 }
     );
 }
@@ -114,11 +128,11 @@ fn security_dictionary_authenticates_user_and_owner_passwords() {
         Value::HexString(hex(id)),
     ]));
 
-    let user = SecurityHandler::authenticate(&dict, &id_value, b"user", None, &crypto).unwrap();
+    let user = authenticate_without_references(&dict, &id_value, b"user", &crypto).unwrap();
     assert_eq!(user.file_key(), &*file_key);
-    let owner = SecurityHandler::authenticate(&dict, &id_value, b"owner", None, &crypto).unwrap();
+    let owner = authenticate_without_references(&dict, &id_value, b"owner", &crypto).unwrap();
     assert_eq!(owner.file_key(), &*file_key);
-    assert!(SecurityHandler::authenticate(&dict, &id_value, b"wrong", None, &crypto).is_err());
+    assert!(authenticate_without_references(&dict, &id_value, b"wrong", &crypto).is_err());
 }
 
 #[test]
@@ -126,17 +140,17 @@ fn revision_three_authenticates_user_and_owner_passwords() {
     let crypto = RustCryptoBackend;
     let (dict, id, expected_key) = revision_three_dictionary(&crypto);
     for password in [b"user".as_slice(), b"owner".as_slice()] {
-        let handler = SecurityHandler::authenticate(&dict, &id, password, None, &crypto).unwrap();
+        let handler = authenticate_without_references(&dict, &id, password, &crypto).unwrap();
         assert_eq!(handler.file_key(), &*expected_key);
     }
-    assert!(SecurityHandler::authenticate(&dict, &id, b"wrong", None, &crypto).is_err());
+    assert!(authenticate_without_references(&dict, &id, b"wrong", &crypto).is_err());
 }
 
 #[test]
 fn revision_four_aesv2_crypt_filter_decrypts_streams() {
     let crypto = RustCryptoBackend;
     let (dict, id, file_key) = revision_four_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     let stream_dict = Dict::new()
         .insert("Filter", Value::Name("Crypt".into()))
         .insert(
@@ -209,7 +223,7 @@ fn permission_views_and_key_derivation_share_the_same_32_bits() {
 fn authenticated_handler_publishes_the_permissions_it_authenticated() {
     let crypto = RustCryptoBackend;
     let (dict, id, _key) = revision_three_dictionary(&crypto);
-    let handler = SecurityHandler::authenticate(&dict, &id, b"user", None, &crypto).unwrap();
+    let handler = authenticate_without_references(&dict, &id, b"user", &crypto).unwrap();
     assert_eq!(handler.permission_entry(), Some((-4, 3)));
 }
 
@@ -364,7 +378,7 @@ fn absent_or_non_integer_permission_entry_fails_authentication() {
         Some(Value::Null),
     ] {
         let dict = standard_handler_dict(2, 3, permissions);
-        let error = SecurityHandler::authenticate(&dict, &Value::Null, b"", None, &crypto)
+        let error = authenticate_without_references(&dict, &Value::Null, b"", &crypto)
             .expect_err("无有效 /P 的标准安全字典不应认证通过");
         assert!(error.contains("/P"), "报错应指向 /P：{error}");
     }
@@ -387,7 +401,7 @@ fn permission_entry_outside_signed_32_bits_fails_authentication() {
     let crypto = RustCryptoBackend;
     for out_of_range in [4_294_967_295i64, 2_147_483_648, -2_147_483_649] {
         let dict = standard_handler_dict(2, 3, Some(Value::Integer(out_of_range)));
-        let error = SecurityHandler::authenticate(&dict, &Value::Null, b"", None, &crypto)
+        let error = authenticate_without_references(&dict, &Value::Null, b"", &crypto)
             .expect_err("超出 Table 22 位词范围的 /P 不应认证通过");
         assert!(error.contains("permissions"), "报错应指向 /P 位词：{error}");
     }
@@ -399,7 +413,7 @@ fn unsupported_revision_is_rejected_before_permissions_are_read() {
     // 在 /P 之前即被拒绝，故读端不会拿到未知 revision 的权限视图。
     let crypto = RustCryptoBackend;
     let dict = standard_handler_dict(5, 6, Some(Value::Integer(-1)));
-    let error = SecurityHandler::authenticate(&dict, &Value::Null, b"", None, &crypto)
+    let error = authenticate_without_references(&dict, &Value::Null, b"", &crypto)
         .expect_err("R5/R6 不受支持");
     assert!(error.contains("unsupported"), "报错应说明不受支持：{error}");
 }
@@ -571,3 +585,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 mod crypt_filter_references;
+mod encrypt_dict_references;
+mod helpers;
+
+use helpers::authenticate_without_references;

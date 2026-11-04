@@ -20,6 +20,7 @@ impl SecurityOptions {
         file_id: &Value,
         password: &[u8],
         crypto: &dyn CryptoBackend,
+        resolver: &crate::core::filters::ObjectResolver<'_>,
     ) -> Result<Self, String> {
         if encrypt.get("Filter").and_then(Value::as_name) != Some("Standard") {
             return Err("unsupported PDF security handler".to_string());
@@ -127,7 +128,7 @@ impl SecurityOptions {
                 permissions,
                 owner_file_key,
                 encrypt_metadata,
-                crypto,
+                resolver,
             );
         }
 
@@ -138,7 +139,7 @@ impl SecurityOptions {
             permissions,
             file_key,
             encrypt_metadata,
-            crypto,
+            resolver,
         )
     }
 
@@ -149,7 +150,7 @@ impl SecurityOptions {
         permissions: i32,
         file_key: Zeroizing<Vec<u8>>,
         encrypt_metadata: bool,
-        _crypto: &dyn CryptoBackend,
+        resolver: &crate::core::filters::ObjectResolver<'_>,
     ) -> Result<Self, String> {
         let default_method = if version < 4 {
             CryptMethod::Rc4 {
@@ -162,17 +163,17 @@ impl SecurityOptions {
         let string_method = if version < 4 {
             default_method
         } else {
-            crypt_filter(encrypt, "StrF", default_method, file_key_len)?
+            crypt_filter(encrypt, "StrF", default_method, file_key_len, resolver)?
         };
         let stream_method = if version < 4 {
             default_method
         } else {
-            crypt_filter(encrypt, "StmF", default_method, file_key_len)?
+            crypt_filter(encrypt, "StmF", default_method, file_key_len, resolver)?
         };
         let embedded_file_method = if version < 4 {
             default_method
         } else {
-            crypt_filter(encrypt, "EFF", stream_method, file_key_len)?
+            crypt_filter(encrypt, "EFF", stream_method, file_key_len, resolver)?
         };
         if [string_method, stream_method, embedded_file_method].contains(&CryptMethod::Aes128)
             && file_key_len != 16
@@ -190,7 +191,7 @@ impl SecurityOptions {
             embedded_file_method,
             encrypt_metadata,
             encrypt_dict_ref: None,
-            crypt_filters: encrypt.get("CF").and_then(Value::as_dict).cloned(),
+            crypt_filters: encrypt.get("CF").cloned(),
         })
     }
 }

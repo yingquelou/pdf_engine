@@ -45,7 +45,9 @@ struct SecurityOptions {
     pub embedded_file_method: CryptMethod,
     pub encrypt_metadata: bool,
     pub encrypt_dict_ref: Option<(i64, i64)>,
-    crypt_filters: Option<Dict>,
+    /// 加密字典 `/CF` 的**原值**（字典或指向字典的间接引用，7.3.10），
+    /// 由 `filters::named_crypt_filter` 按需解引用。
+    crypt_filters: Option<crate::core::types::Value>,
 }
 
 pub(crate) struct SecurityHandler {
@@ -70,8 +72,9 @@ impl SecurityHandler {
         password: &[u8],
         encrypt_dict_ref: Option<(i64, i64)>,
         crypto: &dyn CryptoBackend,
+        resolver: &crate::core::filters::ObjectResolver<'_>,
     ) -> Result<Self, String> {
-        let options = SecurityOptions::from_dict(encrypt, file_id, password, crypto)?;
+        let options = SecurityOptions::from_dict(encrypt, file_id, password, crypto, resolver)?;
         Ok(Self {
             options: SecurityOptions {
                 encrypt_dict_ref,

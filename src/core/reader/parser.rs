@@ -226,24 +226,33 @@ impl Parser {
             return Ok(None);
         }
 
+        // 加密字典一侧的 `/CF`、`/CF` 条目与 `StrF`/`StmF`/`EFF` 选择器都允许
+        // 写成间接引用（7.3.10；7.6.1 只要求加密字典里的**字符串**为直接对象），
+        // 故认证需要一个能按需取对象的解析器。用当前文件句柄的副本临时装配
+        // 一份 Document（不带 security，避免递归认证），其生命周期须覆盖
+        // `authenticate`，因此在这里创建而不是用完即弃。
+        let file = self
+            .reader_mut()?
+            .get_ref()
+            .try_clone()
+            .map_err(|e| err(0, format!("failed to read encryption dictionary: {e}")))?;
+        let scratch = Document::from_source(
+            BufReader::new(file),
+            xref.clone(),
+            trailer.clone(),
+            startxref.clone(),
+            version,
+            Vec::new(),
+            None,
+        );
+        let resolver = scratch.indirect_object_resolver();
+
         let (encrypt_dict, encrypt_dict_ref) = match encrypt_value {
             Value::Dict(dict) => (dict.clone(), None),
             Value::Ref(num, generation) => {
-                let file =
-                    self.reader_mut()?.get_ref().try_clone().map_err(|e| {
-                        err(0, format!("failed to read encryption dictionary: {e}"))
-                    })?;
-                let document = Document::from_source(
-                    BufReader::new(file),
-                    xref.clone(),
-                    trailer.clone(),
-                    startxref.clone(),
-                    version,
-                    Vec::new(),
-                    None,
-                );
-                let object = document
-                    .get_object(*num)?
+                let object = scratch
+                    .get_object(*num)
+                    .map_err(|e| err(0, format!("failed to read encryption dictionary: {e}")))?
                     .filter(|object| object.generation == *generation)
                     .ok_or_else(|| err(0, "invalid trailer /Encrypt reference"))?;
                 let dict = object
@@ -267,6 +276,7 @@ impl Parser {
             &password,
             encrypt_dict_ref,
             &RustCryptoBackend,
+            &resolver,
         )
         .map_err(|_| err(0, "invalid password or unsupported PDF encryption"))?;
         Ok(Some(Arc::new(security)))

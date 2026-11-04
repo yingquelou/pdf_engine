@@ -1,5 +1,13 @@
 //! 7.6.5 crypt filter：把加密字典 `/CF` `/StrF` `/StmF` `/EFF` 与流上
 //! 显式 `/Crypt` 过滤器选择为具体的 [`CryptMethod`]。
+//!
+//! 两条选择路径对**同一个 `/CF` 字典**取值，故引用形态的处理口径必须一致：
+//! 7.3.10「Any object in a PDF file may be labelled as an indirect object」
+//! 允许 `/CF` 本体、`/CF` 的条目值与 `/StmF` 之类的 Name 都写成间接引用，
+//! 而 7.6.1 只要求加密字典里的**串**是间接引用以外的形态
+//! （「Unlike strings within the body of the document, those in the encryption
+//! dictionary shall be direct objects」）——即**没有**任何 shall 要求 `/CF`
+//! 一侧的字典或名字是直接对象。故两条路径都按需解引用（见 [`deref_dictionary`]）。
 
 use crate::core::filters::{ObjectResolver, normalize_filter_entries};
 use crate::core::types::{Dict, Value};
@@ -120,8 +128,8 @@ fn blocking_filter_issues(issues: &[String]) -> Option<String> {
 
 /// `/CF` 里命名的 crypt filter。
 ///
-/// `/CF` 的条目值合法写法可以是间接引用（`<< /CF << /StdCF 9 0 R >> >>`），
-/// 故按需解引用；解不到字典时明确报错，不退回 `/Identity`（选错 filter 会拿错密钥）。
+/// `options.crypt_filters` 存的是 `/CF` 的**原值**（字典或指向字典的引用），
+/// 与 [`crypt_filter`]（文件级默认 filter 一侧）取的是同一个原值形态。
 fn named_crypt_filter(
     options: &SecurityOptions,
     resolver: &ObjectResolver<'_>,
@@ -130,36 +138,72 @@ fn named_crypt_filter(
     if name == "Identity" {
         return Ok(CryptMethod::Identity);
     }
-    let entry = options
+    let cf = crypt_filters(options, resolver)?;
+    let entry = cf
+        .get(name)
+        .ok_or_else(|| format!("missing encryption crypt filter /{name}"))?;
+    let filter = deref_dictionary(
+        entry,
+        resolver,
+        &format!("encryption crypt filter /{name}: /CF entry"),
+    )?;
+    crypt_method(&filter, name, options.file_key.len())
+}
+
+/// 取加密字典的 `/CF` 本体：原值可以是字典，也可以是指向字典的引用。
+fn crypt_filters(options: &SecurityOptions, resolver: &ObjectResolver<'_>) -> Result<Dict, String> {
+    let cf = options
         .crypt_filters
         .as_ref()
-        .and_then(|filters| filters.get(name));
-    let filter = match entry {
-        Some(Value::Dict(filter)) => filter.clone(),
-        Some(Value::Ref(num, generation)) => {
-            let resolved = resolver(&Value::Ref(*num, *generation))?;
-            match resolved {
-                Some(Value::Dict(filter)) => filter,
-                Some(_) => {
-                    return Err(format!(
-                        "invalid encryption crypt filter /{name}: /CF entry reference did not resolve to a dictionary"
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "invalid encryption crypt filter /{name}: /CF entry references an absent object"
-                    ));
-                }
-            }
+        .ok_or("missing encryption /CF dictionary")?;
+    deref_dictionary(cf, resolver, "encryption /CF dictionary")
+}
+
+/// 引用链的跳数上限（库策略）：7.3.10 不禁止「引用指向一个值仍是引用」的对象，
+/// 故按链解引用；上限只用于挡住畸形文件造成的循环取值。
+const MAX_DEREF_HOPS: usize = 32;
+
+/// 把一个「应为字典」的值解成字典：直接字典原样返回；间接引用（含引用链）
+/// 逐跳解引用后必须是字典。
+///
+/// 解不到字典（对象缺失、指向非字典、成环、超跳数）与值本身既非字典亦非引用
+/// 一律**明确报错**，不退回 `/Identity`——选错 crypt filter 会拿错密钥、
+/// 产出静默乱码。`described` 是报错里对目标值的描述。
+fn deref_dictionary(
+    value: &Value,
+    resolver: &ObjectResolver<'_>,
+    described: &str,
+) -> Result<Dict, String> {
+    match deref_value(value, resolver, described)? {
+        Value::Dict(dict) => Ok(dict),
+        _ => Err(format!("invalid {described}: must be a dictionary")),
+    }
+}
+
+/// 沿引用链取到**最终非引用值**；对象缺失、成环、超跳数都报错。
+/// 非引用值原样返回，故调用方可继续按自己的形态要求判定。
+fn deref_value(
+    value: &Value,
+    resolver: &ObjectResolver<'_>,
+    described: &str,
+) -> Result<Value, String> {
+    let mut current = value.clone();
+    let mut seen: Vec<(i64, i64)> = Vec::new();
+    loop {
+        let reference = match current {
+            Value::Ref(num, generation) => (num, generation),
+            _ => return Ok(current),
+        };
+        if seen.contains(&reference) {
+            return Err(format!("invalid {described}: reference chain is cyclic"));
         }
-        Some(_) => {
-            return Err(format!(
-                "invalid encryption crypt filter /{name}: /CF entry must be a dictionary"
-            ));
+        seen.push(reference);
+        if seen.len() > MAX_DEREF_HOPS {
+            return Err(format!("invalid {described}: reference chain too long"));
         }
-        None => return Err(format!("missing encryption crypt filter /{name}")),
-    };
-    crypt_method(&filter, name, options.file_key.len())
+        current = resolver(&Value::Ref(reference.0, reference.1))?
+            .ok_or_else(|| format!("invalid {described}: references an absent object"))?;
+    }
 }
 
 fn crypt_method(filter: &Dict, name: &str, file_key_len: usize) -> Result<CryptMethod, String> {
@@ -206,27 +250,37 @@ fn validate_auth_event(filter: &Dict, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 加密字典一侧的文件级默认 filter 选择（Table 21 的 `/StmF` `/StrF` `/EFF`）。
+///
+/// 与 [`named_crypt_filter`] 共用同一套引用形态处理：选择器名字、`/CF` 本体、
+/// `/CF` 条目值都允许写成间接引用（7.3.10），解不到即报错。
 pub(super) fn crypt_filter(
     dict: &Dict,
     selector: &str,
     default: CryptMethod,
     file_key_len: usize,
+    resolver: &ObjectResolver<'_>,
 ) -> Result<CryptMethod, String> {
-    let name = match dict.get(selector) {
-        Some(Value::Name(name)) => name.as_str(),
-        None => return Ok(default),
-        Some(_) => return Err(format!("invalid encryption /{selector}")),
+    let Some(raw) = dict.get(selector) else {
+        return Ok(default);
+    };
+    let name_value = deref_value(raw, resolver, &format!("encryption /{selector}"))?;
+    let name = match name_value {
+        Value::Name(ref name) => name.clone(),
+        _ => return Err(format!("invalid encryption /{selector}")),
     };
     if name == "Identity" {
         return Ok(CryptMethod::Identity);
     }
-    let filters = dict
-        .get("CF")
-        .and_then(Value::as_dict)
-        .ok_or("missing encryption /CF dictionary")?;
-    let filter = filters
-        .get(name)
-        .and_then(Value::as_dict)
+    let cf = dict.get("CF").ok_or("missing encryption /CF dictionary")?;
+    let filters = deref_dictionary(cf, resolver, "encryption /CF dictionary")?;
+    let entry = filters
+        .get(name.as_str())
         .ok_or_else(|| format!("missing encryption crypt filter /{name}"))?;
-    crypt_method(filter, name, file_key_len)
+    let filter = deref_dictionary(
+        entry,
+        resolver,
+        &format!("encryption crypt filter /{name}: /CF entry"),
+    )?;
+    crypt_method(&filter, name.as_str(), file_key_len)
 }
