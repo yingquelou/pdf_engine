@@ -8,6 +8,9 @@ use super::*;
 use crate::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField};
 use crate::core::types::{Array, PdfVersion};
 
+/// 目录值树各值位置的 ASCII85 载荷门禁（7.4.3）：非法 body 零字节拒绝、
+/// 合法 body 逐字写出。
+mod gate;
 /// Table 245 JavaScript 字典的写出、原值保留与装配前校验。
 mod javascript;
 

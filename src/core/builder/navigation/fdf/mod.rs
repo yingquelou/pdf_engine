@@ -30,7 +30,10 @@
 //! Required）、Table 251 的注解缺 `/Page`、`/Page` 非整型或为负序数、
 //! `/Subtype` 命中 Table 243 的注解类型黑名单、
 //! 超出读端深度/数量上限等）返回
-//! [`WriteError::InvalidObject`]，同样零字节。
+//! [`WriteError::InvalidObject`]，同样零字节。ASCII85 串（`<~ ... ~>`）
+//! body 的 7.4.3 校验（`~>`、表外字符、半组 `z`）也在任何字节写出之前
+//! 对整棵目录值树跑 writer 的同一门禁（见 [`emit`]），命中即
+//! [`WriteError::InvalidObject`]、零字节。
 //!
 //! Table 248–251 的写端只下降**直接数组里的直接字典**：本入口只产出
 //! 一个间接对象，无法解引用 `/Pages`/`/Annots`/`/Templates`/模板
@@ -51,8 +54,8 @@ use crate::core::builder::types::fdf::{annots_value, catalog_dict, pages_value};
 use crate::core::reader::fdf::{
     FdfAnnotation, FdfDocument, FdfPage, MAX_FDF_FIELD_DEPTH, MAX_FDF_FIELD_NODES,
 };
-use crate::core::types::{Dict, PdfVersion, Value};
-use crate::core::writer::{WriteError, write_value};
+use crate::core::types::{Dict, Document, Object, PdfVersion, StartXref, Trailer, Value, Xref};
+use crate::core::writer::{WriteError, validate_ascii85_payloads, write_value};
 
 use super::PdfBuilder;
 use super::invalid;
@@ -340,11 +343,36 @@ pub(super) fn walk_field(
     Ok(())
 }
 
+/// 把 FDF 目录树包成单对象 [`Document`]，复用 writer 的 crate 内 ASCII85
+/// 门禁 [`validate_ascii85_payloads`]（提交 `96ffd15` 的同一实现）。
+///
+/// 目录挂在对象号 1——与 [`emit`] 写出的 `1 0 obj` 同一编号，违规消息里
+/// 的 "object 1" 直接对应 FDF 目录；trailer 为空字典，门禁自然通过。
+/// 只为校验而构造，不参与任何字节产出。
+fn gate_document(root: &Value) -> Document {
+    Document::from_objects(
+        vec![Object::new(1, 0, root.clone())],
+        Xref::new(),
+        Trailer::new(),
+        StartXref(0),
+    )
+}
+
 /// 校验并装配独立 FDF 字节；失败时不返回任何字节。
+///
+/// 体部经**不可失败**的原语 `write_value` 落字节，绕过了装配期
+/// [`validate_ascii85_payloads`] 门禁（`writer/value.rs` 的口径说明要求
+/// 直接拼字节的调用方自备门禁），故此处于装配任何字节之前，对整棵目录
+/// 值树（`/Fields`、`/FDF` 目录、`/Pages`、`/Annots`、`/Differences` 载荷、
+/// `/EmbeddedFDFs`、`/JavaScript`、`/Status`、`/Target` 及各层原值）跑
+/// 同一 7.4.3 ASCII85 body 校验：命中 `~>`、表外字符或半组 `z` 即返回
+/// [`WriteError::InvalidObject`]、零字节；合法取值的输出字节完全不变。
 pub(super) fn emit(catalog: &Dict, version: PdfVersion) -> Result<Vec<u8>, WriteError> {
     validate(catalog, version)?;
+    let root = Value::Dict(catalog.clone());
+    validate_ascii85_payloads(&gate_document(&root))?;
     let mut body = String::new();
-    write_value(&Value::Dict(catalog.clone()), &mut body);
+    write_value(&root, &mut body);
     let mut out: Vec<u8> = Vec::with_capacity(body.len() + 128);
     // 12.7.7.2.2 — 一行文件头 `%FDF-<ver>`。
     let _ = writeln!(&mut out, "%FDF-{version}");

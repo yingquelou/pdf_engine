@@ -8,6 +8,8 @@
 use super::*;
 
 mod embedded;
+/// ASCII85 载荷门禁（7.4.3）的写出→重解析往返与零字节拒绝。
+mod gate;
 mod javascript;
 /// Table 248–251 的 `/Pages`/`/Annots` 类型化视图写出→重解析往返与
 /// 写端装配前校验的零字节拒绝。
