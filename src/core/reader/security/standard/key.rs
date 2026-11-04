@@ -18,6 +18,16 @@ pub(super) fn pad_password(password: &[u8]) -> Zeroizing<Vec<u8>> {
     padded
 }
 
+/// Algorithm 3 b–d – 派生 `/O` 用的 RC4 所有者密钥。
+///
+/// 步 (c)（raw L3092–L3093）与 Algorithm 2 步 (h)（raw L3072–L3074）**只差在
+/// 是否截断**：Algorithm 2 每次续哈希只喂「上一次输出的前 n 字节」，而
+/// Algorithm 3 把「上一次 MD5 的输出」整体喂给下一次——密钥长度的截断只发生
+/// 在步 (d)（raw L3096–L3098）。故这里循环内不得切片。
+///
+/// 二者在 `key_len == 16`（128 位）时结果相同（16 字节摘要切片是恒等），
+/// 缺陷只在 `/Length` < 128 且 R ≥ 3 时显形；`/Length` 缺省即 40 位
+/// （Table 20），所以这不是纯理论分支。
 pub(super) fn derive_owner_key(
     padded_password: &[u8],
     revision: u8,
@@ -27,7 +37,7 @@ pub(super) fn derive_owner_key(
     let mut digest = crypto.md5(padded_password);
     if revision >= 3 {
         for _ in 0..50 {
-            digest = crypto.md5(&digest[..key_len]);
+            digest = crypto.md5(&digest);
         }
     }
     Zeroizing::new(digest[..key_len].to_vec())

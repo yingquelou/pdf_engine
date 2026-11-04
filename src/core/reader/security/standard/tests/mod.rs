@@ -592,6 +592,7 @@ fn hex(bytes: &[u8]) -> String {
 mod crypt_filter_references;
 mod encrypt_dict_references;
 mod helpers;
+mod owner_key_alg3;
 mod v4_write;
 
 use helpers::authenticate_without_references;
