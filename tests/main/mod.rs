@@ -51,6 +51,8 @@ mod font_truetype;
 mod font_type1;
 mod font_type1_builtin;
 mod graphics_state_hybrid;
+mod hint_write_generic;
+mod hint_write_shared;
 mod hybrid_reference;
 mod linearization_hints;
 mod objstm_inline_stream;

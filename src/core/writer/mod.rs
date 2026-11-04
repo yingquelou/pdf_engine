@@ -68,6 +68,7 @@ mod context;
 mod document_writer;
 mod hybrid;
 mod incremental;
+pub mod linearization;
 mod serialize;
 mod signature;
 #[cfg(test)]
