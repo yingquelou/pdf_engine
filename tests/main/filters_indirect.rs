@@ -301,3 +301,220 @@ fn image_xobject_with_indirect_filter_array_roundtrips_like_inline_form() {
         );
     }
 }
+
+// ── 7.6.5：加密流上显式 `/Crypt` 的筛选器条目写成间接引用 ───────────────
+//
+// 写端不产出 `/CF` crypt 字典，故按 `standard/tests` 的密钥派生先例手工构造
+// R4/AESV2 加密样本（解析 → 解密全链路，不经写出重读）。
+
+/// 三个 crypt 流共用的明文（先 ASCIIHex 编码再 AES 加密，故 `/Crypt` 之后
+/// 还有一个真实的链上筛选器）。
+const CRYPT_REF_PLAIN: &[u8] = b"indirect crypt filter payload";
+
+/// 7.6.3.1 Table 22 的 32 字节口令填充表。
+const CRYPT_REF_PADDING: [u8; 32] = [
+    0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
+    0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a,
+];
+
+fn crypt_ref_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02X}")).collect()
+}
+
+fn crypt_ref_rc4_16(key: &[u8], input: &[u8]) -> Vec<u8> {
+    let mut cipher = Rc4::<U16>::new_from_slice(key).unwrap();
+    let mut output = input.to_vec();
+    cipher.apply_keystream(&mut output);
+    output
+}
+
+/// AES-128-CBC + PKCS#5 填充，IV 前置（AESV2 的流加密形态）。
+fn crypt_ref_aes(plaintext: &[u8], key: &[u8], iv: [u8; 16]) -> Vec<u8> {
+    let padding = 16 - plaintext.len() % 16;
+    let mut data = plaintext.to_vec();
+    data.extend(std::iter::repeat_n(padding as u8, padding));
+    let cipher = Aes128::new_from_slice(key).unwrap();
+    let mut previous = iv;
+    for chunk in data.chunks_mut(16) {
+        for (byte, prior) in chunk.iter_mut().zip(previous) {
+            *byte ^= prior;
+        }
+        let mut block = GenericArray::clone_from_slice(chunk);
+        cipher.encrypt_block(&mut block);
+        chunk.copy_from_slice(&block);
+        previous.copy_from_slice(chunk);
+    }
+    [iv.as_slice(), data.as_slice()].concat()
+}
+
+/// R4（`/V 4 /R 4 /Length 128`、`EncryptMetadata false`、`/P -4`）的文件密钥与
+/// `/O` `/U` 条目（Algorithm 2 与 Algorithm 4/5 的手工实现）。
+fn crypt_ref_r4_entries(id: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let pad = |password: &[u8]| {
+        let mut result = password[..password.len().min(32)].to_vec();
+        result.extend_from_slice(&CRYPT_REF_PADDING[..32 - result.len()]);
+        result
+    };
+    let user_password = pad(b"user-password");
+    let owner_password = pad(b"owner-password");
+    let mut owner_digest = Md5::digest(&owner_password).to_vec();
+    for _ in 0..50 {
+        owner_digest = Md5::digest(&owner_digest[..16]).to_vec();
+    }
+    let mut owner_entry = crypt_ref_rc4_16(&owner_digest[..16], &user_password);
+    for iteration in 1..20u8 {
+        let key: Vec<u8> = owner_digest[..16]
+            .iter()
+            .map(|byte| byte ^ iteration)
+            .collect();
+        owner_entry = crypt_ref_rc4_16(&key, &owner_entry);
+    }
+    let permissions = -4i32;
+    let mut key_material = user_password;
+    key_material.extend_from_slice(&owner_entry);
+    key_material.extend_from_slice(&permissions.to_le_bytes());
+    key_material.extend_from_slice(id);
+    key_material.extend_from_slice(&[0xff; 4]);
+    let mut file_key = Md5::digest(key_material).to_vec();
+    for _ in 0..50 {
+        file_key = Md5::digest(&file_key[..16]).to_vec();
+    }
+    let mut user_material = CRYPT_REF_PADDING.to_vec();
+    user_material.extend_from_slice(id);
+    let digest = Md5::digest(user_material);
+    let mut user_entry = crypt_ref_rc4_16(&file_key[..16], &digest);
+    for iteration in 1..20u8 {
+        let key: Vec<u8> = file_key[..16].iter().map(|byte| byte ^ iteration).collect();
+        user_entry = crypt_ref_rc4_16(&key, &user_entry);
+    }
+    user_entry.extend_from_slice(&[0; 16]);
+    (file_key, owner_entry, user_entry)
+}
+
+/// Algorithm 1：对象密钥 = MD5(文件密钥 + 3 字节对象号 + 2 字节代号 + `sAlT`)。
+fn crypt_ref_object_key(file_key: &[u8], num: i64, generation: i64) -> Vec<u8> {
+    let mut material = file_key[..16].to_vec();
+    material.extend_from_slice(&(num as u32).to_le_bytes()[..3]);
+    material.extend_from_slice(&(generation as u16).to_le_bytes());
+    material.extend_from_slice(b"sAlT");
+    Md5::digest(material)[..16].to_vec()
+}
+
+/// 写出给定编号的对象（编号缺口写自由条目）+ 带 `/Encrypt` 与 `/ID` 的 trailer。
+fn assemble_encrypted(objects: &[(i64, Vec<u8>)], encrypt_num: i64, id: &[u8]) -> Vec<u8> {
+    let highest = objects.iter().map(|(num, _)| *num).max().unwrap_or(1);
+    let mut buf = b"%PDF-1.5\n".to_vec();
+    let mut offsets = vec![0usize; highest as usize + 1];
+    for (num, body) in objects {
+        offsets[*num as usize] = buf.len();
+        buf.extend_from_slice(body);
+    }
+    let xref_offset = buf.len();
+    buf.extend_from_slice(format!("xref\n0 {}\n", highest + 1).as_bytes());
+    buf.extend_from_slice(b"0000000000 65535 f \n");
+    for num in 1..=highest {
+        let line = if offsets[num as usize] == 0 {
+            "0000000000 65535 f \n".to_string()
+        } else {
+            format!("{:010} 00000 n \n", offsets[num as usize])
+        };
+        buf.extend_from_slice(line.as_bytes());
+    }
+    let id_hex = crypt_ref_hex(id);
+    let trailer = format!(
+        "trailer\n<< /Size {} /Root 1 0 R /Encrypt {encrypt_num} 0 R /ID [<{id_hex}> <{id_hex}>] >>\nstartxref\n{xref_offset}\n%%EOF\n",
+        highest + 1
+    );
+    buf.extend_from_slice(trailer.as_bytes());
+    buf
+}
+
+/// 一个 `/Crypt` 之后接 `/ASCIIHexDecode` 的加密流对象。
+fn crypt_ref_stream(num: i64, entries: &str, file_key: &[u8]) -> Vec<u8> {
+    let payload = format!("{}>", crypt_ref_hex(CRYPT_REF_PLAIN)).into_bytes();
+    let encrypted = crypt_ref_aes(
+        &payload,
+        &crypt_ref_object_key(file_key, num, 0),
+        [0x41; 16],
+    );
+    let head = format!(
+        "{num} 0 obj\n<< {entries} /Length {} >>\nstream\n",
+        encrypted.len()
+    );
+    let mut body = head.into_bytes();
+    body.extend_from_slice(&encrypted);
+    body.extend_from_slice(b"\nendstream\nendobj\n");
+    body
+}
+
+/// R4/AESV2 样本：
+/// - 对象 2：`/Filter 6 0 R`（→ `[ 5 0 R /ASCIIHexDecode ]`，元素 5 即 Name `/Crypt`）
+///   ＋ `/DecodeParms 7 0 R`（→ `[ 8 0 R null ]`，元素 8 即 `<< /Name /StdCF >>`）；
+/// - 对象 3：同一筛选器的**直接对象**写法（对照）；
+/// - 对象 9：`/DecodeParms 10 0 R` 指向缺失对象（失败形态，对象 10 不在 xref 里）。
+fn crypt_filter_reference_pdf() -> Vec<u8> {
+    let id = b"pdf-r4-crypt-ref-test";
+    let (file_key, owner_entry, user_entry) = crypt_ref_r4_entries(id);
+    let entries = "/Filter [ /Crypt /ASCIIHexDecode ] /DecodeParms [ << /Name /StdCF >> null ]";
+    let encrypt = format!(
+        "4 0 obj\n<< /Filter /Standard /V 4 /R 4 /Length 128 /O <{}> /U <{}> /P -4 /EncryptMetadata false /CF << /StdCF << /CFM /AESV2 /Length 16 >> >> /StmF /StdCF /StrF /StdCF >>\nendobj\n",
+        crypt_ref_hex(&owner_entry),
+        crypt_ref_hex(&user_entry)
+    );
+    let objects: Vec<(i64, Vec<u8>)> = vec![
+        (1, b"1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec()),
+        (
+            2,
+            crypt_ref_stream(2, "/Filter 6 0 R /DecodeParms 7 0 R", &file_key),
+        ),
+        (3, crypt_ref_stream(3, entries, &file_key)),
+        (4, encrypt.into_bytes()),
+        (5, b"5 0 obj\n/Crypt\nendobj\n".to_vec()),
+        (6, b"6 0 obj\n[ 5 0 R /ASCIIHexDecode ]\nendobj\n".to_vec()),
+        (7, b"7 0 obj\n[ 8 0 R null ]\nendobj\n".to_vec()),
+        (8, b"8 0 obj\n<< /Name /StdCF >>\nendobj\n".to_vec()),
+        (
+            9,
+            crypt_ref_stream(9, "/Filter /Crypt /DecodeParms 10 0 R", &file_key),
+        ),
+    ];
+    assemble_encrypted(&objects, 4, id)
+}
+
+/// 加密流上 `/Crypt` 的筛选器条目写成间接引用时，选中的 crypt filter 与直接
+/// 对象写法**给出同一份明文**；引用指向缺失对象时明确报错、不返回任何字节。
+#[test]
+fn encrypted_stream_with_reference_crypt_filter_entries_decrypts_like_the_direct_form() {
+    let bytes = crypt_filter_reference_pdf();
+    let doc = parse_buf_with_password(&bytes, b"user-password");
+    let indirect = stream_value(&doc, 2);
+    let direct = stream_value(&doc, 3);
+
+    // 解密后的原始字节仍是 ASCIIHex 载荷（密钥取自 /CF 的 StdCF，而非 Identity）。
+    let payload = format!("{}>", crypt_ref_hex(CRYPT_REF_PLAIN)).into_bytes();
+    assert_eq!(
+        doc.try_stream_bytes(&indirect)
+            .expect("引用形态的 /Crypt 条目应选中 StdCF 并解密"),
+        payload
+    );
+    assert_eq!(
+        doc.decode_stream_bytes(&indirect)
+            .expect("引用形态的完整筛选器链应解码"),
+        CRYPT_REF_PLAIN
+    );
+    // 与直接对象写法逐字节一致。
+    assert_eq!(
+        doc.decode_stream_bytes(&direct).unwrap(),
+        doc.decode_stream_bytes(&indirect).unwrap()
+    );
+
+    // 失败形态：参数字典引用指向缺失对象 → 明确报错，不静默解密成乱码。
+    let broken = stream_value(&doc, 9);
+    let error = doc
+        .try_stream_bytes(&broken)
+        .expect_err("缺失的 /DecodeParms 引用必须报错");
+    assert!(
+        error.contains("/DecodeParms") && error.contains("absent object"),
+        "错误应给出键名与解引用诊断：{error}"
+    );
+}
