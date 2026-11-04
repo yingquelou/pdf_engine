@@ -42,6 +42,9 @@ mod extended;
 /// F.4.5 extended generic hint 表的写端编码与读端往返。
 mod extended_write;
 
+/// F.4.3 缩略图 hint 表的写端编码与读端往返。
+mod thumbnail_write;
+
 /// F.4.6 内嵌文件流 hint 表家族。
 mod embedded_file;
 
