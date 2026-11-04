@@ -24,6 +24,7 @@ use crate::core::types::Document;
 
 mod conform;
 mod fixture;
+mod hint_dict_objects;
 mod hints;
 mod parts;
 mod structure;
@@ -116,6 +117,9 @@ struct Knobs<'a> {
     hint_payload: Option<&'a [u8]>,
     /// 追加进主 hint 流字典的条目原文（如 `" /S 4"`，Table F.2 键位）。
     hint_entries: &'a str,
+    /// 追加进首页内容流（即 `/H` 第二对所指的溢出 hint 流）字典的条目原文，
+    /// 用于驱动 F.3.6 对**溢出** hint 流字典的直接对象核对。
+    overflow_entries: &'a str,
 }
 
 /// 默认形态即「附录 F 严格合规」的线性化文件：版本取一个 1.2 之后的常见值
@@ -150,6 +154,7 @@ impl Default for Knobs<'_> {
             replaced: &[],
             hint_payload: None,
             hint_entries: "",
+            overflow_entries: "",
         }
     }
 }

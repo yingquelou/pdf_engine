@@ -57,6 +57,7 @@ use super::issues::LinearizationIssue;
 
 mod assemble;
 pub mod bits;
+mod direct_objects;
 mod embedded_file;
 mod extended;
 mod generic;

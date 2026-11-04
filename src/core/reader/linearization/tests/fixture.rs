@@ -127,7 +127,7 @@ pub(super) fn build_once(knobs: &Knobs, g: Guess) -> (Vec<u8>, Guess) {
     let page_at = buf.len() as u64;
     push(&mut buf, &object(PAGE1, &first_page_body(knobs)));
     let contents_at = buf.len() as u64;
-    push(&mut buf, &stream_object(CONTENTS1));
+    push(&mut buf, &stream_object(CONTENTS1, knobs.overflow_entries));
     let font_at = buf.len() as u64;
     push(&mut buf, &object(FONT, &font_body()));
     // `/E`：首页对象组末尾（F.3.1 第 6 项与第 7 项的分界）。
@@ -145,7 +145,7 @@ pub(super) fn build_once(knobs: &Knobs, g: Guess) -> (Vec<u8>, Guess) {
     let page2_at = buf.len() as u64;
     push(&mut buf, &object(PAGE2, &page2_body()));
     let contents2_at = buf.len() as u64;
-    push(&mut buf, &stream_object(CONTENTS2));
+    push(&mut buf, &stream_object(CONTENTS2, ""));
     let info_at = match early_info {
         Some(at) => at,
         None => {

@@ -100,19 +100,19 @@ fn page_offset_bytes() -> usize {
 }
 
 /// Table F.2 键 `S` 的定位条目原文：紧跟页偏移表之后。
-fn hint_entries() -> String {
+pub(super) fn hint_entries() -> String {
     format!(" /S {}", page_offset_bytes())
 }
 
 /// hint 流载荷：偏移 0 的页偏移表 + 紧随其后的共享对象表。
-fn hint_payload(first_page_refs: u64, last_shared_id: u64) -> Vec<u8> {
+pub(super) fn hint_payload(first_page_refs: u64, last_shared_id: u64) -> Vec<u8> {
     let mut payload = page_offset_table_bits(first_page_refs, last_shared_id);
     payload.extend(shared_table_bits());
     payload
 }
 
 /// 装配了合法两张表与 `/S` 定位条目的形态。
-fn crafted<'a>(knobs: &mut Knobs<'a>, payload: &'a [u8], entries: &'a str) {
+pub(super) fn crafted<'a>(knobs: &mut Knobs<'a>, payload: &'a [u8], entries: &'a str) {
     knobs.hint_payload = Some(payload);
     knobs.hint_entries = entries;
 }

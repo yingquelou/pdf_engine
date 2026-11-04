@@ -156,10 +156,10 @@ pub(super) fn object(number: i64, body: &str) -> String {
     format!("{number} 0 obj\n{body}\nendobj\n")
 }
 
-pub(super) fn stream_object(number: i64) -> String {
+pub(super) fn stream_object(number: i64, extra_entries: &str) -> String {
     let payload = std::str::from_utf8(CONTENT_PAYLOAD).expect("content payload is ascii");
     format!(
-        "{number} 0 obj\n<< /Length {} >>\nstream\n{payload}\nendstream\nendobj\n",
+        "{number} 0 obj\n<< /Length {}{extra_entries} >>\nstream\n{payload}\nendstream\nendobj\n",
         CONTENT_PAYLOAD.len()
     )
 }

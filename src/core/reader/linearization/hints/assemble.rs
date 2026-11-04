@@ -15,6 +15,7 @@ use super::super::LinearizationInfo;
 use super::super::checks::read_object_at;
 use super::super::dict::HintRange;
 use super::super::issues::LinearizationIssue;
+use super::direct_objects::check_hint_stream_direct_objects;
 use super::embedded_file::{check_embedded_file_semantics, parse_embedded_file};
 use super::extended::{check_extended_shared_id_widths, group_hint_keys, parse_extended};
 use super::{
@@ -70,12 +71,18 @@ impl Document {
                 });
             }
         };
+        // F.3.6：两条 hint 流的字典除 `/Length` 外不得含间接引用（唯一豁免是
+        // 流字典的 `Length` 条目）；本核对只报告，原值照常参与后续解析。
+        check_hint_stream_direct_objects(&dict, "primary", &mut issues);
         // F.3.6：两 hint 流的（解码后）内容「shall be concatenated and
         // treated as if they were a single unbroken stream」；表位置只存在
         // 于主流字典。溢出流读失败给诊断并退回主流继续。
         if let Some(overflow) = streams.overflow {
             match self.read_hint_stream(overflow) {
-                Ok((_, extra)) => data.extend_from_slice(&extra),
+                Ok((overflow_dict, extra)) => {
+                    check_hint_stream_direct_objects(&overflow_dict, "overflow", &mut issues);
+                    data.extend_from_slice(&extra);
+                }
                 Err(problem) => issues.push(LinearizationIssue::HintStreamUnreadable {
                     which: "overflow",
                     problem,
