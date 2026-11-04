@@ -75,6 +75,7 @@ pub mod content;
 mod document;
 pub mod embedded;
 pub mod fdf;
+pub mod file_stream;
 pub mod font;
 pub mod form;
 pub mod graphics_state;
