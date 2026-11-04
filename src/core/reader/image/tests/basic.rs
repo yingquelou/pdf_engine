@@ -201,3 +201,128 @@ fn page_image_resolves_page_xobject_resource() {
     assert!(doc.page_image(0, "Missing").unwrap().is_none());
     assert!(doc.page_image(9, "Im1").is_err());
 }
+
+/// 7.4.1 / Table 5 + 7.3.10：`/Filter` 数组元素写成间接引用
+/// （如 `[ /AHx 11 0 R ]`）时，规范名列表与全直接写法一致，解码数据与
+/// 样本读取行为不变。
+#[test]
+fn image_filter_array_with_reference_element_matches_inline_form() {
+    // ASCIIHex → RunLength 两级链：`0100FF80>` → 0x01 0x00 0xFF 0x80 →
+    // 字面段 [0x00, 0xFF] + EOD。
+    let encoded = b"0100FF80>".to_vec();
+    let indirect = doc_with(vec![
+        (
+            10,
+            stream(
+                image_dict(2, 1, "DeviceGray", 8).insert(
+                    "Filter",
+                    Value::Array(Array(vec![Value::Name("AHx".into()), Value::Ref(11, 0)])),
+                ),
+                encoded.clone(),
+            ),
+        ),
+        (11, Value::Name("RunLengthDecode".into())),
+    ]);
+    let direct = doc_with(vec![(
+        10,
+        stream(
+            image_dict(2, 1, "DeviceGray", 8).insert(
+                "Filter",
+                Value::Array(Array(vec![
+                    Value::Name("ASCIIHexDecode".into()),
+                    Value::Name("RunLengthDecode".into()),
+                ])),
+            ),
+            encoded,
+        ),
+    )]);
+
+    let image = indirect
+        .image(&Value::Ref(10, 0))
+        .expect("间接引用元素形态的 /Filter 数组必须可解析");
+    let baseline = direct
+        .image(&Value::Ref(10, 0))
+        .expect("全直接写法应作为基准可解析");
+    assert_eq!(
+        image.filters,
+        vec!["ASCIIHexDecode".to_string(), "RunLengthDecode".to_string()]
+    );
+    assert_eq!(image.filters, baseline.filters);
+    assert_eq!(image.data, baseline.data);
+    assert_eq!(image.data, vec![0x00, 0xFF]);
+    assert_eq!(
+        image.samples().unwrap().values,
+        baseline.samples().unwrap().values
+    );
+    assert_eq!(image.samples().unwrap().values, vec![0.0, 1.0]);
+    assert!(
+        indirect.warnings().is_empty(),
+        "合法形态不得产诊断：{:?}",
+        indirect.warnings()
+    );
+}
+
+/// `/Filter` 元素引用指向缺失对象：产出 `7.4.1` 诊断并明确失败，
+/// 绝不静默按「该元素不存在／无筛选器」误解码像素。
+#[test]
+fn image_filter_array_reference_to_absent_object_is_diagnosed_and_rejected() {
+    let doc = doc_with(vec![(
+        10,
+        stream(
+            image_dict(2, 1, "DeviceGray", 8).insert(
+                "Filter",
+                Value::Array(Array(vec![
+                    Value::Name("ASCIIHexDecode".into()),
+                    Value::Ref(99, 0),
+                ])),
+            ),
+            b"0100FF80>".to_vec(),
+        ),
+    )]);
+    let error = doc
+        .image(&Value::Ref(10, 0))
+        .expect_err("缺失对象的引用元素必须失败而非误解码");
+    assert!(
+        error
+            .to_string()
+            .contains("/Filter array has a non-name element"),
+        "got: {error}"
+    );
+    assert!(
+        doc.warnings()
+            .iter()
+            .any(|warning| { warning.contains("7.4.1") && warning.contains("absent object") }),
+        "诊断缺失：{:?}",
+        doc.warnings()
+    );
+}
+
+/// `/Filter` 顶层引用成环：与 `Document::decode_stream_bytes` 同一立场，
+/// 保留原值 + 环诊断 + 类型化失败（不 panic、不递归爆炸）。
+#[test]
+fn image_filter_cyclic_reference_is_diagnosed_and_rejected() {
+    let doc = doc_with(vec![
+        (
+            10,
+            stream(
+                image_dict(2, 1, "DeviceGray", 8)
+                    .insert("Filter", Value::Array(Array(vec![Value::Ref(11, 0)]))),
+                b"0100FF80>".to_vec(),
+            ),
+        ),
+        (11, Value::Ref(11, 0)),
+    ]);
+    assert!(
+        doc.image(&Value::Ref(10, 0))
+            .expect_err("环引用不得解析成功")
+            .to_string()
+            .contains("/Filter array has a non-name element"),
+    );
+    assert!(
+        doc.warnings()
+            .iter()
+            .any(|warning| warning.contains("7.4.1") && warning.contains("cyclic")),
+        "环诊断缺失：{:?}",
+        doc.warnings()
+    );
+}

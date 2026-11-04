@@ -378,3 +378,124 @@ fn direct_forms_produce_no_issues() {
     assert_eq!(normalized, dict);
     assert!(issues.is_empty(), "got: {issues:?}");
 }
+
+/// Table 7（7.4.2 外部文件流）：`/FFilter` 引用→Name、数组元素引用，与
+/// 直接对象写法规范化结果一致；「同 Filter 规则」逐字落地。
+#[test]
+fn ffilter_reference_forms_match_direct_names() {
+    let direct = Dict::new()
+        .insert("Filter", Value::Name("FlateDecode".into()))
+        .insert(
+            "FFilter",
+            Value::Array(
+                Array::new()
+                    .push(Value::Name("ASCIIHexDecode".into()))
+                    .push(Value::Name("RunLengthDecode".into())),
+            ),
+        );
+    let indirect = Dict::new()
+        .insert("Filter", Value::Name("FlateDecode".into()))
+        .insert(
+            "FFilter",
+            Value::Array(
+                Array::new()
+                    .push(Value::Ref(21, 0))
+                    .push(Value::Name("RunLengthDecode".into())),
+            ),
+        );
+    let by_ref = Dict::new().insert("FFilter", Value::Ref(22, 0));
+    let table = [
+        ((21, 0), Value::Name("ASCIIHexDecode".into())),
+        ((22, 0), Value::Name("DCTDecode".into())),
+    ];
+    assert_eq!(normalized_without_issues(&indirect, &table), direct.clone());
+    assert_eq!(
+        normalized_without_issues(&by_ref, &table).get("FFilter"),
+        Some(&Value::Name("DCTDecode".into()))
+    );
+    // 外部文件流的普通 `/Filter` 规范化不受 `/FFilter` 影响（Table 5 例
+    // 99 形态：EF 流自身仍可压缩，FFilter 描述的是外部文件本体）。
+    let decoded = decode_stream(
+        &normalized_without_issues(&indirect, &table)
+            .insert("Filter", Value::Name("RunLengthDecode".into())),
+        &[0, b'x'],
+    )
+    .expect("普通 /Filter 照常调度");
+    assert_eq!(decoded, b"x");
+    // `/FFilter` 不参与 decode_stream 调度，仍留在字典里供后续建模。
+    assert_eq!(
+        normalized_without_issues(&indirect, &table).get("FFilter"),
+        direct.get("FFilter")
+    );
+}
+
+/// Table 7：`/FDecodeParms` 引用→字典与字典数组元素引用同样解引用；
+/// `/FDecodeParms` 脱离 `/FFilter` 单独出现、个数不匹配都产诊断。
+#[test]
+fn fdecode_parms_reference_and_pair_counts_follow_table_7() {
+    let parms = Value::Dict(ccitt_parms());
+    let direct = Dict::new()
+        .insert("FFilter", Value::Name("CCITTFaxDecode".into()))
+        .insert("FDecodeParms", parms.clone());
+    let indirect = Dict::new()
+        .insert("FFilter", Value::Ref(23, 0))
+        .insert("FDecodeParms", Value::Ref(24, 0));
+    let table = [
+        ((23, 0), Value::Name("CCITTFaxDecode".into())),
+        ((24, 0), parms.clone()),
+    ];
+    assert_eq!(normalized_without_issues(&indirect, &table), direct.clone());
+
+    // 元素级引用：FDecodeParms 数组元素 [24 0 R]。
+    let element_indirect = direct.clone().insert(
+        "FDecodeParms",
+        Value::Array(Array::new().push(Value::Ref(24, 0))),
+    );
+    assert_eq!(normalized_without_issues(&element_indirect, &table), {
+        direct.insert("FDecodeParms", Value::Array(Array::new().push(parms)))
+    });
+
+    // /FDecodeParms 无 /FFilter：按「同 DecodeParms 规则」诊断。
+    let orphan = Dict::new().insert("FDecodeParms", Value::Dict(ccitt_parms()));
+    let (_, issues) = normalize_filter_entries(&orphan, &resolver(&[]));
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.contains("/FDecodeParms present without /FFilter")),
+        "got: {issues:?}"
+    );
+
+    // 个数不匹配：两个 FFilter 配单个参数字典。
+    let mismatched = Dict::new()
+        .insert(
+            "FFilter",
+            Value::Array(
+                Array::new()
+                    .push(Value::Name("ASCIIHexDecode".into()))
+                    .push(Value::Name("RunLengthDecode".into())),
+            ),
+        )
+        .insert("FDecodeParms", Value::Dict(ccitt_parms()));
+    let (normalized, issues) = normalize_filter_entries(&mismatched, &resolver(&[]));
+    assert_eq!(normalized, mismatched, "个数核对不得改写数据");
+    assert!(
+        issues.iter().any(|issue| issue
+            .contains("/FDecodeParms is a single dictionary but /FFilter applies 2 filters")),
+        "got: {issues:?}"
+    );
+}
+
+/// Table 7 失败形态与 Table 5 同一立场：环引用保留原值 + `cyclic` 诊断。
+#[test]
+fn cyclic_ffilter_reference_keeps_original_and_diagnoses() {
+    let indirect = Dict::new().insert("FFilter", Value::Ref(25, 0));
+    let table = [((25, 0), Value::Ref(25, 0))];
+    let (normalized, issues) = normalize_filter_entries(&indirect, &resolver(&table));
+    assert_eq!(normalized, indirect);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.contains("/FFilter") && issue.contains("cyclic")),
+        "got: {issues:?}"
+    );
+}

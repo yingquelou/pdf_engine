@@ -191,15 +191,38 @@ impl Document {
             .collect()
     }
 
+    /// 7.4.1 / Table 5：图像流字典 `/Filter` 的规范名列表。
+    ///
+    /// 复用 [`crate::core::filters::normalize_filter_entries`] 共享规范化器
+    /// （与 `Document::decode_stream_bytes` 同一入口逻辑）：`/Filter` 的值、
+    /// 以及 Name 数组的**元素**写成间接引用（7.3.10）时都经同一懒加载通道
+    /// （[`Document::get_object`]）解引用，跳数上限与环检测由规范化器内部
+    /// 完成；解引用失败保留原值并产出 `7.4.1` 诊断，随后按真正畸形的形态
+    /// 报 `invalid`——绝不静默按「无筛选器」误解码。
     pub(super) fn image_filters(&self, dict: &Dict) -> Result<Vec<String>> {
-        let Some(value) = dict.get("Filter") else {
+        if dict.get("Filter").is_none() {
             return Ok(Vec::new());
+        }
+        let resolve = |value: &Value| -> std::result::Result<Option<Value>, String> {
+            let Value::Ref(num, _) = value else {
+                return Err(format!(
+                    "expected an indirect reference, got {}",
+                    value.type_name()
+                ));
+            };
+            // 按对象号取最新修订，忽略引用中的代号（与 document 侧同口径）。
+            self.get_object(*num)
+                .map(|object| object.map(|object| object.value))
+                .map_err(|error| error.to_string())
         };
-        let resolved = self.resolve_image_value(value)?;
-        let names = match resolved {
-            Value::Name(name) => vec![name],
-            Value::Null => Vec::new(),
-            Value::Array(array) => array
+        let (normalized, issues) = crate::core::filters::normalize_filter_entries(dict, &resolve);
+        for issue in issues {
+            self.push_warning(format!("image stream filter dictionary (7.4.1): {issue}"));
+        }
+        let names = match normalized.get("Filter") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Name(name)) => vec![name.clone()],
+            Some(Value::Array(array)) => array
                 .0
                 .iter()
                 .map(|item| match item {
@@ -210,7 +233,7 @@ impl Document {
                     ))),
                 })
                 .collect::<Result<Vec<_>>>()?,
-            other => {
+            Some(other) => {
                 return Err(invalid(format!(
                     "/Filter must be a name or array, got {}",
                     other.type_name()

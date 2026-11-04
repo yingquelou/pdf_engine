@@ -15,12 +15,20 @@
 //! - 7.3.10 Indirect Objects：「**Any** object in a PDF file may be labelled as
 //!   an indirect object … by which other objects can refer to it (for example,
 //!   as an element of an array or as the value of a dictionary entry)」——故上述
-//!   两个条目的**值**、以及 Name/参数数组的**元素**都允许是间接引用，读端必须
+//!   两个条目**的值**、以及 Name/参数数组的**元素**都允许是间接引用，读端必须
 //!   先解引用再按 Table 5 的形态处理（本仓库此前的缺口正是把它按不支持处理）；
+//! - Table 7（7.4.2 外部文件流字典）：`FFilter`「The name of a filter to be
+//!   applied in processing the data found in the stream's external file, or an
+//!   array of zero, one or several such names. **The same rules apply as for
+//!   Filter**」，`FDecodeParms`「…used by the filters specified by FFilter. The
+//!   same rules apply as for DecodeParms」——本模块凡遇到带这两个键的字典按
+//!   同一套跳数上限／环检测／诊断规则规范化其引用形态，并按同样的 shall 个数
+//!   约束交叉核对；外部文件流的**类型化建模**（读端暴露 /FFilter 语义）仍是
+//!   矩阵缺口，不属本模块职责；
 //! - 7.5.8.2（交叉引用流字典）是**例外**：「If the stream is encoded, the
 //!   Filter and DecodeParms entries in Table 5 **shall** also be direct
 //!   objects」——所以 xref 流读端（`crate::core::reader::xref`）不需要、也不应
-//!   解引用这两个条目，本模块只服务普通流对象。
+//!   解引用这些条目，本模块只服务普通流对象。
 //!
 //! # 解引用失败的立场
 //!
@@ -54,7 +62,8 @@ const MAX_INDIRECT_HOPS: usize = 16;
 pub(crate) type ObjectResolver<'a> =
     dyn Fn(&Value) -> std::result::Result<Option<Value>, String> + 'a;
 
-/// 规范化流字典的 `/Filter` 与 `/DecodeParms`（含缩写 `/DP`）间接引用形态。
+/// 规范化流字典的 `/Filter` 与 `/DecodeParms`（含缩写 `/DP`）间接引用形态；
+/// 字典若带 Table 7（外部文件流）的 `/FFilter`／`/FDecodeParms`，同样规范化。
 ///
 /// 返回 `(规范化字典, 诊断列表)`：
 /// - 解引用成功且形态合法 → 对应条目被替换为 Name / Name 数组 / 字典 /
@@ -74,7 +83,7 @@ pub(crate) fn normalize_filter_entries(
     let mut result = dict.clone();
 
     if let Some(value) = dict.get("Filter")
-        && let Some(normalized) = normalize_filter_value(value, resolve, &mut issues)
+        && let Some(normalized) = normalize_filter_value("/Filter", value, resolve, &mut issues)
     {
         result.0.insert("Filter".to_string(), normalized);
     }
@@ -82,31 +91,52 @@ pub(crate) fn normalize_filter_entries(
         .into_iter()
         .find(|key| dict.get(key).is_some());
     if let Some(key) = parms_key
-        && let Some(normalized) =
-            normalize_parms_value(dict.get(key).expect("key just found"), resolve, &mut issues)
+        && let Some(normalized) = normalize_parms_value(
+            "/DecodeParms",
+            dict.get(key).expect("key just found"),
+            resolve,
+            &mut issues,
+        )
     {
         result.0.insert(key.to_string(), normalized);
+    }
+    // Table 7（7.4.2 外部文件流）：`/FFilter`（name 或 name 数组）与
+    // `/FDecodeParms`（字典或字典数组）同样是「值与数组元素可为间接引用」
+    // 的条目，这里凡是带这两个键的字典（`Document::decode_stream_bytes`
+    // 会对外部文件流字典调用本函数）一律同跳数上限／环检测／诊断地规范化。
+    if let Some(value) = dict.get("FFilter")
+        && let Some(normalized) = normalize_filter_value("/FFilter", value, resolve, &mut issues)
+    {
+        result.0.insert("FFilter".to_string(), normalized);
+    }
+    if let Some(value) = dict.get("FDecodeParms")
+        && let Some(normalized) =
+            normalize_parms_value("/FDecodeParms", value, resolve, &mut issues)
+    {
+        result.0.insert("FDecodeParms".to_string(), normalized);
     }
 
     check_table5_counts(&result, &mut issues);
     (result, issues)
 }
 
-/// `/Filter` 形态规范化：需要解引用时返回替换后的值，否则返回 `None`。
+/// `/Filter`（及 Table 7 的 `/FFilter`）形态规范化：需要解引用时返回替换后
+/// 的值，否则返回 `None`；诊断里的键名用 `key`。
 fn normalize_filter_value(
+    key: &str,
     value: &Value,
     resolve: &ObjectResolver<'_>,
     issues: &mut Vec<String>,
 ) -> Option<Value> {
     match value {
-        Value::Ref(_, _) => match dereference("/Filter", value, resolve, issues) {
+        Value::Ref(_, _) => match dereference(key, value, resolve, issues) {
             Some(Value::Name(name)) => Some(Value::Name(name)),
-            Some(Value::Array(array)) => Some(Value::Array(names_from_array(
-                "/Filter", &array, resolve, issues,
-            ))),
+            Some(Value::Array(array)) => {
+                Some(Value::Array(names_from_array(key, &array, resolve, issues)))
+            }
             Some(other) => {
                 issues.push(format!(
-                    "/Filter indirect reference resolves to {} (Table 5: name or array of names); \
+                    "{key} indirect reference resolves to {} (Table 5: name or array of names); \
                      original value kept",
                     other.type_name()
                 ));
@@ -115,33 +145,35 @@ fn normalize_filter_value(
             None => None,
         },
         // 数组元素本身也可以是间接引用（7.3.10），逐个解引用。
-        Value::Array(array) if array.iter().any(|item| matches!(item, Value::Ref(_, _))) => Some(
-            Value::Array(names_from_array("/Filter", array, resolve, issues)),
-        ),
+        Value::Array(array) if array.iter().any(|item| matches!(item, Value::Ref(_, _))) => {
+            Some(Value::Array(names_from_array(key, array, resolve, issues)))
+        }
         _ => None,
     }
 }
 
-/// `/DecodeParms`／`/DP` 形态规范化，规则同 [`normalize_filter_value`]。
+/// `/DecodeParms`／`/DP`／`/FDecodeParms` 形态规范化，规则同
+/// [`normalize_filter_value`]；诊断里的键名用 `key`。
 fn normalize_parms_value(
+    key: &str,
     value: &Value,
     resolve: &ObjectResolver<'_>,
     issues: &mut Vec<String>,
 ) -> Option<Value> {
     match value {
-        Value::Ref(_, _) => match dereference("/DecodeParms", value, resolve, issues) {
+        Value::Ref(_, _) => match dereference(key, value, resolve, issues) {
             Some(Value::Dict(params)) => Some(Value::Dict(params)),
             Some(Value::Array(array)) => Some(Value::Array(Array(
                 array
                     .0
                     .iter()
-                    .map(|item| parms_entry(item, resolve, issues))
+                    .map(|item| parms_entry(key, item, resolve, issues))
                     .collect(),
             ))),
             Some(other) => {
                 issues.push(format!(
-                    "/DecodeParms indirect reference resolves to {} (Table 5: dictionary or array \
-                     of dictionaries); original value kept",
+                    "{key} indirect reference resolves to {} (Table 5: dictionary or array of \
+                     dictionaries); original value kept",
                     other.type_name()
                 ));
                 None
@@ -153,7 +185,7 @@ fn normalize_parms_value(
                 array
                     .0
                     .iter()
-                    .map(|item| parms_entry(item, resolve, issues))
+                    .map(|item| parms_entry(key, item, resolve, issues))
                     .collect(),
             )))
         }
@@ -192,16 +224,21 @@ fn names_from_array(
     )
 }
 
-/// 把 `/DecodeParms` 数组元素解引用为字典或 `null`；非法元素保留原值并记诊断。
-fn parms_entry(item: &Value, resolve: &ObjectResolver<'_>, issues: &mut Vec<String>) -> Value {
+/// 把参数数组元素解引用为字典或 `null`；非法元素保留原值并记诊断。
+fn parms_entry(
+    key: &str,
+    item: &Value,
+    resolve: &ObjectResolver<'_>,
+    issues: &mut Vec<String>,
+) -> Value {
     match item {
-        Value::Ref(_, _) => match dereference("/DecodeParms", item, resolve, issues) {
+        Value::Ref(_, _) => match dereference(key, item, resolve, issues) {
             Some(Value::Dict(params)) => Value::Dict(params),
             Some(Value::Null) => Value::Null,
             Some(other) => {
                 issues.push(format!(
-                    "/DecodeParms array element resolves to {} (Table 5: dictionary or null); \
-                     original value kept",
+                    "{key} array element resolves to {} (Table 5: dictionary or null); original \
+                     value kept",
                     other.type_name()
                 ));
                 item.clone()
@@ -266,19 +303,36 @@ fn dereference(
     }
 }
 
-/// Table 5 的 `/Filter`↔`/DecodeParms` 个数 shall 约束（只诊断，不改数据）。
+/// Table 5／Table 7 的「筛选器 ↔ 参数」shall 个数约束（只诊断，不改数据）：
+/// `/Filter`↔`/DecodeParms`（含缩写 `/DP`）与 `/FFilter`↔`/FDecodeParms`。
 fn check_table5_counts(dict: &Dict, issues: &mut Vec<String>) {
-    let parms_key = if dict.get("DecodeParms").is_some() {
-        "DecodeParms"
-    } else {
-        "DP"
-    };
+    check_filter_parms_counts(dict, "Filter", &["DecodeParms", "DP"], issues);
+    check_filter_parms_counts(dict, "FFilter", &["FDecodeParms"], issues);
+}
+
+/// 一组筛选器/参数键的个数交叉核对，消息里的键名取实际使用的参数键。
+fn check_filter_parms_counts(
+    dict: &Dict,
+    filter_key: &str,
+    parms_keys: &[&str],
+    issues: &mut Vec<String>,
+) {
+    let parms_key = parms_keys
+        .iter()
+        .copied()
+        .find(|key| dict.get(key).is_some())
+        .unwrap_or_else(|| {
+            parms_keys
+                .first()
+                .copied()
+                .expect("caller passes a non-empty key set")
+        });
     let parms = dict.get(parms_key);
-    let Some(filters) = dict.get("Filter") else {
+    let Some(filters) = dict.get(filter_key) else {
         if matches!(parms, Some(Value::Dict(_)) | Some(Value::Array(_))) {
             issues.push(format!(
-                "/{parms_key} present without /Filter (Table 5: the parameters are used by the \
-                 filters specified by Filter)"
+                "/{parms_key} present without /{filter_key} (Table 5: the parameters are used by \
+                 the filters specified by {filter_key})"
             ));
         }
         return;
@@ -289,7 +343,7 @@ fn check_table5_counts(dict: &Dict, issues: &mut Vec<String>) {
     let Some(parms_value) = parms else { return };
     match parms_value {
         Value::Dict(_) if filter_count > 1 => issues.push(format!(
-            "/{parms_key} is a single dictionary but /Filter applies {filter_count} filters \
+            "/{parms_key} is a single dictionary but /{filter_key} applies {filter_count} filters \
              (Table 5: DecodeParms shall be an array with one entry for each filter)"
         )),
         Value::Array(array) => {
@@ -300,7 +354,7 @@ fn check_table5_counts(dict: &Dict, issues: &mut Vec<String>) {
             }
             if parms_count != filter_count {
                 issues.push(format!(
-                    "/{parms_key} array has {parms_count} entries but /Filter has \
+                    "/{parms_key} array has {parms_count} entries but /{filter_key} has \
                      {filter_count} (Table 5: one entry per filter, the null object where a \
                      filter has no parameters)"
                 ));

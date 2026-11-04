@@ -5,6 +5,10 @@
 //! 字典数组且数组元素本身也是引用）与两种失败形态（引用指向字典、引用成环）：
 //! 合法形态的解码结果与 Table 5 例子的直接对象写法一致；失败形态保留原值、
 //! 产出 `7.4.1` 诊断且**原始字节不丢**（解码明确失败）。
+//!
+//! 图像读端（切片 149）复用同一规范化器：`/Filter [ /AHx 2 0 R ]` 形态的
+//! 图像 XObject 经写出→重解析后，元数据、解码数据与 `samples()` 与全直接
+//! 写法一致，见 `image_xobject_with_indirect_filter_array_roundtrips_like_inline_form`。
 
 use super::*;
 
@@ -202,4 +206,98 @@ fn decode_parms_count_mismatch_is_reported_while_parsing_stream() {
         "shall 诊断缺失：{:?}",
         doc.warnings()
     );
+}
+
+/// 2×1 DeviceGray 8-bit 图像流：数据为 ASCIIHex→RunLength 两级编码
+/// （`0100FF80>` → 字节 01 00 FF 80 → 字面段 [00 FF] + EOD），
+/// 期望样本 [0.0, 1.0]。`/Filter` 取调用方给定的字面形态。
+fn image_stream(num: i64, filter: &str) -> Vec<u8> {
+    let data: &[u8] = b"0100FF80>";
+    let mut body = format!(
+        "{num} 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 1 \
+         /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter {filter} /Length {} >>\nstream\n",
+        data.len()
+    )
+    .into_bytes();
+    body.extend_from_slice(data);
+    body.extend_from_slice(b"\nendstream\nendobj\n");
+    body
+}
+
+/// 图像读端复用 7.4.1 规范化器（切片 149）：`/Filter [ /AHx 2 0 R ]` 这类
+/// **数组元素为间接引用**的图像 XObject，写出→重解析后，规范名列表、解码
+/// 数据与 `samples()` 检索与全直接写法完全一致；引用指向缺失对象则诊断 +
+/// 明确失败（不静默误解码）。
+#[test]
+fn image_xobject_with_indirect_filter_array_roundtrips_like_inline_form() {
+    let objects: Vec<Vec<u8>> = vec![
+        b"1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec(),
+        b"2 0 obj\n/RunLengthDecode\nendobj\n".to_vec(),
+        image_stream(3, "[ /AHx 2 0 R ]"), // 缺口形态：数组元素是引用
+        image_stream(4, "[ /AHx /RunLengthDecode ]"), // 全直接基准
+        image_stream(5, "[ /AHx 99 0 R ]"), // 引用指向缺失对象
+    ];
+    let bytes = assemble(&objects);
+    let stages = [
+        ("解析后", parse_buf(&bytes)),
+        ("写出重读后", {
+            let doc = parse_buf(&bytes);
+            let mut out = Vec::new();
+            core::writer::DocumentWriter::new()
+                .build(&doc, &mut out)
+                .expect("间接引用 /Filter 数组的图像流不得被写出丢弃");
+            parse_buf(&out)
+        }),
+    ];
+    for (stage, doc) in stages {
+        let indirect = doc.image(&stream_value(&doc, 3)).unwrap_or_else(|error| {
+            panic!("{stage}: 元素引用形态的 /Filter 数组应可解析：{error}")
+        });
+        let inline = doc
+            .image(&stream_value(&doc, 4))
+            .expect("全直接基准应可解析");
+        assert_eq!(
+            indirect.filters,
+            vec!["ASCIIHexDecode".to_string(), "RunLengthDecode".to_string()],
+            "{stage}: 规范名列表"
+        );
+        assert_eq!(indirect.filters, inline.filters, "{stage}: 过滤器列表");
+        assert_eq!(indirect.width, 2, "{stage}: 元数据 /Width");
+        assert_eq!(indirect.height, 1, "{stage}: 元数据 /Height");
+        assert_eq!(indirect.data, inline.data, "{stage}: 解码数据");
+        let samples = indirect
+            .samples()
+            .unwrap_or_else(|error| panic!("{stage}: 样本读取失败：{error}"));
+        assert_eq!(samples.values, vec![0.0, 1.0], "{stage}: 像素样本");
+        assert_eq!(
+            samples.values,
+            inline.samples().expect("基准样本").values,
+            "{stage}: 与全直接写法样本不一致"
+        );
+        assert!(
+            !doc.warnings()
+                .iter()
+                .any(|warning| warning.contains("7.4.1")),
+            "{stage}: 合法形态不应产生诊断：{:?}",
+            doc.warnings()
+        );
+
+        // 负面：引用指向缺失对象 → 诊断 + 失败，绝不静默按剩余过滤器解码。
+        let error = doc
+            .image(&stream_value(&doc, 5))
+            .expect_err("{stage}: 缺失对象的引用元素必须失败而非误解码");
+        assert!(
+            error
+                .to_string()
+                .contains("/Filter array has a non-name element"),
+            "{stage}: got {error}"
+        );
+        assert!(
+            doc.warnings()
+                .iter()
+                .any(|warning| { warning.contains("7.4.1") && warning.contains("absent object") }),
+            "{stage}: absent 诊断缺失：{:?}",
+            doc.warnings()
+        );
+    }
 }
