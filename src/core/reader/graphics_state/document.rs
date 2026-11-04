@@ -1,8 +1,9 @@
 use super::helpers::{
     STANDARD_ENTRIES, invalid, optional_blend_mode, optional_bool, optional_code, optional_dash,
-    optional_font, optional_min_number, optional_name, optional_ranged_number, optional_raw,
+    optional_font, optional_hybrid_color_space, optional_hybrid_color_space_style,
+    optional_min_number, optional_name, optional_ranged_number, optional_raw,
 };
-use super::model::{ExtGState, SoftMask};
+use super::model::{ExtGState, GraphicsStateIssue, SoftMask};
 use super::soft_mask::parse_soft_mask;
 use super::{BTreeMap, Dict, Document, GraphicsStateError, Result, Value};
 
@@ -83,7 +84,13 @@ impl Document {
 /// Parse a graphics state parameter dictionary (`Table 58`).
 ///
 /// Indirect values are resolved one level; `/Font` keeps its first element
-/// unresolved (see [`ExtGStateFont::font`]).
+/// unresolved (see [`ExtGStateFont::font`]). The two hybrid-colour-space
+/// keys `/CS` and `/CSS` follow a preserve-and-report contract rather than
+/// the hard Table 58 rejection used by the other entries: an untypable
+/// shape is written back into `ExtGState::other` under the same key and a
+/// diagnostic is appended to `ExtGState::issues`, so a reader never panics
+/// and never silently drops bytes on an entry that ISO 32000-1:2008 Table
+/// 58 does not even define.
 pub fn parse_ext_g_state(document: &Document, dict: &Dict) -> Result<ExtGState> {
     if let Some(type_value) = dict.get("Type") {
         let type_value = document.resolve_graphics_state_value(type_value)?;
@@ -98,6 +105,10 @@ pub fn parse_ext_g_state(document: &Document, dict: &Dict) -> Result<ExtGState> 
             other.insert(key.clone(), value.clone());
         }
     }
+    let mut issues: Vec<GraphicsStateIssue> = Vec::new();
+    let hybrid_color_space = optional_hybrid_color_space(document, dict, &mut other, &mut issues)?;
+    let hybrid_color_space_style =
+        optional_hybrid_color_space_style(document, dict, &mut other, &mut issues)?;
 
     Ok(ExtGState {
         line_width: optional_min_number(document, dict, "LW", 0.0)?,
@@ -131,6 +142,9 @@ pub fn parse_ext_g_state(document: &Document, dict: &Dict) -> Result<ExtGState> 
         black_generation2: optional_raw(document, dict, "BG2")?,
         under_color_removal: optional_raw(document, dict, "UCR")?,
         under_color_removal2: optional_raw(document, dict, "UCR2")?,
+        hybrid_color_space,
+        hybrid_color_space_style,
         other,
+        issues,
     })
 }

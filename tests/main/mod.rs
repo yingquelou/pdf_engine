@@ -50,6 +50,7 @@ mod filters_indirect;
 mod font_truetype;
 mod font_type1;
 mod font_type1_builtin;
+mod graphics_state_hybrid;
 mod hybrid_reference;
 mod linearization_hints;
 mod objstm_inline_stream;

@@ -30,6 +30,57 @@ pub enum BlendMode {
     Array(Vec<String>),
 }
 
+/// Hybrid colour space parameter (`/CS`).
+///
+/// ISO 32000-1:2008 Table 58 (8.4.5) lists no `/CS` or `/CSS` entry; the
+/// typed shape below is a conservative model of the hybrid-colour-space
+/// parameter later standardised as a PDF 1.4 / PDF/VT-2 extension of the
+/// transparency model (see 11.6.3, "Specifying Blending Colour Space and
+/// Blend Mode"). It accepts the two documented shapes — a bare name or a
+/// two-element array whose members are names or numeric special values —
+/// and every other shape is preserved verbatim in [`ExtGState::other`]
+/// with a [`GraphicsStateIssue`] recorded in [`ExtGState::issues`], so a
+/// reader never loses the original bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HybridColorSpace {
+    /// Single colour-space name (e.g. `/CalRGB`).
+    Name(String),
+    /// Two-element array `[element element]` of colour-space names or
+    /// numeric special values, kept in written order.
+    Pair(HybridColorSpaceElement, HybridColorSpaceElement),
+}
+
+/// One element of a hybrid-colour-space array (`/CS [element element]`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum HybridColorSpaceElement {
+    /// Colour-space name or a special name value.
+    Name(String),
+    /// Numeric special value, kept finite; range is caller policy.
+    Number(f64),
+}
+
+/// Hybrid colour space style (`/CSS`, always `/Knockout` or `/Native`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridColorSpaceStyle {
+    /// `/Knockout`.
+    Knockout,
+    /// `/Native`.
+    Native,
+}
+
+/// Diagnostic for an ExtGState entry that could not be typed.
+///
+/// Records the offending key and a human-readable reason. The raw value is
+/// preserved in [`ExtGState::other`] under the same key so round-tripping
+/// never drops bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphicsStateIssue {
+    /// Dictionary key that produced the diagnostic (e.g. `"CS"`).
+    pub key: String,
+    /// Human-readable reason, always prefixed with `/<key>`.
+    pub message: String,
+}
+
 /// Soft-mask subtype (`/S`, ISO 32000-1 §11.6.5.2 Table 144).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoftMaskSubtype {
@@ -135,6 +186,22 @@ pub struct ExtGState {
     pub under_color_removal: Option<Value>,
     /// `/UCR2` undercolour-removal function for image masking.
     pub under_color_removal2: Option<Value>,
+    /// `/CS` hybrid colour space parameter (see [`HybridColorSpace`]).
+    ///
+    /// Not an ISO 32000-1:2008 Table 58 entry; the shape is modelled
+    /// conservatively from the transparency-clause extension that defines
+    /// this key as a name or a two-element array. A malformed value is
+    /// preserved in [`ExtGState::other`] and reported through
+    /// [`ExtGState::issues`] rather than failing the whole dictionary.
+    pub hybrid_color_space: Option<HybridColorSpace>,
+    /// `/CSS` hybrid colour space style (`/Knockout` or `/Native`).
+    ///
+    /// Companion of [`ExtGState::hybrid_color_space`]; unrecognised names
+    /// and non-name values follow the same preserve-and-report contract.
+    pub hybrid_color_space_style: Option<HybridColorSpaceStyle>,
     /// Entries outside Table 58, preserved verbatim and unresolved.
     pub other: BTreeMap<String, Value>,
+    /// Diagnostics for standard keys the reader could not type; the raw
+    /// value is simultaneously preserved in [`ExtGState::other`].
+    pub issues: Vec<GraphicsStateIssue>,
 }

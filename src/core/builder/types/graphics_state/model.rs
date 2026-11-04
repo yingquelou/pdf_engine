@@ -196,4 +196,17 @@ pub struct GraphicsState {
     pub transfer_function_2: Option<Value>,
     /// `/HT` 半色调包装字典（PDF 1.3）。
     pub halftone: Option<HalftoneDictionary>,
+    /// `/CS` 混合色彩空间参数（PDF 1.4；见 §11.6.3 与 PDF/VT-2 扩展）。
+    ///
+    /// 存储原样写出形态：一个 `Value::Name`（色彩空间名）或一个
+    /// `Value::Array` 两元素数组（成员为 `Name` 或有限数）。setter 只
+    /// 生成合法形态，`to_value` 再对形态与 PDF 名称合法性做二次校验。
+    pub hybrid_color_space: Option<Value>,
+    /// `/CSS` 混合色彩空间风格：只接受 `"Knockout"` 或 `"Native"`。
+    ///
+    /// 只在 [`Self::hybrid_color_space`] 出现时有效；非法组合与非法字符串
+    /// 在装配阶段以 [`WriteError::InvalidObject`] 拒绝。
+    ///
+    /// [`WriteError::InvalidObject`]: crate::core::writer::WriteError::InvalidObject
+    pub hybrid_color_space_style: Option<String>,
 }

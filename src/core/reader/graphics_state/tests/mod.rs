@@ -12,7 +12,8 @@
 use crate::core::types::{Array, Dict, Document, Object, StreamData, Value};
 
 use super::{
-    BlendMode, DashPattern, ExtGStateFont, GraphicsStateError, SoftMaskSubtype, parse_ext_g_state,
+    BlendMode, DashPattern, ExtGStateFont, GraphicsStateError, HybridColorSpace,
+    HybridColorSpaceElement, HybridColorSpaceStyle, SoftMaskSubtype, parse_ext_g_state,
 };
 
 fn document_with_objects(objects: Vec<(i64, Value)>) -> Document {
@@ -50,6 +51,7 @@ fn xobject_stream(subtype: Option<&str>) -> Value {
     Value::Stream(dict, StreamData::Owned(Vec::new()))
 }
 
+mod hybrid_color_space;
 mod parsing;
 mod resources;
 mod soft_mask;

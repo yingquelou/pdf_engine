@@ -12,7 +12,10 @@
 //!   单输出契约与未知句柄拒绝；
 //! - `transfer`：`/TR2` 传递函数扩展字典逐字写出与字典形态校验；
 //! - `halftone`：`/HT` 半色调字典（Type 1/Type 2 色料）写出、函数句柄共享
-//!   解析内联与参数校验。
+//!   解析内联与参数校验；
+//! - `hybrid_color_space`：`/CS` 混合色彩空间参数（PDF/VT-2 与 §11.6.3
+//!   透明模型的 PDF 1.4 扩展）与配套 `/CSS` 风格的写出、约束校验与版本
+//!   门禁。
 //!
 //! 原 `graphics_state.rs` 中被多个主题引用的夹具集中保留在本文件（可见性
 //! 放宽到 `pub(super)`），仅服务单一主题的夹具（`mask_form`、
@@ -20,6 +23,7 @@
 
 mod black_generation;
 mod halftone;
+mod hybrid_color_space;
 mod resources;
 mod soft_mask;
 mod transfer;

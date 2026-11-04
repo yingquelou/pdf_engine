@@ -187,6 +187,23 @@ impl GraphicsState {
         if let Some(value) = functions.halftone {
             dict = dict.insert("HT", value);
         }
+        if let Some(value) = &self.hybrid_color_space {
+            validate_hybrid_color_space(value)?;
+            dict = dict.insert("CS", value.clone());
+        }
+        if let Some(style) = &self.hybrid_color_space_style {
+            if self.hybrid_color_space.is_none() {
+                return Err(invalid(
+                    "/CSS requires /CS to be present on the same graphics state",
+                ));
+            }
+            if style != "Knockout" && style != "Native" {
+                return Err(invalid(
+                    "/CSS must be /Knockout or /Native, got the string given",
+                ));
+            }
+            dict = dict.insert("CSS", Value::Name(style.clone()));
+        }
         if let Some(soft_mask) = &self.soft_mask {
             let group_num =
                 soft_mask_group_num.ok_or_else(|| invalid("/SMask /G reference is missing"))?;
@@ -274,4 +291,52 @@ fn is_valid_pdf_name(name: &str) -> bool {
                     b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#'
                 )
         })
+}
+
+/// `/CS` 形态校验：一个合法的 PDF 名，或一个恰好两元素的数组，每个
+/// 元素为合法的 PDF 名或有限数。setter 生成的形态均满足此约束；此处
+/// 二次校验保证调用方手工构造 `GraphicsState` 并直接设置 `Option<Value>`
+/// 字段时也走同一条契约。
+fn validate_hybrid_color_space(value: &Value) -> Result<(), WriteError> {
+    match value {
+        Value::Name(name) => {
+            if !is_valid_pdf_name(name) {
+                return Err(invalid("/CS name must be a valid PDF name"));
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            if items.0.len() != 2 {
+                return Err(invalid("/CS array form must have exactly two elements"));
+            }
+            for item in &items.0 {
+                match item {
+                    Value::Name(name) => {
+                        if !is_valid_pdf_name(name) {
+                            return Err(invalid("/CS array elements must be valid PDF names"));
+                        }
+                    }
+                    Value::Integer(number) => {
+                        if *number == i64::MIN {
+                            return Err(invalid(
+                                "/CS array numbers must convert to finite floating point",
+                            ));
+                        }
+                    }
+                    Value::Float(number) if number.is_finite() => {}
+                    other => {
+                        return Err(invalid(format!(
+                            "/CS array elements must be names or finite numbers, got {}",
+                            other.type_name()
+                        )));
+                    }
+                }
+            }
+            Ok(())
+        }
+        other => Err(invalid(format!(
+            "/CS must be a name or a two-element array, got {}",
+            other.type_name()
+        ))),
+    }
 }

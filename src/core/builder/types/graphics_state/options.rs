@@ -1,4 +1,4 @@
-use crate::core::types::Value;
+use crate::core::types::{Array, Value};
 
 use super::super::Font;
 use super::super::halftone::HalftoneDictionary;
@@ -171,6 +171,83 @@ impl GraphicsState {
     /// 设置 `/HT` 半色调包装字典（PDF 1.3）。
     pub fn with_halftone(mut self, halftone: HalftoneDictionary) -> Self {
         self.halftone = Some(halftone);
+        self
+    }
+
+    /// 设置单名形态的 `/CS` 混合色彩空间（PDF 1.4，§11.6.3）。
+    ///
+    /// 写出为 `/CS /name`。name 必须是合法 PDF 名（装配阶段校验，非法值
+    /// 返回 [`WriteError::InvalidObject`]）；本层只承诺形态，色彩空间
+    /// 是否 CIE-based 由调用方负责——PDF 32000-1:2008 Table 58 未列 `/CS`，
+    /// 本库按 PDF/VT-2 的扩展形态保守建模。
+    ///
+    /// [`WriteError::InvalidObject`]: crate::core::writer::WriteError::InvalidObject
+    pub fn with_hybrid_color_space_name(mut self, name: impl Into<String>) -> Self {
+        self.hybrid_color_space = Some(Value::Name(name.into()));
+        self
+    }
+
+    /// 设置 `[色彩空间名 色彩空间名]` 两元素数组形态的 `/CS`。
+    pub fn with_hybrid_color_space_pair_names(
+        mut self,
+        first: impl Into<String>,
+        second: impl Into<String>,
+    ) -> Self {
+        self.hybrid_color_space = Some(Value::Array(
+            Array::new()
+                .push(Value::Name(first.into()))
+                .push(Value::Name(second.into())),
+        ));
+        self
+    }
+
+    /// 设置 `[色彩空间名 数字特殊值]` 形态的 `/CS`。
+    pub fn with_hybrid_color_space_name_number(
+        mut self,
+        name: impl Into<String>,
+        number: f64,
+    ) -> Self {
+        self.hybrid_color_space = Some(Value::Array(
+            Array::new()
+                .push(Value::Name(name.into()))
+                .push(Value::Float(number)),
+        ));
+        self
+    }
+
+    /// 设置 `[数字特殊值 色彩空间名]` 形态的 `/CS`。
+    pub fn with_hybrid_color_space_number_name(
+        mut self,
+        number: f64,
+        name: impl Into<String>,
+    ) -> Self {
+        self.hybrid_color_space = Some(Value::Array(
+            Array::new()
+                .push(Value::Float(number))
+                .push(Value::Name(name.into())),
+        ));
+        self
+    }
+
+    /// 设置 `[数字 数字]` 形态的 `/CS`；两个元素都必须是有限数。
+    pub fn with_hybrid_color_space_pair_numbers(mut self, first: f64, second: f64) -> Self {
+        self.hybrid_color_space = Some(Value::Array(
+            Array::new()
+                .push(Value::Float(first))
+                .push(Value::Float(second)),
+        ));
+        self
+    }
+
+    /// 设置 `/CSS` 混合色彩空间风格。
+    ///
+    /// 值只能是 `"Knockout"` 或 `"Native"`（大小写敏感，装配阶段核对）；
+    /// 且仅在同一条目同时设置 `/CS` 时有效——单独的 `/CSS` 会在装配阶段
+    /// 以 [`WriteError::InvalidObject`] 拒绝。
+    ///
+    /// [`WriteError::InvalidObject`]: crate::core::writer::WriteError::InvalidObject
+    pub fn with_hybrid_color_space_style(mut self, style: impl Into<String>) -> Self {
+        self.hybrid_color_space_style = Some(style.into());
         self
     }
 }

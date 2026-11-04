@@ -2,7 +2,7 @@
 //! `/UCR2`、`/SMask /TR` 与 `/HT` 内函数），再写图形状态参数字典。
 
 use crate::core::builder::{GraphicsStateFunctions, PdfBuilder, same_font};
-use crate::core::types::{Document, Object, Value};
+use crate::core::types::{Document, Object, PdfFeature, Value};
 use crate::core::writer::WriteError;
 
 use super::plan::{FormPlan, PoolPlan};
@@ -18,6 +18,18 @@ impl PdfBuilder {
         pools: &PoolPlan,
         forms: &FormPlan,
     ) -> Result<(), WriteError> {
+        // 混合色彩空间 `/CS` 与 `/CSS` 是透明模型（§11.6.3）的 PDF 1.4 条目；
+        // 走本仓库既有的 `PdfFeature::Transparency` 门禁：先登记特征、再让
+        // writer 的 `validate_content_version` 对照目标版本给出
+        // `UnsupportedVersion`。装配阶段仍返回 Result，构建失败保持零字节。
+        if pools
+            .gs_pool
+            .iter()
+            .any(|(state, _)| state.hybrid_color_space.is_some())
+        {
+            doc.features.borrow_mut().insert(PdfFeature::Transparency);
+        }
+
         // 函数类条目（/TR /BG /BG2 /UCR /UCR2，以及 /SMask /TR 与 /HT 内
         // 函数）：只写被 ExtGState 引用的函数，同一句柄只写一次。Type 0/4
         // 分配独立流对象并返回引用；Type 2/3 内联为直接字典，Type 3 的子
