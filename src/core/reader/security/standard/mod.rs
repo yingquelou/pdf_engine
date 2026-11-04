@@ -14,6 +14,7 @@
 //! 本文件只保留入口类型 [`SecurityHandler`]、聚合状态
 //! [`SecurityOptions`] 与 `ObjectSecurity` 分派。
 
+use crate::core::filters::ObjectResolver;
 use crate::core::types::ObjectSecurity;
 use crate::core::types::{Dict, Object, Value};
 use zeroize::Zeroizing;
@@ -101,12 +102,17 @@ impl ObjectSecurity for SecurityHandler {
         Ok(())
     }
 
+    /// `resolver` 由调用方（`Document`，持有 `File` 与 `/Encrypt` trailer）提供：
+    /// 显式 `/Crypt` 的筛选器字典允许写成间接引用
+    /// （`/Filter [ /Crypt 7 0 R ]`、`/DecodeParms [ << /Name /StdCF >> 8 0 R ]`、
+    /// `/CF << /StdCF 9 0 R >>`），解不到就明确报错，不静默退回默认 stream filter。
     fn decrypt_stream(
         &self,
         object_num: i64,
         generation: i64,
         dict: &Dict,
         bytes: &[u8],
+        resolver: &ObjectResolver<'_>,
     ) -> Result<Vec<u8>, String> {
         if dict.get("Type").and_then(Value::as_name) == Some("XRef")
             || (!self.options.encrypt_metadata
@@ -115,7 +121,7 @@ impl ObjectSecurity for SecurityHandler {
             return Ok(bytes.to_vec());
         }
 
-        let method = explicit_crypt_filter(dict, &self.options)?.unwrap_or_else(|| {
+        let method = explicit_crypt_filter(dict, resolver, &self.options)?.unwrap_or_else(|| {
             match dict.get("Type").and_then(Value::as_name) {
                 Some("EmbeddedFile") => self.options.embedded_file_method,
                 _ => self.options.stream_method,

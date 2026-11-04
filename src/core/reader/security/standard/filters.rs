@@ -1,6 +1,7 @@
 //! 7.6.5 crypt filter：把加密字典 `/CF` `/StrF` `/StmF` `/EFF` 与流上
 //! 显式 `/Crypt` 过滤器选择为具体的 [`CryptMethod`]。
 
+use crate::core::filters::{ObjectResolver, normalize_filter_entries};
 use crate::core::types::{Dict, Value};
 
 use super::SecurityOptions;
@@ -12,24 +13,60 @@ pub(crate) enum CryptMethod {
     Aes128,
 }
 
+/// 解出流字典上显式 `/Crypt` 选择的具体 crypt filter。
+///
+/// `/Filter` 本体、`/Filter` 数组元素与 `/DecodeParms`（含缩写 `/DP`）都允许
+/// 写成间接引用（7.3.10），故先用 7.3.7 规范化器（[`normalize_filter_entries`]）
+/// 解引用再判定有无 `/Crypt`：
+/// - 规范化后没有 `/Crypt` → `Ok(None)`，普通加密流沿用文件级默认 filter，
+///   规范化器的 Table 5/7 交叉核对诊断不参与，无关流不因筛选器写法违例变红；
+/// - 选中了 `/Crypt` → 严格：与 `/Filter`／`/DecodeParms` 相关的诊断
+///   （引用缺失、指向非 Name／非字典、成环、超跳数、个数不配对）升级为错误，
+///   与「`/Crypt` 必须是第一个筛选器即报错」的既有立场一致——选错 crypt filter
+///   会拿错密钥、产出静默乱码，故不静默退回 `/Identity` 也不退回未解密。
 pub(super) fn explicit_crypt_filter(
     dict: &Dict,
+    resolver: &ObjectResolver<'_>,
     options: &SecurityOptions,
 ) -> Result<Option<CryptMethod>, String> {
-    let filters: Vec<&str> = match dict.get("Filter") {
-        Some(Value::Name(name)) => vec![name],
-        Some(Value::Array(array)) => array
-            .iter()
-            .map(|filter| {
-                filter
-                    .as_name()
-                    .ok_or_else(|| "invalid PDF stream /Filter array".to_string())
-            })
-            .collect::<Result<_, _>>()?,
+    let candidate = match dict.get("Filter") {
+        Some(Value::Name(name)) => name == "Crypt",
+        Some(Value::Ref(_, _) | Value::Array(_)) => true,
+        _ => false,
+    };
+    if !candidate {
+        return Ok(None);
+    }
+    let (dict, issues) = normalize_filter_entries(dict, resolver);
+    match (
+        select_crypt_method(&dict, resolver, options),
+        blocking_filter_issues(&issues),
+    ) {
+        // 没有 /Crypt：按文件级默认 filter 走，规范化诊断不参与。
+        (Ok(None), _) => Ok(None),
+        (Ok(Some(method)), None) => Ok(Some(method)),
+        (Ok(Some(_)), Some(problem)) => Err(problem),
+        (Err(error), None) => Err(error),
+        (Err(error), Some(problem)) => Err(format!("{error}; {problem}")),
+    }
+}
+
+/// 规范化之后按 `/Crypt` 的位置与参数字典选 filter；形态与既有直写对象一致。
+fn select_crypt_method(
+    dict: &Dict,
+    resolver: &ObjectResolver<'_>,
+    options: &SecurityOptions,
+) -> Result<Option<CryptMethod>, String> {
+    // 宽松扫描「链里有没有 /Crypt」：解不开的数组元素按「不是 /Crypt」计，
+    // 由筛选器调度那侧（`Document::decode_stream_bytes`）另行诊断，这样
+    // 普通加密流不会仅仅因为链上某处写法违例就整体变红。
+    let filters: Vec<Option<&str>> = match dict.get("Filter") {
+        Some(Value::Name(name)) => vec![Some(name.as_str())],
+        Some(Value::Array(array)) => array.iter().map(Value::as_name).collect(),
         None => return Ok(None),
         Some(_) => return Err("invalid PDF stream /Filter".to_string()),
     };
-    let Some(position) = filters.iter().position(|filter| *filter == "Crypt") else {
+    let Some(position) = filters.iter().position(|filter| *filter == Some("Crypt")) else {
         return Ok(None);
     };
     if position != 0 {
@@ -56,20 +93,73 @@ pub(super) fn explicit_crypt_filter(
         None => "Identity",
         Some(_) => return Err("invalid /Crypt DecodeParms /Name".to_string()),
     };
-    named_crypt_filter(options, name).map(Some)
+    named_crypt_filter(options, resolver, name).map(Some)
 }
 
-fn named_crypt_filter(options: &SecurityOptions, name: &str) -> Result<CryptMethod, String> {
+/// 升级为错误的规范化诊断：只针对本流 `/Filter`／`/DecodeParms`（含 `/DP`）
+/// 自身的形态与个数违例；Table 7 的 `/FFilter`／`/FDecodeParms` 与 crypt filter
+/// 选择无关，不作阻断（否则外部文件流的写法问题会误伤解密）。
+fn blocking_filter_issues(issues: &[String]) -> Option<String> {
+    let blocking = issues
+        .iter()
+        .filter(|issue| {
+            issue.starts_with("/Filter")
+                || issue.starts_with("/DecodeParms")
+                || issue.starts_with("/DP")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if blocking.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "invalid PDF stream /Crypt filter entries: {}",
+        blocking.join("; ")
+    ))
+}
+
+/// `/CF` 里命名的 crypt filter。
+///
+/// `/CF` 的条目值合法写法可以是间接引用（`<< /CF << /StdCF 9 0 R >> >>`），
+/// 故按需解引用；解不到字典时明确报错，不退回 `/Identity`（选错 filter 会拿错密钥）。
+fn named_crypt_filter(
+    options: &SecurityOptions,
+    resolver: &ObjectResolver<'_>,
+    name: &str,
+) -> Result<CryptMethod, String> {
     if name == "Identity" {
         return Ok(CryptMethod::Identity);
     }
-    let filter = options
+    let entry = options
         .crypt_filters
         .as_ref()
-        .and_then(|filters| filters.get(name))
-        .and_then(Value::as_dict)
-        .ok_or_else(|| format!("missing encryption crypt filter /{name}"))?;
-    crypt_method(filter, name, options.file_key.len())
+        .and_then(|filters| filters.get(name));
+    let filter = match entry {
+        Some(Value::Dict(filter)) => filter.clone(),
+        Some(Value::Ref(num, generation)) => {
+            let resolved = resolver(&Value::Ref(*num, *generation))?;
+            match resolved {
+                Some(Value::Dict(filter)) => filter,
+                Some(_) => {
+                    return Err(format!(
+                        "invalid encryption crypt filter /{name}: /CF entry reference did not resolve to a dictionary"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "invalid encryption crypt filter /{name}: /CF entry references an absent object"
+                    ));
+                }
+            }
+        }
+        Some(_) => {
+            return Err(format!(
+                "invalid encryption crypt filter /{name}: /CF entry must be a dictionary"
+            ));
+        }
+        None => return Err(format!("missing encryption crypt filter /{name}")),
+    };
+    crypt_method(&filter, name, options.file_key.len())
 }
 
 fn crypt_method(filter: &Dict, name: &str, file_key_len: usize) -> Result<CryptMethod, String> {

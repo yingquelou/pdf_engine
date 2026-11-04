@@ -25,7 +25,7 @@ mod jpeg;
 mod lzw;
 mod predictor;
 
-pub(crate) use indirect::normalize_filter_entries;
+pub(crate) use indirect::{ObjectResolver, normalize_filter_entries};
 
 use crate::core::types::{Dict, Value};
 use std::fmt;

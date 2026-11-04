@@ -146,7 +146,7 @@ fn revision_four_aesv2_crypt_filter_decrypts_streams() {
     let encrypted = encrypt_aes_stream(b"R4 AESV2 stream", &file_key, 7, 0, &crypto);
     assert_eq!(
         handler
-            .decrypt_stream(7, 0, &stream_dict, &encrypted)
+            .decrypt_stream(7, 0, &stream_dict, &encrypted, &indirect_resolver(&[]))
             .unwrap(),
         b"R4 AESV2 stream"
     );
@@ -154,7 +154,13 @@ fn revision_four_aesv2_crypt_filter_decrypts_streams() {
     let metadata_bytes = b"unencrypted metadata stream";
     assert_eq!(
         handler
-            .decrypt_stream(8, 0, &metadata_dict, metadata_bytes)
+            .decrypt_stream(
+                8,
+                0,
+                &metadata_dict,
+                metadata_bytes,
+                &indirect_resolver(&[])
+            )
             .unwrap(),
         metadata_bytes
     );
@@ -545,6 +551,23 @@ fn encrypt_aes_stream(
     [iv.as_slice(), padded.as_slice()].concat()
 }
 
+/// 测试用间接引用解引用器：`(对象号, 代号) → 值`，模拟
+/// `Document::indirect_object_resolver` 的 xref 查找（对象缺失即 `Ok(None)`，
+/// 非引用值原样返回，与 `filters::indirect::dereference` 的调用口径一致）。
+pub(super) fn indirect_resolver(
+    table: &[((i64, i64), Value)],
+) -> impl Fn(&Value) -> Result<Option<Value>, String> + '_ {
+    use std::collections::HashMap;
+
+    let map: HashMap<(i64, i64), Value> = table.iter().cloned().collect();
+    move |value| match value {
+        Value::Ref(num, generation) => Ok(map.get(&(*num, *generation)).cloned()),
+        other => Ok(Some(other.clone())),
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect()
 }
+
+mod crypt_filter_references;

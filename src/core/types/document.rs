@@ -12,12 +12,17 @@ use super::version::PdfVersion;
 
 pub(crate) trait ObjectSecurity: Send + Sync + std::fmt::Debug {
     fn decrypt_object(&self, object: &mut Object) -> Result<(), String>;
+    /// `resolver` 由调用方（本文件 `try_stream_bytes`）提供：流字典上显式
+    /// `/Crypt` 的 `/Filter`／`/DecodeParms` 允许写成间接引用（7.3.10），
+    /// 需要按需解引用才能选中正确的 crypt filter；解不到即报错，
+    /// 不静默退回默认 stream filter（选错 filter 会拿错密钥）。
     fn decrypt_stream(
         &self,
         object_num: i64,
         generation: i64,
         dict: &super::value::Dict,
         bytes: &[u8],
+        resolver: &crate::core::filters::ObjectResolver<'_>,
     ) -> Result<Vec<u8>, String>;
 
     /// 加密字典 `/P` 的有符号原值与处理器 revision（`/R`），供读端
@@ -250,13 +255,33 @@ impl Document {
                     let bytes = self
                         .read_at(*offset, *len as usize)
                         .ok_or_else(|| "failed to read encrypted stream bytes".to_string())?;
+                    let resolver = self.indirect_object_resolver();
                     self.security
                         .as_ref()
                         .ok_or_else(|| "missing PDF decryption context".to_string())?
-                        .decrypt_stream(*object_num, *generation, dict, &bytes)
+                        .decrypt_stream(*object_num, *generation, dict, &bytes, &resolver)
                 }
             },
             _ => Err("value is not a PDF stream".to_string()),
+        }
+    }
+
+    /// 7.3.10 间接引用解引用器（懒加载）：按对象号取**最新修订**，忽略引用里
+    /// 的代号——增量更新会把变更对象升代写出，而历史引用仍写旧代号，与
+    /// `super::trees::resolve_value` 同立场。
+    ///
+    /// `Ok(None)` 表示 xref 无此对象或对象是自由条目；`Err` 表示读取、
+    /// 语法解析或字符串解密失败。供需要解引用间接对象的读端路径复用
+    /// （如 [`crate::core::filters::normalize_filter_entries`]）。
+    pub(crate) fn indirect_object_resolver(
+        &self,
+    ) -> impl Fn(&Value) -> Result<Option<Value>, String> + '_ {
+        move |value| match value {
+            Value::Ref(num, _) => self
+                .get_object(*num)
+                .map_err(|error| format!("failed to get object {num}: {error}"))
+                .map(|object| object.map(|object| object.value)),
+            other => Ok(Some(other.clone())),
         }
     }
 
