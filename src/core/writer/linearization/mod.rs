@@ -26,10 +26,11 @@
 //! 2. 对象号/位置重排、`/L`（文件总长）、`/H`（主流对象范围）、`/T`（主引用表
 //!    定位）、`/E`（首页末尾偏移）的**真实字节**求值，以及两段交叉引用表与两个
 //!    trailer 的写出（F.3.1/F.3.4/F.3.11）——本模块完全不碰文件布局；
-//! 3. 其余四个 hint 表族（页偏移 F.4.1 / 缩略图 F.4.3 / extended F.4.5 /
-//!    内嵌文件流 F.4.6）的编码器，其中页偏移表是 F.4.6 内嵌文件流表项 5 的
-//!    **文档级宽度硬依赖**，extended/内嵌文件流表位置须由 Table F.2 键给出
-//!    （generic F.4.4 已在本切片落地，见 [`encode_generic_table`]）。
+//! 3. 其余三个 hint 表族（缩略图 F.4.3 / extended F.4.5 / 内嵌文件流 F.4.6）
+//!    的编码器，其中内嵌文件流表项 5 的对象号宽度是**文档级**硬依赖（取本页
+//!    偏移表 Table F.3 项 11，见 [`encode_page_offset_table`]），extended /
+//!    内嵌文件流表位置须由 Table F.2 键给出（generic F.4.4 与页偏移 F.4.1 已
+//!    落地，见 [`encode_generic_table`]）。
 
 pub mod bits;
 pub mod hints;
@@ -37,6 +38,7 @@ pub mod hints;
 pub use bits::{HintBitWriter, HintEncodeError, MAX_UNSIGNED_BITS};
 pub use hints::encode_shared_object_table;
 pub use hints::generic::encode_generic_table;
+pub use hints::page_offset::{PageOffsetTableInput, encode_page_offset_table};
 
 use crate::core::reader::linearization::hints::{GenericHintTable, SharedObjectHintTable};
 
@@ -73,5 +75,16 @@ impl HintTableEncoder {
         table: &GenericHintTable,
     ) -> Result<Vec<u8>, HintEncodeError> {
         encode_generic_table(table)
+    }
+
+    /// F.4.1 页偏移 hint 表（Table F.3 头部 + Table F.4 交错列）→ 位流字节。
+    ///
+    /// 见 [`encode_page_offset_table`] 的编码口径与自洽约束；声明宽度越界、
+    /// 首页 shall 违规、计数与向量不符、数值溢出一律类型化拒绝且零字节产出。
+    pub fn encode_page_offset_table(
+        &self,
+        input: &PageOffsetTableInput,
+    ) -> Result<Vec<u8>, HintEncodeError> {
+        encode_page_offset_table(input)
     }
 }

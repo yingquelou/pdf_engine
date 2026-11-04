@@ -48,6 +48,42 @@ pub enum HintEncodeError {
         declared_total: u64,
         actual_total: usize,
     },
+    /// F.4.1 Table F.3 里声明「number of bits needed」的项越出原文的 0—32 范围
+    /// （35524—35525：「All the items in Table F.3 that specify a number of bits
+    /// needed … have values in the range 0 through 32」）。读端照声明值继续解析
+    /// 并以 `width_problems` 如实上报（原文未规定越界读法，属**待核**取舍），
+    /// 写端按 shall 作 conforming writer 直接拒绝。
+    DeclaredWidthOutOfRange { item: &'static str, bits: u64 },
+    /// F.4.1 Table F.4 项 3 的 shall：「For the first page, this number shall be
+    /// 0; the next two items start with the second page」（35579—35581）。首页
+    /// 既不得声明共享对象引用数，也不得携带项 4/5 的元素——读端虽保留违规原值
+    /// 并落类型化诊断，conforming writer 不产出该形态。
+    FirstPageSharedRefs {
+        count: u64,
+        ids: usize,
+        numerators: usize,
+    },
+    /// 第二页起项 4/5 两列的元素数必须与本页项 3 声明值严格相等——读端按头部
+    /// 计数逐页重建向量（F.4.1 d)/e) 交错序，35582—35584 与 35608—35612），
+    /// 计数与向量长度不符的模型无从逐项往返。
+    SharedReferenceSpreadMismatch {
+        page: usize,
+        declared: u64,
+        ids: usize,
+        numerators: usize,
+    },
+    /// 相关列宽度全为 0 时条目不占任何位、位预算无法为声明计数背书，读端对此
+    /// 类计数设 65 536（`page_offset.rs` 的 `MAX_UNEVIDENCED_ITEMS`）绝对上限
+    /// 并拒绝——为保证「写得出的一定读得回」，写端同口径提前拒绝（属库策略，
+    /// 非规范条款）。
+    UnevidencedItemsTooLarge {
+        kind: &'static str,
+        count: u64,
+        limit: u64,
+    },
+    /// F.4.1 的 shall：页偏移表「followed by one or more per-page entries」
+    /// （35508—35509）——页向量为空的模型是残缺表，写端拒绝。
+    PageEntriesMissing,
 }
 
 impl fmt::Display for HintEncodeError {
@@ -78,6 +114,42 @@ impl fmt::Display for HintEncodeError {
                  {declared_total} entry(ies), but the group vectors hold {actual_first_page} first-page \
                  and {actual_total} total entries; the reader reconstructs the sequences from the \
                  header counts, so an inconsistent model cannot round-trip"
+            ),
+            Self::DeclaredWidthOutOfRange { item, bits } => write!(
+                f,
+                "F.4.1 Table F.3 {item}: a bits-needed width must be in 0..=32 (35524-35525), got {bits}"
+            ),
+            Self::FirstPageSharedRefs {
+                count,
+                ids,
+                numerators,
+            } => write!(
+                f,
+                "F.4.1 Table F.4 item 3 shall be 0 for the first page (35579-35581) and items 4/5 \
+                 start with the second page, but the model declares {count} reference(s) with {ids} \
+                 id(s) and {numerators} numerator(s) on the first page"
+            ),
+            Self::SharedReferenceSpreadMismatch {
+                page,
+                declared,
+                ids,
+                numerators,
+            } => write!(
+                f,
+                "F.4.1 Table F.4 page {page}: item 3 declares {declared} shared reference(s) but the \
+                 item 4/item 5 vectors hold {ids}/{numerators} element(s); the reader rebuilds each \
+                 page's spread from the declared count, so a mismatch cannot round-trip"
+            ),
+            Self::UnevidencedItemsTooLarge { kind, count, limit } => write!(
+                f,
+                "F.4.1 {kind}: with all related column widths 0 the bit budget cannot evidence the \
+                 count, and the reader caps it at {limit}; refusing {count} keeps every written \
+                 byte decodable"
+            ),
+            Self::PageEntriesMissing => write!(
+                f,
+                "F.4.1: the page offset hint table shall be followed by one or more per-page entries \
+                 (35508-35509); the model carries none"
             ),
         }
     }

@@ -9,7 +9,9 @@
 //! [`HintBitWriter`](super::bits::HintBitWriter) 与校验骨架补齐。
 
 pub mod generic;
+pub mod page_offset;
 pub mod shared;
 
 pub use generic::encode_generic_table;
+pub use page_offset::{PageOffsetTableInput, encode_page_offset_table};
 pub use shared::encode_shared_object_table;

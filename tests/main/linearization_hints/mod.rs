@@ -27,6 +27,9 @@ mod support;
 /// F.4.1 页偏移 hint 表家族。
 mod page_offset;
 
+/// F.4.1 页偏移 hint 表的写端编码与读端往返。
+mod page_offset_write;
+
 /// F.4.2 共享对象 hint 表家族。
 mod shared_object;
 
