@@ -64,8 +64,11 @@ impl FdfDifferences {
     }
 
     /// 经 [`Document::decode_stream_bytes`] 解出的增量更新字节：过滤器链
-    /// 与 PDF 侧（7.6）解密照常应用；**FDF 侧 RC4 不在此列**（见模块文档
-    /// 缺口 1）。未确证为流或解码失败报 [`FdfError::Malformed`]。
+    /// 与 PDF 侧（7.6）解密照常应用。Table 244 的 FDF 侧 RC4 **只作用于
+    /// `/EmbeddedFDFs` 的嵌入式 FDF 文件整体**（见
+    /// [`Document::fdf_embedded_fdfs_with_password`]），`/Differences` 流
+    /// 字典不声明 `/EncryptionRevision`，故此处无需 FDF 侧解扰。未确证为
+    /// 流或解码失败报 [`FdfError::Malformed`]。
     pub fn decoded_bytes(&self, document: &Document) -> Result<Vec<u8>> {
         let stream = self
             .stream
@@ -132,16 +135,24 @@ pub struct FdfEmbeddedFdf {
     /// Table 244 — 载体流的 `/EncryptionRevision`（存在**且为整数**时
     /// `Some`；非整数形态记诊断，原值留在载体流字典里）。
     pub encryption_revision: Option<i64>,
+    /// 本条目的内层字节是否**经 12.7.7.3 解密**得到：仅当
+    /// `/EncryptionRevision == 1` 且调用方走
+    /// [`Document::fdf_embedded_fdfs_with_password`] 给出口令时为 `true`
+    /// （解扰本身失败时为 `false`）。未加密条目恒 `false`——它没有
+    /// 需要解密的步骤，[`Self::data`] 即明文。
+    /// 密钥字节永不进入本视图（见 `embedded/crypto.rs` 的安全说明）。
+    pub decrypted: bool,
     /// 递归解析出的子 FDF 文档视图（Table 242 目录 + Table 243 字典）。
-    /// `None`：无 `/EF` 载体、内容未经/无法 FDF 解析、加密未解密、超限或
-    /// 命中环路——具体原因见 [`Self::issues`]。
+    /// `None`：无 `/EF` 载体、内容未经/无法 FDF 解析、加密且未经解密（未给
+    /// 口令、`/EncryptionRevision` ≠ 1、或解扰失败）、超限或命中环路——
+    /// 具体原因见 [`Self::issues`]。
     pub document: Option<Box<FdfDocument>>,
     /// 子文档自己 `/Differences` 的类型化视图（就地装配：子
     /// [`Document`] 不落进视图，[`FdfDocument`] 里保留的
     /// `differences` 原值只是一个调用方无法解引用的对象号）。子文档未
     /// 声明该条目时为 `None`；[`FdfDifferences::decoded_bytes`] 以**外层**
-    /// 文档为上下文解释子流（内层字节已随载体流解码内联，PDF 侧 `/Crypt`
-    /// 按外层加密状态裁剪），FDF 侧 RC4 依旧不解。
+    /// 文档为上下文解释子流（内层字节已随载体流解码内联，解密后的明文
+    /// 同样如此；PDF 侧 `/Crypt` 按外层加密状态裁剪）。
     pub differences: Option<Box<FdfDifferences>>,
     /// 子文档自己的 `/EmbeddedFDFs` 类型化结果（递归一层记一层，受
     /// [`super::MAX_FDF_EMBEDDED_DEPTH`]、环检测与
@@ -165,7 +176,12 @@ impl FdfEmbeddedFdf {
             .filter(|name| !name.is_empty())
     }
 
-    /// 载体流的（已按 PDF 侧过滤器与解密处理的）字节；FDF 侧加密**未解密**。
+    /// 载体流的（已按 PDF 侧过滤器与解密处理的）**文件字节原值**：
+    /// FDF 侧 RC4 **不在此应用**，故加密条目的返回值仍是密文（读端策略是
+    /// 原值永不丢弃）。12.7.7.3 解扰出的明文只在装配期存在（由
+    /// `Zeroizing` 承载、随后归零），其类型化结果见 [`Self::document`] /
+    /// [`Self::differences`] / [`Self::nested`]，是否解扰过见
+    /// [`Self::is_decrypted`]。
     pub fn data(&self) -> Option<&[u8]> {
         self.carrier().map(|file| file.data.as_slice())
     }
@@ -174,6 +190,13 @@ impl FdfEmbeddedFdf {
     /// FDF 流按 FDF 机制加密）。
     pub fn is_encrypted(&self) -> bool {
         self.encryption_revision.is_some()
+    }
+
+    /// 本条目的内层字节是否由 **12.7.7.3 的 FDF 侧解密**得到（即
+    /// [`Self::document`] 等类型化结果来自解密后的明文，而非文件里的
+    /// 原字节）。未加密条目为 `false`（无需解密）。
+    pub fn is_decrypted(&self) -> bool {
+        self.decrypted
     }
 
     /// `/EncryptionRevision` 是否落在「publication 时唯一被定义的值 1」

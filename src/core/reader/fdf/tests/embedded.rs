@@ -1,7 +1,8 @@
 //! FDF 读端 `/Differences`（Table 243 续表 raw L24906–L24926）与
 //! `/EmbeddedFDFs`（raw L24930–L24932）的类型化单元测试：流形态识别与
 //! 解引用（直接/引用/悬空/非流）、7.11 文件规范逐项类型化、递归子 FDF
-//! 文档、Table 244 `/EncryptionRevision` 只识别不解密、条目/深度/环
+//! 文档、Table 244 `/EncryptionRevision` 识别 + 12.7.7.3 的 FDF 侧解密
+//! （见 `embedded/decrypt.rs`；不带口令的旧入口依旧不解密）、条目/深度/环
 //! 上限降级，以及 PDF 1.4 版本语义的宽容报告。
 
 use super::*;
@@ -9,6 +10,8 @@ use crate::core::reader::fdf::embedded::{MAX_FDF_EMBEDDED_DEPTH, MAX_FDF_EMBEDDE
 use crate::core::reader::fdf::{FdfEmbeddedFdf, FdfEmbeddedFdfs};
 use crate::core::types::StreamData;
 
+/// 12.7.7.3 的 FDF 侧解密（密钥派生向量、RC4 对称性、带口令入口）。
+mod decrypt;
 /// 递归放大防护（跨层全局条目预算）与子文档 `/Differences` 就地类型化。
 mod limits;
 
@@ -427,20 +430,19 @@ fn encrypted_document(revision: Value) -> Document {
 }
 
 #[test]
-fn embedded_fdf_encryption_revision_one_is_typed_and_skips_decryption() {
-    // Table 244：存在且为整数 → 类型化；本车道只识别不解密。
+fn embedded_fdf_encryption_revision_one_without_password_is_typed_but_not_decrypted() {
+    // Table 244：存在且为整数 → 类型化；旧入口不带口令 ⇒ 依旧不解密。
     let document = encrypted_document(Value::Integer(1));
     let view = embedded_of(&document);
     let entry = first_entry(&view);
     assert!(entry.is_encrypted());
     assert_eq!(entry.encryption_revision, Some(1));
     assert!(entry.encryption_revision_supported());
+    assert!(!entry.is_decrypted(), "无口令入口不解密");
     assert!(entry.document.is_none(), "加密内容不得当作明文递归");
     let joined = entry.issues.join("|");
-    assert!(
-        joined.contains("decryption is not implemented"),
-        "got {joined}"
-    );
+    assert!(joined.contains("no user password"), "got {joined}");
+    assert!(joined.contains("undecrypted"), "got {joined}");
     assert!(
         !joined.contains("only defined value 1"),
         "值 1 不该报畸形：{joined}"
@@ -449,7 +451,7 @@ fn embedded_fdf_encryption_revision_one_is_typed_and_skips_decryption() {
 
 #[test]
 fn embedded_fdf_encryption_revision_other_than_one_is_reported() {
-    // ≠1 是「可判定畸形」（规范只定义 1）：报诊断，仍不解密。
+    // ≠1 是「可判定畸形」（规范只定义 1）：报诊断，且**不 Attempt 解密**。
     let document = encrypted_document(Value::Integer(2));
     let view = embedded_of(&document);
     let entry = first_entry(&view);
@@ -457,10 +459,7 @@ fn embedded_fdf_encryption_revision_other_than_one_is_reported() {
     assert!(!entry.encryption_revision_supported());
     let joined = entry.issues.join("|");
     assert!(joined.contains("only defined value 1"), "got {joined}");
-    assert!(
-        joined.contains("decryption is not implemented"),
-        "got {joined}"
-    );
+    assert!(joined.contains("returned undecrypted"), "got {joined}");
 }
 
 #[test]

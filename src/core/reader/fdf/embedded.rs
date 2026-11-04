@@ -3,7 +3,8 @@
 //!
 //! 本文件是模块门面：规范依据、防护上限、跨层条目预算与对外的
 //! [`Document`] 入口方法。形态类型见 [`view`]，装配过程见
-//! [`expand`]，内层字节的宽容扫描见 [`scan`]。
+//! [`expand`]，内层字节的宽容扫描见 [`scan`]，Table 244 revision 1 的
+//! 密钥派生与 RC4 解扰见 [`crypto`]。
 //!
 //! 规范依据（`pdftotext -raw docs/PDF32000_2008.pdf` 实测行号）：
 //! - raw L24906–L24926 — `Differences`：**stream**，「A stream containing
@@ -29,18 +30,18 @@
 //!   encrypted; PDF 1.4」，「This value shall be defined at the time of
 //!   publication is 1」）。FDF 加密与 7.6 的 PDF 文件加密**无关**（raw
 //!   L24893–L24899：独立机制，revision 1 用 40 位类 RC4 + MD5 派生密钥）。
+//!   解密入口是 [`Document::fdf_embedded_fdfs_with_password`]（密钥派生与
+//!   RC4 见 [`crypto`]，只走 7.6.3.3 的步 (a)/(b)）；`/EncryptionRevision`
+//!   ≠ 1 不属已定义算法，只记诊断、不 Attempt 解密。
 //!
 //! **剩余缺口（如实记录，本车道不实现）**：
-//! 1. FDF 侧解密**未实现**：本模块只识别并类型化 `/EncryptionRevision`，
-//!    存在即视为「内容未经解密」，不做 RC4 解扰，故加密嵌入式 FDF 的
-//!    子文档为 `None` 并记一条诊断。
-//! 2. 类型化结果以**方法**（[`Document::fdf_differences`] /
+//! 1. 类型化结果以**方法**（[`Document::fdf_differences`] /
 //!    [`Document::fdf_embedded_fdfs`]）而不是 `FdfDictionary` 字段暴露：
 //!    加字段需要同时改动 `FdfDictionary` 的全字段字面构造点
 //!    （`src/core/builder/tests/fdf/mod.rs`、`tests/main/fdf/{javascript,write}.rs`），
 //!    这些文件超出本车道写集；且递归子树与字节解码本就依赖 `&Document`
 //!    上下文，惰性方法形态与之匹配。字段化留给后续增量统一收口。
-//! 3. `/Differences` 的增量更新字节**不参与**本文件的对象视图合并（7.5.6
+//! 2. `/Differences` 的增量更新字节**不参与**本文件的对象视图合并（7.5.6
 //!    的增量重放属写端/签名车道范围）。
 //!
 //! 防护（库策略，非规范数值）：`/EmbeddedFDFs` 数组长度与内层流字节数都是
@@ -54,13 +55,19 @@
 //! 规范则判为环路并停止展开）。条目展开一律不预分配容量（禁
 //! `Vec::with_capacity(外部计数)`），畸形项按「跳过 + 记录 + 保留原值」降级，
 //! 与既有 `/JavaScript`、`/Target` 的读端宽容风格一致，绝不让整份 FDF
-//! 解析失败。
+//! 解析失败。解密后的明文走的是**同一条**类型化路径，故这四道防护对加密
+//! 条目逐层照常生效（`/EncryptionRevision 1` 不是绕过上限的通行证）。
 
 use crate::core::types::Document;
+use zeroize::Zeroizing;
 
 use super::FdfError;
 
 pub(crate) mod scan;
+
+/// Table 244 revision 1 的密钥派生与 RC4 解扰（`pub(crate)` 仅供本模块
+/// 与单元测试直接使用独立向量校验）。
+pub(crate) mod crypto;
 
 mod expand;
 mod view;
@@ -118,6 +125,11 @@ impl Document {
     /// 非 FDF 文件或该条目缺失返回 `Ok(None)`；数组级与条目级畸形都降级
     /// 为诊断记录，不让本文件解析失败。整棵递归树的展开共享一个
     /// [`MAX_FDF_EMBEDDED_TOTAL_ENTRIES`] 全局条目预算。
+    ///
+    /// **加密条目不解密**：本入口不带用户口令（12.7.7.3 的 FDF 侧解密
+    /// 需要它），故 `/EncryptionRevision` 存在即记一条诊断并给出 `None`
+    /// 子文档；需要读加密嵌入式 FDF 时用
+    /// [`Document::fdf_embedded_fdfs_with_password`]。
     pub fn fdf_embedded_fdfs(&self) -> Result<Option<FdfEmbeddedFdfs>> {
         let Some(fdf) = self.fdf()? else {
             return Ok(None);
@@ -127,6 +139,46 @@ impl Document {
             &fdf,
             0,
             &mut ExpansionBudget::default(),
+            None,
+        ))
+    }
+
+    /// [`Document::fdf_embedded_fdfs`] 的**带口令**变体（12.7.7.3，
+    /// Table 244 `/EncryptionRevision`）：额外对 `/EncryptionRevision 1`
+    /// 的嵌入式 FDF 流做 FDF 侧解密。
+    ///
+    /// 密钥按规范原文派生：与 7.6.3.3「Algorithm 2」的步 (a)/(b) **完全
+    /// 一致**（把口令截断/填充到 32 字节后取 MD5 摘要的**前 5 字节**），
+    /// 不掺 `/O`、`/P`、`/ID`（raw L24893–L24900 + L3015–L3018 +
+    /// L3054–L3059）；载体字节随后经 RC4 解扰，明文走**与未加密条目完全
+    /// 相同**的类型化路径（递归子文档、`/Differences` 视图逐层照常给出）。
+    ///
+    /// 其余形态与本模块同口径：
+    /// - 未声明 `/EncryptionRevision` 的条目行为与 [`Document::fdf_embedded_fdfs`]
+    ///   逐字一致（明文路径）。
+    /// - `/EncryptionRevision` ≠ 1（Table 244「唯一被定义的值是 1」）：
+    ///   **不 Attempt 解密**，只记诊断、子文档为 `None`。
+    /// - 解扰后无法解析（多为口令不符）：跳过 + 记录诊断 + 保留原值，
+    ///   绝不 panic、绝不让整份 FDF 解析失败。
+    /// - 口令与派生密钥只在本调用栈内以 [`Zeroizing`] 承载，解密明文同样
+    ///   在装配完成后归零销毁；密钥字节不进入诊断、视图字段或日志。
+    ///   口令在递归层逐层下传（子文档自己的加密条目同样可解）。
+    pub fn fdf_embedded_fdfs_with_password(
+        &self,
+        password: impl AsRef<[u8]>,
+    ) -> Result<Option<FdfEmbeddedFdfs>> {
+        let Some(fdf) = self.fdf()? else {
+            return Ok(None);
+        };
+        // 口令不驻留 Document（与 `reader/parser.rs` 的 `with_password`
+        // 同一口径：只在本次解析期内存在）。
+        let password = Zeroizing::new(password.as_ref().to_vec());
+        Ok(expand::embedded_view(
+            self,
+            &fdf,
+            0,
+            &mut ExpansionBudget::default(),
+            Some(password.as_slice()),
         ))
     }
 }

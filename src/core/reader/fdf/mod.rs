@@ -35,7 +35,11 @@
 //!   逐项按 7.11 文件规范解析（复用 `reader/embedded.rs`）、识别
 //!   Table 244 的 `/EncryptionRevision` 并递归解析可解出的子 FDF 文档
 //!   （递归受层数、单数组条目数与**跨层全局条目预算**三重上限约束，子文档
-//!   自己的 `/Differences` 在同一趟递归里逐层类型化）。
+//!   自己的 `/Differences` 在同一趟递归里逐层类型化）。加密的嵌入式 FDF 流
+//!   另有带口令入口 [`Document::fdf_embedded_fdfs_with_password`]：按
+//!   12.7.7.3 用 7.6.3.3 步 (a)/(b) 派生的 40 位密钥（MD5 前 5 字节）做
+//!   RC4 解扰后再走同一类型化路径；旧入口不带口令，故加密条目依旧只识别
+//!   不解密（诊断 + 子文档 `None`）。
 //!   两者以**方法**而非 `FdfDictionary` 字段暴露（加字段需改本车道
 //!   写集外的全字段字面构造点），见子模块 `embedded` 的模块文档；
 //!   `differences`/`embedded_fdfs` 原值字段继续保留，两条通道互不替代。

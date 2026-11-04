@@ -4,10 +4,15 @@
 //! trailer）→ **真实 Parser** → 类型化只读视图。内层嵌入式 FDF 的字节
 //! 一处用手写最小文件、一处用本 crate 写端 `PdfBuilder::export_fdf` 的
 //! **真实产出**，证明递归子文档解析在真实字节上成立。
+//! 12.7.7.3 的 FDF 侧解密（带口令入口）见子模块 `decrypt`。
 
 use super::*;
 use pdf_engine::core::builder::PdfBuilder;
 use pdf_engine::core::reader::fdf::{FdfDictionary, FdfDocument, FdfField};
+
+/// 12.7.7.3 的 FDF 侧解密：密文载体 → `/EncryptionRevision 1` → 带口令
+/// 入口解密后照常递归（真实字节 + 真实 Parser）。
+mod decrypt;
 
 /// 全 None 裸字段（Table 246 读模型；写端不消费全限定名）。
 fn bare_field(partial: &str) -> FdfField {
@@ -356,9 +361,10 @@ fn embedded_fdfs_nested_levels_and_cycle_read_from_a_real_fdf_file() {
 }
 
 #[test]
-fn embedded_fdfs_encrypted_carrier_is_typed_but_never_decrypted() {
-    // Table 244：`/EncryptionRevision` 存在即识别（本切片不解密）；
-    // 值 ≠ 1 额外记「唯一被定义的值是 1」的诊断，加密项一律不产子文档。
+fn embedded_fdfs_encrypted_carrier_is_typed_but_undecrypted_without_a_password() {
+    // Table 244：`/EncryptionRevision` 存在即识别；**旧入口不带口令**，
+    // 故 12.7.7.3 的解密不发生（子文档 `None` + 诊断）。带口令的新入口见
+    // `embedded/decrypt.rs`。值 ≠ 1 额外记「唯一被定义的值是 1」的诊断。
     let clear = inner_fdf_bytes("plain", "k", "v");
     let mut file = FdfFile::new("%FDF-1.4\n");
     file.object(1, b"<< /FDF 2 0 R >>");
@@ -380,12 +386,11 @@ fn embedded_fdfs_encrypted_carrier_is_typed_but_never_decrypted() {
     assert_eq!(one.encryption_revision, Some(1));
     assert!(one.is_encrypted());
     assert!(one.encryption_revision_supported());
-    assert!(one.document.is_none(), "加密流不解密故无子文档");
+    assert!(!one.is_decrypted(), "无口令入口不解密");
+    assert!(one.document.is_none(), "加密流未解密故无子文档");
     let joined = one.issues.join("|");
-    assert!(
-        joined.contains("decryption is not implemented"),
-        "got {joined}"
-    );
+    assert!(joined.contains("no user password"), "got {joined}");
+    assert!(joined.contains("undecrypted"), "got {joined}");
     assert!(
         !joined.contains("not the only defined value"),
         "got {joined}"
@@ -395,6 +400,7 @@ fn embedded_fdfs_encrypted_carrier_is_typed_but_never_decrypted() {
     let three = &view.entries[1];
     assert_eq!(three.encryption_revision, Some(3));
     assert!(!three.encryption_revision_supported());
+    assert!(!three.is_decrypted());
     let joined = three.issues.join("|");
     assert!(
         joined.contains("not the only defined value 1"),
@@ -404,6 +410,8 @@ fn embedded_fdfs_encrypted_carrier_is_typed_but_never_decrypted() {
         joined.contains("Table 244 raw L24937-L24939"),
         "got {joined}"
     );
+    // 带口令的入口对 revision 3 同样**不 Attempt 解密**（见 decrypt 子模块
+    // 的 `embedded_fdfs_non_one_revision_is_reported_and_never_decrypted`）。
 }
 
 #[test]
