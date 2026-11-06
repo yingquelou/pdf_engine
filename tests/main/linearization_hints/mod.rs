@@ -48,6 +48,9 @@ mod thumbnail_write;
 /// F.4.6 内嵌文件流 hint 表家族。
 mod embedded_file;
 
+/// F.4.6 内嵌文件流 hint 表的写端编码与读端往返。
+mod embedded_file_write;
+
 use support::{
     BitWriter, PAGE_COUNT, build, build_at_version, hint_entries, hint_payload, page_offset_bytes,
     page_offset_table_bits, shared_object_table_bits,

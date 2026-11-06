@@ -26,16 +26,23 @@
 //! 2. 对象号/位置重排、`/L`（文件总长）、`/H`（主流对象范围）、`/T`（主引用表
 //!    定位）、`/E`（首页末尾偏移）的**真实字节**求值，以及两段交叉引用表与两个
 //!    trailer 的写出（F.3.1/F.3.4/F.3.11）——本模块完全不碰文件布局；
-//! 3. 其余三个 hint 表族（缩略图 F.4.3 / extended F.4.5 / 内嵌文件流 F.4.6）
-//!    的编码器，其中内嵌文件流表项 5 的对象号宽度是**文档级**硬依赖（取本页
-//!    偏移表 Table F.3 项 11，见 [`encode_page_offset_table`]），extended /
-//!    内嵌文件流表位置须由 Table F.2 键给出（generic F.4.4 与页偏移 F.4.1 已
-//!    落地，见 [`encode_generic_table`]）。
+//! 3. F.4 六家的**表级**编码器已全部落地（F.4.1 页偏移、F.4.2 共享对象、
+//!    F.4.3 缩略图、F.4.4 generic、F.4.5 extended 与本轮的 F.4.6 内嵌文件流，
+//!    见 [`encode_embedded_file_table`]），剩下的不是「哪张表还写不出」而是门面
+//!    与装配：本类型挂了 F.4.1/F.4.2/F.4.4/F.4.6 四家，缩略图 F.4.3 与 extended
+//!    F.4.5 还须直调 `hints` 子模块的自由函数；而内嵌文件流表 Table F.12 项 5 的
+//!    宽度是**文档级**硬依赖（取本页偏移表 Table F.3 项 11，见
+//!    [`encode_page_offset_table`]），其真实位置又须由 Table F.2 键 `B` 给出——
+//!    两者都要等缺口 1 的多表装配切片才在同一次调用里算得出（generic F.4.4 与
+//!    页偏移 F.4.1 已落地，见 [`encode_generic_table`]）。
 
 pub mod bits;
 pub mod hints;
 
 pub use bits::{HintBitWriter, HintEncodeError, MAX_UNSIGNED_BITS};
+pub use hints::embedded_file::{
+    EmbeddedFileEncodeError, EmbeddedFileTableInput, encode_embedded_file_table,
+};
 pub use hints::encode_shared_object_table;
 pub use hints::generic::encode_generic_table;
 pub use hints::page_offset::{PageOffsetTableInput, encode_page_offset_table};
@@ -86,5 +93,20 @@ impl HintTableEncoder {
         input: &PageOffsetTableInput,
     ) -> Result<Vec<u8>, HintEncodeError> {
         encode_page_offset_table(input)
+    }
+
+    /// F.4.6 内嵌文件流 hint 表（Table F.11 头部 7 项 + Table F.12 的项主序五列）
+    /// → 位流字节。
+    ///
+    /// 见 [`encode_embedded_file_table`] 的编码口径与自洽约束；声明宽度越界、
+    /// 组数与组向量不符、项 4 与项 5 列表不符、项 2/项 3/项 4 的互斥 shall、
+    /// 数值溢出一律类型化拒绝且零字节产出。项 5 的宽度是**文档级**入参
+    /// （[`EmbeddedFileTableInput::shared_object_id_bits`]，取 Table F.3 项 11），
+    /// 由调用方从页偏移表带来。
+    pub fn encode_embedded_file_table(
+        &self,
+        input: &EmbeddedFileTableInput,
+    ) -> Result<Vec<u8>, EmbeddedFileEncodeError> {
+        encode_embedded_file_table(input)
     }
 }
