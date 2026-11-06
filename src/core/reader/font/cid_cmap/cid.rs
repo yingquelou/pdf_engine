@@ -13,6 +13,8 @@ struct CidRange {
     low: u32,
     high: u32,
     first_cid: u16,
+    /// `cidrange`/`cidchar` 的 CID 随码递增；`notdefrange` 整段使用同一个 CID。
+    increments: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +82,7 @@ impl CidCMap {
                 low: start_code,
                 high: end_code,
                 first_cid: start_cid,
+                increments: true,
             });
 
             i = j;
@@ -143,6 +146,22 @@ impl CidCMap {
         self.writing_mode
     }
 
+    /// 声明的源字符码空间（供 ToUnicode 预定义基座按码长/码值过滤）。
+    pub(in crate::core::reader::font) fn code_spaces(&self) -> &[CodeSpace] {
+        &self.code_spaces
+    }
+
+    /// Whether `code` falls inside a codespace range of the given byte length.
+    pub(in crate::core::reader::font) fn codespace_contains(
+        &self,
+        length: usize,
+        code: u32,
+    ) -> bool {
+        self.code_spaces
+            .iter()
+            .any(|space| space.contains(length, code))
+    }
+
     pub fn decode(&self, input: &[u8]) -> FontResult<Vec<(Vec<u8>, u16)>> {
         let mut output = Vec::new();
         let mut offset = 0;
@@ -170,7 +189,12 @@ impl CidCMap {
                 .iter()
                 .find(|range| range.length == length && (range.low..=range.high).contains(&code))
                 .map_or(0, |range| {
-                    range.first_cid + u16::try_from(code - range.low).expect("validated CID range")
+                    if range.increments {
+                        range.first_cid
+                            + u16::try_from(code - range.low).expect("validated CID range")
+                    } else {
+                        range.first_cid
+                    }
                 });
             output.push((remaining[..length].to_vec(), cid));
             offset += length;
@@ -285,6 +309,7 @@ fn parse_sections(data: &[u8]) -> FontResult<ParsedCidCMap> {
                     low: code,
                     high: code,
                     first_cid: cid,
+                    increments: true,
                 });
             }
             index = end + 1;
@@ -308,6 +333,30 @@ fn parse_sections(data: &[u8]) -> FontResult<ParsedCidCMap> {
                     low,
                     high,
                     first_cid,
+                    increments: true,
+                });
+            }
+            index = end + 1;
+            continue;
+        }
+        if operator == "beginnotdefrange" {
+            let count = section_count(&tokens, index)?;
+            let end = section_end(&tokens, index, count, 3, "endnotdefrange")?;
+            for entry in tokens[index + 1..end].chunks(3) {
+                let (low_length, low) = source_code(&entry[0])?;
+                let (high_length, high) = source_code(&entry[1])?;
+                let cid = cid_number(&entry[2])?;
+                if low_length != high_length || low > high {
+                    return Err(invalid_cmap("invalid notdef range"));
+                }
+                // `notdefrange` 把整段码映射到同一个 CID（通常为 0，Adobe 数据
+                // 也有 1/7716 这类取值），不随码递增。
+                ranges.push(CidRange {
+                    length: low_length,
+                    low,
+                    high,
+                    first_cid: cid,
+                    increments: false,
                 });
             }
             index = end + 1;
@@ -353,19 +402,9 @@ fn finalize_cmap(
             return Err(invalid_cmap("codespace ranges overlap"));
         }
     }
-    for (index, shorter) in code_spaces.iter().enumerate() {
-        for longer in code_spaces.iter().skip(index + 1) {
-            if shorter.length >= longer.length {
-                continue;
-            }
-            let shift = (longer.length - shorter.length) * 8;
-            let prefix_low = longer.low >> shift;
-            let prefix_high = longer.high >> shift;
-            if prefix_low <= shorter.high && prefix_high >= shorter.low {
-                return Err(invalid_cmap("codespace ranges have ambiguous prefixes"));
-            }
-        }
-    }
+    // 不同码长区间之间的数值前缀重叠不再视为错误：解码按声明的最长码长
+    // 优先匹配，失败再逐级回退（如 GBK2K 的 4 字节 `<81308130>`–`<FE39FE39>`
+    // 与 2 字节 `<8140>`–`<FEFE>`）。同长度区间之间的重叠仍在上方拒绝。
     ranges.sort_by_key(|range| (range.length, range.low));
     for pair in ranges.windows(2) {
         if pair[0].length == pair[1].length && pair[0].high >= pair[1].low {
@@ -402,7 +441,12 @@ fn clip_to_codespaces(range: &CidRange, code_spaces: &[CodeSpace]) -> Vec<CidRan
                 length: range.length,
                 low,
                 high,
-                first_cid: range.first_cid + (low - range.low) as u16,
+                first_cid: if range.increments {
+                    range.first_cid + (low - range.low) as u16
+                } else {
+                    range.first_cid
+                },
+                increments: range.increments,
             })
         })
         .collect()
@@ -421,6 +465,7 @@ fn subtract_range(existing: &CidRange, cut: &CidRange) -> Vec<CidRange> {
             low: existing.low,
             high: cut.low - 1,
             first_cid: existing.first_cid,
+            increments: existing.increments,
         });
     }
     if cut.high < existing.high {
@@ -428,7 +473,12 @@ fn subtract_range(existing: &CidRange, cut: &CidRange) -> Vec<CidRange> {
             length: existing.length,
             low: cut.high + 1,
             high: existing.high,
-            first_cid: existing.first_cid + (cut.high + 1 - existing.low) as u16,
+            first_cid: if existing.increments {
+                existing.first_cid + (cut.high + 1 - existing.low) as u16
+            } else {
+                existing.first_cid
+            },
+            increments: existing.increments,
         });
     }
     pieces
@@ -446,6 +496,7 @@ pub(in crate::core::reader::font) fn identity_cmap(writing_mode: u8) -> CidCMap 
             low: 0,
             high: u16::MAX.into(),
             first_cid: 0,
+            increments: true,
         }],
         writing_mode,
     }

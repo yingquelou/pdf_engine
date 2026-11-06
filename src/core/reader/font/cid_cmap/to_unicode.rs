@@ -9,13 +9,48 @@ use super::{CodeSpace, FontResult, MAX_CMAP_BYTES, MAX_CMAP_ENTRIES, MAX_UNICODE
 /// 内置恒等基座名：源码值即 Unicode 标量（仅 2 字节码）。
 const IDENTITY_UCS_NAME: &str = "Adobe-Identity-UCS";
 
+/// 预定义 ToUnicode 基座对源码的读端解释方式。
+///
+/// PDF 规范要求 `usecmap` 基座是 ToUnicode CMap（CMapType 2），但 Adobe
+/// 发布的 `UniGB/UniCNS/UniJIS/UniKS` 编码 CMap 均为 CMapType 1。本库按
+/// **名称编码**宽松解释：源码按对应 Unicode 编码精确解码，不借用基座里的
+/// code→CID 映射。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::core::reader::font) enum UnicodeBase {
+    /// `Adobe-Identity-UCS` 与各 ordering 的 `UCS2`（含 `UCS2-HW`）：
+    /// 2 字节码值即 Unicode 标量。
+    Identity,
+    /// 各 ordering 的 `UTF16`：源码按 UTF-16BE 解码（2 字节或 4 字节代理对）。
+    Utf16,
+    /// 各 ordering 的 `UTF32`：源码按 UTF-32BE 解码（4 字节）。
+    Utf32,
+    /// 各 ordering 的 `UTF8`：源码按 UTF-8 解码（1–4 字节）。
+    Utf8,
+}
+
+/// 预定义 Unicode 基座家族前缀（`UniJIS` 与 `UniJIS2004` 等按前缀区分）。
+const UNICODE_CMAP_FAMILIES: &[&str] = &[
+    "UniGB",
+    "UniCNS",
+    "UniJIS",
+    "UniJIS2004",
+    "UniJISPro",
+    "UniJISX0213",
+    "UniJISX02132004",
+    "UniKS",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::core::reader::font) struct ToUnicodeMap {
     mappings: BTreeMap<Vec<u8>, String>,
-    /// 基座为 `Adobe-Identity-UCS` 时，未显式映射的 2 字节码按码值解析。
-    identity_base: bool,
-    /// 本地声明的 codespace；非空时恒等基座只在这些区间内生效。
-    identity_spaces: Vec<CodeSpace>,
+    /// 未显式映射的源码交由该基座解码；`None` 表示无基座。
+    base: Option<UnicodeBase>,
+    /// 基座生效的 codespace 过滤层：每一层都必须包含源码（交集）。
+    ///
+    /// 第一层是预定义基座自身的 codespace（`Adobe-Identity-UCS` 除外，它
+    /// 没有数据文件，按 2 字节码隐式约束）；本地声明的 codespace 非空时
+    /// 追加为第二层。
+    space_filters: Vec<Vec<CodeSpace>>,
 }
 
 impl ToUnicodeMap {
@@ -24,8 +59,8 @@ impl ToUnicodeMap {
     pub fn parse(data: &[u8]) -> FontResult<Self> {
         Ok(Self {
             mappings: parse_to_unicode_sections(data)?.mappings,
-            identity_base: false,
-            identity_spaces: Vec::new(),
+            base: None,
+            space_filters: Vec::new(),
         })
     }
 
@@ -86,8 +121,8 @@ impl ToUnicodeMap {
             Some(base) => merge_mappings(mappings, &code_spaces, base),
             None => Self {
                 mappings,
-                identity_base: false,
-                identity_spaces: Vec::new(),
+                base: None,
+                space_filters: Vec::new(),
             },
         })
     }
@@ -97,47 +132,107 @@ impl ToUnicodeMap {
         self.mappings.get(source_code).map(String::as_str)
     }
 
-    /// Resolve a source code through local mappings, then the inherited
-    /// identity base.
+    /// Resolve a source code through local mappings, then the inherited base.
     pub fn resolve_unicode(&self, source_code: &[u8]) -> Option<String> {
         if let Some(text) = self.mappings.get(source_code) {
             return Some(text.clone());
         }
-        self.identity_unicode(source_code)
+        let base = self.base?;
+        if !self.base_allows(source_code) {
+            return None;
+        }
+        decode_base(base, source_code)
     }
 
-    fn identity_unicode(&self, source_code: &[u8]) -> Option<String> {
-        if !self.identity_base {
-            return None;
+    /// 基座是否作用于该源码：先过隐式 2 字节约束（恒等基座无数据文件），
+    /// 再要求每一层 codespace 过滤都命中。
+    fn base_allows(&self, source_code: &[u8]) -> bool {
+        if self.space_filters.is_empty() {
+            return source_code.len() == 2;
         }
-        let [high, low] = source_code else {
-            return None;
-        };
-        let value = u16::from_be_bytes([*high, *low]);
-        if !self.identity_spaces.is_empty()
-            && !self
-                .identity_spaces
+        let code = bytes_to_code(source_code);
+        self.space_filters.iter().all(|spaces| {
+            spaces
                 .iter()
-                .any(|space| space.contains(2, u32::from(value)))
-        {
-            return None;
+                .any(|space| space.contains(source_code.len(), code))
+        })
+    }
+}
+
+/// 按基座的编码语义精确解码源码；解码失败或产生空串时返回 `None`。
+fn decode_base(base: UnicodeBase, source_code: &[u8]) -> Option<String> {
+    match base {
+        UnicodeBase::Identity => {
+            let [high, low] = source_code else {
+                return None;
+            };
+            char::from_u32(u32::from(u16::from_be_bytes([*high, *low]))).map(String::from)
         }
-        char::from_u32(u32::from(value)).map(String::from)
+        UnicodeBase::Utf16 => {
+            if !source_code.len().is_multiple_of(2) {
+                return None;
+            }
+            let units: Vec<u16> = source_code
+                .chunks(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect();
+            let text = String::from_utf16(&units).ok()?;
+            (!text.is_empty()).then_some(text)
+        }
+        UnicodeBase::Utf32 => {
+            let [a, b, c, d] = source_code else {
+                return None;
+            };
+            char::from_u32(u32::from_be_bytes([*a, *b, *c, *d])).map(String::from)
+        }
+        UnicodeBase::Utf8 => {
+            let text = std::str::from_utf8(source_code).ok()?;
+            (!text.is_empty()).then(|| text.to_owned())
+        }
     }
 }
 
 /// Resolve the built-in ToUnicode base roster.
 ///
 /// 供 `parse_lenient` 与 `use_cmap`（Table 120 的 name 形态）共用同一份名册。
+/// `Adobe-Identity-UCS` 内建；`UniGB/UniCNS/UniJIS/UniKS` 的 47 个 Unicode
+/// 编码变体经 `resolve_predefined_cmap` 取真实 codespace，按名称编码解码源码。
+/// 其余名称返回 `Err`，基座降级为空。
 pub(super) fn builtin_base(name: &str) -> FontResult<ToUnicodeMap> {
     if name == IDENTITY_UCS_NAME {
-        Ok(ToUnicodeMap {
+        return Ok(ToUnicodeMap {
             mappings: BTreeMap::new(),
-            identity_base: true,
-            identity_spaces: Vec::new(),
-        })
-    } else {
-        Err(invalid_cmap("unknown ToUnicode base CMap"))
+            base: Some(UnicodeBase::Identity),
+            space_filters: Vec::new(),
+        });
+    }
+    let Some(codec) = predefined_codec(name) else {
+        return Err(invalid_cmap("unknown ToUnicode base CMap"));
+    };
+    let cmap = crate::core::reader::font::predefined_cmaps::resolve_predefined_cmap(name)?;
+    Ok(ToUnicodeMap {
+        mappings: BTreeMap::new(),
+        base: Some(codec),
+        space_filters: vec![cmap.code_spaces().to_vec()],
+    })
+}
+
+/// 识别 `Uni{GB,CNS,JIS,JIS2004,JISPro,JISX0213,JISX02132004,KS}-
+/// {UCS2,UCS2-HW,UTF8,UTF16,UTF32}-{H,V}` 对应的源码编码。
+fn predefined_codec(name: &str) -> Option<UnicodeBase> {
+    let rest = UNICODE_CMAP_FAMILIES
+        .iter()
+        .find_map(|family| name.strip_prefix(family)?.strip_prefix('-'))?;
+    let (codec, orientation) = rest.rsplit_once('-')?;
+    if !matches!(orientation, "H" | "V") {
+        return None;
+    }
+    match codec {
+        "UCS2" | "UCS2-HW" => Some(UnicodeBase::Identity),
+        "UTF16" => Some(UnicodeBase::Utf16),
+        "UTF32" => Some(UnicodeBase::Utf32),
+        "UTF8" => Some(UnicodeBase::Utf8),
+        _ => None,
     }
 }
 
@@ -148,8 +243,8 @@ fn merge_mappings(
 ) -> ToUnicodeMap {
     let ToUnicodeMap {
         mappings: mut merged,
-        identity_base,
-        ..
+        base,
+        mut space_filters,
     } = base;
     if !code_spaces.is_empty() {
         merged.retain(|source, _| {
@@ -157,17 +252,14 @@ fn merge_mappings(
                 .iter()
                 .any(|space| space.contains(source.len(), bytes_to_code(source)))
         });
+        // 本地 codespace 作为额外过滤层，与基座 codespace 取交集。
+        space_filters.push(code_spaces.to_vec());
     }
     merged.extend(local);
     ToUnicodeMap {
         mappings: merged,
-        identity_base,
-        // 恒等基座没有可预先裁剪的映射表，改为按本地 codespace 过滤查询。
-        identity_spaces: if identity_base {
-            code_spaces.to_vec()
-        } else {
-            Vec::new()
-        },
+        base,
+        space_filters,
     }
 }
 

@@ -34,7 +34,7 @@ const MAX_UNICODE_BYTES: usize = 1024;
 
 /// 源字符码空间：同长度码值的闭区间。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CodeSpace {
+pub(in crate::core::reader::font) struct CodeSpace {
     length: usize,
     low: u32,
     high: u32,

@@ -130,6 +130,41 @@ fn cid_font_type2_subset_rejects_cid_outside_explicit_map() {
 }
 
 #[test]
+fn cid_font_type2_subset_rejects_glyph_outside_font() {
+    // 显式 /CIDToGIDMap 把 CID 2 指向源程序不存在的 gid 9：
+    // 子集化必须拒绝，而不是静默裁掉该字形。
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::TrueType(sample_truetype_program()))
+    .with_cid_to_gid_map(&[0, 1, 9])
+    .with_subset_cids(&[2]);
+
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    let idx = b.cid_font(p, &cid_font);
+    b.text_cid(p, idx, 10.0, 10.0, &[2]);
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("映射到字体范围外的 gid 应导致子集化失败");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("TrueType subsetting"),
+        "错误信息应带子集化上下文: {error}"
+    );
+    assert!(
+        error.to_string().contains("outside the font"),
+        "错误信息应指出 gid 越界: {error}"
+    );
+    assert!(out.is_empty());
+}
+
+#[test]
 fn cid_font_type2_subset_reports_truetype_errors() {
     let cid_font = CidFont::new(
         "ExampleCIDFont",

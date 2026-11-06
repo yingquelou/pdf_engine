@@ -180,6 +180,35 @@ fn mixed_lengths_decode_by_longest_match() {
 }
 
 #[test]
+fn overlapping_short_and_long_codespaces_roundtrip_with_longest_first() {
+    let (mut b, page, index) = builder_with(
+        CidEncoding::new(0)
+            .mapping(0x8230, 2)
+            .mapping_bytes(&[0x82, 0x30, 0x81, 0x30], 3),
+    );
+    b.text_code_bytes(
+        page,
+        index,
+        10.0,
+        10.0,
+        &[&[0x82, 0x30, 0x81, 0x30], &[0x82, 0x30]],
+    );
+    let s = render(&mut b);
+
+    // 2 字节 `<8230>` 与 4 字节 `<82308130>` 在数值前缀上重叠，写端允许。
+    assert!(
+        s.contains("2 begincodespacerange\n<8230> <8230>\n<82308130> <82308130>\n"),
+        "应写出跨长度前缀重叠的 codespace: {s}"
+    );
+
+    let decoded = decode_after_assemble(&mut b, &[0x82, 0x30, 0x81, 0x30, 0x82, 0x30]);
+    assert_eq!(decoded[0].0, vec![0x82, 0x30, 0x81, 0x30], "4 字节码优先");
+    assert_eq!(decoded[0].1, 3);
+    assert_eq!(decoded[1].0, vec![0x82, 0x30], "剩余 2 字节回退到短码");
+    assert_eq!(decoded[1].1, 2);
+}
+
+#[test]
 fn to_unicode_keys_follow_code_length() {
     let (mut b, page, index) = builder_with(
         CidEncoding::new(0)

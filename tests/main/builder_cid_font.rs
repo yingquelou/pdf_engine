@@ -290,6 +290,49 @@ fn builder_cid_font_type2_subset_roundtrips_through_parser() {
     assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("A"));
 }
 
+/// 读端边界：显式 `/CIDToGIDMap` 把 CID 指向内嵌 TrueType 程序 glyph
+/// 范围之外的 GID 时，`glyph_id_for_cid` 应回退 `None`（不 panic），而
+/// ToUnicode 仍可还原文本。
+#[test]
+fn builder_cid_font_type2_out_of_range_gid_is_ignored_by_reader() {
+    use pdf_engine::core::builder::{
+        CidFont, CidFontSubtype, CidSystemInfo, FontDescriptor, FontProgram, PageSize, PdfBuilder,
+    };
+
+    // 内嵌程序只有 3 个 glyph（0/1/2），映射把 CID 1 指向 gid 9（数组按 CID 索引）。
+    let cid_font = CidFont::new(
+        "ExampleCIDFont",
+        CidFontSubtype::CIDFontType2,
+        CidSystemInfo::new("Adobe", "Identity", 0),
+        FontDescriptor::new(),
+        12.0,
+    )
+    .with_font_program(FontProgram::TrueType(sample_sfnt_font()))
+    .with_cid_to_gid_map(&[0, 9]);
+
+    let mut builder = PdfBuilder::new();
+    let page = builder.page(PageSize::A4);
+    let index = builder.cid_font(page, &cid_font);
+    builder.text_cid_unicode(page, index, 72.0, 700.0, &[(1, "B")]);
+
+    let mut buf = Vec::new();
+    builder.build(&mut buf).expect("build");
+    let reparsed = parse_buf(&buf);
+
+    let descendant = find_font_dict(&reparsed, "CIDFontType2");
+    let parsed = reparsed
+        .cid_font_type2(&descendant)
+        .expect("should parse CIDFontType2")
+        .expect("should be CIDFontType2");
+    assert_eq!(parsed.glyph_id_for_cid(0), Some(0));
+    assert_eq!(
+        parsed.glyph_id_for_cid(1),
+        None,
+        "超出内嵌程序 glyph 数的 GID 应返回 None"
+    );
+    assert_eq!(reparsed.extract_page_text(0).as_deref(), Some("B"));
+}
+
 /// 写入 → 重新解析： CIDFontType0 嵌入的 CFF 程序应作为 `/FontFile3`
 /// 保存，流子类型为 `/CIDFontType0C`。
 #[test]

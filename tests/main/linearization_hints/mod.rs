@@ -8,7 +8,7 @@
 //! 后面那张表 `/S` 的最小合法位置：本文件把两表按真实字节相邻装配，再用
 //! `hints.page_offset_end_byte()` 与 `position_of("S")` 相互印证。
 //!
-//! 本库写端尚不产出线性化布局（`docs/ROADMAP.md` 的 F5 缺口），`PdfBuilder`
+//! 本库写端尚不产出线性化布局（`docs/roadmap/stages/f-special.md` 的 F5 缺口），`PdfBuilder`
 //! 也就无从直接造出 F.3.1 要求的两段交叉引用表形态，因此这里按分部顺序
 //! 逐字节写出；所有可变数字一律定宽，两次装配即可让偏移收敛到自洽。
 

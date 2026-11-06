@@ -52,9 +52,8 @@ fn rejects_invalid_cmap_sections_ranges_and_inputs() {
     assert!(
         CidCMap::parse(b"/WMode 2 def 1 begincodespacerange <00> <FF> endcodespacerange").is_err()
     );
-    assert!(
-        CidCMap::parse(b"2 begincodespacerange <00> <FF> <0000> <FFFF> endcodespacerange").is_err()
-    );
+    // 不同码长区间之间的数值前缀重叠是允许的（见
+    // `longest_declared_code_length_wins_across_prefix_overlap`）。
     assert!(
         CidCMap::parse(
             b"1 begincodespacerange <00> <FF> endcodespacerange 1 begincidrange <01> <02> 65535 endcidrange"
@@ -279,4 +278,273 @@ fn tounicode_identity_base_skips_surrogates_and_other_lengths() {
     assert_eq!(map.resolve_unicode(&[0xD8, 0x00]), None, "代理码无标量");
     assert_eq!(map.resolve_unicode(&[0x00]), None);
     assert_eq!(map.resolve_unicode(&[0x00, 0x41, 0x00]), None);
+}
+
+// ---- B6.4/B6.5：UniGB/UniCNS/UniJIS/UniKS 预定义基座的编码语义（读端宽松解释）----
+
+#[test]
+fn tounicode_uni_gb_ucs2_base_decodes_two_byte_codes() {
+    let map = ToUnicodeMap::parse_lenient(b"/UniGB-UCS2-H usecmap").expect("基座应可解析");
+    assert_eq!(map.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+    assert_eq!(map.resolve_unicode(&[0x00, 0x41]).as_deref(), Some("A"));
+    // 基座 codespace 排除代理区 `<D800>`–`<DFFF>`，且码值本身无标量。
+    assert_eq!(map.resolve_unicode(&[0xD8, 0x00]), None);
+    // UCS2 基座只覆盖 2 字节码。
+    assert_eq!(map.resolve_unicode(&[0x41]), None);
+}
+
+#[test]
+fn tounicode_uni_gb_utf16_base_decodes_surrogate_pairs() {
+    let map = ToUnicodeMap::parse_lenient(b"/UniGB-UTF16-H usecmap").expect("基座应可解析");
+    assert_eq!(map.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+    assert_eq!(
+        map.resolve_unicode(&[0xD8, 0x3D, 0xDE, 0x00]).as_deref(),
+        Some("😀"),
+        "4 字节代理对按 UTF-16BE 合成一个标量"
+    );
+    // 单独的代理码不是合法 UTF-16 → 不解析。
+    assert_eq!(map.resolve_unicode(&[0xD8, 0x3D]), None);
+    assert_eq!(map.resolve_unicode(&[0x00]), None);
+}
+
+#[test]
+fn tounicode_uni_gb_utf32_base_decodes_four_byte_codes() {
+    let map = ToUnicodeMap::parse_lenient(b"/UniGB-UTF32-H usecmap").expect("基座应可解析");
+    assert_eq!(
+        map.resolve_unicode(&[0x00, 0x00, 0x4E, 0x2D]).as_deref(),
+        Some("中")
+    );
+    assert_eq!(
+        map.resolve_unicode(&[0x00, 0x01, 0xF6, 0x00]).as_deref(),
+        Some("😀")
+    );
+    assert_eq!(map.resolve_unicode(&[0x4E, 0x2D]), None, "非 4 字节码");
+    // 超出 Unicode 上界（基座 codespace 上界为 0x10FFFF）。
+    assert_eq!(map.resolve_unicode(&[0x00, 0x11, 0x00, 0x00]), None);
+}
+
+#[test]
+fn tounicode_uni_gb_utf8_base_decodes_variable_length_codes() {
+    let map = ToUnicodeMap::parse_lenient(b"/UniGB-UTF8-H usecmap").expect("基座应可解析");
+    assert_eq!(map.resolve_unicode(&[0x41]).as_deref(), Some("A"));
+    assert_eq!(
+        map.resolve_unicode(&[0xC2, 0xA0]).as_deref(),
+        Some("\u{a0}")
+    );
+    assert_eq!(
+        map.resolve_unicode(&[0xE4, 0xB8, 0xAD]).as_deref(),
+        Some("中")
+    );
+    assert_eq!(
+        map.resolve_unicode(&[0xF0, 0x9F, 0x98, 0x80]).as_deref(),
+        Some("😀")
+    );
+    // 非 UTF-8 字节序列（0xFF 不在任何 codespace 内）。
+    assert_eq!(map.resolve_unicode(&[0xFF]), None);
+}
+
+#[test]
+fn tounicode_uni_gb_base_respects_local_codespace_intersection() {
+    // 本地 codespace 只允许 1 字节码：UTF-8 基座的 3 字节映射被裁掉。
+    let source = b"/UniGB-UTF8-H usecmap 1 begincodespacerange <00> <7F> endcodespacerange";
+    let map = ToUnicodeMap::parse_lenient(source).expect("基座应可解析");
+    assert_eq!(map.resolve_unicode(&[0x41]).as_deref(), Some("A"));
+    assert_eq!(map.resolve_unicode(&[0xE4, 0xB8, 0xAD]), None);
+}
+
+#[test]
+fn tounicode_uni_cns_utf16_base_decodes_surrogate_pairs() {
+    let map = ToUnicodeMap::parse_lenient(b"/UniCNS-UTF16-H usecmap").expect("基座应可解析");
+    assert_eq!(map.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+    assert_eq!(
+        map.resolve_unicode(&[0xD8, 0x40, 0xDC, 0x21]).as_deref(),
+        Some("\u{20021}"),
+        "UniCNS 代理对按 UTF-16BE 合成一个标量"
+    );
+    assert_eq!(map.resolve_unicode(&[0xD8, 0x40]), None, "孤立高代理不解析");
+}
+
+#[test]
+fn tounicode_uni_jis_bases_decode_scalar_codes() {
+    let ucs2 = ToUnicodeMap::parse_lenient(b"/UniJIS-UCS2-H usecmap").expect("基座应可解析");
+    assert_eq!(ucs2.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+    assert_eq!(ucs2.resolve_unicode(&[0x00, 0x41]).as_deref(), Some("A"));
+    assert_eq!(
+        ucs2.resolve_unicode(&[0xD8, 0x00]),
+        None,
+        "代理区不在 codespace"
+    );
+    assert_eq!(ucs2.resolve_unicode(&[0x41]), None, "UCS2 只覆盖 2 字节码");
+
+    // HW / 2004 / Pro / X0213 家族名都按同一名称编码规则识别。
+    for name in [
+        "UniJIS-UCS2-HW-H",
+        "UniJISPro-UCS2-HW-V",
+        "UniJIS2004-UTF16-H",
+    ] {
+        let source = format!("/{name} usecmap");
+        let map = ToUnicodeMap::parse_lenient(source.as_bytes()).expect("基座应可解析");
+        assert_eq!(map.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+    }
+
+    let utf32 = ToUnicodeMap::parse_lenient(b"/UniJIS-UTF32-H usecmap").expect("基座应可解析");
+    assert_eq!(
+        utf32.resolve_unicode(&[0x00, 0x00, 0x4E, 0x2D]).as_deref(),
+        Some("中")
+    );
+    assert_eq!(
+        utf32.resolve_unicode(&[0x00, 0x02, 0x00, 0x0B]).as_deref(),
+        Some("\u{2000b}")
+    );
+    assert_eq!(utf32.resolve_unicode(&[0x4E, 0x2D]), None, "非 4 字节码");
+
+    let x0213 =
+        ToUnicodeMap::parse_lenient(b"/UniJISX02132004-UTF32-H usecmap").expect("基座应可解析");
+    assert_eq!(
+        x0213.resolve_unicode(&[0x00, 0x00, 0x00, 0x5C]).as_deref(),
+        Some("\\")
+    );
+}
+
+#[test]
+fn tounicode_uni_ks_bases_decode_scalar_codes() {
+    let ucs2 = ToUnicodeMap::parse_lenient(b"/UniKS-UCS2-H usecmap").expect("基座应可解析");
+    assert_eq!(ucs2.resolve_unicode(&[0xAC, 0x00]).as_deref(), Some("가"));
+    assert_eq!(ucs2.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+    assert_eq!(
+        ucs2.resolve_unicode(&[0xD8, 0x00]),
+        None,
+        "代理区不在 codespace"
+    );
+
+    let utf16 = ToUnicodeMap::parse_lenient(b"/UniKS-UTF16-V usecmap").expect("基座应可解析");
+    assert_eq!(utf16.resolve_unicode(&[0x4E, 0x2D]).as_deref(), Some("中"));
+
+    let utf32 = ToUnicodeMap::parse_lenient(b"/UniKS-UTF32-H usecmap").expect("基座应可解析");
+    assert_eq!(
+        utf32.resolve_unicode(&[0x00, 0x00, 0xAC, 0x00]).as_deref(),
+        Some("가")
+    );
+    assert_eq!(
+        utf32.resolve_unicode(&[0x00, 0x02, 0x00, 0x00]).as_deref(),
+        Some("\u{20000}")
+    );
+
+    let utf8 = ToUnicodeMap::parse_lenient(b"/UniKS-UTF8-H usecmap").expect("基座应可解析");
+    assert_eq!(
+        utf8.resolve_unicode(&[0xEA, 0xB0, 0x80]).as_deref(),
+        Some("가")
+    );
+    assert_eq!(
+        utf8.resolve_unicode(&[0xF0, 0x90, 0x80, 0x80]).as_deref(),
+        Some("\u{10000}")
+    );
+    assert_eq!(utf8.resolve_unicode(&[0xFF]), None);
+}
+
+#[test]
+fn tounicode_unsupported_uni_base_keeps_local_mappings() {
+    // 名册外的变体名：基座降级为空，本地映射照常可用。
+    let source = b"/UniCNS-UCS2-HW usecmap 1 beginbfchar <4E2D> <0058> endbfchar";
+    let map = ToUnicodeMap::parse_lenient(source).expect("本地映射应可用");
+    assert_eq!(map.unicode_for(&[0x4E, 0x2D]), Some("X"));
+    assert_eq!(map.resolve_unicode(&[0x00, 0x41]), None, "不得合成基座映射");
+}
+
+#[test]
+fn longest_declared_code_length_wins_across_prefix_overlap() {
+    // 1 字节码空间与 2 字节码空间在数值前缀上重叠不再拒绝：读端按声明的
+    // 最长码优先匹配，失败再回退到较短码长。
+    let source = b"
+        2 begincodespacerange
+          <00> <FF>
+          <0041> <0041>
+        endcodespacerange
+        2 begincidchar
+          <41> 7
+          <0041> 9
+        endcidchar";
+    let cmap = CidCMap::parse(source).unwrap();
+    assert_eq!(cmap.decode(&[0x41]).unwrap(), [(vec![0x41], 7)]);
+    assert_eq!(cmap.decode(&[0x00, 0x41]).unwrap(), [(vec![0x00, 0x41], 9)]);
+}
+
+#[test]
+fn rejects_codespaces_with_same_length_overlap() {
+    // 同长度区间之间的重叠仍是真正的歧义，必须拒绝。
+    let source = b"
+        2 begincodespacerange
+          <0000> <FFFF>
+          <0100> <0200>
+        endcodespacerange
+        1 begincidchar <0041> 7 endcidchar";
+    assert!(CidCMap::parse(source).is_err());
+}
+
+#[test]
+fn notdefrange_maps_whole_range_to_one_cid() {
+    // notdefrange (Adobe CMap 规范) 整段使用第三个操作数作为 CID，不随码递增；
+    // 未被任何区间覆盖的码仍解为 CID 0。
+    let source = b"
+        1 begincodespacerange <0000> <FFFF> endcodespacerange
+        1 begincidchar <0041> 5 endcidchar
+        1 beginnotdefrange <0000> <0040> 9 endnotdefrange";
+    let cmap = CidCMap::parse(source).unwrap();
+    assert_eq!(
+        cmap.decode(&[0x00, 0x00, 0x00, 0x3F, 0x00, 0x41, 0x00, 0x42])
+            .unwrap(),
+        [
+            (vec![0x00, 0x00], 9),
+            (vec![0x00, 0x3F], 9),
+            (vec![0x00, 0x41], 5),
+            (vec![0x00, 0x42], 0),
+        ]
+    );
+}
+
+#[test]
+fn notdefrange_alone_is_a_valid_cmap() {
+    let source =
+        b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginnotdefrange <0000> <FFFF> 3 endnotdefrange";
+    let cmap = CidCMap::parse(source).unwrap();
+    assert_eq!(cmap.decode(&[0x12, 0x34]).unwrap(), [(vec![0x12, 0x34], 3)]);
+}
+
+#[test]
+fn rejects_notdefrange_overlapping_cid_mapping() {
+    let source = b"
+        1 begincodespacerange <0000> <FFFF> endcodespacerange
+        1 begincidchar <0041> 5 endcidchar
+        1 beginnotdefrange <0041> <0041> 9 endnotdefrange";
+    assert!(CidCMap::parse(source).is_err());
+}
+
+#[test]
+fn rejects_notdefrange_outside_the_codespace() {
+    let source = b"
+        1 begincodespacerange <0000> <00FF> endcodespacerange
+        1 beginnotdefrange <0100> <0100> 9 endnotdefrange";
+    assert!(CidCMap::parse(source).is_err());
+}
+
+#[test]
+fn local_notdefrange_overrides_inherited_mapping() {
+    let base = CidCMap::parse(
+        b"1 begincodespacerange <0000> <FFFF> endcodespacerange
+          1 begincidrange <0040> <0042> 5 endcidrange",
+    )
+    .unwrap();
+    let child = b"1 begincodespacerange <0000> <FFFF> endcodespacerange
+                  1 beginnotdefrange <0040> <0040> 9 endnotdefrange";
+    let cmap =
+        CidCMap::parse_with_base(child, Some(base), |_| unreachable!("dict base is provided"))
+            .unwrap();
+    assert_eq!(
+        cmap.decode(&[0x00, 0x40, 0x00, 0x41, 0x00, 0x42]).unwrap(),
+        [
+            (vec![0x00, 0x40], 9),
+            (vec![0x00, 0x41], 6),
+            (vec![0x00, 0x42], 7),
+        ]
+    );
 }

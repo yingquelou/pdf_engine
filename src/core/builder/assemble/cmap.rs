@@ -16,8 +16,9 @@ struct CodeEntry {
 ///
 /// 支持 1..=4 字节字符码：字符码按实际长度写成大端十六进制。仅含 2 字节
 /// 映射时保持传统 codespace `<0000> <FFFF>`；存在其他码长时按实际连续码
-/// 区间分组写 codespace，避免与较短码产生前缀歧义（歧义时返回
-/// [`WriteError::InvalidObject`]）。字符码与 CID 同时逐 1 递增的极大段写
+/// 区间分组写 codespace。不同码长区间之间的数值前缀重叠是允许的（读端按
+/// 声明的最长码长优先、失败逐级回退）；同长度区间重叠仍返回
+/// [`WriteError::InvalidObject`]。字符码与 CID 同时逐 1 递增的极大段写
 /// `cidrange`，其余写 `cidchar`；每节至多 100 条（与 §9.10.3 一致）。
 /// 可选 `usecmap` 基座在 codespace 之前写出，仅声明继承关系。
 pub(super) fn cid_encoding_cmap(encoding: &CidEncoding) -> Result<Vec<u8>, WriteError> {
@@ -327,32 +328,18 @@ fn contiguous_runs(entries: impl Iterator<Item = (usize, u32)>) -> Vec<(usize, u
     runs
 }
 
-/// 校验 codespace 分组：同长度不重叠，不同长度前缀不歧义（与读端
-/// `finalize_cmap` 的约束一致）。
+/// 校验 codespace 分组：同长度不重叠（与读端 `finalize_cmap` 一致）。
+///
+/// 不同长度区间之间的数值前缀重叠是允许的：读端按声明的最长码长优先、
+/// 失败逐级回退，写端因此可以写出 GBK2K 这类 4 字节与 2 字节 codespace
+/// 重叠的 CMap。
 fn validate_codespaces(spaces: &[(usize, u32, u32)]) -> Result<(), WriteError> {
     for (index, first) in spaces.iter().enumerate() {
         for second in spaces.iter().skip(index + 1) {
-            if first.0 == second.0 {
-                if first.2 >= second.1 {
-                    return Err(WriteError::InvalidObject(
-                        "CidEncoding codespace ranges overlap".into(),
-                    ));
-                }
-                continue;
-            }
-            let (short, long) = if first.0 < second.0 {
-                (first, second)
-            } else {
-                (second, first)
-            };
-            let shift = (long.0 - short.0) * 8;
-            let prefix_low = long.1 >> shift;
-            let prefix_high = long.2 >> shift;
-            if prefix_low <= short.2 && prefix_high >= short.1 {
-                return Err(WriteError::InvalidObject(format!(
-                    "CidEncoding codespace has ambiguous {}-byte prefix for {}-byte codes",
-                    short.0, long.0
-                )));
+            if first.0 == second.0 && first.2 >= second.1 {
+                return Err(WriteError::InvalidObject(
+                    "CidEncoding codespace ranges overlap".into(),
+                ));
             }
         }
     }

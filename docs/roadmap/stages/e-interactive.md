@@ -1,0 +1,32 @@
+# 阶段 E：交互与文档交换
+> 规划层｜职责：本阶段的增量、依赖、验收标准与未闭项。｜禁止：测试名、统计数字、历史叙述（见 `changelog/`）。
+
+**目标**：导航、注解、表单、元数据、嵌入文件与增量更新基础可用。
+
+**增量**：
+
+- [ ] **E1 导航与页面标签**（12.3、12.4.2、12.7.6）：显式/命名 Destinations、Outline、Page Labels、Named Pages（`/Pages` 名称树）。本增量拥有 7.7.4 `/Names` 名称字典的语义封装（解析、查找、写回），作为 E6 的前置，不得由 E6 另建一套。
+  - 剩余缺口：12.3.5 便携集合与集合项 `/CI`（7.11.6）已于 2026-10-30 读写，写端 `/D` 名称树与 `/CI` ↔ `/Schema` 交叉校验已于 2026-10-30 补齐（读端 `/CI` 键/值与模式对照已于 2026-10-30 由 `Document::collection_items` 补齐），13.5 Alternate Presentations 已于 2026-10-30 读写（写端资源只接受已注册嵌入文件、读端只解析单叶子 `/Resources` 名称树、无真实幻灯片 fixture；12.3.4 页面缩略图 `/Thumb` 已于 2026-10-30 读写；读端仍解析全部 Table 89 条目、未按 12.3.4 忽略 Width/Height/ColorSpace/BitsPerComponent/Decode 之外的条目，写端不生成缩略图像素、颜色空间以外的图像特性（如 `/SMask`）照常写出；12.4.4 页面演示条目 `/Dur` `/Trans` 已读写，但自动换页行为本身与演示状态不建模；12.4.3 文章线 `/Threads`/bead/页面 `/B` 已于 2026-10-30 读写，Thread 动作（12.6.4.6 Table 205）已于 2026-10-30 读写（写端只产出 `/D` `/B` 索引形态，读端支持引用/索引/标题三种 `/D` 与两种 `/B`）、文章线读端要求 thread 与 bead 均为间接引用、`/B` 仅为构建器页面写出且不校验既有 `/B` 与 `/N` 链一致、`/I` 写端仅支持 `DocumentInfo` 子集）；`/Templates` 名称树已于 2026-10-30 读写（模板页无内容流与内容生成、读端对缺失/非法 `/MediaBox` 宽容为 `None`、写端恒写空 `/Resources` 并要求显式尺寸）；大纲 `/A` 动作已于 2026-10-30 经 `Document::outline_action` 类型化读取（`OutlineItem::action` 仍保留原值，写端可挂 `/A` 动作句柄）；旧式目录 `/Dests` 不写出；名称树/数值树不写 `/Kids`/`/Limits` 中间节点，读端 `/Limits` 仅透传不校验；其他 `/Names` 类别（EmbeddedFiles/JavaScript 等）归 E6 及后续增量。
+- [ ] **E2 注解通用结构与常用类型**（12.5.1–12.5.6）：Annotation 字典/标志/边框/AP 外观流；先做 Text、Link、FreeText、Highlight、Underline、Squiggly、StrikeOut、Stamp、Ink、Popup、FileAttachment、Widget（Widget 与 E4 联动）。
+  - 剩余缺口：外观流内容生成不建模；子类型专属条目覆盖 Text/Caret/Ink/Line/FreeText/Square/Circle/Polygon/PolyLine/Popup/Link/Redact/Screen/Watermark/Sound（Line 无 `/DS` 条目——Table 175 仅列 L/BS/LE/IC/LL/LLE/Cap/IT/LLO/CP/Measure/CO；Ink 边框宽度即通用 `/BS /W`，Table 182 无 `/B` 条目），Square/Circle/Polygon/PolyLine 的顶点与 `/Rect` 几何一致性不校验；FreeText `/DA` 只校验非空、不解析字体资源名与操作数，`/RC` 只写文本串形态（文本流不写），`/Q` 实际排版效果不验证（FileAttachment `/FS` 已归 E6、Widget 字段联动归 E4）；标记状态有效值由 `/StateModel` 定义，当前只搬运字符串不校验状态机；规范无注解属性继承（12.5.2 `/Parent` 仅 Popup 指向父注解、Widget 指向字段），当前仅保留引用不联动（Widget 字段链继承由 E4 字段树承担）；`/H` 缺省 `Invert` 不物化、非 Link 注解的 `/BS` 未单独设 1.2 门禁（当前写端非 Link 子类型均 ≥1.3，门槛不可触发）、`/A` `/Dest` 互斥仅写端校验（读端宽容保留双存）；外观流内容解析归渲染；写端仅建模 Table 169 的 26 种中 22 种（`PrinterMark`/`TrapNet`/`3D` 只读端识别子类型，`Widget` 归 E4）；标记类归属当前仅用于版本门禁与通用条目，标记类专属外观（高亮 `/BM`、Squiggly 波浪流）不建模；父注解 `/Popup` 与子注解 `/Parent` 已自动成对（孤立弹出框与非 Popup 目标在构建期拒绝），跨页父子配对不校验、读端两端不互查、`/Open` 缺省 false 不物化；`/Measure` 与 `/Vertices`/`/L` 的几何一致性不校验，测量值计算与格式化（12.9 canonical function 与渲染语义）不在读端模型内；Redact 涂消应用（移除 `/QuadPoints`/`/Rect` 区域内容）与 `/RO` 叠加外观渲染语义不建模，`/OverlayText` 不做排版、`/QuadPoints` 与 `/Rect` 一致性不校验，`/IC` 与输出意图（PDF 2.0 `/POP`）不联动；Screen 的 Table 187 `/MM` 播放设置字典与 rendition 动作（13.5）不建模、`/P` 预定义页面与 Screen 的关联不校验、Screen `/AP` 外观流内容生成不建模（规范：无 `/AP` 即无视觉外观）、Widget 端 `/MK`（题注与图标随 `/AS` 切换）归 E4 的字段写路径；Watermark 的 `/FixedPrint` 只做类型化搬运，目标介质尺寸与 `/H` `/V` 百分比的实际放置计算不建模（负平移按 Table 191 的 should not 是建议、不作拒绝），水印绘制与「无弹出窗口」之外的交互语义（如渲染顺序）不校验。文本标记四型的 `/QuadPoints` 只做类型化搬运（分组与形态校验），与 `/Rect` 的包含关系、高亮几何与实际覆盖范围不计算；Rubber Stamp 的 `/Name` 只做标准名/未名可判别，图标外观流与渲染不建模。
+- [ ] **E3 动作**（12.6）：GoTo/URI/Named 优先；GoToR/Launch/JavaScript 等按需增补；动作字典读写与注解/大纲联动。
+  - 剩余缺口：GoTo-3D-View 读端不校验 `/V` 下标是否落在 `/VA` 内、写端要求目标注解已注册 3D 流且视图集可解析（读端 `reader/action/goto3d.rs`、写端 `builder/types/action/goto3d.rs`，`/V` 支持内联视图/下标/`/IN` 名称/名字 F L N P D）（Rendition 已于 2026-10-30 读写：读端 `reader/rendition.rs` + `reader/action/rendition.rs`，写端 `builder/types/rendition.rs` + `builder/types/action/rendition.rs`，见矩阵 13.2/12.6；Movie 已于 2026-10-30 读写：`/S /Movie` 的 `/Annotation` 须解析为 Movie 注解、`/T` 非空标题二选一，激活字典复用 13.4 Table 296 模型；Sound 已于 2026-10-30 读写：`/Sound` 须为间接引用、`/Volume` −1..1 缺省 1 不物化、`/Repeat` 存在时 `/Synchronous` 被忽略；Hide、Set-OCG-State、Transition、Thread 与 GoToE 已读写；GoToE 写端只产出 `P`/`C` 关系与 `/N` 或 `/P`+`/A` 定位、`/F` 与 `/T` 至少一项，读端保留未知关系名；Thread 写端仅产出 `/D` `/B` 索引形态，读端不校验索引是否落在 `/Threads` 内）；读端 Hide `/T` 接受注解引用与字段名字符串、Set-OCG-State 组目标只接受间接引用（直接字典形态均不识别）；写端 Hide `/H` 仅在显式声明时写出（缺省 true 不物化），Set-OCG-State 非标准操作名（如 `Restore`）读端保留、写端不产出；页面过渡形态（`/Dur`/`/Trans`）已由 E1 的 12.4.4 切片读写；读端过渡字典只校验取值、不校验 `/Dm` `/M` `/Di` `/SS` `/B` 与样式的适用性（写端严格），`/D` `/Dm` `/M` `/Di` `/SS` `/B` 缺省不物化；触发事件（/K,/D,/U 等）归 E2/E4 联动；`/D` 远程目标数组的页面号解析未做（远程文档无页面树）。
+
+- [ ] **E4 表单（AcroForm 与字段）**（12.7.2–12.7.4、12.7.5）：`/AcroForm` 字典与字段树读写、字段类型与 `/Ff` 标志、`/DR` 默认资源、字段级 `/AP` 状态与 `/AA` 附加动作、数据动作（SubmitForm/ResetForm）。本行为 2026-11-02 评审核查**补回**：该增量的复选框行在此前的进度行插入中丢失，其表单侧进度与「剩余缺口」行（`reader/form*`、`builder/*/form_field*`、`/DR`/`/Opt`/`/TI`/`/I`、`LogicalField`）一直悬挂在 E3 列表下，内容未丢失、仅层级挂错。依赖：E1/E3 与 D0（见下方「依赖」段原文）。
+  - 剩余缺口：`/DR /ExtGState` 仅写自包含状态（外部字体/软蒙版/函数引用不写）；`/Ff` 位已全量解码、单选组 `/Opt` 与位置化开状态、选择字段 `/TI`/`/I` 索引、同全限定名多重表示的 `/FT`/`/V`/`/DV` 一致性已读写校验；XFA 未实现（12.7.8 设计决策不实现；12.7.5 表单动作已支持，读端 `/Fields` 不校验引用是否为字段树成员、`/Flags` 未定义位不报错；读端 `/CO` 仅解析引用不校验条目是否真带 `/C` 动作，`/AA` 读端对非标准事件原样保留不校验动作类别）；单选/复选框组多 Widget 的字段级 `/AP` 状态子字典（`/N << /On ... >>`）已支持（状态仅引用已有 Form XObject，不生成外观流内容；同名字段一致性只覆盖 `/FT`/`/V`/`/DV`，`/DA`、`/Q` 等其余继承条目不一致不报错，且写端按根逐树检查、跨根重复全限定名要到读端归并时才检出）；无真实 AcroForm fixture。
+- [ ] **E5 元数据与文件标识**（14.3.2、14.3.3、14.4）：`/Info` 语义封装、XMP `/Metadata` 读写（先透传/基本包，后做属性访问）、`/ID` 生成/更新/校验（经典 xref 路径补 `/ID`）。本增量拥有 `/ID` 生成与校验的唯一实现，E7 复用。
+  - 剩余缺口：XMP 写端已覆盖文本/列表/集合/嵌套资源/类型化值/引用/字面量（`PdfBuilder::set_xmp_packet`），剩余 XMP schema 语义与类型转换（Date/Integer 等）、无 `xpacket` 包装、类型化主值仅文本、读端文本首尾空白不保留；`Literal` 标记的良构与命名空间自包含由调用方负责；属性值位置的普通节点元素仍退化为文本（`Collection` 条目按属性值规则折叠、普通节点元素折为资源）。
+- [ ] **E6 嵌入文件**（7.11）：Filespec、`/EmbeddedFiles` 名称树、嵌入文件流；名称树复用 E1 的 `/Names` 语义封装；与 FileAttachment 注解联动。
+  - 剩余缺口：`/RF` 关联文件只读（相对路径不解析、不写）；`/DOS`/`/Mac`/`/Unix` 规范声明弃用、写端有意不写，`/FS`/`/ID`/`/V` 面向外部引用仅读；Sound/Screen/Movie 注解与 Launch/GoToR 的 Filespec 参数未联动；写端 `/EF` 仅载体字典单流（嵌套/数组载体不写）；无真实附件 fixture。
+- [ ] **E7 增量更新写出**（7.5.6 Writer）：`/Prev` 链、新/自由 xref 条目、trailer 合并、`/ID` 更新；复用 E5 的 `/ID` API，不另造生成/校验逻辑；为 F1 数字签名提供基础。
+  - 剩余缺口：增量段全部顶层写出，不做对象流重打包/历史垃圾回收（垃圾字节随版本累积）；文件头版本不可改（升级需目录 `/Version`，未实现）；无源字节（内存构造的 `Document`）无法增量；`/ID` 缺失时保持缺失；`/XRefStm` 混合引用文件写出已落地（见下一条进度行）；Linearize 属后续（签名 ByteRange 已随 F1 切片三落地）。
+
+**依赖**：E1/E3/E5 只依赖 A；E2 依赖 D0 的 Form XObject 写端；E4 依赖 E1/E3 与 D0；E6 依赖 E1（`/Names`）；E7 依赖 E5（`/ID`）与 A（xref 读写），可与 E2/E4 并行。F1 依赖 E7。
+
+**验收标准**：
+
+- `tests/fixtures/annotated.pdf` 可读，注解/动作结构可遍历；生成含 Link 注解的文档可点击跳转（人工验收）；
+- AcroForm 文本字段 + Widget 写出后可被第三方阅读器识别；
+- XMP 与 `/Info` 读写一致，`/ID` 生成符合规范算法；
+- 增量更新文件可被读端与第三方阅读器按 `/Prev` 链读取；
+- `cargo test` 全绿。

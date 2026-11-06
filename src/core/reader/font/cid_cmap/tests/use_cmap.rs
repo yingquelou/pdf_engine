@@ -374,6 +374,47 @@ fn to_unicode_name_use_cmap_uses_the_identity_roster() {
 }
 
 #[test]
+fn to_unicode_name_use_cmap_resolves_a_vendored_uni_gb_base() {
+    // 字典 `/UseCMap` 指向 UniGB-UTF16-H：本地映射优先，其余按 UTF-16BE 解码。
+    let body = cid_body(&bf_body(&[("4E2D", "0058")]));
+    let to_unicode = cmap_stream(cmap_dict(Value::Name("UniGB-UTF16-H".into())), &body);
+    let document = to_unicode_document(to_unicode, &[]);
+    assert_eq!(
+        unicodes(&document, &[0x4E, 0x2D, 0x00, 0x41, 0x00, 0x42]),
+        vec![Some("X".into()), Some("A".into()), Some("B".into())],
+        "本地映射覆盖基座，未映射码按基座编码解析"
+    );
+}
+
+#[test]
+fn to_unicode_stream_internal_usecmap_resolves_a_vendored_uni_gb_base() {
+    // 流内 `usecmap` 走同一份 `builtin_base` 名册（UniGB-UTF8-H）。
+    // `/Encoding` 为 2 字节 Identity-H，因此基座只能看到 2 字节码：
+    // `<C2A0>` 是合法的 2 字节 UTF-8（U+00A0）。
+    let body = "/UniGB-UTF8-H usecmap 1 beginbfchar <4E2D> <0058> endbfchar";
+    let to_unicode = cmap_stream(plain_cmap_dict(), body);
+    let document = to_unicode_document(to_unicode, &[]);
+    assert_eq!(
+        unicodes(&document, &[0x4E, 0x2D, 0xC2, 0xA0]),
+        vec![Some("X".into()), Some("\u{a0}".into())],
+        "流内基座名应可解析"
+    );
+}
+
+#[test]
+fn to_unicode_uni_cns_name_base_resolves_by_name_encoding() {
+    // B6.5：UniCNS 已入册，名字形态按真实 codespace + Unicode 语义解析；
+    // 本地 bfchar 仍优先。
+    let body = cid_body(&bf_body(&[("0041", "0058")]));
+    let to_unicode = cmap_stream(cmap_dict(Value::Name("UniCNS-UCS2-H".into())), &body);
+    let document = to_unicode_document(to_unicode, &[]);
+    assert_eq!(
+        unicodes(&document, &[0x00, 0x41, 0x4E, 0x2D, 0x00, 0x42]),
+        vec![Some("X".into()), Some("中".into()), Some("B".into())]
+    );
+}
+
+#[test]
 fn to_unicode_unknown_name_base_degrades_to_local_mappings() {
     let to_unicode = cmap_stream(
         cmap_dict(Value::Name("Adobe-SomeThirdParty-UCS".into())),

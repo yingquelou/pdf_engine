@@ -116,7 +116,7 @@ pub struct CidEncoding {
     /// 写出时在 codespace 之前写 `/<基座> usecmap`，仅声明继承关系；
     /// 本 CMap 仍显式写出自己的 codespace 与全部映射。基座须为
     /// `/Identity-H`、`/Identity-V` 或读端 `predefined_cmaps` 名册中的
-    /// 名称，且不能与 `/CMapName` 同名，否则构建报错。
+    /// 名称（横排/竖排均可），且不能与 `/CMapName` 同名，否则构建报错。
     pub usecmap: Option<String>,
 }
 
@@ -235,13 +235,13 @@ pub struct CidFont {
     /// 为 `Some` 时 Type 0 父字体的 `/Encoding` 直接写该名称（如
     /// `/UniGB-UCS2-H`），不生成嵌入 CMap 流；读端按同名名册解析，写出的
     /// 文档保持「写入→解析→提取」可还原。名称必须在读端
-    /// `predefined_cmaps` 名册内（当前为 `Adobe-GB1`、`Adobe-CNS1`、
-    /// `Adobe-Japan1`、`Adobe-Korea1`、`UniGB-UCS2-H`），否则
-    /// [`PdfBuilder::build`] 返回 [`WriteError::InvalidObject`]。
+    /// `predefined_cmaps` 名册内（当前为四个裸 ordering 近似名与 160 个
+    /// vendored Adobe 原文 CMap，含 UniGB/UniCNS/UniJIS/UniKS 的 47 个
+    /// Unicode 编码变体），否则 [`PdfBuilder::build`] 返回
+    /// [`WriteError::InvalidObject`]。
     ///
     /// 与 [`CidFont::encoding`]（嵌入 CMap）互斥：同时设置时构建报错。
-    /// 名册内 CMap 均为水平书写（WMode 0），与读端解析语义一致；`-V`
-    /// 竖排变体不在名册内，传入会在构建阶段按未知名称报错。
+    /// 横排与竖排名称均可写：竖排 `-V` 变体的 WMode 1 由读端按名称解析。
     ///
     /// 文本写入可用 [`PdfBuilder::text_predefined_unicode`]（按 Unicode
     /// 文本编码为目标 CMap 的 2 字节字符码）或沿用
@@ -356,10 +356,12 @@ impl CidFont {
 
     /// 按名称引用预定义 CMap 作为 Type 0 的 `/Encoding`（链式构造）。
     ///
-    /// 名称须在读端 `predefined_cmaps` 名册内（当前为 `Adobe-GB1`、
-    /// `Adobe-CNS1`、`Adobe-Japan1`、`Adobe-Korea1`、`UniGB-UCS2-H`）；
-    /// 未知名称或与 [`CidFont::with_encoding`] 同时使用都会在
-    /// [`PdfBuilder::build`] 阶段返回 [`WriteError::InvalidObject`]。
+    /// 名称须在读端 `predefined_cmaps` 名册内：内置近似名 `Adobe-GB1`、
+    /// `Adobe-CNS1`、`Adobe-Japan1`、`Adobe-Korea1`，以及 vendored 的
+    /// Adobe 原文编码 CMap（GB1 26 个、CNS1 36 个、Japan1 44 个、Korea1 15 个，
+    /// 含 B6.4 的 `UniGB-{UCS2,UTF16,UTF32,UTF8}-H/V`）。未收录名称或与
+    /// [`CidFont::with_encoding`] 同时使用都会在 [`PdfBuilder::build`]
+    /// 阶段返回 [`WriteError::InvalidObject`]。
     /// 候选名称与 WMode 语义详见 [`CidFont::predefined_encoding`]。
     ///
     /// [`PdfBuilder::build`]: crate::core::builder::PdfBuilder::build

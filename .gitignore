@@ -2,4 +2,5 @@
 /target
 Cargo.lock
 *.pdf
+!tests/fixtures/*.pdf
 PDF32000_2008/

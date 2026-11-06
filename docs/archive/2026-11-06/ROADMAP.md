@@ -161,7 +161,7 @@
 | 阶段 | 目标 | 增量数 | 已完成 | 主要依赖 | 状态 |
 |---|---|---|---|---|---|
 | A 核心读入与安全 | 语法/文件结构/核心过滤器/加密/函数可读 | 6 | 6（A1–A6 全绿） | — | ✅ |
-| B 字体与文本 | 字体字典、程序、编码、文本提取（语法层） | 7 | 6（仅 B6 未闭） | A | 🚧 |
+| B 字体与文本 | 字体字典、程序、编码、文本提取（语法层） | 7 | 7 | A | ✅ |
 | C 内容流读取模型 | 通用 Op/资源/状态/标记内容读取，解除第 8/9/11/14 章读端缺口 | 5 | 5 | A | ✅ |
 | D 图形完整 | 颜色/图像/Shading/透明度的读端模型与写端收尾 | 7 | 6（D1、D2、D4、D5、D6、D7；写端基线见 D0；仅 D3 未闭） | A、B、C（D3 只需 A） | 🚧 |
 | E 交互与文档交换 | 导航/注解/表单/元数据/嵌入文件/增量更新 | 7 | 0（三齐口径；E1–E7 主体切片均已落地，各条「剩余缺口」逐条列出未闭项） | D（E1/E3/E5 只需 A） | 🚧 |
@@ -207,7 +207,7 @@
 - 真实样本 fixture 已接入自动化测试，来源/许可/体积已登记；
 - `cargo test` 全绿；除上文已排除的条目（7.3.4 扩展、7.4.7/7.4.9、7.7.4、7.11；7.12 与 7.6.3 权限行已于 2026-11-01 落地）外，A1–A5 所列章节的矩阵条目 Reader 均为 ✅；上述排除条目的归属见「不属于阶段 A」与「未分配条目」；A6 的 fixture 要求全部满足。
 
-## 阶段 B：字体与文本 🚧
+## 阶段 B：字体与文本 ✅
 
 **目标**：能读写 ISO 32000-1 定义的简单字体、Type 0/CID 字体、Type 3 字体与嵌入程序，并提取 Unicode 文本；不做 hinting/渲染。
 
@@ -216,7 +216,7 @@
 - [x] B1 简单字体与编码：9.6.2/9.6.6（Standard 14、`/Widths`、`/FontDescriptor`、五种预定义编码 + `/Differences` + AGL；写端宽度/编码/描述符）。
 - [x] B2 TrueType 程序：9.6.3（SFNT、cmap format 0/2/4/6/8/10/12/13、水平/垂直度量、复合字形、内建编码、OpenType `OTTO` 读端）。
 - [x] B3 CID/Type 0 核心：9.7.4/9.7.5/9.7.6（CIDFontType0/2、`CIDToGIDMap`、W/DW、DW2/W2、Identity-H/V 与嵌入 CMap、CFF 轮廓经 trait 适配）。
-- [x] B4 嵌入程序与子集：9.9/9.6.4（Type 1/TrueType/CFF/OpenType 嵌入、`Length1–3`、TrueType/Type 1/CID-CFF/name-keyed CFF 子集、六字母标签、`/CIDSet` 裁剪）。
+- [x] B4 嵌入程序与子集：9.9/9.6.4（Type 1/TrueType/CFF/OpenType 嵌入、`Length1–3`、TrueType/Type 1/CID-CFF/name-keyed CFF 子集、六字母标签、`/CIDSet` 裁剪）。CIDFontType2 子集经 `subset_truetype_with_mapping` 重写 `/CIDToGIDMap`，越界 GID 读端回退 `None`（`builder_cid_font_type2_out_of_range_gid_is_ignored_by_reader`）。
 
 **待推进增量**：
 
@@ -224,12 +224,18 @@
   - 退出标准：Type 3 字体字典的 Table 112 条目可写→解析→提取往返；字体级 `/Resources` 经多级间接引用可读回；`/Name`/`/FontDescriptor`/`/ToUnicode` 读写往返；负向用例覆盖缺失/非法资源与缺失必需条目。
   - 完成说明（2026-10-27，证据见矩阵 9.6.5）：读端 `Type3Font` 新增 `name`/`descriptor`/`has_to_unicode` 字段，`/FontDescriptor` 复用 `parse_descriptor`（含 `/FontFamily`、`/Ascent` 等 Table 122 条目），`/ToUnicode` 校验为流并由文本提取经 `simple_font_to_unicode` 解析；字体级 `/Resources` 支持任意层间接引用（上限 16 层，超出或成环返回类型化错误），`resources()` 返回最终字典，`resource(document, category, name)` 支持类别字典再解引用与资源名 `#xx` 解码后的匹配（与页面资源查找语义一致）。写端 `Type3Font::with_name`/`with_to_unicode` 与 `Font::with_descriptor` 生效：`/Name` 经 `is_valid_pdf_name` 校验后写出，描述符按 `fill_required_defaults` 补齐必填项且不写 `FontFile*`，`/ToUnicode` 复用 CMap 生成器（bfchar/bfrange 分节），`/Resources` 由调用方以 `with_resources` 提供后原样挂到字体字典。测试：`type3_font_parses_name_descriptor_and_to_unicode`、`type3_font_rejects_invalid_name_descriptor_and_to_unicode`、`type3_font_omits_optional_entries_when_absent`、`type3_font_requires_char_procs`、`type3_font_resources_missing_returns_none`、`type3_font_resources_rejects_non_dict_and_unresolved`、`type3_resources_follow_multi_level_indirect_chain`、`type3_resources_reject_reference_cycle_and_depth_overflow`、`type3_resource_resolves_category_chain_and_escaped_names`、`type3_font_writes_name_descriptor_and_to_unicode`、`type3_font_rejects_invalid_name`、`builder_type3_metadata_and_resources_roundtrip_through_parser`。
   - 剩余缺口：仍不对 CharProcs 求值（只读 `d0`/`d1` 声明指标，不执行绘制操作符）；无 `/BaseEncoding` 时字符码→字形名仍以 StandardEncoding 近似（未实现 Table 112 注的精确归属）；写端不自动生成 `/Resources` 或字形所引用的资源对象，仅透传调用方字典；`/Name` 按 PDF 1.1+ 语义视为可选（PDF 1.0 要求存在，未做版本门控）。
-- [ ] **B6 CMap/ToUnicode 完整性**（9.7.5、9.10.3，🟡）：补全 Adobe-GB1/CNS1/Japan1/Korea1 ordering 数据（当前为紧凑近似）；读端 ToUnicode `usecmap` 基座名册（已内置 `Adobe-Identity-UCS`，其余预定义基座待补）；写端 ToUnicode 支持 `usecmap` 继承（已支持 Identity 基座）。
+- [x] **B6 CMap/ToUnicode 完整性**（9.7.5、9.10.3，🟡）：Adobe-GB1/CNS1/Japan1/Korea1 编码类 CMap 已全量 vendored（160 个文件 6039206 B，B6.1–B6.5），读端 ToUnicode `usecmap` 基座名册扩到 47 个 Unicode 编码名称；写端 ToUnicode `usecmap` 仅声明 `Adobe-Identity-UCS` 继承。裸 ordering 名仍为紧凑近似（边界见矩阵 9.7.5）。
   - 启动前置：先确定 ordering 数据来源、许可证与体积上限并登记到 fixtures 表，不得引入许可不明的 Adobe 数据文件；`reader/font/cid_cmap.rs` 已超限，触及前先拆分。
   - 退出标准：预定义 CMap 与完整 ordering 样本的字符码→CID 映射正确；数据来源/许可/体积已登记；`usecmap` 基座覆盖/裁剪有测试；`text_code_bytes*` 不再静默跳过非法长度。
   - 进度（2026-10-27）：拆分前置已完成——`cid_cmap.rs` 拆为 `cid_cmap/{mod,cid,token,to_unicode,tests}.rs`（39/433/193/320/228 行），行为与既有测试不变。读端 ToUnicode `usecmap` 机制落地：`ToUnicodeMap::parse_lenient_with(data, resolve)` 合并基座映射（本地映射覆盖基座、本地声明 codespace 时裁剪越界继承映射、基座不可解析时保留本地映射），`parse_lenient` 通过该路径仅使用本地映射；`usecmap` 基座覆盖/裁剪已有单元测试。写端 `text_code_bytes`/`text_code_bytes_unicode` 不再静默跳过非法码长：记录首个非法长度（`PageBuild.invalid_code_length`），`build` 返回 `WriteError::InvalidObject` 且零字节输出；两方法拆至 `builder/text_codes.rs`。测试：`tounicode_usecmap_inherits_base_and_prefers_local_mappings`、`tounicode_usecmap_clips_inherited_mappings_to_local_codespace`、`tounicode_usecmap_inherits_all_mappings_without_local_codespace`、`tounicode_usecmap_rejects_duplicate_and_malformed_bases`、`text_code_bytes_rejects_illegal_lengths_at_build`、`text_code_bytes_unicode_rejects_illegal_length_at_build`。
   - 进度（2026-10-27 切片 2）：读端 `ToUnicodeMap` 内置 `Adobe-Identity-UCS` 恒等基座——惰性解析不物化 65536 条映射，仅对 2 字节码按大端 u16 取 Unicode 标量（`char::from_u32` 拒绝孤立代理、本地声明 codespace 时裁剪），`unicode_for` 保持仅本地映射，新增 `resolve_unicode` 供 `Type0Font::decode_codes` 回退；未知基座仍保留本地映射。写端 `CidFont::with_to_unicode_usecmap` 仅接受该基座，`to_unicode_cmap` 在 `/CMapType 2 def` 后写 `/<基座> usecmap`（带基座时 `/CMapName` 改 `/Custom-UCS`），仅声明基座而无显式映射时也生成 CMap，未知基座构建期 `WriteError::InvalidObject` 零字节。测试：`tounicode_identity_base_resolves_unmapped_two_byte_codes`、`tounicode_identity_base_respects_local_codespace`、`tounicode_identity_base_skips_surrogates_and_other_lengths`、`cid_font_to_unicode_usecmap_writes_identity_base`、`cid_font_to_unicode_usecmap_alone_writes_identity_base`、`cid_font_to_unicode_usecmap_rejects_unknown_base`、`builder_to_unicode_identity_base_roundtrips_through_extractor`。
-  - 剩余缺口：完整 ordering 数据与来源/许可/体积登记未完成（fixtures 表登记前不引入 Adobe 数据文件）；预定义 ToUnicode 基座名册仅内置 `Adobe-Identity-UCS`，其余基座名仍按未知处理（保留本地映射）；写端 `usecmap` 只声明继承、不展开写出基座映射，代理对与多码元目标一律写 `bfchar`。
+  - 剩余缺口：裸 `Adobe-GB1`/`Adobe-CNS1`/`Adobe-Japan1`/`Adobe-Korea1` 仍走紧凑近似（不得生成近似假表，边界见矩阵 9.7.5）；`Adobe-KR-9`/`Adobe-Manga1-0`/`Adobe-Japan2-0` 不在 B6 范围且未收录；写端 `usecmap` 只声明 `Adobe-Identity-UCS` 继承、不展开写出基座映射，代理对与多码元目标一律写 `bfchar`；名册外 ToUnicode 基座名称仍按未知处理（保留本地映射）。
+  - 进度（2026-11-06，GBK2K 真实数据与「声明最长码优先」解码策略）：vendored 同一提交 `f5cf3bca` 的 `GBK2K-H`（94485 B，sha256 `7d945768331212eadca4a9c35390405efa72cf1be7f064cef170aa68cdab0be9`）与 `GBK2K-V`（3482 B，sha256 `49e81ae0d4b7b35901fbaeff63558bb133d9d0398ac2d0e33fab75404ea71cd2`），逐文件登记见 `cmap_resources/README.txt`；`cmap_resources/` 现为 113 个文件 1169761 B（GB1 18 个 442384 B）。读端 `finalize_cmap` 移除「不同码长区间数值前缀重叠即报错」、保留同长度区间重叠拒绝，`CidCMap::decode` 按 4→1 声明最长码优先、失败逐级回退；写端 `validate_codespaces` 同步放宽跨长度前缀、保留同长度重叠，维持「读端能读的写端才写」。真实值与正负向测试见 `FEATURE_MATRIX.md` 9.7.5（`GBK2K-H` 2 字节 `<8140>`→10072、4 字节 `<81308436>`→22354/`<82308130>`→22690；`GBK2K-V` `<A1A2>`→575 并继承 4/2 字节；同长度 codespace 重叠仍拒绝）。
+  - 进度（2026-11-06，B6.4 UniGB 编码 CMap 与 ToUnicode 预定义基座）：vendored 同一上游提交 `f5cf3bca` 的 `Adobe-GB1-6/CMap` 8 个 Unicode 编码变体（`UniGB-UCS2-H/V` 274383/3167 B、`UniGB-UTF16-H/V` 203288/3062 B、`UniGB-UTF32-H/V` 271244/3178 B、`UniGB-UTF8-H/V` 241183/3116 B），合计 1002621 B；`cmap_resources/` 现为 121 个文件 2172382 B（GB1 26 个 1445005 B），逐文件 sha256 与来源（jsDelivr 同提交固定镜像，本环境 raw.githubusercontent 不可达）见 `README.txt`。`resolve_predefined_cmap` 删除 `UniGB-UCS2-H` 的运行时恒等近似分支，8 个名称统一落入 vendored 名册；裸 `Adobe-GB1/CNS1/Japan1/Korea1` 仍为紧凑近似。真实值断言与可变长 codespace 结论见矩阵 9.7.5：`UniGB-UCS2-H` `<0041>`→34/`<4E2D>`→4559/notdef `<0000>`→1、`UniGB-UTF16-H` 2 字节 BMP 与 4 字节代理对 `<D83DDE00>`→0、`UniGB-UTF32-H` `<00004E2D>`→4559、`UniGB-UTF8-H` 1/3/4 字节、V 变体 `<2014>` 105→598 本地覆盖其余继承 H；UTF16 的 2 字节 BMP + 4 字节代理对区间与 UTF8 的 1/2/3/4 字节区间前缀均不重叠，沿用既有「声明最长码优先」策略（按真实数据验证，未假设自动适用）。ToUnicode 基座：`ToUnicodeMap` 的 `identity_base/identity_spaces` 改为 `base: Option<UnicodeBase{Identity,Utf16,Utf32,Utf8}>` + `space_filters`，`builtin_base` 名册由仅 `Adobe-Identity-UCS` 扩为再加 8 个 UniGB 名称；基座 codespace 经 `resolve_predefined_cmap` 取真实区间并与本地 codespace 逐层取交集，UTF16/UTF32/UTF8 精确解码、非法值返回 `None` 不合成；写端 `CidFont::with_to_unicode_usecmap` 仍仅接受 `Adobe-Identity-UCS`。测试新增 14 个（lib 4 + lib 6 + lib 3 + main 1，名单见矩阵 9.7.5/9.10.3），既有断言改为真实值（`resolves_uni_gb_ucs2`、`resolves_predefined_encoding_names_by_reference` 的 `0x4E2D`→4559、往返 CID `[4559,3795,40,35]`、负向改用 `UniCNS-UCS2-H`、写端单元测试改名 `predefined_cid_encoding_rejects_unknown_names`）。体量取舍：本轮 +1002621 B（1169761→2172382 B，+85.7%）；再收 UniCNS/UniJIS/UniKS 39 个变体需 +3866824 B，故维持缺口。缺口：UniCNS/UniJIS/UniKS 的编码 CMap 与 ToUnicode 基座未内置；裸 ordering 名仍为近似（不得生成近似假表）；写端 ToUnicode 基座白名单未扩大。
+  - 进度（2026-11-06，B6.5 UniCNS/UniJIS/UniKS 39 个 Unicode 编码变体，B6 收口）：vendored 同一上游提交 `f5cf3bca` 的 `Adobe-CNS1-7` 8 个（1206282 B）、`Adobe-Japan1-7` 23 个（2048428 B）、`Adobe-Korea1-2` 8 个（612114 B）Unicode 编码变体，合计 39 个文件 3866824 B；`cmap_resources/` 由 121 个文件 2172382 B 增至 160 个文件 6039206 B（GB1 26 个 1445005 B、CNS1 44 个 1472230 B、Japan1 67 个 2327955 B、Korea1 23 个 794016 B），来源为 jsDelivr 同提交固定镜像（本环境 raw.githubusercontent 不可达），逐文件 sha256 与许可证原文见 `README.txt`。上游事实：`Adobe-Japan1-7/CMap` 不含 `UniJISPro-UCS2-H`/`UniJISPro-UTF8-H`，`UniJISPro-UCS2-V`/`UniJISPro-UCS2-HW-V`/`UniJISPro-UTF8-V` 的 `usecmap` 分别指向已在册的 `UniJIS-UCS2-H`/`UniJIS-UTF8-H`，无需占位或补表。codespace 按原文实测确认（未假设「最长码优先已覆盖」即可免验）：`UCS2` 2 字节 `0000–D7FF`/`E000–FFFF`；`UTF16` 2 字节 BMP + 4 字节代理对 `D800DC00–DBFFDFFF`；`UTF32` 4 字节 `0–10FFFF`；`UTF8` 1/2/3/4 字节 `00–7F`/`C080–DFBF`/`E08080–EFBFBF`/`F0808080–F7BFBFBF`。真实值断言见矩阵 9.7.5（CNS `<4E2D>`→661/`<2013>`→121、代理对 `<D840DC21>`→15861、4 字节 `<00020021>`→15861、UTF8 `<F0A080A1>`→15861、竖排 `<2013>`→120 与 `<FF5B>`→134；Japan `<4E2D>`→2980/`<00B0>`→707、竖排 `<00B0>`→8269、代理对 `<D840DC0B>`→13839、2004/Pro/X0213 变体同族实测；Korea `<AC00>`→1086/`<4E2D>`→6922，UTF16/UTF32/UTF8 的补充平面码落在 codespace 内但原文无映射、实测解为 CID 0）。ToUnicode 基座名册由 8 个 `UniGB-*` 扩到 47 个（识别规则改为「家族前缀 + `-<codec>-<H|V>`」，`UNICODE_CMAP_FAMILIES` + `predefined_codec`）。测试新增 14 个（10 个 vendored lib + `vendored_unicode_encoding_decodes_variable_length_codes` + 3 个 ToUnicode 基座；名单见矩阵 9.7.5/9.10.3），负向 `rejects_unicode_and_out_of_scope_variants` 覆盖 `UniCNS-UCS2-HW`/`UniJIS-UTF16-HW`/`UniKS-UCS2-HW` 与范围外 `Adobe-KR-9`/`Adobe-Manga1-0`/`Adobe-Japan2-0`。边界：不生成近似表；裸 `Adobe-GB1/CNS1/Japan1/Korea1` 保持紧凑近似（矩阵 9.7.5 已写明）。
+  - 进度（2026-11-06，B6.3 CNS1/Japan1/Korea1 真实 ordering）：vendored 同一上游提交 `f5cf3bca` 的 `Adobe-CNS1-7` 36 个（265949 B）、`Adobe-Japan1-7` 44 个（279527 B）、`Adobe-Korea1-2` 15 个（181901 B）非 Unicode CMap，共 95 个文件 727377 B；连同 GB1 16 个，`cmap_resources/` 现有 111 个文件 1071794 B，逐文件 sha256 见 `README.txt`。收录规则：按 ordering 收录全部**非 Unicode** 变体（含带版本号 identity CMap），`UniCNS`/`UniJIS`/`UniKS` 共 39 个文件（1206282/2048428/612114 B，合计 3866824 B，占三套目录总计 4594201 B 的 84.2%，含 UCS2/UTF16/UTF32/UTF8 可变长 codespace）归 B6.4；`Adobe-KR-9`/`Adobe-Manga1-0`/`Adobe-Japan2-0` 不在 B6.3 范围。真实值断言：`B5-H` `<A140>`→99/`<A1A1>`→162/`<00>`→13648、`B5pc-H` `<80>`→61/`<FD>`→96、`CNS-EUC-H` `<A1A1>`→99 与 4 字节 `<8EA2A1A1>`→5996、`CNS1-H` `<2121>`→99、`CNS2-H` `<2121>`→5996、`ETen-B5-H` `<A140>`→99、`ETHK-B5-H`/`HKscs-B5-H` `<8740>`→18965、`HKgccs-B5-H` `<8A40>`→17160、`HKdlb-B5-H` `<8E40>`→15735；Japan1 `H` `<2121>`→633、`EUC-H` `<A1A1>`→633/`<A2A1>`→727/`<8EA1>`→327/`<41>`→264、`RKSJ-H` `<8140>`→633/`<82A0>`→843/`<A0>`→326、`78-RKSJ-H` `<DF>`→389、单字节 `Hankaku`/`Roman` `<41>`→264、`Hiragana`/`Katakana` `<21>`→327、`WP-Symbol` `<41>`→8118；Korea1 `KSC-EUC-H` `<A1A1>`→101/`<B0A1>`→1086、`KSCms-UHC-H` `<8141>`→9333/`<C0A1>`→2590、`KSCpc-EUC-H` `<A141>`→8191/`<FE>`→99、`KSC-Johab-H` `<E031>`→3436/`<A1A1>`→1917（未登记码 `<D831>`→0）。竖排 14 个 CNS V、8 个 Japan V、6 个 Korea V 均 `WMode=1` 且继承横排（`B5-V` `<A140>`→99、`ETenms-B5-V` `<A1A2>`→135、`V` `<2122>`→7887、`KSC-V` `<2122>`→8056）。测试：13 个 lib 真实值/竖排/负向（`vendored_b5_and_b5pc_map_real_ordering` 等，名单见矩阵 9.7.5）与 3 个 main 往返（`builder_predefined_cns_euc_cmap_roundtrips_two_and_four_byte_codes`、`builder_predefined_japan_rksj_cmap_roundtrips_real_ordering`、`builder_predefined_korea_uhc_cmap_roundtrips_real_ordering`）。体量：`predefined_cmaps.rs` 拆出 `predefined_cmaps/sources.rs` 与 `predefined_cmaps/tests.rs`，主文件 228 行。缺口：UniCNS/UniJIS/UniKS 归 B6.4；GBK2K 待解码策略实现；裸 `Adobe-CNS1`/`Adobe-Japan1`/`Adobe-Korea1` 仍是紧凑近似（带版本号原文已收录）。
+  - 进度（2026-11-06，B6.2 GB1 编码类大体积变体与 `notdefrange`）：vendored 名册扩到 16 个编码类变体——新增 `GBK-EUC-H/V`、`GBKp-EUC-H/V`、`GBT-H/V`、`GBT-EUC-H/V`、`GBTpc-EUC-H/V` 共 10 个文件（合计 321925 B，目录总计 344417 B），逐文件 sha256 与 V 的 `usecmap` 基座清单同步到 `cmap_resources/README.txt` 与 fixtures 表；竖排变体仍经文件内 `usecmap` 继承横排基座，未复制任何映射表。`CidRange` 新增 `increments` 标志，`beginnotdefrange`/`endnotdefrange` 按规范解析（整段映射到同一 CID，与 `cidrange` 的递增 CID 共用同一区间结构与 merge/subtract/clip 逻辑）：未命中码仍解为 CID 0，本地 `notdefrange` 覆盖继承映射，重叠/越界/长度不一致均报错。真实值断言：`GBK-EUC-H` `<20>`→7716、`<8140>`→10072、`<8179>`→8281、notdef `<00>`/`<1F>`→7716；`GBKp-EUC-H` `<20>`→1；`GBT-H` `<2121>`→96；`GBT-EUC-H` `<A2B1>`→190；`GBTpc-EUC-H` `<80>`→7712；5 个 V 变体 `WMode=1` 且继承横排映射。测试：`vendored_gbk_euc_h_maps_real_ordering`、`vendored_gbkp_euc_h_maps_pc_ordering`、`vendored_gbt_h_maps_seven_bit_rows`、`vendored_gbt_euc_h_maps_real_ordering`、`vendored_gbtpc_euc_h_maps_pc_ordering`、`vendored_gbk_gbt_vertical_variants_inherit_horizontal_and_set_wmode`、`notdefrange_maps_whole_range_to_one_cid`、`notdefrange_alone_is_a_valid_cmap`、`rejects_notdefrange_overlapping_cid_mapping`、`rejects_notdefrange_outside_the_codespace`、`local_notdefrange_overrides_inherited_mapping`、`builder_predefined_gbk_euc_cmap_roundtrips_real_ordering`（证据见矩阵 9.7.5）。`rejects_predefined_encoding_outside_the_vendored_roster` 的输入改用仍未引入的 `GBK2K-H`。剩余缺口：`GBK2K-*` 的 4 字节 codespace `<81308130>`–`<FE39FE39>` 与 2 字节 `<8140>`–`<FEFE>` 在数值前缀上重叠，现有按连续区间判码长的歧义校验会拒绝整份 CMap，引入前需先确定解码策略（应按声明 codespace 最长码优先，还是按 `cidrange` 实际字节模式裁剪 codespace），留待单独增量立项；`UniGB-*` 单文件 203–274 KiB，按体积决策归入 B6.4；CNS1/Japan1/Korea1 未引入。
+  - 进度（2026-11-06，B6.1 首个可验证子集）：按「先取可追溯真实数据」拆为 B6.1 小体积真实 CMap（本轮）、B6.2 GB1 大体积变体（GBK/GBT/GBK2K/UniGB，受体积上限约束另行立项）、B6.3 CNS1/Japan1/Korea1、B6.4 ToUnicode 预定义基座。本轮 vendored `adobe-type-tools/cmap-resources` 提交 `f5cf3bca`（BSD-3-Clause）的 6 个 GB1 文件（`GB-EUC-H/V`、`GBpc-EUC-H/V`、`GB-H/V`，合计 22492 B 约 22.0 KiB），来源/许可/逐文件 sha256 登记在 `src/core/reader/font/cmap_resources/README.txt` 并同步 fixtures 表。`predefined_cmaps.rs` 改为包装 `CidCMap`（保留 `cidrange` 区间，避免展开数万条逐码映射与 1/2 字节码值撞键）；`resolve_predefined_cmap` 先匹配既有近似名、再查 vendored 名册，未覆盖名称仍返回 `Err`，不合成假表；Type 0 `/Encoding` 名称引用与嵌入 CMap 基座统一走该入口。真实值断言、写→解析→提取往返与负向覆盖见矩阵 9.7.5（`GBK-EUC-H` 不在名册、`usecmap` 指向缺失基座、不同码长 codespace 前缀歧义）。剩余缺口：GBK/GBT/GBK2K/UniGB 与 CNS1/Japan1/Korea1 未引入；`beginnotdefrange` 未实现（未命中码解为 CID 0）；`text_predefined_unicode` 仅适用 UCS-2 型 CMap（对 `GB-EUC-H` 的 2 字节区段不适用）；预定义 ToUnicode 基座名册仍只有 `Adobe-Identity-UCS`。
 - [x] **B7 文本提取语义完善**（9.10，🟡）：跳过 `/Artifact` 标记内容、提供可选的带位置/间距的文本片段 API（不做版面分析）；`/ActualText` 替换与隐藏 OCG 过滤已随 C4 落地，B7 只需补回归样本与 OCMD 可见性。
   - 退出标准：`ActualText`、Artifact、隐藏 OCG 三类样本的提取结果正确；现有文本提取测试无回归；`try_extract_page_text` 错误语义保持。
   - 完成说明（2026-10-27，证据见矩阵 9.2/9.10/14.6）：提取端标记栈把 `/Artifact`（含嵌套继承、内联属性、分隔符抑制）整体排除；新增 `TextFragment` 位置模型（`Tm/Td/TD/T*/TL/Ts`、`cm`、`q/Q`、Form `/Matrix`、`BT` 重置；不含字形推进）与 `Document::extract_text_fragments`/`try_extract_page_text_fragments`/`extract_page_text_fragments`，页面文本与片段共用 `extract_page_state`，错误语义不变；新增 OCMD 求值：`OptionalContentProperties::membership_visible` + `membership_visibility`（`/P` 四种策略、`/VE` 的 `And/Or/Not` 递归与短路、未知组状态返回 `None`），文本提取与 `resolve_marked_visibility` 均支持内联/间接 OCMD。测试：`artifact_marked_content_is_skipped`、`nested_sections_inherit_artifact_state`、`artifact_with_inline_properties_is_skipped`、`artifact_breaks_do_not_insert_separators`、`artifact_text_is_absent_from_fragments`、`fragments_report_show_positions_and_merge_same_position_runs`、`fragments_apply_cm_and_q_q_at_the_ctm_level`、`fragments_track_leading_and_text_rise`、`actual_text_replacement_becomes_a_fragment`、`fragments_apply_form_matrix_and_restore_ctm`、`extract_page_text_fragments_reports_page_errors`、`hidden_ocg_text_is_absent_from_fragments`、`membership_policy_matrix`、`membership_visibility_expression_overrides_policy`、`visibility_evaluates_inline_membership_dictionary`、`indirect_ocmd_hides_section_by_policy`、`ocmd_resolved_through_properties_name`、`inline_ocmd_visibility_expression_overrides_policy`、`builder_text_fragments_report_positions`。
@@ -559,11 +565,11 @@
 2. **工程债：`tests/syntax.rs` 主题目录化**（1670 行 / 62.2 KiB，全仓最大单文件）。按既有主题分组（词法与对象头 / 经典 xref 与 XRef 流 / 对象流与 `/Prev` 链 / 过滤器解码 / 写出布局与 Name 转义 / 版本与特性门控）拆为 `tests/syntax/`，`Cargo.toml` 须显式 `[[test]] name = "syntax" path = "tests/syntax/mod.rs"`（`tests/main.rs`、`tests/interactive.rs` 先例）。
 3. **11.6.2–11.6.3 混合色彩空间（`/CS`）建模**（矩阵评审补登行，读写两端同为 🟡）：读端 `reader/graphics_state/` 类型化 `/CS`（混合模式用的色彩空间名/数组），写端补 `GraphicsState` setter 与 `PdfFeature` 版本门；背景色（`/BG`-类渲染语义）仍属第 10 章非目标，不做。收益：透明度章唯一可在语法层闭合的缺口。
 4. **8.9.2–8.9.4 图像变换矩阵与设备映射**（矩阵评审补登行，读端 🟡）：`ImageModel` 补 `/Matrix`（图像 XObject 到单位正方形的映射，PDF 1.7 条目）与 `/Decode` 之外的设备映射语义；写端同步。此项不做像素解码，仅语法层类型化。
-5. **B6 ToUnicode/CMap ordering 数据**（阶段 B 唯一未闭增量）：须先确定 Adobe ordering 数据的来源与许可并登记 fixtures 行（见文末 backlog），否则本增量不得启动——这是它排在纯语法缺口之后的原因，不是难度排序。
+5. ~~**B6 ToUnicode/CMap ordering 数据**~~ **已落地（2026-11-06，B6.1–B6.5）**：编码类 CMap 全量 vendored（160 个文件 6039206 B）、ToUnicode 基座名册 47 个 Unicode 名称；仅剩裸 ordering 近似与写端 `usecmap` 只声明继承等边界（矩阵 9.7.5/9.10.3 已登记）。此项移出待办。
 6. **D3 JBIG2/JPX 解码后端选型 spike**（阶段 D 唯一未闭增量）：只做选型与契约（`StreamFilter` trait 之后的适配器边界），不引入第三方依赖；像素/小波/熵解码属工程约定 #1 的隔离项。JPX 语法层头解析已于 2026-11-01 落地（`reader/image/jpx.rs`），本增量只补解码。
 7. **F1 剩余：CMS 签名值与真实 fixture**（阶段 F）：`adbe.pkcs7.*` SubFilter 下的真实 PKCS#7 对象构造与证书链校验；须与「不内置密码学」的既有契约对账后再立项，属大项，排在清债与小缺口之后。
 
-并行边界：阶段 C 已全部完成；A（6/6）与 C（5/5）为 ✅，B 仅剩 B6、D 仅剩 D3；E1/E2/E3/E4/E5/E6/E7 与 F1/F2/F3/F4/F5 的主体切片均已落地但各条「剩余缺口」未闭，故复选框仍为 `[ ]`。上表 1–4 为纯语法层、可独立立项且写集不重叠；5–6 含外部决策（许可/后端选型），启动前先出评审结论；7 依赖 E7 与 F1 既有切片。当前在飞的债拆车道（`builder/assemble/annotation.rs`、`builder/tests/font_program.rs`）不在本列表重复派发。
+并行边界：阶段 C 已全部完成；A（6/6）、B（7/7）与 C（5/5）为 ✅，D 仅剩 D3；E1/E2/E3/E4/E5/E6/E7 与 F1/F2/F3/F4/F5 的主体切片均已落地但各条「剩余缺口」未闭，故复选框仍为 `[ ]`。上表 1–4 为纯语法层、可独立立项且写集不重叠；第 5 项（B6）已于 2026-11-06 收口；第 6 项含后端选型外部决策，启动前先出评审结论；7 依赖 E7 与 F1 既有切片。当前在飞的债拆车道（`builder/assemble/annotation.rs`、`builder/tests/font_program.rs`）不在本列表重复派发。
 
 ## 真实样本与 fixtures backlog
 
@@ -577,7 +583,13 @@
 | 待补：JPX 图像 | D3 | 可使用公开测试图或生成工具（须登记许可） | — | 未获取 |
 | 待补：Shading/Pattern/透明组 | D5/D6 | 优先用 builder 生成合成样本，再补真实样本 | — | D5/D6 合成样本已由 builder 往返集成测试覆盖；真实样本未获取 |
 | 待补：AcroForm | E4 | 自行生成最小表单样本 | — | 未获取 |
-| 待补：CJK CID/Type 0 | B6 | 使用开源字体生成最小样本；ordering 数据许可须单独登记 | — | 未获取；2026-10-27 两个切片均未引入 ordering 数据文件，来源/许可/体积仍未登记；内置的 `Adobe-Identity-UCS` 基座为算法恒等解析（无第三方数据文件） |
+| 待补：CJK CID/Type 0 | B6 | 使用开源字体生成最小样本 | — | 样本未获取；CMap ordering 数据已登记（见下列六行），`Adobe-Identity-UCS` 基座为算法恒等解析（无第三方数据文件），B6.5 后内置 47 个 UniGB/UniCNS/UniJIS/UniKS 预定义基座 |
+| `src/core/reader/font/cmap_resources/`（`GB-EUC-H/V`、`GBpc-EUC-H/V`、`GB-H/V`） | B6.1 预定义 CMap 真实 ordering | `adobe-type-tools/cmap-resources`，分支 `master`，提交 `f5cf3bca`（2023-11-15），BSD-3-Clause（许可证原文 `ADOBE_CMAP_LICENSE.txt`，逐文件 sha256 见 `README.txt`） | 22492 B（约 22.0 KiB；6 个文件 4427/3100/4455/3112/4322/3076 B） | ✅ 2026-11-06 接入（`predefined_cmaps.rs` vendored 名册 + 真实值/往返测试）；GBK/GBT/UniGB 与 CNS1/Japan1/Korea1 见后续行 |
+| `src/core/reader/font/cmap_resources/`（`GBK-EUC-H/V`、`GBKp-EUC-H/V`、`GBT-H/V`、`GBT-EUC-H/V`、`GBTpc-EUC-H/V`） | B6.2 预定义 CMap 真实 ordering（编码类大体积变体） | 同上（`adobe-type-tools/cmap-resources`，`master`，`f5cf3bca`，BSD-3-Clause；逐文件 sha256 见 `README.txt`） | 321925 B（目录总计 344417 B；单文件 83102/3089/83083/3095/46668/3084/46773/3108/46803/3120 B） | ✅ 2026-11-06 接入（vendored 名册扩到 16 个编码类变体，`notdefrange` 按规范解析 + 真实值/V 继承/负向往返测试）；未收录：`UniGB-*`（归 B6.4）；`GBK2K-*` 见 GBK2K 行；CNS1/Japan1/Korea1 见 B6.3 行 |
+| `src/core/reader/font/cmap_resources/`（`Adobe-CNS1-7` 36 个、`Adobe-Japan1-7` 44 个、`Adobe-Korea1-2` 15 个非 Unicode CMap） | B6.3 CNS1/Japan1/Korea1 真实 ordering | 同上（`adobe-type-tools/cmap-resources`，`master`，`f5cf3bca`，BSD-3-Clause；逐文件 sha256 见 `README.txt`） | 727377 B（CNS1 265949 + Japan1 279527 + Korea1 181901；`cmap_resources/` 合计 111 个文件 1071794 B） | ✅ 2026-11-06 接入（含带版本号的 identity CMap；13 个 lib + 3 个 main 往返测试）；未收录：UniCNS/UniJIS/UniKS 39 个 Unicode 变体 3866824 B（占三套目录总计 4594201 B 的 84.2%）归 B6.4；`Adobe-KR-9`/`Adobe-Manga1-0`/`Adobe-Japan2-0` 不在 B6.3 范围 |
+| `src/core/reader/font/cmap_resources/`（`GBK2K-H`、`GBK2K-V`） | GBK2K 真实 ordering 与跨长度 codespace 解码策略 | 同上（`adobe-type-tools/cmap-resources`，`master`，`f5cf3bca`，BSD-3-Clause，许可证原文 `ADOBE_CMAP_LICENSE.txt`） | 97967 B（H 94485 / V 3482 B；`cmap_resources/` 合计 113 个文件 1169761 B） | ✅ 2026-11-06 接入（4 字节 `<81308130>`–`<FE39FE39>` 与 2 字节 `<8140>`–`<FEFE>` 前缀重叠按「声明最长码优先」解码，同长度重叠仍拒绝；3 个 vendored lib + 2 个解码器 lib + 1 个写端 lib + 1 个 main 往返测试）；未收录：UniGB/UniCNS/UniJIS/UniKS 归 B6.4 |
+| `src/core/reader/font/cmap_resources/`（`UniGB-UCS2-H/V`、`UniGB-UTF16-H/V`、`UniGB-UTF32-H/V`、`UniGB-UTF8-H/V`） | B6.4 UniGB 编码 CMap 与 ToUnicode 预定义基座 | 同上（`adobe-type-tools/cmap-resources`，`master`，`f5cf3bca`，BSD-3-Clause；来源镜像为 jsDelivr 同提交固定地址，逐文件 sha256 见 `README.txt`） | 1002621 B（274383/3167 + 203288/3062 + 271244/3178 + 241183/3116；`cmap_resources/` 合计 121 个文件 2172382 B，GB1 26 个 1445005 B） | ✅ 2026-11-06 接入（8 个名称统一走 vendored 名册、删除 `UniGB-UCS2-H` 运行时近似；lib 4 + lib 6 + lib 3 + main 1 个新增测试）；UniCNS/UniJIS/UniKS 39 个变体见下一行（B6.5） |
+| `src/core/reader/font/cmap_resources/`（`Adobe-CNS1-7` 8 个、`Adobe-Japan1-7` 23 个、`Adobe-Korea1-2` 8 个 Unicode 编码 CMap） | B6.5 UniCNS/UniJIS/UniKS 39 个 Unicode 编码变体 | 同上（`adobe-type-tools/cmap-resources`，`master`，`f5cf3bca`，BSD-3-Clause；来源镜像为 jsDelivr 同提交固定地址，逐文件 sha256 见 `README.txt`） | 3866824 B（CNS1 1206282 + Japan1 2048428 + Korea1 612114；`cmap_resources/` 由 121 个文件 2172382 B 增至 160 个文件 6039206 B，目录另含 `README.txt`/`ADOBE_CMAP_LICENSE.txt` 共 162 个文件 6058047 B） | ✅ 2026-11-06 接入（47 个 ToUnicode 基座名称 + 14 个新增测试；UTF16/UTF32/UTF8 码长结构按原文实测确认，未生成近似表）；裸 ordering 名仍为紧凑近似 |
 | 待补：增量更新/签名 | E7/F1 | 自行构造 v1 + update 样本 | — | 未获取 |
 
 > 纪律：真实 PDF 必须有可追溯来源与许可；无法确认许可的样本不得入库。合成样本由 builder 或脚本生成，生成脚本随 fixture 一并入库。既有 4 个 fixture 来源待追溯，A6 已接入测试，后续决策是否替换为自生成样本。
@@ -586,7 +598,7 @@
 
 ```mermaid
 flowchart LR
-    A["A 核心读入与安全 ✅"] --> B["B 字体与文本 🚧"]
+    A["A 核心读入与安全 ✅"] --> B["B 字体与文本 ✅"]
     A --> C["C 内容流读取模型 ✅"]
     B --> D["D 图形完整 🚧"]
     C --> D
@@ -606,10 +618,46 @@ flowchart LR
 | 旧规划 | 新规划 | 说明 |
 |---|---|---|
 | 阶段 A 读得全 ✅ | 阶段 A 核心读入与安全 🚧 | 收窄完成口径；JBIG2/JPX/图像字典/内容流读端移出；评审后回退为 🚧 并补 A6 fixture 回归 |
-| 阶段 B 文本可用 🚧 | 阶段 B 字体与文本 🚧 | 条目合并为 7 个增量；B1–B5、B7 已完成，B6 已推进 2026-10-27 两个切片（拆分/ToUnicode `usecmap` 继承/非法码长校验；内置 Identity 基座与写端 `usecmap`），完整 ordering 数据待补 |
+| 阶段 B 文本可用 🚧 | 阶段 B 字体与文本 ✅ | 条目合并为 7 个增量；B1–B7 已全部完成；B6 经 B6.1–B6.5 收口（编码类 CMap 160 个文件全量 vendored、ToUnicode 基座名册 47 个），裸 ordering 仍为紧凑近似（矩阵 9.7.5 已登记边界） |
 | 阶段 C 图形完整 🚧 | 阶段 C 内容流读取模型 ⬜ + 阶段 D 图形完整 🚧 | 拆出跨章节前置的读端内容流模型 |
 | 阶段 D 交互与交换 ⬜ | 阶段 E 交互与文档交换 ⬜ | 顺延；新增 E7 增量更新 |
 | 阶段 E 专门领域 ⬜ | 阶段 F 专门领域 ⬜ | 顺延；签名/线性化等重新分组 |
+
+## 积压问题（Backlog）
+
+> 以下问题由 `scripts/validate_matrix.py` 与 `scripts/verify_evidence_paths.py` 在 2026-11-02 评审中发现，推迟到专门增量处理，不阻塞当前开发主线。每轮增量若触及同类问题，优先从此 backlog 核掉。
+
+### 待核条目（规范引用未锚定）
+
+_本轮及历史增量中标记为「待核」的章节号 / Table 号 / 版本门禁，需在后续增量中查阅 `docs/PDF32000_2008.pdf` 核掉。_
+
+（当前无待核条目）
+
+### 证据路径过期（模块重构后路径变更）
+
+> 由 `verify_evidence_paths.py` 扫描发现，共 170 条历史路径在矩阵中引用但实际文件已不存在（因模块目录化拆分）。这些是历史引用，不影响当前功能，但应在后续「文档清理」增量中批量更新。
+
+典型过期路径：
+- `reader/lexer.rs` → 实际位于 `reader/lexer/` 目录
+- `reader/image/jbig2.rs` → 实际位于 `reader/image/jbig2/` 目录
+- `builder/assemble.rs` → 实际位于 `builder/assemble/` 目录
+- 其余 167 条见 `verify_evidence_paths.py` 完整输出
+
+处理方式：后续专门增量中跑 `verify_evidence_paths.py` 获取完整列表，批量更新矩阵证据列。
+
+### 矩阵总览计数不一致
+
+> 由 `validate_matrix.py` 扫描发现，矩阵底部「总览」行的计数与实际行数不符。这是 2026-11-02 评审新增 13 行后未同步更新总览所致。
+
+| 状态 | 总览写 | 实际数 | 差值 |
+|---|---|---|---|
+| ✅ | 40 | 42 | +2 |
+| 🟡 | 93 | 98 | +5 |
+| ⬜ | 14 | 13 | -1 |
+| ❌ | 7 | 9 | +2 |
+| — | 14 | 20 | +6 |
+
+处理方式：后续增量中重算总览行，或在专门「文档清理」增量中修正。
 
 ## 维护说明
 

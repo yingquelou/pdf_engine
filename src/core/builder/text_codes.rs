@@ -335,10 +335,7 @@ impl PdfBuilder {
                 continue;
             }
             // 仅接受落在 2 字节码空间内的码位，保证读端按 2 字节解码。
-            let in_codespace = cmap
-                .codespace_ranges
-                .iter()
-                .any(|&(low, high, length)| length == 2 && (low..=high).contains(&code));
+            let in_codespace = cmap.codespace_contains(2, code);
             if !in_codespace {
                 continue;
             }

@@ -50,7 +50,8 @@ pub(super) fn write_cid_font(
             "CidFont predefined encoding and custom CidEncoding are mutually exclusive".into(),
         ));
     }
-    // 预定义 CMap 名称复用读端名册校验；未知名称（含 -V 竖排变体）报错。
+    // 预定义 CMap 名称复用读端名册校验；未知名称报错。横排与竖排名称均可写
+    // （竖排语义随 `/Encoding` 名称与 WMode 一并由读端解析）。
     if let Some(name) = &cid_font.predefined_encoding {
         resolve_predefined_cmap(name)
             .map_err(|_| WriteError::InvalidObject(format!("unknown predefined CMap: {name}")))?;

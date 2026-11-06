@@ -174,8 +174,10 @@ fn predefined_cid_encoding_writes_name_reference_without_cmap_stream() {
 }
 
 #[test]
-fn predefined_cid_encoding_rejects_unknown_and_vertical_names() {
-    for name in ["NoSuch-CMap", "UniGB-UCS2-V"] {
+fn predefined_cid_encoding_rejects_unknown_names() {
+    // 竖排名在读端名册内同样可写（见 `builder_predefined_gb_v_encoding_*`）；
+    // 此处只覆盖名册外名称。
+    for name in ["NoSuch-CMap", "UniCNS-UCS2-HW"] {
         let cid_font = CidFont::new(
             "ExampleCIDFont",
             CidFontSubtype::CIDFontType2,
@@ -191,9 +193,7 @@ fn predefined_cid_encoding_rejects_unknown_and_vertical_names() {
         b.text_codes(p, idx, 10.0, 10.0, &[1]);
 
         let mut out = Vec::new();
-        let error = b
-            .build(&mut out)
-            .expect_err("未知或竖排（不在名册内）的 CMap 名应使构建失败");
+        let error = b.build(&mut out).expect_err("名册外的 CMap 名应使构建失败");
         assert!(
             matches!(&error, WriteError::InvalidObject(_)),
             "应返回 InvalidObject: {error}"
