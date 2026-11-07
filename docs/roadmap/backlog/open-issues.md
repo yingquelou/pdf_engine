@@ -46,3 +46,23 @@ _本轮及历史增量中标记为「待核」的章节号 / Table 号 / 版本�
 | OI-3 | 数据源自相矛盾 | 原路线图 2026-10-26 条目写「以 `docs/PDF32000_2008/` 重新核对」，而矩阵维护说明已更正该 HTML 目录在本仓库不存在 | 历史条目不改写；现状口径以 `matrix/README.md`「数据源与口径」为准 |
 | OI-4 | 旧 backlog 计数 | 上文「矩阵总览计数不一致」表为迁移前快照（40/93/14/7/14），与现状（43/99/10/9/20）不符 | 保留为历史快照，不再引用为事实源；修复项由 OI-2 一并跟进 |
 
+### 依赖边界越界登记（2026-11-06）
+
+> 由 `scripts/deps_check.ps1` 的 D2 扫描发现。以下位置在能力型适配器之外直接使用第三方 crate，已记为基线债务，本轮只登记不改代码。整改时把调用改走既有适配器（`security/crypto.rs` 与 `signature/digest.rs`），并同步把对应条目从 `scripts/deps.allow.toml` 的 `known_violation` 移除。
+
+| 编号 | 位置 | 越界内容 | 处置 |
+|---|---|---|---|
+| OI-5 | `src/core/reader/embedded.rs` | MD5 摘要直用，未走 `SignatureBackend`/`DigestSink` | 待整改：改走摘要适配器 |
+| OI-6 | `src/core/builder/types/embedded_file.rs` | MD5 摘要直用，属 builder 侧业务代码 | 待整改：抽出统一的嵌入文件校验入口 |
+| OI-7 | `src/core/reader/fdf/embedded/crypto.rs` | MD5 + RC4 重复实现 Algorithm 2，与 `security/crypto.rs` 并行 | 待整改：合并到标准安全处理器的密钥派生 |
+
+### 依赖替换优先级（2026-11-06）
+
+> 依据既有第三方库评估结论：叶子级编解码可由成熟 crate 承担，PDF 产品语义保持本地实现。本轮只登记顺序，不动过滤器代码。
+
+1. 第一批：LZW 与 CCITT 均已完成（2026-11-07）。`src/core/filters/lzw.rs` 保留 PDF 语义与截断宽容，位流/字典解码改经 `lzw_backend.rs` 适配 `weezl` 0.1.12；`src/core/ccitt/mod.rs` 保留 `CcittParams` 与 PDF 语义层，位流/行解码改经 `ccitt/backend.rs` 适配 `hayro-ccitt` 0.3.0，`/BlackIs1` 反转、补白行、`/DamagedRowsBeforeError` 损坏行恢复与 `/EndOfBlock false` 三者最早终止均在适配层完成，行为与替换前一致（证据见矩阵 7.4.6 与 `docs/changelog/2026-11-07.md`）。二者原同为无产品语义的叶子编解码，替换收益最高、风险最低。
+2. 第二批：JBIG2 与 JPX。现有 `Jbig2Backend`/`JpxBackend` 只有语法解析与空后端，适合直接填实，业务调用点不变。
+3. 每批替换前先跑 `scripts/deps_check.ps1` 建立基线，替换后确认 D2 无新增越界、D4 许可证相容、D7 登记已更新。
+4. 子集化、CMap 码空间切分、版本特性降级、线性化与签名流程不进入替换清单，理由见 `docs/roadmap/principles.md` 工程约定 #1。
+
+

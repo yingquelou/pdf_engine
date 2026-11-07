@@ -30,6 +30,7 @@ docs/
 │   ├── graph.md               # 依赖图与阶段映射
 │   └── backlog/               # 工程债、fixtures、未决策、积压问题
 ├── changelog/                 # 历史层：按日期一文件，append-only
+├── third-party/               # 引用层：第三方归属索引（许可证、版权、接入位置）
 └── archive/2026-11-06/        # 迁移前历史快照（不再维护）
 ```
 
@@ -45,6 +46,8 @@ docs/
 | 非目标理由 | `roadmap/non-goals.md` | 矩阵行只写「❌ 非目标（理由见 …）」 |
 | fixture 来源/许可/体积 | `roadmap/backlog/fixtures.md` | 矩阵证据列只写 fixture 名 |
 | 测试数、行数、体积数字 | 只进 `changelog/<date>.md` 与 `backlog/fixtures.md`、`backlog/module-debt.md` | 当前状态不写计数 |
+| 第三方许可证、版权、接入位置 | `third-party/README.md` | 写包名并链接本文件，不复制许可证全文 |
+| 依赖分类、判定顺序、门槛阈值 | `roadmap/principles.md` 与 `scripts/deps.allow.toml` | 易变元数据只进 `deps.allow.toml` |
 
 引用写法：
 

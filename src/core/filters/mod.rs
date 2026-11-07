@@ -23,6 +23,7 @@ mod flate;
 mod indirect;
 mod jpeg;
 mod lzw;
+mod lzw_backend;
 mod predictor;
 
 pub(crate) use indirect::{ObjectResolver, normalize_filter_entries};

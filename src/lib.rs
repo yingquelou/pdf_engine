@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! `pdf_engine` PDF 处理库：解析与生成 PDF 1.x 文件。
 //!
 //! 顶层只导出 [`core`] 模块。详见各子模块文档：

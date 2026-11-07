@@ -17,9 +17,13 @@
 
 以下约定面向全库；条目中的现有模块只是当前实例，同类新增实现同样适用。
 
-1. **第三方库必须隔离在 PDF 语义 trait/适配器之后**：
-   - 代码实现方案优先级：Rust 标准库 > 成熟第三方库/本地实现；
-   - 需要在实现内部使用第三方能力时，禁止直接调用第三方库，必须先定义稳定的 trait，再由适配器实现（现有示例：`filters::InflateBackend` 封装 `flate2`；`CffOutlineParser` 封装 `ttf-parser`；`JpegBackend` 封装 `zune-jpeg`；`CryptoBackend` 封装 RustCrypto 原语）。
+1. **依赖选型与边界**（标准库 / 本地实现 / 第三方库）：
+   - **四类划分**：能力型依赖提供编解码、解析或密码学能力，必须落在 PDF 语义 trait 之后；卫生型依赖只提供安全属性（如 `zeroize`、`subtle`），登记豁免、不强制包装；数据型依赖是 CMap、码表等纯数据，以 vendored 原文入库并保留溯源、许可证与 SHA-256；开发型依赖只允许出现在 `[dev-dependencies]`，不得进入运行时产物。
+   - **判定顺序**：先判「PDF 产品语义 vs 标准件」。产品语义（对象模型、版本特性映射与降级、CMap 码空间切分、字体子集化不变量、内容流算子、线性化、xref/ObjStm、签名流程）一律本地实现，不再讨论替代；纯数据走 vendored；标准库已有等价物（容器、IO、同步、时间）走标准库；安全卫生属性走卫生型豁免；其余叶子能力才查候选库，过门槛后经适配器接入，过不了门槛才自研。
+   - **硬门槛**：许可证须与出站 `MIT OR Apache-2.0` 相容（允许 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC、Zlib、Unicode-3.0、CC0-1.0、Unlicense、IJG；MPL-2.0 仅在未修改其源文件时有条件允许；GPL、AGPL、LGPL 与无许可证一律拒绝）；直接依赖的 unsafe 计数大于零时必须附审计记录（用途、边界、为何无法用安全实现替代）；维护状态以「最近一次发布不超过 365 天、反向依赖不少于 5 个或近 90 天下载不少于 100k、RUSTSEC 无未修复公告」为准，格式冻结型与数据型可显式豁免。
+   - **适配器边界**：第三方 crate 只能出现在 `scripts/deps.allow.toml` 登记的适配器路径内；适配器对外只暴露本项目类型，公开 API 签名不得出现外部 crate 类型，外部类型不得穿过边界进入业务代码。D3 以离线静态扫描执行：从 crate 根按 `pub mod` 收窄到可达公开模块，扫描 `pub` 项签名、公有结构体具名字段、`pub use` 与公有枚举变体负载，命中外部 crate 根名或本文件从该 crate 导入的标识符即 FAIL，不依赖 nightly 工具链。
+   - **不得降低项目质量**：引入第三方库前必须逐项给出结论——它替换或新增了什么能力（与本地现状的能力对照）；错误处理语义是否比现状更弱（错误类型、错误位置、是否吞掉错误）；是否丢失容错或恢复能力（如 CCITT `/DamagedRowsBeforeError` 的损坏行恢复、`/EndOfBlock false` 的提前终止）；性能与内存是否有量级变化；MSRV 是否被抬高；维护状态与许可证是否过门槛。任一项比现状差且无补偿方案则不得采用；可接受的行为差异必须登记到 `scripts/deps.allow.toml` 的 `behaviour_delta`，退化项还须登记 `degradations`、`degradation_acceptance` 与 `degradation_tests`。
+   - **机器校验**：上述规则由 `scripts/deps_check.ps1`（D1–D9）执行；其中 D9 以 `cargo metadata` 的 `rust_version` 为事实源，任一普通依赖要求的工具链高于 `Cargo.toml` 的 `rust-version` 即 FAIL，platform-specific 与 dev-dependencies 单列报告、不计失败。阈值之外的易变元数据（版本、发布日期、下载量、SHA-256、豁免理由、行为差异与退化判定）只登记在 `scripts/deps.allow.toml`，本文不复述。
 2. **扩展优先于修改核心调度**：新增能力应通过既有扩展点（trait、注册表、可注入后端）接入；核心调度逻辑保持稳定，不得为单个实现修改调度分支。现有实例：过滤器经 `filters::StreamFilter` + `builtin_filters` 注册，`decode_stream` 不改动，`decode_stream_with` 支持注入/覆盖。
 3. **抽象须可替换、可验证**：每个扩展点都要有替代实现的测试，证明核心只依赖抽象而非具体实现；新增扩展点时同步交付该测试。
 4. **边界失败语义统一**：所有解析、解码与安全边界对损坏、截断或非法输入返回类型化错误（`DecodeError`、`FontError`、`ParseError` 等），不得 panic；任何宽容恢复或降级行为必须显式实现、有测试覆盖并记录在矩阵备注中。

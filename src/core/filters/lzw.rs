@@ -2,6 +2,7 @@
 
 use crate::core::types::Dict;
 
+use super::lzw_backend::WeezlLzwBackend;
 use super::predictor::apply_predictor;
 use super::{DecodeError, Result, StreamFilter};
 
@@ -19,42 +20,15 @@ impl StreamFilter for LzwFilter {
     }
 }
 
-/// LZW 位流读取器：PDF 规定码流高位优先（MSB-first），码可跨字节边界。
-struct LzwBitReader<'a> {
-    data: &'a [u8],
-    /// 已消费的位数。
-    bit_pos: usize,
+/// LZW 位流与字典解码后端。
+///
+/// 只经字节、`/EarlyChange` 布尔语义与字符串错误交互，第三方码流库的类型
+/// 不越过此边界；换库或改回本地实现只需替换 `lzw_backend.rs` 中的实现。
+pub(super) trait LzwBackend {
+    /// `early_change` 为 `true` 表示 `/EarlyChange 1`（码长提前一个码切换，
+    /// 与 TIFF 口径一致）；`false` 为标准口径。
+    fn decode(&self, data: &[u8], early_change: bool) -> std::result::Result<Vec<u8>, String>;
 }
-
-impl<'a> LzwBitReader<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, bit_pos: 0 }
-    }
-
-    /// 读取 `width` 位；剩余位数不足时返回 `None`（视为流在无 EOD 处结束）。
-    fn read(&mut self, width: usize) -> Option<u32> {
-        if width == 0 || self.bit_pos + width > self.data.len() * 8 {
-            return None;
-        }
-        let mut value = 0u32;
-        for _ in 0..width {
-            let byte = self.data[self.bit_pos / 8];
-            let bit = (byte >> (7 - (self.bit_pos % 8))) & 1;
-            value = (value << 1) | u32::from(bit);
-            self.bit_pos += 1;
-        }
-        Some(value)
-    }
-}
-
-/// 清空字典并重置码长的特殊码。
-const LZW_CLEAR: u32 = 256;
-/// 数据结束码。
-const LZW_EOD: u32 = 257;
-/// 初始表长：0–255 单字节 + 256 CLEAR + 257 EOD。
-const LZW_INITIAL_TABLE_LEN: usize = 258;
-/// 码宽 12 位可表示的最大表项数；表满后停止扩容（规范：entry 4095 为最后一项）。
-const LZW_TABLE_LIMIT: usize = 4096;
 
 /// 读取 `/EarlyChange`（仅 LZWDecode）：缺省 1；规范只定义 0 与 1，
 /// 其他值（含非整数）视为参数错误。
@@ -72,68 +46,19 @@ fn lzw_early_change(params: Option<&Dict>) -> Result<usize> {
 /// `LZWDecode`（ISO 32000-1 7.4.4）：9–12 位变长码、CLEAR/EOD、KwKwK
 /// 特例与 `/EarlyChange`。
 ///
-/// 码宽切换：`/EarlyChange 1`（缺省）在表长 511 时切到 10 位（之后 1023、
-/// 2047），`/EarlyChange 0` 在 512 时切换；12 位封顶。表满 4096 后停止
-/// 新增但继续解码。规范要求 EOD，但流被截断时返回已解出的前缀（宽容，
-/// 与库的「宽进」策略一致），绝不 panic。
+/// 位流与字典解码交给后端适配层（当前为 `weezl`）：`/EarlyChange 1`（缺省）
+/// 按 TIFF 口径在表长 511 时切到 10 位（之后 1023、2047），`/EarlyChange 0`
+/// 在 512 时切换；12 位封顶，表满 4096 后停止新增但继续解码。规范要求 EOD，
+/// 但流被截断时后端返回已解出的前缀（宽容，与库的「宽进」策略一致），绝不
+/// panic。
 fn lzw_decode(data: &[u8], params: Option<&Dict>) -> Result<Vec<u8>> {
     let early_change = lzw_early_change(params)?;
-    let mut reader = LzwBitReader::new(data);
-    let mut table: Vec<Vec<u8>> = (0..=255u16).map(|b| vec![b as u8]).collect();
-    table.push(Vec::new()); // 256 CLEAR
-    table.push(Vec::new()); // 257 EOD
-    let mut width = 9usize;
-    let mut prev: Option<Vec<u8>> = None;
-    let mut out = Vec::new();
+    lzw_decode_with(data, early_change == 1, &WeezlLzwBackend)
+}
 
-    // `read` 在无 EOD 的截断流上返回 `None`：返回已解出的前缀。
-    while let Some(code) = reader.read(width) {
-        match code {
-            LZW_CLEAR => {
-                table.truncate(LZW_INITIAL_TABLE_LEN);
-                width = 9;
-                prev = None;
-            }
-            LZW_EOD => break,
-            _ => {
-                // 当前码对应的字节序列；`code == table.len()` 为 KwKwK
-                // （编码端刚新增的表项，解码端尚未持有）。
-                let entry = if (code as usize) < table.len() {
-                    table[code as usize].clone()
-                } else if code as usize == table.len() {
-                    let Some(p) = prev.as_ref() else {
-                        return Err(DecodeError::new(format!(
-                            "LZWDecode: code {code} has no predecessor entry"
-                        )));
-                    };
-                    let mut e = p.clone();
-                    e.push(p[0]);
-                    e
-                } else {
-                    return Err(DecodeError::new(format!(
-                        "LZWDecode: code {code} outside table (next code {})",
-                        table.len()
-                    )));
-                };
-
-                if let Some(p) = prev.as_ref()
-                    && table.len() < LZW_TABLE_LIMIT
-                {
-                    let mut new_entry = p.clone();
-                    new_entry.push(entry[0]);
-                    table.push(new_entry);
-                    // /EarlyChange=1：码长增加提前一个码；=0：按规范
-                    // 「创建表项 2^width 后切换」。12 位封顶。
-                    if width < 12 && table.len() == (1 << width) - early_change {
-                        width += 1;
-                    }
-                }
-                out.extend_from_slice(&entry);
-                prev = Some(entry);
-            }
-        }
-    }
-    Ok(out)
+/// 经后端 trait 解码，便于以替身实现验证 PDF 语义层只依赖抽象。
+fn lzw_decode_with<B: LzwBackend>(data: &[u8], early_change: bool, backend: &B) -> Result<Vec<u8>> {
+    backend.decode(data, early_change).map_err(DecodeError::new)
 }
 
 #[cfg(test)]
@@ -279,6 +204,15 @@ mod tests {
         assert!(e.to_string().contains("outside table"), "got: {e}");
     }
 
+    /// CLEAR 之后紧跟 KwKwK 形态的码（等于表长）但无前驱 → Err，不 panic。
+    #[test]
+    fn lzw_rejects_kwkwk_without_predecessor() {
+        let d = dict_with(Value::Name("LZWDecode".into()), None);
+        let codes = [(256, 9), (258, 9)];
+        let e = decode_stream(&d, &pack_lzw_codes(&codes)).unwrap_err();
+        assert!(e.to_string().contains("LZWDecode"), "got: {e}");
+    }
+
     /// `/EarlyChange` 只接受 0/1；其他值报参数错误。
     #[test]
     fn lzw_rejects_invalid_early_change() {
@@ -295,5 +229,36 @@ mod tests {
         let d = dict_with(Value::Name("LZWDecode".into()), None);
         let codes = [(256, 9), (45, 9), (65, 9)]; // 无 EOD
         assert_eq!(decode_stream(&d, &pack_lzw_codes(&codes)).unwrap(), b"-A");
+    }
+
+    /// 码流总位数不是 8 的倍数：末字节的填充位被忽略，EOD 前的数据完整解出。
+    #[test]
+    fn lzw_ignores_non_byte_aligned_tail() {
+        let d = dict_with(Value::Name("LZWDecode".into()), None);
+        let codes = [(256, 9), (65, 9), (66, 9), (257, 9)]; // 36 位 = 4.5 字节
+        assert_eq!(decode_stream(&d, &pack_lzw_codes(&codes)).unwrap(), b"AB");
+    }
+
+    /// 替身后端：验证 PDF 语义层只依赖 `LzwBackend`，且 `/EarlyChange`
+    /// 语义被原样传给后端（换库或改回本地实现只需替换适配文件）。
+    struct FakeBackend;
+
+    impl LzwBackend for FakeBackend {
+        fn decode(&self, _data: &[u8], early_change: bool) -> std::result::Result<Vec<u8>, String> {
+            Ok(if early_change {
+                b"early".to_vec()
+            } else {
+                b"standard".to_vec()
+            })
+        }
+    }
+
+    #[test]
+    fn lzw_backend_is_replaceable() {
+        assert_eq!(lzw_decode_with(&[0], true, &FakeBackend).unwrap(), b"early");
+        assert_eq!(
+            lzw_decode_with(&[0], false, &FakeBackend).unwrap(),
+            b"standard"
+        );
     }
 }

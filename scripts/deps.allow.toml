@@ -1,0 +1,244 @@
+# 依赖登记表（机器可读事实源）
+# 规则解释见 docs/roadmap/principles.md 工程约定 #1；人类可读索引见 docs/third-party/README.md。
+# 本文件只登记易变元数据（版本、复核日期、豁免理由、适配器位置、行为差异与退化判定），由 scripts/deps_check.ps1 校验。
+
+[meta]
+outbound_license = "MIT OR Apache-2.0"
+review_interval_days = 365
+
+# role:
+#   capability  提供编解码/解析/密码学能力，只能出现在 adapter 或 test_paths 内
+#   hygiene     只提供安全属性，全域允许
+#   data        vendored 纯数据，不参与 manifest 对账
+#   dev         仅 [dev-dependencies]，禁止进入 src
+# maintenance:
+#   active          按 review_interval_days 复核发布节奏
+#   frozen-format   格式冻结型，只要求无未修复安全公告
+#   vendored        数据型，只要求溯源与许可证
+# behaviour_delta  与本地实现或替换前实现相比的已知行为差异（无差异写「无」）；D8 必填
+# degraded         是否相对现状退化；true 时须另登记 degradations、degradation_acceptance 与 degradation_tests
+
+[[dep]]
+name = "aes"
+lib = "aes"
+role = "capability"
+version = "0.8.4"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/reader/security/crypto.rs"]
+test_paths = ["src/core/reader/security/standard/tests/mod.rs"]
+behaviour_delta = "无；仅 AES-128-CBC 原语，分组模式、填充与密钥派生仍在本地实现"
+degraded = false
+justification = "AES-128-CBC 原语（标准安全处理器 7.6.2/7.6.3）；密钥派生与权限位在本地实现。"
+
+[[dep]]
+name = "flate2"
+lib = "flate2"
+role = "capability"
+version = "1.1.10"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/filters/flate.rs", "src/core/writer/compression.rs"]
+test_paths = [
+    "src/core/filters/tests.rs",
+    "src/core/filters/bitmap/tests.rs",
+    "src/core/reader/tests/support.rs",
+    "src/core/reader/image/tests/jpx.rs",
+]
+required_features = ["rust_backend"]
+default_features = false
+behaviour_delta = "无；纯 Rust 后端；DecodeParms、predictor 与错误映射仍由适配器保持"
+degraded = false
+justification = "FlateDecode 编解码；rust_backend 保证纯 Rust、无 C 依赖，DecodeParms/predictor 与错误映射在适配器内。"
+
+[[dep]]
+name = "md-5"
+lib = "md5"
+role = "capability"
+version = "0.10.6"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/reader/security/crypto.rs", "src/core/reader/signature/digest.rs"]
+test_paths = [
+    "src/core/builder/tests/embedded_file.rs",
+    "src/core/reader/embedded/tests/mod.rs",
+    "src/core/reader/fdf/tests/embedded/decrypt.rs",
+]
+known_violation = [
+    "src/core/reader/embedded.rs",
+    "src/core/builder/types/embedded_file.rs",
+    "src/core/reader/fdf/embedded/crypto.rs",
+]
+behaviour_delta = "无；摘要原语；会话与错误语义由适配器统一"
+degraded = false
+justification = "MD5 摘要原语（7.6.2 Algorithm 2 / 嵌入文件校验 / 签名摘要）；三处业务直用已登记为债务。"
+
+[[dep]]
+name = "sha1"
+lib = "sha1"
+role = "capability"
+version = "0.10.7"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/reader/signature/digest.rs"]
+behaviour_delta = "无；摘要原语；ByteRange 语义与错误映射在适配器"
+degraded = false
+justification = "签名 ByteRange 摘要（12.8.1）；CMS/ByteRange 语义在本地实现。"
+
+[[dep]]
+name = "sha2"
+lib = "sha2"
+role = "capability"
+version = "0.10.9"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/reader/signature/digest.rs"]
+behaviour_delta = "无；摘要原语；CMS 摘要语义在适配器"
+degraded = false
+justification = "AES-256 与 CMS 摘要（7.6.3 / 12.8）；RustCrypto digest 家族与 md-5/sha1 同源。"
+
+[[dep]]
+name = "rc4"
+lib = "rc4"
+role = "capability"
+version = "0.1.0"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/reader/security/crypto.rs"]
+known_violation = ["src/core/reader/fdf/embedded/crypto.rs"]
+behaviour_delta = "无；流密码原语；密钥派生与权限位在本地实现"
+degraded = false
+justification = "RC4 流密码原语（7.6.2/7.6.3）；FDF 侧重复实现已登记为债务。"
+
+[[dep]]
+name = "subtle"
+lib = "subtle"
+role = "hygiene"
+version = "2.6.1"
+spdx = "BSD-3-Clause"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = []
+behaviour_delta = "无；常量时间比较不改变判定结果"
+degraded = false
+justification = "常量时间比较，语义无关的安全属性，按卫生型豁免适配器要求。"
+
+[[dep]]
+name = "zeroize"
+lib = "zeroize"
+role = "hygiene"
+version = "1.9.1"
+spdx = "Apache-2.0 OR MIT"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = []
+behaviour_delta = "无；内存清零不改变对外语义"
+degraded = false
+justification = "密钥与口令内存清零，语义无关的安全属性，按卫生型豁免适配器要求；不包装为项目类型。"
+
+[[dep]]
+name = "zune-core"
+lib = "zune_core"
+role = "capability"
+version = "0.5.3"
+spdx = "MIT OR Apache-2.0 OR Zlib"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/filters/jpeg.rs"]
+behaviour_delta = "无；仅配套基础类型；项目自有 ColorSpace 不复用其类型"
+degraded = false
+justification = "zune-jpeg 配套基础类型；仅经由 JpegBackend 适配器使用，项目自有 ColorSpace 不复用其类型。"
+
+[[dep]]
+name = "zune-jpeg"
+lib = "zune_jpeg"
+role = "capability"
+version = "0.5.15"
+spdx = "MIT OR Apache-2.0 OR Zlib"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = ["src/core/filters/jpeg.rs"]
+behaviour_delta = "无；DCTDecode 解码；色彩空间与采样由适配器转换为项目类型；错误映射在适配器内"
+degraded = false
+justification = "DCTDecode 熵解码；色彩空间与采样处理由适配器转换为项目类型。"
+
+[[dep]]
+name = "ttf-parser"
+lib = "ttf_parser"
+role = "capability"
+version = "0.25.1"
+spdx = "MIT OR Apache-2.0"
+maintenance = "frozen-format"
+reviewed = "2026-11-06"
+adapter = [
+    "src/core/reader/font/cff/ttf_parser.rs",
+    "src/core/reader/font/cff/raw/mod.rs",
+]
+local_shadow = ["src/core/reader/font/cff/mod.rs"]
+behaviour_delta = "无；仅 outline 与 advance；子集化不变量与 CID 语义本地实现；上游已停止维护，按冻结格式定位使用"
+degraded = false
+justification = "CFF/SFNT 轮廓解析；子集化不变量与 CID 语义本地实现，库只提供 outline 与 advance。"
+
+[[dep]]
+name = "weezl"
+lib = "weezl"
+role = "capability"
+version = "0.1.12"
+spdx = "MIT OR Apache-2.0"
+maintenance = "active"
+reviewed = "2026-11-07"
+adapter = ["src/core/filters/lzw_backend.rs"]
+required_features = ["alloc"]
+default_features = false
+behaviour_delta = "无；LZW 位流/字典解码；/EarlyChange、Predictor、截断宽容与错误文案仍在过滤器层"
+degraded = false
+justification = "LZWDecode 位流与字典解码（7.4.4）；/EarlyChange、Predictor 与错误语义在适配器/过滤器层，库类型不越过适配边界。"
+
+[[dep]]
+name = "hayro-ccitt"
+lib = "hayro_ccitt"
+role = "capability"
+version = "0.3.0"
+spdx = "Apache-2.0 OR MIT"
+maintenance = "active"
+reviewed = "2026-11-07"
+adapter = ["src/core/ccitt/backend.rs"]
+test_paths = ["src/core/ccitt/tests.rs"]
+behaviour_delta = "无；两处上游行为差异已在适配层补偿：/DamagedRowsBeforeError 恢复跳到下一 EOL、用上一行（连续损坏时用空白行）替换损坏行、达到上限即截断补白；/EndOfBlock false 下 EOB/RTC、/Rows、数据结束三者最早终止。等价性由 damaged_row_repeats_previous_row、consecutive_damaged_rows_use_blank_rows、damaged_rows_stop_after_limit、end_of_block_false_still_stops_at_rtc、end_of_block_false_still_stops_at_eofb、rows_and_data_end_terminate_without_eob、ccitt_matches_legacy_semantics 固化"
+degraded = false
+degradation_tests = ["src/core/ccitt/tests.rs"]
+justification = "CCITTFaxDecode Group 3/4 位流与行解码（7.4.6）；参数解析、/BlackIs1 反转、补白行与错误语义在适配器/语义层，库类型不越过适配边界。0.3.0 未声明 rust-version（0.5.x 声明 1.92，超出本项目 1.85）。"
+
+[[dep]]
+name = "jpeg-encoder"
+lib = "jpeg_encoder"
+role = "dev"
+version = "0.7.1"
+spdx = "(MIT OR Apache-2.0) AND IJG"
+maintenance = "active"
+reviewed = "2026-11-06"
+adapter = []
+behaviour_delta = "无；仅测试样本编码器，不进入运行时"
+degraded = false
+justification = "仅测试构造 JPEG 样本，不得进入 [dependencies]。"
+
+[[dep]]
+name = "adobe-cmap"
+lib = ""
+role = "data"
+version = "f5cf3bca"
+spdx = "BSD-3-Clause"
+maintenance = "vendored"
+reviewed = "2026-11-06"
+path = "src/core/reader/font/cmap_resources"
+provenance = "src/core/reader/font/cmap_resources/README.txt"
+license_file = "src/core/reader/font/cmap_resources/ADOBE_CMAP_LICENSE.txt"
+behaviour_delta = "无；纯数据注入，无可执行语义"
+degraded = false
+justification = "Adobe CMap 原文 vendored，逐文件 SHA-256 与上游提交绑定；码空间切分逻辑本地实现。"

@@ -3,8 +3,8 @@
 
 > **2026-11-02 重写**：原列表 6 项中 5 项已落地（D2、D7、B7、E1 读写切片，以及 D1/D4/D5/D6 基线），只剩 D3 与 B6 为真·未完成，故原列表整体过期。下列按「先清债、再补语法层缺口、最后动需要第三方决策的大项」排序，每项给出矩阵回写目标；顺序为建议，非排期承诺。
 
-1. **工程债：`builder/mod.rs` 目录化**（1105 行 / 51.5 KiB，全库最大 `src/` 违例，且 builder 侧增量频繁触及）。按「门面/链式 API/对象号编排」主题拆分，逐行搬运、零可见性放宽为目标；完成后 `src/` 超限数由 21 降至 20。回写目标：docs/roadmap/README.md「工程债」清单勾选 + 本行下方「并行边界」。
-2. **工程债：`tests/syntax.rs` 主题目录化**（1670 行 / 62.2 KiB，全仓最大单文件）。按既有主题分组（词法与对象头 / 经典 xref 与 XRef 流 / 对象流与 `/Prev` 链 / 过滤器解码 / 写出布局与 Name 转义 / 版本与特性门控）拆为 `tests/syntax/`，`Cargo.toml` 须显式 `[[test]] name = "syntax" path = "tests/syntax/mod.rs"`（`tests/main.rs`、`tests/interactive.rs` 先例）。
+1. **工程债：`builder/mod.rs` 目录化**（体量与拆分台账见 `backlog/module-debt.md`；builder 侧增量频繁触及）。按「门面/链式 API/对象号编排」主题拆分，逐行搬运、零可见性放宽为目标；完成后 `src/` 超限数由 21 降至 20。回写目标：docs/roadmap/README.md「工程债」清单勾选 + 本行下方「并行边界」。
+2. **工程债：`tests/syntax.rs` 主题目录化**（体量与拆分台账见 `backlog/module-debt.md`）。按既有主题分组（词法与对象头 / 经典 xref 与 XRef 流 / 对象流与 `/Prev` 链 / 过滤器解码 / 写出布局与 Name 转义 / 版本与特性门控）拆为 `tests/syntax/`，`Cargo.toml` 须显式 `[[test]] name = "syntax" path = "tests/syntax/mod.rs"`（`tests/main.rs`、`tests/interactive.rs` 先例）。
 3. **11.6.2–11.6.3 混合色彩空间（`/CS`）建模**（矩阵评审补登行，读写两端同为 🟡）：读端 `reader/graphics_state/` 类型化 `/CS`（混合模式用的色彩空间名/数组），写端补 `GraphicsState` setter 与 `PdfFeature` 版本门；背景色（`/BG`-类渲染语义）仍属第 10 章非目标，不做。收益：透明度章唯一可在语法层闭合的缺口。
 4. **8.9.2–8.9.4 图像变换矩阵与设备映射**（矩阵评审补登行，读端 🟡）：`ImageModel` 补 `/Matrix`（图像 XObject 到单位正方形的映射，PDF 1.7 条目）与 `/Decode` 之外的设备映射语义；写端同步。此项不做像素解码，仅语法层类型化。
 5. ~~**B6 ToUnicode/CMap ordering 数据**~~ **已落地（2026-11-06，B6.1–B6.5）**：编码类 CMap 全量 vendored（160 个文件 6039206 B）、ToUnicode 基座名册 47 个 Unicode 名称；仅剩裸 ordering 近似与写端 `usecmap` 只声明继承等边界（矩阵 9.7.5/9.10.3 已登记）。此项移出待办。

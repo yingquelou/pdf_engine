@@ -2,6 +2,14 @@
 name = "pdf_engine"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yingquelou/pdf_engine"
+# 出站双许可：见 LICENSE-MIT / LICENSE-APACHE。
+# rust-version 是实测值而非门槛设定：项目自身代码最高用到 `slice::as_chunks`
+# （1.88 稳定，如 src/core/builder/types/function.rs、src/core/reader/image/model.rs），
+# 非 dev 依赖的最高声明值是 zeroize 1.85；取两者较大值即 1.88。
+# 此前的 1.85 与代码实际不符，这里是把假声明纠正为真实值，不是抬高门槛。
+rust-version = "1.88"
 
 [dependencies]
 aes = "0.8"
@@ -21,8 +29,14 @@ zeroize = "1"
 zune-core = "0.5"
 zune-jpeg = "0.5.15"
 # CFF/OpenType 字体轮廓解析：PDF 的 CIDFontType0 与 FontFile3 CFF 程序。
-# 经 `CffOutlineBackend` trait 适配器隔离，避免直接依赖第三方 API。
+# 经 `CffOutlineParser` trait 适配器隔离，避免直接依赖第三方 API。
 ttf-parser = "0.25"
+# LZW 位流与字典解码：PDF 的 LZWDecode 过滤器（7.4.4）。
+# 仅启用纯 Rust 的 alloc 后端，经 `filters/lzw_backend.rs` 适配器隔离。
+weezl = { version = "0.1.12", default-features = false, features = ["alloc"] }
+# CCITT Group 3/4 位流与行解码：PDF 的 CCITTFaxDecode 过滤器（7.4.6）。
+# 纯安全 Rust（crate 内 forbid(unsafe_code)），经 `ccitt/backend.rs` 适配器隔离。
+hayro-ccitt = "0.3.0"
 
 [lib]
 name = "pdf_engine"

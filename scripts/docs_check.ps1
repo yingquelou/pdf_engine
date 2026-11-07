@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  docs 目录 C1–C6 一致性检查（只读，不改任何文件）。
+  docs 目录 C1–C8 一致性检查（只读，不改任何文件）。
 
 .DESCRIPTION
   自动探测文档布局：
@@ -12,6 +12,8 @@
   C4 Markdown 相对链接完整性
   C5 易漂移数字与阶段标题状态（非 changelog/归档文件）
   C6 单文件体量（默认 600 行 / 40 KiB）
+  C7 稳定规则文件不得出现易漂移事实（版本号、日期、下载量）
+  C8 第三方/规则文档引用的仓库路径必须存在
 
 .PARAMETER Root
   仓库根目录，默认取脚本所在目录的父目录。
@@ -530,6 +532,67 @@ foreach ($file in $scopeFiles) {
 $c6Status = if ($c6Bad -gt 0) { 'FAIL' } else { 'PASS' }
 $c6Summary = ('超限文件 {0} 个｜上限 {1} 行 / {2} KiB｜扫描 {3} 个文件' -f $c6Bad, $MaxLines, $MaxKiB, $scopeFiles.Count)
 Add-Check -Id 'C6' -Name '单文件体量' -Status $c6Status -Summary $c6Summary -Details ($c6Details | Select-Object -First $DetailLimit)
+
+# ---------------- C7 稳定规则文件不得出现易漂移事实 ----------------
+# principles.md 承载不变规则；版本号、发布日期、下载量等事实只允许登记在
+# scripts/deps.allow.toml，避免规则文件随依赖升级而漂移。
+$ruleFiles = @()
+foreach ($p in @('docs/roadmap/principles.md', 'docs/third-party/README.md')) {
+    $full = Join-Path $Root $p.Replace('/', '\')
+    if (Test-Path -LiteralPath $full) { $ruleFiles += Get-Item -LiteralPath $full }
+}
+
+$c7Patterns = @(
+    @{ name = '版本号'; rx = '\b[0-9]+\.[0-9]+\.[0-9]+\b' },
+    @{ name = '日期';   rx = '\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b' },
+    @{ name = '下载量'; rx = '[0-9]{3,}\s*\u6B21\u4E0B\u8F7D|\u4E0B\u8F7D\u91CF\s*[0-9]{3,}' }
+)
+
+$c7Details = @()
+$c7Hits = 0
+foreach ($file in $ruleFiles) {
+    if ((Get-RelPath $file.FullName) -ne 'docs/roadmap/principles.md') { continue }
+    $lines = Read-Utf8Lines $file.FullName
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        foreach ($p in $c7Patterns) {
+            if ($lines[$i] -match $p.rx) {
+                $c7Hits++
+                if ($c7Details.Count -lt $DetailLimit) {
+                    $c7Details += ('{0}:{1} [{2}] {3}' -f (Get-RelPath $file.FullName), ($i + 1), $p.name, $lines[$i].Trim())
+                }
+            }
+        }
+    }
+}
+$c7Status = if ($c7Hits -gt 0) { 'FAIL' } else { 'PASS' }
+$c7Summary = ('易漂移事实 {0} 处｜扫描 principles.md' -f $c7Hits)
+Add-Check -Id 'C7' -Name '规则文件无易漂移事实' -Status $c7Status -Summary $c7Summary -Details $c7Details
+
+# ---------------- C8 文档引用的仓库路径必须存在 ----------------
+$c8Details = @()
+$c8Hits = 0
+$c8Missing = 0
+foreach ($file in $ruleFiles) {
+    $rel = (Get-RelPath $file.FullName)
+    $lines = Read-Utf8Lines $file.FullName
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        foreach ($m in [regex]::Matches($lines[$i], '`([^`]+)`')) {
+            $token = $m.Groups[1].Value.Trim().TrimEnd('/')
+            if ($token -notmatch '^(src|tests|scripts|docs)/') { continue }
+            $c8Hits++
+            $candidate = Join-Path $Root $token.Replace('/', '\')
+            if (-not (Test-Path -LiteralPath $candidate)) {
+                $c8Missing++
+                if ($c8Details.Count -lt $DetailLimit) {
+                    $c8Details += ('{0}:{1} 引用路径不存在：{2}' -f $rel, ($i + 1), $token)
+                }
+            }
+        }
+    }
+}
+$c8Status = if ($c8Missing -gt 0) { 'FAIL' } else { 'PASS' }
+$c8Summary = ('引用路径 {0} 处｜缺失 {1} 处（扫描 principles.md 与 third-party/README.md）' -f $c8Hits, $c8Missing)
+Add-Check -Id 'C8' -Name '引用路径存在' -Status $c8Status -Summary $c8Summary -Details $c8Details
 
 # ---------------- 输出 ----------------
 $failed = @($script:checks | Where-Object { $_.status -eq 'FAIL' }).Count
