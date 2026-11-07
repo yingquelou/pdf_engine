@@ -71,7 +71,7 @@
 use crate::core::types::{PdfFeature, PdfVersion};
 
 use super::error::{ImageError, Result, invalid, unsupported};
-use super::jbig2::{Jbig2PageInfo, Jbig2Stream, is_jbig2_filter};
+use super::jbig2::{Jbig2PageInfo, is_jbig2_filter};
 use super::jpx::{JpxHeader, is_jpx_filter};
 use super::model::ImageModel;
 
@@ -122,6 +122,9 @@ pub struct DecodedBitmap {
     /// 每分量位数（1/2/4/8/16）。
     pub bits_per_component: u8,
     pub samples: Vec<u8>,
+    /// 码流内嵌的 ICC 剖面原始字节（JPX `colr` box 的 ICC 形态）；解码器
+    /// 不解释它，交由本库颜色管线消费。无内嵌剖面或域不适用时为 `None`。
+    pub icc_profile: Option<Vec<u8>>,
 }
 
 impl DecodedBitmap {
@@ -168,8 +171,13 @@ impl DecodedBitmap {
 pub struct Jbig2DecodeRequest<'a> {
     /// 图像流内的 JBIG2 段链原始字节（§7.4.7：PDF 中不应含文件头段）。
     pub codestream: &'a [u8],
-    /// `/JBIG2Globals` 全局段流的已解析段链（缺失为 `None`）。
-    pub globals: Option<&'a Jbig2Stream>,
+    /// `/JBIG2Globals` 全局流的**原始解码字节**（缺失为 `None`）。
+    ///
+    /// 真实后端需要段链原文才能与图像流合并解码（T.88 §7.2.3 按段号排序），
+    /// 因此这里给字节而不是 [`Jbig2Stream`] 解析结果；语法层模型只保留
+    /// 解析出的段元数据，原文由
+    /// [`super::jbig2::Jbig2ImageInfo::globals_bytes`] 携带。
+    pub globals_raw: Option<&'a [u8]>,
     /// 图像流页面信息段（T.88 §7.4.8）几何；未解析到时为 `None`，
     /// 后端须自行从码流读取。
     pub page_information: Option<&'a Jbig2PageInfo>,
@@ -185,6 +193,9 @@ pub struct JpxDecodeRequest<'a> {
     /// [`super::parse_jpx_header`] 的头部结果（几何/分量/颜色空间提示）；
     /// 载荷畸形时为 `None`，后端自行解析。
     pub header: Option<&'a JpxHeader>,
+    /// 图像字典 `/SMaskInData`（Table 89，0–2）；`None` 表示缺省值 0，
+    /// 此时码流内的不透明通道按 §7.4.9 忽略。
+    pub smask_in_data: Option<u8>,
     /// 调用方注入的文档声明版本；`None` 表示门禁交由上层判断。
     pub pdf_version: Option<PdfVersion>,
 }
@@ -249,11 +260,15 @@ impl<'a> ImageBackends<'a> {
 
 /// 内建图像解码后端集合。
 ///
-/// 与 [`crate::core::filters::builtin_filters`] 对称的注册入口，但内建
-/// 集合恒为 [`ImageBackends::NONE`]：本库按既定边界不解析第三方二进制。
-/// 调用方经 [`ImageBackends::new`] 显式注册后端即可覆盖该默认。
+/// 与 [`crate::core::filters::builtin_filters`] 对称的注册入口：内建集合
+/// 逐个域登记适配层后端（[`jbig2_hayro::HayroJbig2Backend`]），与
+/// CCITT/LZW 经适配层使用第三方实现的口径一致。调用方经
+/// [`ImageBackends::NONE`] 显式退化为「不派发任何图像」。
 pub fn builtin_image_backends() -> &'static ImageBackends<'static> {
-    &ImageBackends::NONE
+    static JBIG2: [&dyn Jbig2Backend; 1] = [&jbig2_hayro::HayroJbig2Backend];
+    static JPX: [&dyn JpxBackend; 1] = [&jpx_hayro::HayroJpxBackend];
+    static BUILTIN: ImageBackends<'static> = ImageBackends::new(&JBIG2, &JPX);
+    &BUILTIN
 }
 
 /// 契约层版本门禁：声明版本低于规范门（JBIG2 1.4 / JPX 1.5）时拒绝。
@@ -360,13 +375,17 @@ impl ImageModel {
             let request = JpxDecodeRequest {
                 codestream: &self.data,
                 header: self.jpx.as_ref(),
+                smask_in_data: self.smask_in_data,
                 pdf_version,
             };
             decode_jpx_with(backends.jpx(), &request)
         } else if is_jbig2_filter(&self.filters) {
             let request = Jbig2DecodeRequest {
                 codestream: &self.data,
-                globals: self.jbig2.as_ref().and_then(|info| info.globals.as_ref()),
+                globals_raw: self
+                    .jbig2
+                    .as_ref()
+                    .and_then(|info| info.globals_bytes.as_deref()),
                 page_information: self
                     .jbig2
                     .as_ref()
@@ -382,6 +401,9 @@ impl ImageModel {
         }
     }
 }
+
+pub mod jbig2_hayro;
+pub mod jpx_hayro;
 
 mod document_entry;
 #[cfg(test)]

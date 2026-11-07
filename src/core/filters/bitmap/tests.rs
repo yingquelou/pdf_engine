@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::filters::{BitmapStreamContext, decode_bitmap_stream, decode_bitmap_stream_with};
 use crate::core::reader::image::{
-    DecodedBitmap, ImageBackends, ImageError, Jbig2Backend, Jbig2DecodeRequest, Jbig2Stream,
+    DecodedBitmap, ImageBackends, ImageError, Jbig2Backend, Jbig2DecodeRequest,
     JpxBackend, JpxDecodeRequest,
 };
 use crate::core::types::{Array, Dict, PdfVersion, Value};
@@ -19,6 +19,7 @@ fn good_bitmap() -> DecodedBitmap {
         components: 1,
         bits_per_component: 8,
         samples: vec![10, 20, 30, 40, 50, 60],
+        icc_profile: None,
     }
 }
 
@@ -30,6 +31,7 @@ fn bad_shape_bitmap() -> DecodedBitmap {
         components: 1,
         bits_per_component: 8,
         samples: vec![10],
+        icc_profile: None,
     }
 }
 
@@ -87,7 +89,7 @@ impl Jbig2Backend for FakeJbig2 {
         self.calls.fetch_add(1, Ordering::Relaxed);
         *self.seen_codestream.lock().unwrap() = request.codestream.to_vec();
         self.saw_globals
-            .store(usize::from(request.globals.is_some()), Ordering::Relaxed);
+            .store(usize::from(request.globals_raw.is_some()), Ordering::Relaxed);
         self.saw_page_information.store(
             usize::from(request.page_information.is_some()),
             Ordering::Relaxed,
@@ -409,11 +411,7 @@ fn earlier_filter_stages_decode_before_bitmap_backend() {
 /// 送达后端；缺省（`None`）时后端按契约自行从码流读取。
 #[test]
 fn jbig2_globals_injected_through_context_reach_backend() {
-    let globals = Jbig2Stream {
-        segments: Vec::new(),
-        findings: Vec::new(),
-        page_information: None,
-    };
+    let globals = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00".to_vec();
     let fake = FakeJbig2::new(Outcome::Good);
     let refs: [&dyn Jbig2Backend; 1] = [&fake];
     let backends = ImageBackends::new(&refs, &[]);

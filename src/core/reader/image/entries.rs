@@ -50,6 +50,7 @@ impl Document {
             .as_ref()
             .and_then(|params| params.get("JBIG2Globals"));
         let mut globals = None;
+        let mut globals_bytes = None;
         let mut globals_reference = None;
         match globals_value {
             Some(value) => {
@@ -59,15 +60,20 @@ impl Document {
                 match self.resolve_image_value(value) {
                     Ok(resolved) => match &resolved {
                         Value::Stream(_, _) => {
-                            let parsed = self
-                                .decode_stream_bytes(&resolved)
-                                .map_err(Jbig2Error::GlobalsStreamDecode)
-                                .and_then(|bytes| jbig2::parse_jbig2_segments(&bytes));
-                            match parsed {
-                                Ok(stream) => globals = Some(stream),
-                                Err(error) => {
-                                    findings.push(Jbig2Finding::Jbig2GlobalsUnparsable(error))
+                            // 原始字节同时保留：真实后端需要段链原文才能与
+                            // 图像流合并解码（见 `backend/jbig2_hayro.rs`）。
+                            match self.decode_stream_bytes(&resolved) {
+                                Ok(bytes) => {
+                                    match jbig2::parse_jbig2_segments(&bytes) {
+                                        Ok(stream) => globals = Some(stream),
+                                        Err(error) => findings
+                                            .push(Jbig2Finding::Jbig2GlobalsUnparsable(error)),
+                                    }
+                                    globals_bytes = Some(bytes);
                                 }
+                                Err(error) => findings.push(Jbig2Finding::Jbig2GlobalsUnparsable(
+                                    Jbig2Error::GlobalsStreamDecode(error),
+                                )),
                             }
                         }
                         other => findings.push(Jbig2Finding::Jbig2GlobalsNotAStream {
@@ -99,6 +105,7 @@ impl Document {
         Jbig2ImageInfo {
             page,
             globals,
+            globals_bytes,
             globals_reference,
             findings,
         }

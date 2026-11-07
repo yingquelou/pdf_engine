@@ -26,6 +26,8 @@
 | `ttf-parser` | 0.25.1 | MIT OR Apache-2.0 | CFF / OpenType 轮廓解析 | `src/core/reader/font/cff/ttf_parser.rs`、`src/core/reader/font/cff/raw/mod.rs` | Caleb Maclennan、Laurenz Stampfl、Yevgenii Reizner |
 | `weezl` | 0.1.12 | MIT OR Apache-2.0 | LZWDecode 位流与字典解码 | `src/core/filters/lzw_backend.rs` | The image-rs Developers |
 | `hayro-ccitt` | 0.3.0 | Apache-2.0 OR MIT | CCITTFaxDecode Group 3/4 位流与行解码 | `src/core/ccitt/backend.rs` | Laurenz Stampfl |
+| `hayro-jbig2` | 0.3.0 | Apache-2.0 OR MIT | JBIG2Decode 像素解码（页位图与嵌入组织码流） | `src/core/reader/image/backend/jbig2_hayro.rs` | Laurenz Stampfl |
+| `hayro-jpeg2000` | 0.3.5 | Apache-2.0 OR MIT | JPXDecode 像素解码（JP2 框与裸码流） | `src/core/reader/image/backend/jpx_hayro.rs` | Laurenz Stampfl |
 
 ## 开发依赖
 

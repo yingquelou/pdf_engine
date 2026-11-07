@@ -23,6 +23,7 @@ fn ok_bitmap() -> DecodedBitmap {
         components: 1,
         bits_per_component: 1,
         samples: vec![0xAA, 0x55],
+        icc_profile: None,
     }
 }
 

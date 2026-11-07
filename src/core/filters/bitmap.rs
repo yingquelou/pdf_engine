@@ -30,10 +30,10 @@
 //! 同口径）。
 
 use crate::core::reader::image::{
-    ImageBackends, ImageError, Jbig2DecodeRequest, Jbig2Stream, JpxDecodeRequest,
-    decode_jbig2_with, decode_jpx_with, parse_jbig2_segments, parse_jpx_header,
+    ImageBackends, ImageError, Jbig2DecodeRequest, JpxDecodeRequest, decode_jbig2_with,
+    decode_jpx_with, parse_jbig2_segments, parse_jpx_header,
 };
-use crate::core::types::{Dict, PdfVersion};
+use crate::core::types::{Dict, PdfVersion, Value};
 
 use super::{canonical_filter, decode_stream_except, filter_names};
 
@@ -50,10 +50,10 @@ pub struct BitmapStreamContext<'a> {
     /// 持有 `Document` 的调用层（与 `ImageModel::decode_image_with` 的
     /// 便捷路径同口径）。
     pub pdf_version: Option<PdfVersion>,
-    /// 已解码并解析出的 `/JBIG2Globals` 全局段链。该流是间接引用、需
+    /// 已解码的 `/JBIG2Globals` 全局段链**原始字节**。该流是间接引用、需
     /// `Document` 解引用才能取到，故由持有它的调用方注入；缺省 `None`
     /// 表示后端须自行从码流读取（后端契约口径）。
-    pub jbig2_globals: Option<&'a Jbig2Stream>,
+    pub jbig2_globals: Option<&'a [u8]>,
 }
 
 /// 经显式注册的位图后端解码 `/JBIG2Decode`/`/JPXDecode` 流并展平为
@@ -99,9 +99,16 @@ pub fn decode_bitmap_stream_with(
         .map_err(|error| ImageError::Filter(error.to_string()))?;
     let bitmap = if has_jpx {
         let header = parse_jpx_header(&codestream);
+        // `/SMaskInData` 属于图像字典本身；非整数形态按缺省 0 处理（忽略
+        // 码流内不透明通道），与图像读端同口径。
+        let smask_in_data = match dict.get("SMaskInData") {
+            Some(Value::Integer(value)) => u8::try_from(*value).ok(),
+            _ => None,
+        };
         let request = JpxDecodeRequest {
             codestream: &codestream,
             header: header.as_ref(),
+            smask_in_data,
             pdf_version: context.pdf_version,
         };
         decode_jpx_with(backends.jpx(), &request)?
@@ -109,7 +116,7 @@ pub fn decode_bitmap_stream_with(
         let segments = parse_jbig2_segments(&codestream).ok();
         let request = Jbig2DecodeRequest {
             codestream: &codestream,
-            globals: context.jbig2_globals,
+            globals_raw: context.jbig2_globals,
             page_information: segments
                 .as_ref()
                 .and_then(|stream| stream.page_information.as_ref()),

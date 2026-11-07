@@ -61,7 +61,7 @@ _本轮及历史增量中标记为「待核」的章节号 / Table 号 / 版本�
 > 依据既有第三方库评估结论：叶子级编解码可由成熟 crate 承担，PDF 产品语义保持本地实现。本轮只登记顺序，不动过滤器代码。
 
 1. 第一批：LZW 与 CCITT 均已完成（2026-11-07）。`src/core/filters/lzw.rs` 保留 PDF 语义与截断宽容，位流/字典解码改经 `lzw_backend.rs` 适配 `weezl` 0.1.12；`src/core/ccitt/mod.rs` 保留 `CcittParams` 与 PDF 语义层，位流/行解码改经 `ccitt/backend.rs` 适配 `hayro-ccitt` 0.3.0，`/BlackIs1` 反转、补白行、`/DamagedRowsBeforeError` 损坏行恢复与 `/EndOfBlock false` 三者最早终止均在适配层完成，行为与替换前一致（证据见矩阵 7.4.6 与 `docs/changelog/2026-11-07.md`）。二者原同为无产品语义的叶子编解码，替换收益最高、风险最低。
-2. 第二批：JBIG2 与 JPX。现有 `Jbig2Backend`/`JpxBackend` 只有语法解析与空后端，适合直接填实，业务调用点不变。
+2. 第二批：JBIG2 与 JPX 已完成（2026-11-07）。`src/core/reader/image/backend/jbig2_hayro.rs` 适配 `hayro-jbig2` 0.3.0，`src/core/reader/image/backend/jpx_hayro.rs` 适配 `hayro-jpeg2000` 0.3.5；两者均经 `ImageBackends` 注册，`filters/bitmap.rs` 的 `samples()` 已返回真实位图（证据见矩阵 7.4.7 / 7.4.9 与 `docs/changelog/2026-11-07.md`）。JPX 的退化项已在 `scripts/deps.allow.toml` 以 `degraded = true` 登记：16 位以上源被上游缩放到 8 位、`/SMaskInData != 0` 返回 `Unsupported`、`colr` 与分量数不一致时按 RGB+alpha 解释；待产品决策是否补本地 16 位路径或软蒙版合成。
 3. 每批替换前先跑 `scripts/deps_check.ps1` 建立基线，替换后确认 D2 无新增越界、D4 许可证相容、D7 登记已更新。
 4. 子集化、CMap 码空间切分、版本特性降级、线性化与签名流程不进入替换清单，理由见 `docs/roadmap/principles.md` 工程约定 #1。
 

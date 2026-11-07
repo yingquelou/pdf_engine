@@ -37,6 +37,14 @@ weezl = { version = "0.1.12", default-features = false, features = ["alloc"] }
 # CCITT Group 3/4 位流与行解码：PDF 的 CCITTFaxDecode 过滤器（7.4.6）。
 # 纯安全 Rust（crate 内 forbid(unsafe_code)），经 `ccitt/backend.rs` 适配器隔离。
 hayro-ccitt = "0.3.0"
+# JBIG2 位图解码：PDF 的 JBIG2Decode 过滤器（7.4.7）。
+# 纯安全 Rust（crate 内 forbid(unsafe_code)），经 `image/backend/jbig2_hayro.rs`
+# 适配器隔离；仅开 std，不引入 image / simd 特性（后者抬高依赖面与 MSRV）。
+hayro-jbig2 = { version = "0.3.0", default-features = false, features = ["std"] }
+# JPEG 2000 位图解码：PDF 的 JPXDecode 过滤器（7.4.9）。
+# 同上：经 `image/backend/jpx_hayro.rs` 适配器隔离；不引入 image/moxcms（ICC
+# 剖面字节交给项目自己的颜色管线）与 simd 特性。
+hayro-jpeg2000 = { version = "0.3.5", default-features = false, features = ["std"] }
 
 [lib]
 name = "pdf_engine"

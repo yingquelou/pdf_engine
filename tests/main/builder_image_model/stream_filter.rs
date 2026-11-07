@@ -53,6 +53,7 @@ impl Jbig2Backend for FakeJbig2 {
             components: 1,
             bits_per_component: 8,
             samples: expected_samples(),
+            icc_profile: None,
         })
     }
 }
@@ -88,6 +89,7 @@ impl JpxBackend for FakeJpx {
             components: 1,
             bits_per_component: 8,
             samples: expected_samples(),
+            icc_profile: None,
         })
     }
 }

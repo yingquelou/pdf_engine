@@ -216,6 +216,41 @@ degradation_tests = ["src/core/ccitt/tests.rs"]
 justification = "CCITTFaxDecode Group 3/4 位流与行解码（7.4.6）；参数解析、/BlackIs1 反转、补白行与错误语义在适配器/语义层，库类型不越过适配边界。0.3.0 未声明 rust-version（0.5.x 声明 1.92，超出本项目 1.85）。"
 
 [[dep]]
+name = "hayro-jbig2"
+lib = "hayro_jbig2"
+role = "capability"
+version = "0.3.0"
+spdx = "Apache-2.0 OR MIT"
+maintenance = "active"
+reviewed = "2026-11-07"
+adapter = ["src/core/reader/image/backend/jbig2_hayro.rs"]
+test_paths = ["src/core/reader/image/backend/jbig2_hayro.rs"]
+behaviour_delta = "新增能力（此前 JBIG2 只有语法解析，无像素解码）：PDF 图像流不含 JBIG2 文件头/页尾/文件尾，按嵌入组织（T.88 D.3）经 Image::new_embedded 解码；带 JBIG2 文件签名（0x97 4A 42 32 0D 0A 1A 0A）的整文件走 Image::new。位图极性按 PDF 约定反转（库内页面位图 1=黑，项目 1 位 DeviceGray 样本 1=白），行末不足一字节补白位为 1。错误统一为 ImageError::Filter 且带 JBIG2Decode: 前缀；段头/载荷截断或签名后无页面信息段 → Filter；已解出的行在后续损坏时保留前缀，与 CCITT 口径一致。资源护栏：单边 2^16、输出 256 MB，按页面信息几何与 1bpp 计算，超限在解码前返回 Filter（含 exceeds），不 OOM/panic。MSRV：0.3.0 声明 1.87，低于项目 1.88；default-features=false + std，未引入 image/moxcms 类可选特性；许可证在 deny.toml 允许清单内。"
+degraded = false
+justification = "JBIG2Decode 像素解码（7.4.7）；段解析、/JBIG2Globals 传递与位图极性转换在适配层，库类型不越过适配边界；依赖 hayro-ccitt 0.3.0（已登记）。"
+
+[[dep]]
+name = "hayro-jpeg2000"
+lib = "hayro_jpeg2000"
+role = "capability"
+version = "0.3.5"
+spdx = "Apache-2.0 OR MIT"
+maintenance = "active"
+reviewed = "2026-11-07"
+adapter = ["src/core/reader/image/backend/jpx_hayro.rs"]
+test_paths = ["src/core/reader/image/backend/jpx_hayro.rs"]
+behaviour_delta = "新增能力（此前 JPX 只有语法解析，无像素解码）：解码输出恒为 8 位交错样本，components 取颜色空间分量数。混合子采样（如 4:2:0）由上游最近邻上采样到参考网格；所有分量步长相同且大于 1 时上游把输出收缩到分量网格，适配层据 JpxDecodeRequest::header 的参考网格按整数因子复制像素补回，保证尺寸与 PDF /Width、/Height 一致。ICC 剖面（colr METH=2/3）只取原始字节放进 DecodedBitmap::icc_profile 交给项目颜色管线，不启用 image/moxcms，不适配颜色转换。/Decode 按 §7.4.9 忽略，CMYK 等分量按码流原值输出、不反转。不透明通道：/SMaskInData 缺省或 0 时按规范忽略；非 0 时无法用 DecodedBitmap 表达软蒙版，返回 Unsupported（显式失败）。错误统一为 ImageError::Filter 且带 JPXDecode: 前缀；结构损坏/截断/输出长度不符 → Filter。资源护栏：单边 2^16、输出 256 MB，解码前按头部几何与通道数校验，超限返回 Filter（含 exceeds）。MSRV：0.3.5 声明 1.88，与项目一致；default-features=false + std；许可证在 deny.toml 允许清单内。"
+degraded = true
+degradations = [
+  "位深：上游 decode() 只输出 8 位样本，12/16 位源的低位精度被丢弃（有损）；适配层不恢复原深。",
+  "软蒙版：/SMaskInData 非 0 时码流内 opacity 通道无法表达为 DecodedBitmap，返回 Unsupported，而非合并出带透明度的像素。",
+  "颜色空间/分量数不一致的容器（如 colr 枚举 sRGB 但码流 4 分量、缺 cdef）会被上游按 RGB+alpha 解释，第 4 分量默认当 opacity 丢弃；PDF 侧应以图像字典 /ColorSpace 对齐，本轮不自行推断重排。",
+]
+degradation_acceptance = "真彩色 8 位是 PDF 图像流的主流形态，16 位以上的低位损失在显示链路不可分辨；软蒙版与不一致容器均以显式错误或规范缺省行为处置，不产生静默错像素，且 PDF 字典的 /ColorSpace 与 /SMask 仍是权威来源。上述边界在 jpx_hayro.rs 的测试中逐条固化。"
+degradation_tests = ["src/core/reader/image/backend/jpx_hayro.rs"]
+justification = "JPXDecode 像素解码（7.4.9）；JP2 框/裸码流头部解析、子采样补偿、ICC 字节转发与错误语义在适配层，库类型不越过适配边界。"
+
+[[dep]]
 name = "jpeg-encoder"
 lib = "jpeg_encoder"
 role = "dev"

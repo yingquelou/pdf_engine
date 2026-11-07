@@ -21,6 +21,7 @@ fn ok_bitmap() -> DecodedBitmap {
         components: 1,
         bits_per_component: 1,
         samples: vec![0xAA, 0x55],
+        icc_profile: None,
     }
 }
 
@@ -105,6 +106,7 @@ fn dispatch(outcome: Outcome) -> Result<DecodedBitmap, ImageError> {
             components: 1,
             bits_per_component: 1,
             samples: vec![0xAA],
+            icc_profile: None,
         }),
     }
 }
@@ -137,6 +139,7 @@ fn jpx_request<'a>(codestream: &'a [u8], version: Option<PdfVersion>) -> JpxDeco
     JpxDecodeRequest {
         codestream,
         header: None,
+        smask_in_data: None,
         pdf_version: version,
     }
 }
@@ -144,14 +147,14 @@ fn jpx_request<'a>(codestream: &'a [u8], version: Option<PdfVersion>) -> JpxDeco
 fn jbig2_request<'a>(codestream: &'a [u8], version: Option<PdfVersion>) -> Jbig2DecodeRequest<'a> {
     Jbig2DecodeRequest {
         codestream,
-        globals: None,
+        globals_raw: None,
         page_information: None,
         pdf_version: version,
     }
 }
 
-/// 未注册任何后端时，JBIG2/JPX 图像维持类型化 `Unsupported`（默认行为
-/// 与 `samples()` 口径一致，不 panic）。
+/// 未注册任何后端时，JBIG2/JPX 图像维持类型化 `Unsupported`（`NONE`
+/// 仍是显式空集合，不 panic）。
 #[test]
 fn unregistered_backends_keep_typed_unsupported_behavior() {
     for filters in [&["JPXDecode"][..], &["JBIG2Decode"][..]] {
@@ -164,13 +167,14 @@ fn unregistered_backends_keep_typed_unsupported_behavior() {
             "filters {filters:?}: got {error:?}"
         );
     }
-    assert!(builtin_is_empty());
 }
 
-/// `builtin_image_backends()` 恒为空集合（本库不内建像素解码）。
-fn builtin_is_empty() -> bool {
+/// 内建集合登记两个像素解码后端，且名字唯一标识适配器实现。
+#[test]
+fn builtin_backends_register_hayro_adapters() {
     let backends = super::builtin_image_backends();
-    backends.jbig2().is_empty() && backends.jpx().is_empty()
+    assert_eq!(backends.jbig2()[0].name(), "hayro-jbig2");
+    assert_eq!(backends.jpx()[0].name(), "hayro-jpeg2000");
 }
 
 /// 非 JBIG2/JPX 图像走后端通路时提示改用 `samples()`，仍是 `Unsupported`。
@@ -323,6 +327,7 @@ fn bitmap_contract_checks_shape_parameters() {
         components: 1,
         bits_per_component: 1,
         samples: Vec::new(),
+        icc_profile: None,
     };
     assert!(zero.contract_violation().is_some());
     let bad_depth = DecodedBitmap {
@@ -331,6 +336,7 @@ fn bitmap_contract_checks_shape_parameters() {
         components: 1,
         bits_per_component: 3,
         samples: vec![0],
+        icc_profile: None,
     };
     assert!(bad_depth.contract_violation().is_some());
     let wide = DecodedBitmap {
@@ -339,6 +345,7 @@ fn bitmap_contract_checks_shape_parameters() {
         components: 1,
         bits_per_component: 2,
         samples: vec![0],
+        icc_profile: None,
     };
     assert_eq!(wide.row_bytes(), 1);
     assert!(wide.contract_violation().is_none());

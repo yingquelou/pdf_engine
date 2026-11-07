@@ -226,6 +226,12 @@ pub struct Jbig2ImageInfo {
     pub page: Jbig2Stream,
     /// `/JBIG2Globals` 全局段流的段链；参数缺失或不可解析时为 `None`。
     pub globals: Option<Jbig2Stream>,
+    /// `/JBIG2Globals` 流解码后的**原始字节**（段链原文）。
+    ///
+    /// 真实后端（`backend/jbig2_hayro.rs`）需要用原文与图像流段链合并解码；
+    /// [`globals`](Self::globals) 只保留解析出的段元数据，无法还原段头。
+    /// 解码失败时为 `None`（此时 `findings` 必有对应记录）。
+    pub globals_bytes: Option<Vec<u8>>,
     /// `/JBIG2Globals` 若为间接引用，记录其 (对象号, 代数)。
     pub globals_reference: Option<(i64, i64)>,
     /// 图像级一致性发现（页关联、全局段放置、`/JBIG2Globals` 解析等）。
