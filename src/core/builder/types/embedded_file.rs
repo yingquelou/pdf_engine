@@ -11,9 +11,8 @@
 
 use std::collections::BTreeMap;
 
-use md5::{Digest, Md5};
-
 use super::{text_string_value, validate_name_value};
+use crate::core::reader::security::{CryptoBackend, RustCryptoBackend};
 use crate::core::types::{Dict, Value};
 
 /// 嵌入文件：名称、说明、MIME 子类型与文件字节。
@@ -132,7 +131,7 @@ impl EmbeddedFile {
             .copied()
             .filter(|byte| !matches!(byte, 0 | 0o11 | 0o12 | 0o14 | 0o15 | b' '))
             .collect();
-        Md5::digest(&filtered).into()
+        RustCryptoBackend.md5(&filtered)
     }
 
     /// 校验名称与配置；错误串直接用于

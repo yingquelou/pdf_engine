@@ -21,6 +21,8 @@ fn gray_image() -> ImageData {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,

@@ -107,7 +107,7 @@ fn number_value(operand: &OperandToken, operator: &str, index: usize) -> Result<
 
 fn integer_value(operand: &OperandToken, operator: &str, index: usize) -> Result<i64> {
     match operand.token() {
-        Some(CsToken::Number(n)) => Ok(*n as i64),
+        Some(CsToken::Number(n)) if n.fract() == 0.0 => Ok(*n as i64),
         _ => Err(invalid_operand(operator, index, "expected integer")),
     }
 }

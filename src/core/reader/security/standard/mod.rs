@@ -34,6 +34,7 @@ mod strings;
 mod tests;
 
 pub(crate) use encrypt::{StandardCryptFilter, StandardEncryptionRequest};
+pub(crate) use key::pad_password;
 
 struct SecurityOptions {
     pub revision: u8,

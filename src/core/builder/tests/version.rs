@@ -17,6 +17,8 @@ fn smask_requires_pdf_1_4() {
     let mask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -33,6 +35,8 @@ fn smask_requires_pdf_1_4() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -75,6 +79,8 @@ fn image_mask_entry_requires_pdf_1_3() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -114,6 +120,8 @@ fn image_mask_entry_requires_pdf_1_3() {
     let stencil = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 8,
         height: 1,

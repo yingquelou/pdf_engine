@@ -17,6 +17,7 @@ impl PdfBuilder {
         doc: &mut Document,
         num: &mut i64,
         pools: &PoolPlan,
+        groups: &GroupPlan,
     ) -> Result<(), WriteError> {
         // 字体对象
         for (f, fnum) in &pools.font_pool {
@@ -36,7 +37,7 @@ impl PdfBuilder {
         // 图片 XObject 流对象；软蒙版、显式蒙版与替代图像作为紧随其后的
         // 独立流写出（替代图像不进入页面资源字典）。
         for (img, nums) in &pools.image_pool {
-            write_image(doc, img, nums, num)?;
+            write_image(doc, img, nums, num, groups)?;
         }
         Ok(())
     }

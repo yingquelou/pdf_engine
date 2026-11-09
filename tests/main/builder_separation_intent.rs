@@ -13,6 +13,8 @@ fn builder_separation_and_devicen_images_roundtrip_through_parser() {
     let separation = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -37,6 +39,8 @@ fn builder_separation_and_devicen_images_roundtrip_through_parser() {
     let devicen = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -236,6 +240,8 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,
@@ -252,6 +258,8 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,
@@ -267,7 +275,9 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
         decode: None,
         interpolate: false,
         intent: Some(ImageIntent::Perceptual),
-        alternates: vec![alternate],
+        alternates: vec![alternate.into()],
+        oc: None,
+        metadata: None,
         matte: Some(vec![0.25, 0.5, 0.75]),
         smask: Some(Box::new(alpha)),
         image_mask: false,
@@ -291,10 +301,16 @@ fn builder_image_intent_alternates_and_matte_roundtrip() {
     assert_eq!(model.intent.as_deref(), Some("Perceptual"));
     assert_eq!(model.alternates.len(), 1, "one alternate image");
     assert_eq!(
-        (model.alternates[0].width, model.alternates[0].height),
+        (
+            model.alternates[0].image.width,
+            model.alternates[0].image.height
+        ),
         (1, 1)
     );
-    let alternate_samples = model.alternates[0].samples().expect("alternate samples");
+    let alternate_samples = model.alternates[0]
+        .image
+        .samples()
+        .expect("alternate samples");
     assert_eq!(
         alternate_samples.pixel(0, 0),
         Some(&[10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0][..])

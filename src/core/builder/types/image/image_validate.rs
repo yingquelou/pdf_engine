@@ -146,24 +146,36 @@ impl ImageData {
                 return Err("Matte must contain finite numbers".into());
             }
         }
+        let mut default_for_printing = 0;
         for (index, alternate) in self.alternates.iter().enumerate() {
-            if alternate.image_mask {
+            let image = &alternate.image;
+            if image.image_mask {
                 return Err(format!("alternate image {index} must not be an image mask"));
             }
-            if !alternate.alternates.is_empty() {
+            if !image.alternates.is_empty() {
                 return Err(format!(
                     "alternate image {index} must not contain nested Alternates"
                 ));
             }
-            if alternate.width > self.width || alternate.height > self.height {
+            if image.width > self.width || image.height > self.height {
                 return Err(format!(
                     "alternate image {index} dimensions {}x{} exceed the base image {}x{}",
-                    alternate.width, alternate.height, self.width, self.height
+                    image.width, image.height, self.width, self.height
                 ));
             }
-            alternate
+            if alternate.default_for_printing {
+                default_for_printing += 1;
+            }
+            image
                 .validate()
                 .map_err(|message| format!("alternate image {index}: {message}"))?;
+        }
+        // Table 91：「At most one alternate for a given base image shall be
+        // so designated.」
+        if default_for_printing > 1 {
+            return Err(
+                "at most one alternate image may set DefaultForPrinting".into(),
+            );
         }
         Ok(())
     }

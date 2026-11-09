@@ -39,6 +39,20 @@ fn validate_image(image: &ImageData, version: PdfVersion) -> Result<(), WriteErr
     if let Some(opi) = &image.opi {
         validate_proxy(opi, version, "image XObject")?;
     }
+    // Table 89：`/Metadata` 自 PDF 1.4 起、`/OC` 自 PDF 1.5 起。
+    if image.metadata.is_some() && version < PdfVersion::V1_4 {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "image XObject /Metadata require PDF 1.4, got {}",
+            version.as_str()
+        )));
+    }
+    if image.oc.is_some() && !version.supports(PdfFeature::OptionalContent) {
+        return Err(WriteError::UnsupportedVersion(format!(
+            "image XObject /OC require PDF {}, got {}",
+            PdfFeature::OptionalContent.min_version().as_str(),
+            version.as_str()
+        )));
+    }
     if let Some(smask) = &image.smask {
         validate_image(smask, version)?;
     }
@@ -46,7 +60,14 @@ fn validate_image(image: &ImageData, version: PdfVersion) -> Result<(), WriteErr
         validate_image(mask, version)?;
     }
     for alternate in &image.alternates {
-        validate_image(alternate, version)?;
+        if alternate.oc.is_some() && !version.supports(PdfFeature::OptionalContent) {
+            return Err(WriteError::UnsupportedVersion(format!(
+                "alternate image /OC require PDF {}, got {}",
+                PdfFeature::OptionalContent.min_version().as_str(),
+                version.as_str()
+            )));
+        }
+        validate_image(&alternate.image, version)?;
     }
     Ok(())
 }

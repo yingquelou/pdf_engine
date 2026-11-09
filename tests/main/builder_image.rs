@@ -10,6 +10,8 @@ fn builder_cmyk_image_roundtrips_through_parser() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -106,6 +108,8 @@ fn builder_soft_mask_image_roundtrips_through_parser() {
     let mask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -123,6 +127,8 @@ fn builder_soft_mask_image_roundtrips_through_parser() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -264,6 +270,8 @@ fn builder_image_masks_roundtrip_through_parser() {
     let stencil = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 8,
         height: 1,
@@ -281,6 +289,8 @@ fn builder_image_masks_roundtrip_through_parser() {
     let explicit_mask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 4,
         height: 2,
@@ -298,6 +308,8 @@ fn builder_image_masks_roundtrip_through_parser() {
     let explicit = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -314,6 +326,8 @@ fn builder_image_masks_roundtrip_through_parser() {
     let keyed = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,

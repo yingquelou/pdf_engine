@@ -2,14 +2,22 @@
 //!
 //! 目录模块：
 //! - `decoder`：PDF 语义层（输出规模护栏、后端调度与输出契约）；
-//! - `backend`：`hayro-ccitt` 的唯一适配点（位流、行解码、`/BlackIs1` 反转）。
+//! - `backend`：`hayro-ccitt` 的唯一适配点（参数映射与损坏行恢复编排）；
+//! - `bitbuf`：MSB 优先位缓冲与带规范 EOL 的区间替换；
+//! - `eol`：EOL/RTC/EOFB 位扫描与损坏行窗口定位；
+//! - `encode`：换色位置提取与替换行的 T.4/T.6 编码（含游程码表）；
+//! - `sink`：逐行打包、`/BlackIs1` 反转与行/`/Rows` 补白。
 //!
 //! 本文件保留参数结构、公共入口与测试。
 
 use crate::core::types::{Dict, Value};
 
 mod backend;
+mod bitbuf;
 mod decoder;
+mod eol;
+mod encode;
+mod sink;
 
 pub(crate) use decoder::decode;
 

@@ -126,6 +126,8 @@ fn image(filters: &[&str], data: Vec<u8>) -> ImageModel {
         smask: None,
         smask_in_data: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         opi: None,
         jpx: None,
         jbig2: None,

@@ -8,6 +8,8 @@ fn cal_gray_image_writes_white_black_and_gamma() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -41,6 +43,8 @@ fn cal_rgb_image_writes_gamma_and_matrix() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -78,6 +82,8 @@ fn lab_image_writes_range() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -111,6 +117,8 @@ fn icc_based_image_writes_profile_stream_and_alternative() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -147,6 +155,8 @@ fn indexed_image_writes_base_hival_and_lookup_hex() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -181,6 +191,8 @@ fn indexed_image_embeds_cie_base_definition() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 3,
         height: 1,
@@ -217,6 +229,8 @@ fn separation_image_writes_colorant_alternate_and_tint_transform() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -258,6 +272,8 @@ fn device_n_image_writes_names_and_sampled_tint_transform() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -303,6 +319,8 @@ fn device_n_allows_repeated_none_colorant() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -371,6 +389,8 @@ fn assert_color_space_rejected(color_space: ColorSpace, expected: &str) {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,

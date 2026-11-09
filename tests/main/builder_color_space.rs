@@ -12,6 +12,8 @@ fn builder_cie_color_spaces_roundtrip_through_parser() {
     let lab_img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -35,6 +37,8 @@ fn builder_cie_color_spaces_roundtrip_through_parser() {
     let icc_img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -181,6 +185,8 @@ fn builder_indexed_image_roundtrips_through_parser() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,

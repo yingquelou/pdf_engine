@@ -48,13 +48,13 @@ _本轮及历史增量中标记为「待核」的章节号 / Table 号 / 版本�
 
 ### 依赖边界越界登记（2026-11-06）
 
-> 由 `scripts/deps_check.ps1` 的 D2 扫描发现。以下位置在能力型适配器之外直接使用第三方 crate，已记为基线债务，本轮只登记不改代码。整改时把调用改走既有适配器（`security/crypto.rs` 与 `signature/digest.rs`），并同步把对应条目从 `scripts/deps.allow.toml` 的 `known_violation` 移除。
+> 由 `scripts/deps_check.ps1` 的 D2 扫描发现。以下位置曾在能力型适配器之外直接使用第三方 crate，2026-11-06 记为基线债务。已在 2026-11-07 整改：调用改走既有适配器（`security/crypto.rs` 的 `CryptoBackend` 与 `signature/digest.rs`），并同步移除 `scripts/deps.allow.toml` 中对应的 `known_violation`，D2 已登记基线降为 0。
 
 | 编号 | 位置 | 越界内容 | 处置 |
 |---|---|---|---|
-| OI-5 | `src/core/reader/embedded.rs` | MD5 摘要直用，未走 `SignatureBackend`/`DigestSink` | 待整改：改走摘要适配器 |
-| OI-6 | `src/core/builder/types/embedded_file.rs` | MD5 摘要直用，属 builder 侧业务代码 | 待整改：抽出统一的嵌入文件校验入口 |
-| OI-7 | `src/core/reader/fdf/embedded/crypto.rs` | MD5 + RC4 重复实现 Algorithm 2，与 `security/crypto.rs` 并行 | 待整改：合并到标准安全处理器的密钥派生 |
+| OI-5 | `src/core/reader/embedded.rs` | MD5 摘要直用，未走 `SignatureBackend`/`DigestSink` | 已整改（2026-11-07）：改走 `CryptoBackend::md5` 适配器 |
+| OI-6 | `src/core/builder/types/embedded_file.rs` | MD5 摘要直用，属 builder 侧业务代码 | 已整改（2026-11-07）：统一改走 `CryptoBackend::md5` 适配器，与读端同一入口 |
+| OI-7 | `src/core/reader/fdf/embedded/crypto.rs` | MD5 + RC4 重复实现 Algorithm 2，与 `security/crypto.rs` 并行 | 已整改（2026-11-07）：Algorithm 2 收敛到 `security/standard/key.rs` 的 `pad_password`，MD5/RC4 经适配器调用 |
 
 ### 依赖替换优先级（2026-11-06）
 

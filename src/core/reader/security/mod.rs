@@ -16,6 +16,7 @@ mod standard;
 
 pub use permissions::Permissions;
 
-pub(super) use crypto::RustCryptoBackend;
+pub(crate) use crypto::{CryptoBackend, RustCryptoBackend};
+pub(crate) use standard::pad_password;
 pub(super) use standard::SecurityHandler;
 pub(crate) use standard::{StandardCryptFilter, StandardEncryptionRequest};

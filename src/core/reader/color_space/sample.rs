@@ -68,6 +68,23 @@ impl ColorSpaceModel {
         pixels_per_row: usize,
         data: &[u8],
     ) -> Result<Vec<f64>> {
+        self.decode_samples_with_decode(bits_per_component, pixels_per_row, data, None)
+    }
+
+    /// 同 [`ColorSpaceModel::decode_samples`]，但把 `/Decode` 数组应用于
+    /// **查表/求值之前**的原始码值。
+    ///
+    /// 仅对 Indexed（映射调色板索引）与 Separation/DeviceN（映射 tint
+    /// 输入）生效；其余色彩空间由调用方在解码后按原生分量映射，故此处
+    /// 忽略 `decode`。Indexed 的映射结果规范未定义取整方式，本库约定
+    /// 四舍五入并裁剪到 `[0, hival]`；tint 输入按变换域 `[0, 1]` 裁剪。
+    pub fn decode_samples_with_decode(
+        &self,
+        bits_per_component: usize,
+        pixels_per_row: usize,
+        data: &[u8],
+        decode: Option<&[f64]>,
+    ) -> Result<Vec<f64>> {
         let raw_n = self
             .component_count()
             .ok_or_else(|| unsupported("pattern color space carries no image samples"))?;
@@ -85,6 +102,22 @@ impl ColorSpaceModel {
             )));
         }
         let max_code = (1u64 << bits_per_component) - 1;
+        let decode = match (decode, self) {
+            (Some(values), Self::Indexed(_) | Self::Separation(_) | Self::DeviceN(_)) => {
+                if values.len() != raw_n * 2 {
+                    return Err(malformed(format!(
+                        "/Decode must contain {} numbers for a {raw_n}-component image, got {}",
+                        raw_n * 2,
+                        values.len()
+                    )));
+                }
+                if values.iter().any(|value| !value.is_finite()) {
+                    return Err(malformed("/Decode must contain finite numbers"));
+                }
+                Some(values)
+            }
+            _ => None,
+        };
         let row_bytes = (bits_per_component * raw_n * pixels_per_row).div_ceil(8);
         if data.is_empty() || !data.len().is_multiple_of(row_bytes) {
             return Err(malformed(format!(
@@ -108,7 +141,15 @@ impl ColorSpaceModel {
                             .base
                             .native_component_count()
                             .ok_or_else(|| unsupported("Indexed base has no sample components"))?;
-                        let index = (codes[0] as usize).min(indexed.hival);
+                        let index = match decode {
+                            Some(pair) => {
+                                // 规范未定义索引取整：本库四舍五入并裁剪到 [0, hival]。
+                                let mapped = pair[0]
+                                    + (codes[0] as f64 / max_code as f64) * (pair[1] - pair[0]);
+                                mapped.clamp(0.0, indexed.hival as f64).round() as usize
+                            }
+                            None => (codes[0] as usize).min(indexed.hival),
+                        };
                         let end = (index + 1)
                             .checked_mul(stride)
                             .ok_or_else(|| malformed("palette offset overflow"))?;
@@ -123,11 +164,11 @@ impl ColorSpaceModel {
                         }
                     }
                     Self::Separation(separation) => {
-                        let tints = normalize_codes(&codes, max_code);
+                        let tints = decode_tints(&codes, max_code, decode);
                         out.extend(eval_tint(&separation.tint, &tints)?);
                     }
                     Self::DeviceN(device_n) => {
-                        let tints = normalize_codes(&codes, max_code);
+                        let tints = decode_tints(&codes, max_code, decode);
                         out.extend(eval_tint(&device_n.tint, &tints)?);
                     }
                     _ => out.extend(normalize_codes(&codes, max_code)),
@@ -143,6 +184,21 @@ fn normalize_codes(codes: &[u32], max_code: u64) -> Vec<f64> {
         .iter()
         .map(|code| *code as f64 / max_code as f64)
         .collect()
+}
+
+/// 把原始码值规格化并按 `/Decode` 映射为 tint 输入。
+///
+/// 映射结果裁剪到 tint 变换输入域 `[0, 1]`（规范未定义越界语义，本库
+/// 约定裁剪；`Dmin > Dmax` 的镜像映射照常支持）。
+fn decode_tints(codes: &[u32], max_code: u64, decode: Option<&[f64]>) -> Vec<f64> {
+    let mut tints = normalize_codes(codes, max_code);
+    if let Some(pairs) = decode {
+        for (index, tint) in tints.iter_mut().enumerate() {
+            let pair = &pairs[index * 2..index * 2 + 2];
+            *tint = (pair[0] + *tint * (pair[1] - pair[0])).clamp(0.0, 1.0);
+        }
+    }
+    tints
 }
 
 /// 从行位流按 MSB-first 读取 `bits` 位（1/2/4/8/16）。

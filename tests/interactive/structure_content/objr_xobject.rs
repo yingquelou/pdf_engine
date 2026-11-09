@@ -33,6 +33,8 @@ fn builder_xobject_object_reference_roundtrip_links_struct_parent() {
             interpolate: false,
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             smask: None,
             image_mask: false,

@@ -15,6 +15,8 @@ fn rgb(width: u32, height: u32, fill: u8) -> ImageData {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,

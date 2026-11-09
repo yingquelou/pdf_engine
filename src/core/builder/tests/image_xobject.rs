@@ -8,6 +8,8 @@ fn image_xobject_emitted() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -46,6 +48,8 @@ fn cmyk_image_xobject_emitted() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -74,6 +78,8 @@ fn image_writes_decode_and_interpolate_entries() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -101,6 +107,8 @@ fn image_with_smask_writes_soft_mask_object_and_reference() {
     let mask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -117,6 +125,8 @@ fn image_with_smask_writes_soft_mask_object_and_reference() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -165,6 +175,8 @@ fn stencil_image_mask_writes_image_mask_and_omits_color_space() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 8,
         height: 1,
@@ -196,6 +208,8 @@ fn explicit_mask_writes_mask_reference_and_stencil_object() {
     let mask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 4,
         height: 2,
@@ -212,6 +226,8 @@ fn explicit_mask_writes_mask_reference_and_stencil_object() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -252,6 +268,8 @@ fn colour_key_mask_writes_integer_ranges() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,

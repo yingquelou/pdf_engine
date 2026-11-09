@@ -61,6 +61,100 @@ fn decode_array_scales_and_inverts_samples() {
 }
 
 #[test]
+fn indexed_explicit_decode_remaps_palette_indices() {
+    let indexed = Value::Array(Array(vec![
+        Value::Name("Indexed".into()),
+        Value::Name("DeviceRGB".into()),
+        Value::Integer(1),
+        Value::HexString("FF000000FF00".into()),
+    ]));
+    let doc = doc_with(vec![(
+        10,
+        stream(
+            image_dict(2, 1, "DeviceGray", 8)
+                .insert("ColorSpace", indexed)
+                .insert(
+                    "Decode",
+                    Value::Array(Array(vec![Value::Integer(1), Value::Integer(0)])),
+                ),
+            [0u8, 255],
+        ),
+    )]);
+    let samples = doc
+        .image(&Value::Ref(10, 0))
+        .unwrap()
+        .samples()
+        .expect("samples");
+    assert_eq!(samples.ranges, vec![(0.0, 1.0); 3]);
+    // 反向映射：索引 0 → 1（绿），索引 255 → 0（红）。
+    assert_eq!(samples.pixel(0, 0), Some(&[0.0, 1.0, 0.0][..]));
+    assert_eq!(samples.pixel(1, 0), Some(&[1.0, 0.0, 0.0][..]));
+}
+
+#[test]
+fn separation_explicit_decode_maps_tint_inputs() {
+    let separation = Value::Array(Array(vec![
+        Value::Name("Separation".into()),
+        Value::Name("None".into()),
+        Value::Name("DeviceGray".into()),
+        Value::Null,
+    ]));
+    let doc = doc_with(vec![(
+        10,
+        stream(
+            image_dict(2, 1, "DeviceGray", 8)
+                .insert("ColorSpace", separation)
+                .insert(
+                    "Decode",
+                    Value::Array(Array(vec![Value::Integer(1), Value::Integer(0)])),
+                ),
+            [0u8, 255],
+        ),
+    )]);
+    let samples = doc
+        .image(&Value::Ref(10, 0))
+        .unwrap()
+        .samples()
+        .expect("samples");
+    assert_eq!(samples.ranges, vec![(0.0, 1.0)]);
+    assert_eq!(samples.values, vec![1.0, 0.0]);
+}
+
+#[test]
+fn special_color_space_decode_length_is_validated() {
+    let separation = Value::Array(Array(vec![
+        Value::Name("Separation".into()),
+        Value::Name("None".into()),
+        Value::Name("DeviceGray".into()),
+        Value::Null,
+    ]));
+    let doc = doc_with(vec![(
+        10,
+        stream(
+            image_dict(1, 1, "DeviceGray", 8)
+                .insert("ColorSpace", separation)
+                .insert(
+                    "Decode",
+                    Value::Array(Array(vec![
+                        Value::Integer(0),
+                        Value::Integer(1),
+                        Value::Integer(0),
+                        Value::Integer(1),
+                    ])),
+                ),
+            [0u8],
+        ),
+    )]);
+    // 长度校验发生在解析期（`parse.rs` 按 `component_count() * 2` 核对），
+    // 因此错误由 `Document::image` 抛出，而不是 `samples()`。
+    let error = doc.image(&Value::Ref(10, 0)).unwrap_err();
+    assert!(
+        error.to_string().contains("must contain 2 numbers"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn lab_default_decode_uses_range() {
     let lab = Value::Array(Array(vec![
         Value::Name("Lab".into()),

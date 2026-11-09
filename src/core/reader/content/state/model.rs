@@ -76,7 +76,8 @@ pub struct ContentGraphicsState {
     pub leading: f64,
     /// Current font resource name and size (`Tf`).
     pub font: Option<(String, f64)>,
-    /// Text rendering mode (`Tr`): 0 fill, 1 stroke, 2 both, 3 invisible.
+    /// Text rendering mode (`Tr`): 0 fill, 1 stroke, 2 both, 3 invisible,
+    /// 4 fill+clip, 5 stroke+clip, 6 both+clip, 7 clip only.
     pub text_rendering_mode: u8,
     /// Text rise (`Ts`).
     pub text_rise: f64,

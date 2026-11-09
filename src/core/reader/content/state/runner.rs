@@ -144,7 +144,7 @@ impl ContentStateRunner {
                 self.state.font = Some((name.clone(), *size));
             }
             Op::SetTextRenderingMode(mode) => {
-                self.state.text_rendering_mode = require_enum("Tr", *mode, 3)?;
+                self.state.text_rendering_mode = require_enum("Tr", *mode, 7)?;
             }
             Op::SetTextRise(v) => {
                 require_finite("Ts", &[*v])?;

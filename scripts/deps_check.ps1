@@ -8,7 +8,8 @@
   D2 导入边界（第三方 crate 只允许出现在适配器/测试路径；已知债务记为基线）
   D3 公开 API 无外部 crate 类型（离线静态扫描 pub 签名与 re-export，无 nightly 依赖）
   D4 许可证相容（需 cargo-deny + deny.toml）
-  D5 安全公告（需 cargo-audit；公告库不可达 → SKIP 并注明已尝试数据源，解析出公告才 FAIL）
+  D5 安全公告（需 cargo-audit；远端公告库拉取失败时回退本地库快照 --no-fetch，仍作真实判定并标注数据源与快照；
+     本地快照也不可用才 SKIP 并注明已尝试数据源，解析出公告才 FAIL）
   D6 unsafe 用量（需 cargo-geiger；只判 pdf_engine 自身 unsafe，依赖图计数仅信息）
   D7 复核时效与 vendored 溯源（离线，始终运行）
   D8 引入不降级登记（behaviour_delta / degraded 缺失即 FAIL；退化项须登记差异、接受理由与测试）
@@ -501,15 +502,33 @@ else {
     $auditRun = Invoke-NativeCapture -Exe $auditProbe.path -Arguments @('audit', '--format', 'json')
     $auditDb = Join-Path $env:USERPROFILE '.cargo\advisory-db'
     $sources = @(('本地库 ' + $auditDb), '远端 git https://github.com/RustSec/advisory-db')
-    $report = $null
-    if ($auditRun.stdout.Trim()) {
-        try { $report = $auditRun.stdout | ConvertFrom-Json } catch { $report = $null }
+    $dbMode = 'fetch'
+    $parseReport = {
+        param($text)
+        if (-not $text.Trim()) { return $null }
+        try {
+            $parsed = $text | ConvertFrom-Json
+            if ($parsed -and $parsed.PSObject.Properties['vulnerabilities']) { return $parsed }
+        } catch { }
+        return $null
     }
-    if (-not $report -or -not $report.PSObject.Properties['vulnerabilities']) {
+    $report = & $parseReport $auditRun.stdout
+    if (-not $report) {
+        $blob = ($auditRun.stdout + "`n" + $auditRun.stderr)
+        $unreachable = $blob -match 'failed to fill whole buffer|error sending request|failed to fetch|couldn''t fetch|could not fetch|Connection refused|timed out|unable to update|failed to update|git fetch|no such file or directory'
+        # 远端公告库拉取失败时回退到本地库快照（--no-fetch）：仍执行真实漏洞判定，
+        # 报告里的 advisory-count / last-updated / last-commit 标明所用快照，不伪造更新。
+        if ($unreachable -and (Test-Path (Join-Path $auditDb '.git'))) {
+            $auditRun = Invoke-NativeCapture -Exe $auditProbe.path -Arguments @('audit', '--format', 'json', '--no-fetch')
+            $dbMode = 'local'
+            $report = & $parseReport $auditRun.stdout
+        }
+    }
+    if (-not $report) {
         $blob = ($auditRun.stdout + "`n" + $auditRun.stderr)
         $unreachable = $blob -match 'failed to fill whole buffer|error sending request|failed to fetch|couldn''t fetch|could not fetch|Connection refused|timed out|unable to update|failed to update|git fetch|no such file or directory'
         if ($unreachable) {
-            $reason = ('公告库不可达，未作漏洞判定；已尝试数据源：{0}；退出码 {1}' -f ($sources -join ' | '), $auditRun.exit_code)
+            $reason = ('公告库不可达且本地快照不可用（未 fetch 回退亦失败），未作漏洞判定；已尝试数据源：{0}；退出码 {1}' -f ($sources -join ' | '), $auditRun.exit_code)
             Add-Check -Id 'D5' -Name 'RUSTSEC 安全公告' -Status 'SKIP' -Summary $reason -Details (Get-LineSnippet $blob $DetailLimit)
         }
         else {
@@ -535,8 +554,10 @@ else {
         $db = $report.database
         $d5Status = 'PASS'
         if ($vuln.found) { $d5Status = 'FAIL' }
-        $d5Summary = ('{0}｜漏洞 {1} 条｜unmaintained 提示 {2} 条｜公告库 {3} 条，快照 {4}（commit {5}）' -f `
-                $auditProbe.version, $vuln.count, $warnUnmaintained.Count, $db.'advisory-count', $db.'last-updated', $db.'last-commit')
+        $dbSource = '远端拉取'
+        if ($dbMode -eq 'local') { $dbSource = '本地快照（未 fetch，快照版本见下）' }
+        $d5Summary = ('{0}｜漏洞 {1} 条｜unmaintained 提示 {2} 条｜公告库 {3} 条，快照 {4}（commit {5}）｜数据源 {6}' -f `
+                $auditProbe.version, $vuln.count, $warnUnmaintained.Count, $db.'advisory-count', $db.'last-updated', $db.'last-commit', $dbSource)
         Add-Check -Id 'D5' -Name 'RUSTSEC 安全公告' -Status $d5Status -Summary $d5Summary -Details ($d5Details | Select-Object -First $DetailLimit)
     }
 }

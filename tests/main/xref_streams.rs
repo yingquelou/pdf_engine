@@ -173,6 +173,8 @@ fn builder_flate_stream_compression_roundtrips_through_parser() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 16,
         height: 4,

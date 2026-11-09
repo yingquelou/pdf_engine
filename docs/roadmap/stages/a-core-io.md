@@ -13,7 +13,7 @@
 
 **待推进增量**：
 
-- [x] **A6 真实样本回归与 fixture 纪律**（原则 5、工程约定 #8）：把 `tests/fixtures/minimal-document.pdf` 与 `tests/fixtures/pdflatex-4-pages.pdf` 接入自动化测试（文档解析、页面树遍历、文本提取冒烟），在 fixtures 表补齐来源/许可/体积；用至少一个真实 PDF 验证损坏输入不 panic。`tests/main.rs` 已超限，接入前按「工程债」要求先把对应主题迁出为独立测试模块。
+- [x] **A6 真实样本回归与 fixture 纪律**（非规范：内部约定，见 docs/roadmap/principles.md；原则 5、样本来源与许可登记见 docs/roadmap/backlog/fixtures.md）：把 `tests/fixtures/minimal-document.pdf` 与 `tests/fixtures/pdflatex-4-pages.pdf` 接入自动化测试（文档解析、页面树遍历、文本提取冒烟），在 fixtures 表补齐来源/许可/体积；用至少一个真实 PDF 验证损坏输入不 panic。`tests/main/mod.rs` 已超限，接入前按「工程债」要求先把对应主题迁出为独立测试模块。
   - 退出标准：两个 fixture 在 `cargo test` 中自动运行（新增用例位于拆分后的主题模块）；二者的来源/许可/体积已登记；无法追溯许可的既有 fixture 由 A6 决定替换为自生成样本并记录决策；截断副本返回类型化错误而非 panic。
 
 **完成口径**：仅指上述 A1–A6。本阶段验收**只看 Reader 列**：A 范围内条目 Reader ✅ 即达成基线，Writer 侧缺口不参与本阶段判定（例如过滤器 Writer 列为 🟡 是「透传/剥离，不主动编码」的已知策略）。以下**不属于**阶段 A，避免「A 完成 = 所有真实 PDF 可读」的误读：

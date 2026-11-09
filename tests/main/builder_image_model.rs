@@ -26,6 +26,8 @@ fn reader_color_space_model_decodes_builder_images() {
     let indexed = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -46,6 +48,8 @@ fn reader_color_space_model_decodes_builder_images() {
     let separation = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -70,6 +74,8 @@ fn reader_color_space_model_decodes_builder_images() {
     let devicen = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -97,6 +103,8 @@ fn reader_color_space_model_decodes_builder_images() {
     let icc = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -273,6 +281,8 @@ fn builder_images_roundtrip_through_image_model() {
     let rgb = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -289,6 +299,8 @@ fn builder_images_roundtrip_through_image_model() {
     let alpha = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -305,6 +317,8 @@ fn builder_images_roundtrip_through_image_model() {
     let soft = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -322,6 +336,8 @@ fn builder_images_roundtrip_through_image_model() {
     let stencil = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 4,
         height: 1,
@@ -338,6 +354,8 @@ fn builder_images_roundtrip_through_image_model() {
     let explicit = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -355,6 +373,8 @@ fn builder_images_roundtrip_through_image_model() {
     let keyed = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,

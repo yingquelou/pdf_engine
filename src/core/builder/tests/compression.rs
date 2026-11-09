@@ -16,6 +16,8 @@ fn compressible_image() -> ImageData {
     ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 24,
         height: 24,

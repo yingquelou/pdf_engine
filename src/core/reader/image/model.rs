@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::core::reader::color_space::ColorSpaceModel;
 use crate::core::reader::opi::OpiProxy;
-use crate::core::types::Value;
+use crate::core::types::{Dict, Value};
 
 use super::error::{ImageError, Result, invalid, unsupported};
 use super::jbig2::{self, Jbig2ImageInfo};
@@ -18,6 +18,36 @@ pub enum ImageMaskModel {
     Explicit(Box<ImageModel>),
     /// 颜色键蒙版：`2 × n` 个整数范围，落在范围内的样本不绘制。
     ColorKey(Vec<i64>),
+}
+
+/// 图像 `/OC` 条目（Table 89/91，PDF 1.5）：指向可选内容组或可选
+/// 内容成员字典的间接引用，或内联的成员字典。本模型只保留引用/字典
+/// 形状，不解析可见性。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageOptionalContent {
+    /// 间接引用（`n g R`）：目标为 OCG 或 OCMD 字典。
+    Reference { object: i64, generation: i64 },
+    /// 内联的可选内容成员字典（OCMD）。
+    Membership(Dict),
+}
+
+/// 图像 `/Metadata` 流（Table 89，PDF 1.4）：流字典与过滤器解码后的
+/// 原始 XML 字节。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageMetadata {
+    pub dict: Dict,
+    pub data: Vec<u8>,
+}
+
+/// `/Alternates` 条目（Table 91）：交替图像及其打印缺省标记与 `/OC`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlternateImage {
+    /// `/Image`：交替图像本身。
+    pub image: ImageModel,
+    /// `/DefaultForPrinting`：是否默认用于打印（至多一个为 true）。
+    pub default_for_printing: bool,
+    /// `/OC`（PDF 1.5）：该交替图像的可选内容。
+    pub oc: Option<ImageOptionalContent>,
 }
 
 /// 解析后的图像 XObject / 内联图像。
@@ -47,7 +77,11 @@ pub struct ImageModel {
     /// `/SMaskInData`：软蒙版是否来自图像数据（0–2）。
     pub smask_in_data: Option<u8>,
     /// `/Alternates`：交替图像列表。
-    pub alternates: Vec<ImageModel>,
+    pub alternates: Vec<AlternateImage>,
+    /// `/OC`（PDF 1.5）：可选内容组/成员字典的引用或内联字典。
+    pub oc: Option<ImageOptionalContent>,
+    /// `/Metadata`（PDF 1.4）：元数据流与其解码后的 XML 字节。
+    pub metadata: Option<ImageMetadata>,
     /// `/OPI`：OPI 代理版本字典（§14.11.7 Table 368–370，PDF 1.2）。
     pub opi: Option<OpiProxy>,
     /// JPXDecode 图像的头部语法解析结果（§7.4.9，仅语法层，不解码
@@ -164,8 +198,16 @@ impl ImageModel {
             )));
         }
 
+        // Indexed 与 Separation/DeviceN 的 `/Decode` 作用于查表/求值之前，
+        // 必须在样本解码阶段传入；其余色彩空间在解码后按原生分量映射。
+        let special_decode = match space {
+            ColorSpaceModel::Indexed(_)
+            | ColorSpaceModel::Separation(_)
+            | ColorSpaceModel::DeviceN(_) => self.decode.as_deref(),
+            _ => None,
+        };
         let values = space
-            .decode_samples(bits, width, &self.data)
+            .decode_samples_with_decode(bits, width, &self.data, special_decode)
             .map_err(ImageError::ColorSpace)?;
         let output_components = space
             .native_component_count()
@@ -184,11 +226,7 @@ impl ImageModel {
     fn apply_decode(&self, space: &ColorSpaceModel, values: Vec<f64>) -> Result<DecodedSamples> {
         match space {
             ColorSpaceModel::Indexed(_) => {
-                if self.decode.is_some() {
-                    return Err(unsupported(
-                        "/Decode on Indexed images must be applied to palette indices",
-                    ));
-                }
+                // `/Decode` 已在样本解码阶段作用于调色板索引。
                 let components = space.native_component_count().unwrap_or(1);
                 let ranges = space.native_ranges();
                 let ranges = if ranges.len() == components {
@@ -199,11 +237,7 @@ impl ImageModel {
                 Ok((values, ranges))
             }
             ColorSpaceModel::Separation(_) | ColorSpaceModel::DeviceN(_) => {
-                if self.decode.is_some() {
-                    return Err(unsupported(
-                        "/Decode on Separation/DeviceN images must be applied to tint inputs",
-                    ));
-                }
+                // `/Decode` 已在样本解码阶段作用于 tint 输入。
                 let components = space.native_component_count().unwrap_or(1);
                 let ranges = space.native_ranges();
                 let ranges = if ranges.len() == components {

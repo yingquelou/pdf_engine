@@ -7,6 +7,7 @@ use crate::core::writer::WriteError;
 
 use super::colorspace::color_space_value;
 use super::opi;
+use super::plan::GroupPlan;
 use super::utils::real_array;
 
 /// 12.3.4：页面缩略图须为常规图像，颜色空间限于 DeviceGray、
@@ -58,7 +59,7 @@ pub(super) fn allocate_image_objects(img: &ImageData, num: &mut i64) -> ImageObj
     let alternates = img
         .alternates
         .iter()
-        .map(|alternate| allocate_image_objects(alternate, num))
+        .map(|alternate| allocate_image_objects(&alternate.image, num))
         .collect();
     ImageObjectNums {
         base,
@@ -70,13 +71,14 @@ pub(super) fn allocate_image_objects(img: &ImageData, num: &mut i64) -> ImageObj
 
 /// 写出图像 XObject 及其软蒙版、显式蒙版与替代图像。
 ///
-/// 替代图像以 `<< /Image n 0 R >>` 字典数组挂在基图 `/Alternates`
-/// 下（Table 90），自身再作为普通图像流对象写出。
+/// 替代图像以 `<< /Image n 0 R … >>` 字典数组挂在基图 `/Alternates`
+/// 下（Table 91），自身再作为普通图像流对象写出。
 pub(super) fn write_image(
     doc: &mut Document,
     img: &ImageData,
     nums: &ImageObjectNums,
     num: &mut i64,
+    groups: &GroupPlan,
 ) -> Result<(), WriteError> {
     img.validate()
         .map_err(|message| WriteError::InvalidObject(format!("image XObject: {message}")))?;
@@ -101,11 +103,24 @@ pub(super) fn write_image(
             doc.features.borrow_mut().insert(PdfFeature::ImageIntent);
         }
         if !nums.alternates.is_empty() {
-            let alternates: Vec<Value> = nums
+            let alternates: Vec<Value> = img
                 .alternates
                 .iter()
-                .map(|alternate| {
-                    Value::Dict(Dict::new().insert("Image", Value::Ref(alternate.base, 0)))
+                .zip(&nums.alternates)
+                .map(|(alternate, alternate_nums)| {
+                    let mut entry =
+                        Dict::new().insert("Image", Value::Ref(alternate_nums.base, 0));
+                    // Table 91：`/DefaultForPrinting` 只在 true 时写出。
+                    if alternate.default_for_printing {
+                        entry = entry.insert("DefaultForPrinting", Value::Bool(true));
+                    }
+                    if let Some(handle) = alternate.oc {
+                        entry = entry.insert("OC", Value::Ref(groups.ocg_nums[handle], 0));
+                        doc.features
+                            .borrow_mut()
+                            .insert(PdfFeature::OptionalContent);
+                    }
+                    Value::Dict(entry)
                 })
                 .collect();
             dict = dict.insert("Alternates", Value::Array(Array(alternates)));
@@ -116,6 +131,8 @@ pub(super) fn write_image(
         dict
     };
     stream_dict = opi::insert_opi(doc, stream_dict, &img.opi);
+    stream_dict = insert_oc(doc, stream_dict, img.oc, groups);
+    stream_dict = insert_metadata(doc, stream_dict, &img.metadata, num);
     if let Some(smask_num) = nums.smask {
         stream_dict = stream_dict.insert("SMask", Value::Ref(smask_num, 0));
     }
@@ -159,6 +176,8 @@ pub(super) fn write_image(
             doc.features.borrow_mut().insert(PdfFeature::SoftMaskMatte);
         }
         mask_dict = opi::insert_opi(doc, mask_dict, &smask.opi);
+        mask_dict = insert_oc(doc, mask_dict, smask.oc, groups);
+        mask_dict = insert_metadata(doc, mask_dict, &smask.metadata, num);
         doc.set_object(Object::new(
             smask_num,
             0,
@@ -168,7 +187,9 @@ pub(super) fn write_image(
     }
 
     if let (Some(mask_num), Some(ImageMask::Explicit(mask))) = (nums.mask, &img.mask) {
-        let mask_dict = opi::insert_opi(doc, image_mask_dict(mask), &mask.opi);
+        let mut mask_dict = opi::insert_opi(doc, image_mask_dict(mask), &mask.opi);
+        mask_dict = insert_oc(doc, mask_dict, mask.oc, groups);
+        mask_dict = insert_metadata(doc, mask_dict, &mask.metadata, num);
         doc.set_object(Object::new(
             mask_num,
             0,
@@ -177,9 +198,50 @@ pub(super) fn write_image(
     }
 
     for (alternate, alternate_nums) in img.alternates.iter().zip(&nums.alternates) {
-        write_image(doc, alternate, alternate_nums, num)?;
+        write_image(doc, &alternate.image, alternate_nums, num, groups)?;
     }
     Ok(())
+}
+
+/// 插入 `/OC` 间接引用（Table 89，PDF 1.5）；句柄已在
+/// `allocate_group_objects` 中收集并校验。
+fn insert_oc(
+    doc: &Document,
+    dict: Dict,
+    oc: Option<usize>,
+    groups: &GroupPlan,
+) -> Dict {
+    let Some(handle) = oc else {
+        return dict;
+    };
+    doc.features
+        .borrow_mut()
+        .insert(PdfFeature::OptionalContent);
+    dict.insert("OC", Value::Ref(groups.ocg_nums[handle], 0))
+}
+
+/// 插入 `/Metadata` 流（Table 89，PDF 1.4）：对象号在写出时分配，
+/// 流字典固定为 `/Type /Metadata /Subtype /XML`。
+fn insert_metadata(
+    doc: &mut Document,
+    dict: Dict,
+    metadata: &Option<Vec<u8>>,
+    num: &mut i64,
+) -> Dict {
+    let Some(xml) = metadata else {
+        return dict;
+    };
+    let metadata_num = *num;
+    *num += 1;
+    let metadata_dict = Dict::new()
+        .insert("Type", Value::Name("Metadata".into()))
+        .insert("Subtype", Value::Name("XML".into()));
+    doc.set_object(Object::new(
+        metadata_num,
+        0,
+        Value::Stream(metadata_dict, StreamData::Owned(xml.clone())),
+    ));
+    dict.insert("Metadata", Value::Ref(metadata_num, 0))
 }
 
 /// 图像蒙版（`/ImageMask true`）的流字典：不写 `/ColorSpace`，

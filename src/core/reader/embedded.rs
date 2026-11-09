@@ -17,10 +17,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
-use md5::{Digest, Md5};
-
 use crate::core::reader::content::text_value;
 use crate::core::reader::navigation::{NavigationError, resolve};
+use crate::core::reader::security::{CryptoBackend, RustCryptoBackend};
 use crate::core::types::{Dict, Document, Value};
 
 mod collection_item;
@@ -154,7 +153,7 @@ impl EmbeddedFile {
             .copied()
             .filter(|byte| !matches!(byte, 0 | 0o11 | 0o12 | 0o14 | 0o15 | b' '))
             .collect();
-        Md5::digest(&filtered).into()
+        RustCryptoBackend.md5(&filtered)
     }
 
     /// 声明的 `/CheckSum` 与计算值是否一致；未声明时返回 `None`。

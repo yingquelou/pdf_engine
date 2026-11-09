@@ -1,0 +1,4 @@
+# 规范一致性检查（scripts/spec_check.ps1）的违规基线。
+# 逐违规条目登记：check + file + unit + anchor + key 精确匹配；违规消失后条目即失效并 FAIL，必须删除。
+# 不提供按文件/目录的整体豁免。虚构键（如 /RDT、/MM）不得登记，必须保持 FAIL。
+# 该文件不用 BOM 写入。

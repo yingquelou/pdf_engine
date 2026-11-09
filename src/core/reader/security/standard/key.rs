@@ -10,7 +10,10 @@ pub(super) const PASSWORD_PADDING: [u8; 32] = [
     0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a,
 ];
 
-pub(super) fn pad_password(password: &[u8]) -> Zeroizing<Vec<u8>> {
+/// 7.6.3.3 步 (a)：把口令截断/填充到恰好 32 字节。
+///
+/// 供标准安全处理器与 FDF 侧密钥派生共用，避免同一算法存在副本。
+pub(crate) fn pad_password(password: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut padded = Zeroizing::new(Vec::with_capacity(PASSWORD_PADDING.len()));
     padded.extend_from_slice(&password[..password.len().min(PASSWORD_PADDING.len())]);
     let remaining = PASSWORD_PADDING.len() - padded.len();

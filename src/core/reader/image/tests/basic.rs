@@ -2,6 +2,7 @@
 
 use super::support::{dict, doc_with, document_with_page, image_dict, stream};
 use crate::core::reader::color_space::ColorSpaceModel;
+use crate::core::reader::image::model::ImageOptionalContent;
 use crate::core::types::{Array, Dict, Object, Value};
 
 #[test]
@@ -126,18 +127,18 @@ fn alternates_are_traversable_and_nested_images_parse() {
     let mut image = doc.image(&Value::Ref(10, 0)).expect("image");
     assert_eq!(image.alternates.len(), 2);
     assert_eq!(
-        image.alternates[0].color_space,
+        image.alternates[0].image.color_space,
         Some(ColorSpaceModel::DeviceGray)
     );
     assert!(matches!(
-        image.alternates[1].color_space,
+        image.alternates[1].image.color_space,
         Some(ColorSpaceModel::Indexed(_))
     ));
-    // The Indexed alternate's explicit /Decode targets palette indices.
-    let error = image.alternates[1].samples().unwrap_err();
-    assert!(
-        error.to_string().contains("Indexed"),
-        "unexpected error: {error}"
+    // Indexed 的显式 `/Decode` 作用于调色板索引：样本 1 按 `[0 1]` 映射后
+    // 四舍五入为索引 0（FF0000）。
+    assert_eq!(
+        image.alternates[1].image.samples().expect("samples").values,
+        vec![1.0, 0.0, 0.0]
     );
 
     doc.set_object(Object::new(
@@ -159,13 +160,13 @@ fn alternates_are_traversable_and_nested_images_parse() {
     image = doc.image(&Value::Ref(10, 0)).expect("image");
     assert_eq!(image.alternates.len(), 2);
     assert_eq!(
-        image.alternates[1].samples().unwrap().values,
+        image.alternates[1].image.samples().unwrap().values,
         vec![0.0, 0.0, 0.0]
     );
 }
 
 #[test]
-fn image_alternates_accept_table_90_dictionaries() {
+fn image_alternates_accept_table_91_dictionaries() {
     let alternate = stream(image_dict(1, 1, "DeviceRGB", 8), vec![0u8; 3]);
     let alternates = Value::Array(Array(vec![Value::Dict(
         Dict::new().insert("Image", Value::Ref(11, 0)),
@@ -175,9 +176,9 @@ fn image_alternates_accept_table_90_dictionaries() {
 
     let image = doc.image(&Value::Ref(10, 0)).expect("image should parse");
     assert_eq!(image.alternates.len(), 1);
-    assert_eq!(image.alternates[0].width, 1);
+    assert_eq!(image.alternates[0].image.width, 1);
     assert_eq!(
-        image.alternates[0].color_space,
+        image.alternates[0].image.color_space,
         Some(ColorSpaceModel::DeviceRGB)
     );
 }
@@ -325,4 +326,156 @@ fn image_filter_cyclic_reference_is_diagnosed_and_rejected() {
         "环诊断缺失：{:?}",
         doc.warnings()
     );
+}
+
+#[test]
+fn image_oc_and_metadata_are_parsed() {
+    let membership = dict(vec![
+        ("Type", Value::Name("OCMD".into())),
+        ("P", Value::Name("AllOn".into())),
+        (
+            "OCGs",
+            Value::Array(Array(vec![Value::Ref(7, 0), Value::Ref(8, 0)])),
+        ),
+    ]);
+    let doc = doc_with(vec![
+        (
+            10,
+            stream(
+                image_dict(1, 1, "DeviceGray", 8)
+                    .insert("OC", Value::Dict(membership))
+                    .insert("Metadata", Value::Ref(11, 0)),
+                vec![128u8],
+            ),
+        ),
+        (
+            11,
+            stream(
+                dict(vec![
+                    ("Type", Value::Name("Metadata".into())),
+                    ("Subtype", Value::Name("XML".into())),
+                ]),
+                b"<x:xmpmeta/>".to_vec(),
+            ),
+        ),
+    ]);
+
+    let image = doc.image(&Value::Ref(10, 0)).expect("image");
+    match image.oc.as_ref().expect("OC") {
+        ImageOptionalContent::Membership(dict) => {
+            assert_eq!(dict.get("Type").and_then(Value::as_name), Some("OCMD"));
+            assert_eq!(dict.get("P").and_then(Value::as_name), Some("AllOn"));
+            assert_eq!(
+                dict.get("OCGs").and_then(Value::as_array).map(|a| a.0.len()),
+                Some(2)
+            );
+        }
+        other => panic!("expected an inline membership dictionary, got {other:?}"),
+    }
+    let metadata = image.metadata.as_ref().expect("Metadata");
+    assert_eq!(metadata.data, b"<x:xmpmeta/>");
+    assert_eq!(
+        metadata.dict.get("Subtype").and_then(Value::as_name),
+        Some("XML")
+    );
+    assert!(
+        image.other.is_empty(),
+        "/OC 与 /Metadata 已建模，不应残留在 other: {:?}",
+        image.other
+    );
+}
+
+#[test]
+fn image_oc_rejects_non_dictionary_and_non_reference() {
+    let doc = doc_with(vec![(
+        10,
+        stream(
+            image_dict(1, 1, "DeviceGray", 8).insert("OC", Value::Name("AllOn".into())),
+            vec![128u8],
+        ),
+    )]);
+    let error = doc
+        .image(&Value::Ref(10, 0))
+        .expect_err("/OC 必须是引用或字典");
+    assert!(error.to_string().contains("/OC"), "got: {error}");
+    assert!(
+        error.to_string().contains("optional content membership dictionary"),
+        "got: {error}"
+    );
+}
+
+#[test]
+fn image_metadata_must_be_stream() {
+    let doc = doc_with(vec![(
+        10,
+        stream(
+            image_dict(1, 1, "DeviceGray", 8).insert("Metadata", Value::Integer(42)),
+            vec![128u8],
+        ),
+    )]);
+    let error = doc
+        .image(&Value::Ref(10, 0))
+        .expect_err("/Metadata 必须是流");
+    assert!(
+        error.to_string().contains("/Metadata must be a stream"),
+        "got: {error}"
+    );
+}
+
+#[test]
+fn alternate_images_expose_default_for_printing_and_oc() {
+    let alternates = Value::Array(Array(vec![
+        Value::Dict(
+            Dict::new()
+                .insert("Image", Value::Ref(11, 0))
+                .insert("DefaultForPrinting", Value::Bool(true))
+                .insert("OC", Value::Ref(7, 0)),
+        ),
+        Value::Dict(Dict::new().insert("Image", Value::Ref(12, 0))),
+    ]));
+    let base = image_dict(2, 2, "DeviceRGB", 8).insert("Alternates", alternates);
+    let doc = doc_with(vec![
+        (10, stream(base, vec![0u8; 12])),
+        (11, stream(image_dict(1, 1, "DeviceGray", 8), vec![128u8])),
+        (12, stream(image_dict(1, 1, "DeviceGray", 8), vec![64u8])),
+    ]);
+
+    let image = doc.image(&Value::Ref(10, 0)).expect("image");
+    assert_eq!(image.alternates.len(), 2);
+    assert!(image.alternates[0].default_for_printing);
+    assert!(!image.alternates[1].default_for_printing);
+    match image.alternates[0].oc.as_ref().expect("alternate OC") {
+        ImageOptionalContent::Reference { object, generation } => {
+            assert_eq!((*object, *generation), (7, 0));
+        }
+        other => panic!("expected a reference, got {other:?}"),
+    }
+    assert!(image.alternates[1].oc.is_none());
+}
+
+#[test]
+fn at_most_one_alternate_default_for_printing() {
+    let alternates = Value::Array(Array(vec![
+        Value::Dict(
+            Dict::new()
+                .insert("Image", Value::Ref(11, 0))
+                .insert("DefaultForPrinting", Value::Bool(true)),
+        ),
+        Value::Dict(
+            Dict::new()
+                .insert("Image", Value::Ref(12, 0))
+                .insert("DefaultForPrinting", Value::Bool(true)),
+        ),
+    ]));
+    let base = image_dict(2, 2, "DeviceRGB", 8).insert("Alternates", alternates);
+    let doc = doc_with(vec![
+        (10, stream(base, vec![0u8; 12])),
+        (11, stream(image_dict(1, 1, "DeviceGray", 8), vec![128u8])),
+        (12, stream(image_dict(1, 1, "DeviceGray", 8), vec![64u8])),
+    ]);
+
+    let error = doc
+        .image(&Value::Ref(10, 0))
+        .expect_err("至多一个交替图像可设置 /DefaultForPrinting");
+    assert!(error.to_string().contains("at most one"), "got: {error}");
 }

@@ -97,6 +97,8 @@ pub(super) fn rgb_image(fill: u8) -> ImageData {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,

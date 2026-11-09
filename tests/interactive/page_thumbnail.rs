@@ -22,6 +22,8 @@ fn builder_page_thumbnail_roundtrips_through_parser() {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,

@@ -1,0 +1,16 @@
+# crates.io 镜像配置（本项目局部生效，不影响其他项目）
+#
+# 背景：本环境直连 crates.io 超时（ROADMAP 阶段 A 的 DCTDecode 因此受阻）。
+# 采用字节跳动 RsProxy sparse 索引作为 crates.io 替换源；若其不可用，
+# 可整体替换为以下任一镜像（均为 sparse 协议）：
+#   - 清华 TUNA: sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/
+#   - 中科大 USTC: sparse+https://mirrors.ustc.edu.cn/crates.io-index/
+
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[registries.rsproxy]
+index = "sparse+https://rsproxy.cn/index/"

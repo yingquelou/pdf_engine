@@ -67,6 +67,125 @@ pub struct ThreeDView {
     pub restore_nodes: Option<bool>,
 }
 
+impl ThreeDView {
+    /// 把 `/C2W` 暴露为带 13.6.5 语义的矩阵。
+    ///
+    /// 解析阶段已校验 `/C2W` 为 12 个有限数，因此此处不重复校验。
+    pub fn camera_to_world_matrix(&self) -> Option<ThreeDMatrix> {
+        self.camera_to_world.map(ThreeDMatrix::from_entries)
+    }
+}
+
+/// 3D 仿射变换矩阵（13.6.5）：`/C2W` 的 12 数表示及其坐标语义。
+///
+/// 12 个数按行展开 4×4 矩阵的前三列（最后一列恒为 `(0 0 0 1)`）：
+///
+/// ```text
+/// a  b  c  0
+/// d  e  f  0
+/// g  h  i  0
+/// tx ty tz 1
+/// ```
+///
+/// 点按行向量左乘变换（13.6.5）：
+/// `x' = a·x + d·y + g·z + tx`、`y' = b·x + e·y + h·z + ty`、
+/// `z' = c·x + f·y + i·z + tz`。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThreeDMatrix {
+    entries: [f64; 12],
+}
+
+impl ThreeDMatrix {
+    /// 单位矩阵（恒等变换）。
+    pub const IDENTITY: Self = Self {
+        entries: [
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        ],
+    };
+
+    /// 由 12 个数构造；任一项非有限时报 `Malformed`。
+    pub fn new(entries: [f64; 12]) -> Result<Self, ThreeDError> {
+        if !entries.iter().all(|entry| entry.is_finite()) {
+            return Err(malformed("3D matrix entries must be finite"));
+        }
+        Ok(Self { entries })
+    }
+
+    /// 已由解析阶段校验有限的 12 个数，直接构造。
+    fn from_entries(entries: [f64; 12]) -> Self {
+        Self { entries }
+    }
+
+    /// 按 PDF 数组顺序返回 12 个数。
+    pub fn entries(&self) -> [f64; 12] {
+        self.entries
+    }
+
+    /// 以行向量约定变换一个点（13.6.5 的公式）。
+    pub fn transform_point(&self, point: [f64; 3]) -> [f64; 3] {
+        let [a, b, c, d, e, f, g, h, i, tx, ty, tz] = self.entries;
+        let [x, y, z] = point;
+        [
+            a * x + d * y + g * z + tx,
+            b * x + e * y + h * z + ty,
+            c * x + f * y + i * z + tz,
+        ]
+    }
+
+    /// 逆变换：13.6.5 步骤 b 的 `(cw)⁻¹`，把世界坐标映射回相机坐标。
+    ///
+    /// 线性部分行列式为 0（退化矩阵）或求逆结果溢出为无穷时报 `Malformed`，
+    /// 不返回伪造值，也不 panic。
+    pub fn inverse(&self) -> Result<Self, ThreeDError> {
+        let [a, b, c, d, e, f, g, h, i, tx, ty, tz] = self.entries;
+        let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+        if det == 0.0 {
+            return Err(malformed("3D matrix is singular and cannot be inverted"));
+        }
+        let linear = [
+            (e * i - f * h) / det,
+            (c * h - b * i) / det,
+            (b * f - c * e) / det,
+            (f * g - d * i) / det,
+            (a * i - c * g) / det,
+            (c * d - a * f) / det,
+            (d * h - e * g) / det,
+            (b * g - a * h) / det,
+            (a * e - b * d) / det,
+        ];
+        let translation = [
+            -(tx * linear[0] + ty * linear[3] + tz * linear[6]),
+            -(tx * linear[1] + ty * linear[4] + tz * linear[7]),
+            -(tx * linear[2] + ty * linear[5] + tz * linear[8]),
+        ];
+        let mut entries = [0.0; 12];
+        entries[..9].copy_from_slice(&linear);
+        entries[9..].copy_from_slice(&translation);
+        Self::new(entries)
+    }
+
+    /// 组合变换：先应用 `self` 再应用 `next`（13.6.5 步骤 c 的 `aw × (cw)⁻¹`）。
+    ///
+    /// 结果非有限时报 `Malformed`。
+    pub fn compose(&self, next: &Self) -> Result<Self, ThreeDError> {
+        let left = self.entries;
+        let right = next.entries;
+        let mut entries = [0.0; 12];
+        for row in 0..4 {
+            for column in 0..3 {
+                let mut sum = left[row * 3] * right[column]
+                    + left[row * 3 + 1] * right[3 + column]
+                    + left[row * 3 + 2] * right[6 + column];
+                if row == 3 {
+                    sum += right[9 + column];
+                }
+                entries[row * 3 + column] = sum;
+            }
+        }
+        Self::new(entries)
+    }
+}
+
 /// 视图选择（注解 `/3DV` 或流 `/DV`）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ThreeDViewSelection {

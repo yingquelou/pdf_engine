@@ -136,7 +136,7 @@ impl PdfBuilder {
         self.assemble_indirect_objects(&mut doc, &pools, &forms, &groups, &annot_plan)?;
         // 属性表字典作为间接对象落进对象表，与页面内容里回填的引用闭合。
         self.write_marked_property_objects(&mut doc, &marked_properties);
-        self.assemble_font_and_image_objects(&mut doc, &mut num, &pools)?;
+        self.assemble_font_and_image_objects(&mut doc, &mut num, &pools, &groups)?;
         self.assemble_form_streams(&mut doc, &mut num, &forms, &groups)?;
         self.assemble_document_group_objects(&mut doc, &mut num, &groups)?;
         self.assemble_graphics_objects(&mut doc, &mut num, &pools, &forms)?;

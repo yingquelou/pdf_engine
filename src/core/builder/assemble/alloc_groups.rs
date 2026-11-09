@@ -1,7 +1,7 @@
 //! 对象号分配（三）：可选内容组、渐变与图案——只为实际被引用的句柄分配
 //! 对象号，并在此完成组参数校验。
 
-use crate::core::builder::{Action, PdfBuilder};
+use crate::core::builder::{Action, ImageData, ImageMask, PdfBuilder};
 use crate::core::writer::WriteError;
 
 use super::plan::{FormPlan, GroupPlan};
@@ -21,6 +21,16 @@ impl PdfBuilder {
             .iter()
             .flat_map(|p| p.optional_content.iter().copied())
             .collect();
+        // 图像字典 `/OC`（Table 89）与交替图像字典 `/OC`（Table 91）。
+        for page in &self.pages {
+            for image in page.images.iter().chain(page.thumbnail.iter()) {
+                collect_image_ocgs(
+                    image,
+                    self.optional_content_groups.len(),
+                    &mut used_ocgs,
+                )?;
+            }
+        }
         // 表单级 `/OC` 与表单自有 `/Properties` 引用的组同样需要写出。
         for &handle in &forms.used_forms {
             let form = &self.forms[handle];
@@ -39,6 +49,13 @@ impl PdfBuilder {
                         )));
                     }
                     used_ocgs.insert(group);
+                }
+                for image in &resources.images {
+                    collect_image_ocgs(
+                        image,
+                        self.optional_content_groups.len(),
+                        &mut used_ocgs,
+                    )?;
                 }
             }
             if let Some(group) = form.optional_content {
@@ -104,4 +121,39 @@ impl PdfBuilder {
             pattern_nums,
         })
     }
+}
+
+/// 收集图像 XObject 及其软蒙版、显式蒙版、交替图像引用的 OCG 句柄，
+/// 并校验句柄上界。
+fn collect_image_ocgs(
+    image: &ImageData,
+    group_count: usize,
+    used: &mut std::collections::BTreeSet<usize>,
+) -> Result<(), WriteError> {
+    if let Some(handle) = image.oc {
+        if handle >= group_count {
+            return Err(WriteError::InvalidObject(format!(
+                "image XObject: /OC references unknown optional content group handle {handle}"
+            )));
+        }
+        used.insert(handle);
+    }
+    if let Some(smask) = &image.smask {
+        collect_image_ocgs(smask, group_count, used)?;
+    }
+    if let Some(ImageMask::Explicit(mask)) = &image.mask {
+        collect_image_ocgs(mask, group_count, used)?;
+    }
+    for alternate in &image.alternates {
+        if let Some(handle) = alternate.oc {
+            if handle >= group_count {
+                return Err(WriteError::InvalidObject(format!(
+                    "alternate image: /OC references unknown optional content group handle {handle}"
+                )));
+            }
+            used.insert(handle);
+        }
+        collect_image_ocgs(&alternate.image, group_count, used)?;
+    }
+    Ok(())
 }

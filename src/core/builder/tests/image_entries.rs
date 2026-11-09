@@ -14,6 +14,8 @@ fn rgb(width: u32, height: u32, fill: u8) -> ImageData {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,
@@ -33,6 +35,8 @@ fn gray(width: u32, height: u32, fill: u8) -> ImageData {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,
@@ -52,6 +56,8 @@ fn stencil() -> ImageData {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: true,
@@ -207,5 +213,124 @@ fn image_mask_rejects_intent_and_alternates() {
     assert_image_rejected(
         stencil().with_alternates(vec![rgb(1, 1, 0)]),
         "image mask must not have Alternates",
+    );
+}
+
+/// 从输出中读取某键引用的对象号（`/Key n 0 R`）。
+fn referenced_number(pdf: &str, key: &str) -> i64 {
+    let prefix = format!("/{key} ");
+    let start = pdf.find(&prefix).expect("key should be present") + prefix.len();
+    let token = pdf[start..]
+        .split_whitespace()
+        .next()
+        .expect("reference number");
+    token.parse().expect("object number")
+}
+
+#[test]
+fn image_oc_requires_pdf_1_5() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    let handle = b.optional_content_group(&OptionalContentGroup::new("Image layer"));
+    let p = b.page(PageSize::A4);
+    b.image(p, 0.0, 0.0, 10.0, 10.0, &rgb(1, 1, 0).with_oc(handle));
+    assert_version_error(&mut b, "image XObject /OC require PDF 1.5");
+}
+
+#[test]
+fn image_metadata_requires_pdf_1_4() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
+    let p = b.page(PageSize::A4);
+    b.image(
+        p,
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+        &rgb(1, 1, 0).with_metadata("<x:xmpmeta/>"),
+    );
+    assert_version_error(&mut b, "image XObject /Metadata require PDF 1.4");
+}
+
+#[test]
+fn image_writes_oc_and_metadata_entries() {
+    let mut b = PdfBuilder::new();
+    let handle = b.optional_content_group(&OptionalContentGroup::new("Image layer"));
+    let p = b.page(PageSize::A4);
+    b.image(
+        p,
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+        &rgb(1, 1, 0)
+            .with_oc(handle)
+            .with_metadata("<x:xmpmeta/>"),
+    );
+    let s = render(&mut b);
+
+    let oc_num = referenced_number(&s, "OC");
+    assert!(oc_num > 0, "{s}");
+    assert!(s.contains("/Type /OCG"), "{s}");
+    assert!(s.contains("/Name <496D616765206C61796572>"), "{s}");
+    assert!(
+        s.contains(&format!("[{oc_num} 0 R]")),
+        "目录 /OCGs 应引用图像 /OC 的同一对象: {s}"
+    );
+
+    let metadata_num = referenced_number(&s, "Metadata");
+    assert!(metadata_num > oc_num, "元数据对象号应晚于 OCG: {s}");
+    assert!(s.contains("/Type /Metadata"), "{s}");
+    assert!(s.contains("/Subtype /XML"), "{s}");
+    assert!(s.contains("<x:xmpmeta/>"), "{s}");
+}
+
+#[test]
+fn image_alternates_write_default_for_printing_and_oc() {
+    let mut b = PdfBuilder::new();
+    let handle = b.optional_content_group(&OptionalContentGroup::new("Alternate layer"));
+    let p = b.page(PageSize::A4);
+    let alternate = AlternateImage::new(rgb(1, 1, 9))
+        .default_for_printing(true)
+        .with_oc(handle);
+    b.image(
+        p,
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+        &rgb(2, 2, 255).with_alternates(vec![alternate]),
+    );
+    let s = render(&mut b);
+
+    assert!(
+        s.contains("/Alternates [<< /DefaultForPrinting true /Image "),
+        "{s}"
+    );
+    assert!(s.contains("/DefaultForPrinting true"), "{s}");
+    let alternate_oc_num = referenced_number(&s, "OC");
+    assert!(alternate_oc_num > 0, "{s}");
+    assert!(s.contains("/Type /OCG"), "{s}");
+    assert!(
+        s.contains(&format!("[{alternate_oc_num} 0 R]")),
+        "目录 /OCGs 应引用同一 OCG 对象: {s}"
+    );
+}
+
+#[test]
+fn invalid_alternate_default_for_printing_fails_the_build() {
+    assert_image_rejected(
+        rgb(2, 2, 0).with_alternates(vec![
+            AlternateImage::new(rgb(1, 1, 0)).default_for_printing(true),
+            AlternateImage::new(rgb(1, 1, 0)).default_for_printing(true),
+        ]),
+        "at most one alternate image may set DefaultForPrinting",
+    );
+}
+
+#[test]
+fn image_unknown_oc_handle_fails_the_build() {
+    assert_image_rejected(
+        rgb(1, 1, 0).with_oc(99),
+        "unknown optional content group handle 99",
     );
 }

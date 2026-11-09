@@ -53,7 +53,8 @@ pub use types::requirements::{
 };
 pub use types::{
     AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
-    AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,
+    AlternateImage, AnnotationBorderStyle, AnnotationDestination, AnnotationKind,
+    AppearanceCharacteristics,
     ArtifactAttachment, ArtifactProperties, ArtifactSubtype, ArtifactType, AxialShading,
     BlockAlign, BorderArray, BorderColor, BorderEffect, BorderEffectStyle, BorderStyle,
     BorderStyles, BorderThickness, CalGray, CalRGB, CalculatorFunction, CalloutLine,

@@ -3,7 +3,7 @@
 
 **本库当前立场**：
 
-- **Reader**：容忍 2.0 文件头（解析为已知版本、记 warning 后继续，不拒绝），证据 tests `reader_accepts_pdf_2_0_header`、`version_parsing_recognizes_2_0`（types.rs `PdfVersion::parse`/`from_name`）。
+- **Reader**：识别 2.0 文件头（`PdfVersion::parse` 返回 `V2_0`），正常继续解析且**不产生 header warning**；仅当头部完全缺失/不可解析时才回退 1.0 并记 warning。证据 `tests/syntax/reader_lexical.rs::reader_accepts_pdf_2_0_header`（断言 `source_version() == V2_0` 且无含 `header` 的警告）、`version_parsing_recognizes_2_0`（`src/core/types/tests.rs`，`types.rs` `PdfVersion::parse`/`from_name`）。
 - **Writer**：输出区间 1.0–1.7，显式拒绝 2.0，证据 writer/ `SUPPORTED_OUTPUT_VERSIONS` + `validate_output_version`，测试 `writer_rejects_unsupported_version`。
 - **口径**：**语法层接受 `%PDF-2.0` 文件头不等于本库是自声明的 conforming PDF 2.0 读写端**。本库的符合性声明对象始终是 ISO 32000-1:2008；对 2.0 新增语法（加密修订 5/6、UTF-8 文本串、`/AF` 扩展挂接对象等）只在读端做到「不因此拒绝解析」，不据此宣称支持 2.0。
 - 本节仅作**远期评估依据**，列出的条目**不进入当前开发阶段**（全部视同 P3）。

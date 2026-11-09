@@ -67,14 +67,9 @@ test_paths = [
     "src/core/reader/embedded/tests/mod.rs",
     "src/core/reader/fdf/tests/embedded/decrypt.rs",
 ]
-known_violation = [
-    "src/core/reader/embedded.rs",
-    "src/core/builder/types/embedded_file.rs",
-    "src/core/reader/fdf/embedded/crypto.rs",
-]
 behaviour_delta = "无；摘要原语；会话与错误语义由适配器统一"
 degraded = false
-justification = "MD5 摘要原语（7.6.2 Algorithm 2 / 嵌入文件校验 / 签名摘要）；三处业务直用已登记为债务。"
+justification = "MD5 摘要原语（7.6.2 Algorithm 2 / 嵌入文件校验 / 签名摘要）；业务侧一律经 CryptoBackend 与 signature::digest 适配器调用，无直连（2026-11-07 整改）。"
 
 [[dep]]
 name = "sha1"
@@ -111,10 +106,9 @@ spdx = "MIT OR Apache-2.0"
 maintenance = "active"
 reviewed = "2026-11-06"
 adapter = ["src/core/reader/security/crypto.rs"]
-known_violation = ["src/core/reader/fdf/embedded/crypto.rs"]
 behaviour_delta = "无；流密码原语；密钥派生与权限位在本地实现"
 degraded = false
-justification = "RC4 流密码原语（7.6.2/7.6.3）；FDF 侧重复实现已登记为债务。"
+justification = "RC4 流密码原语（7.6.2/7.6.3）；FDF 嵌入加密复用标准安全处理器的口令填充并经 CryptoBackend 调用，Algorithm 2 只有一份实现（2026-11-07 整改）。"
 
 [[dep]]
 name = "subtle"

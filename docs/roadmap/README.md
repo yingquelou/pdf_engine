@@ -22,6 +22,13 @@
 > **与矩阵计数的关系**：矩阵是逐条规范小节的实现状态（四态合并），本文档是逐增量的验收状态；二者无换算关系，重算矩阵「总览」不构成本表变更的理由，反之亦然。
 
 
+## 排序原则
+
+1. **PDF 标准特性优先，扩展特性次之**：ISO 32000-1 必选/核心结构（文件结构、交叉引用、流、过滤器、字体、内容流、图形）优先于标准可选特性（注解、表单、透明、可选内容、结构树），后者优先于专用标准（3D、多媒体、签名）与厂商扩展（Adobe ExtensionLevel、`ADBE`、U3D/PRC）。
+2. **读端正确性优先于写端覆盖面**：同一优先级内，先修复真实文件的可读性与错误恢复，再扩展可写特性。
+3. **扩展特性不得挤占标准特性**：需要为扩展特性做取舍时，标准特性的读写完整性先保持；XFA 等非目标以 `non-goals.md` 为准。
+4. **验证口径独立**：标准特性以“库写端生成 + 外部主流阅读器/工具核对”为主；读端异形文件由外部工具现场生成、只读、不入仓，详见 `backlog/fixtures.md`；读端鲁棒性验证的完整评估与落地顺序见 [robustness-verification.md](robustness-verification.md)。
+
 ## 进度跟踪约定
 
 ### 状态机
@@ -66,11 +73,13 @@
 | [non-goals.md](non-goals.md) | 非目标与明确不支持 |
 | [next-increments.md](next-increments.md) | 下一批建议增量 |
 | [graph.md](graph.md) | 阶段依赖图与阶段映射 |
+| [spec-consistency.md](spec-consistency.md) | 规范—规划—实现一致性机制（S1–S8） |
 | [backlog/README.md](backlog/README.md) | backlog 索引 |
 | [backlog/open-decisions.md](backlog/open-decisions.md) | 未分配条目（待决策） |
 | [backlog/open-issues.md](backlog/open-issues.md) | 待核 / 证据路径过期 / 计数不一致 |
 | [backlog/module-debt.md](backlog/module-debt.md) | 未清的模块目录化债 |
 | [backlog/fixtures.md](backlog/fixtures.md) | 真实样本与 fixtures |
+| [robustness-verification.md](robustness-verification.md) | 读端鲁棒性验证方案（差分/语料/变异/资源预算/往返/错误分类的评估与落地顺序） |
 | [../changelog/README.md](../changelog/README.md) | 历史变更（按日期） |
 
 ## 维护说明

@@ -4,6 +4,6 @@
 | 章节 | 特性 | 引入版本 | 状态 | Reader | Writer | 优先级 | 证据/备注 |
 |---|---|---|---|---|---|---|---|
 | 8.5.1 | 本节范围说明（路径对象与绘制操作符的总体模型） | — | — | — | — | — | 登记说明：本行为评审补登（原矩阵未登记该条款），状态按现有代码实测给出：8.5.1 只给出「构造→求交→绘制」三段式模型，无独立数据结构；落地见 8.5.2（构造）、8.5.3（求交/剪裁）、8.5.4（绘制）与 8.4（图形状态）各行。本库不做光栅化，故不实现填充算法本身 |
-| 8.5.2 | 路径构造操作符 `m l c v y h re` | 1.0 | 🟡 | 🟡 | ✅ | P0 | content/ 7 个变体；测试 `path_construction_all_kinds`、`parse_path_construction_operators`。缺口：读端 Op AST 已建模操作符，但状态机不累积当前路径（无路径几何模型） |
+| 8.5.2 | 路径构造操作符 `m l c v y h re` | 1.0 | 🟡 | 🟡 | ✅ | P0 | content/ 7 个变体；测试 `path_construction_all_kinds`、`parse_path_construction_operators`。缺口：读端 Op AST 已建模操作符，但状态机不累积当前路径（无路径几何模型）；已实现未覆盖：`path_construction_all_kinds` 只构造 `m`/`l`/`c`/`v`/`y`/`h` 六种，`re` 在路径构造序列化与解析测试中零覆盖（`src/core/content/tests.rs:157`） |
 | 8.5.3 | 路径绘制操作符 `S s f F f* B B* b b* n` | 1.0 | 🟡 | 🟡 | ✅ | P0 | content/ 10 个变体；测试 `path_painting_variants`（全量覆盖）、`parse_path_painting_operators`。缺口：读端 Op AST 已建模，绘制语义（填充规则应用）超出语法层范围 |
 | 8.5.4 | 裁剪路径操作符 `W W*` | 1.0 | 🟡 | 🟡 | ✅ | P0 | content/ `Op::Clip`/`ClipEvenOdd`；测试 `clipping_variants`。缺口：读端 Op AST 已建模，裁剪路径不进入状态机快照（累积裁剪需路径几何模型） |

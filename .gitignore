@@ -1,4 +1,8 @@
 .*/
+# 项目级 cargo 源替换配置随仓库提交（其余点目录仍整体忽略）
+!.cargo/
+.cargo/*
+!.cargo/config.toml
 /target
 Cargo.lock
 *.pdf

@@ -60,8 +60,8 @@ pub struct ImageData {
     /// `/Intent`（PDF 1.4）：渲染意图；图像蒙版不得设置。
     pub intent: Option<ImageIntent>,
     /// `/Alternates`（PDF 1.3）：同一图像的低分辨率替代版本，按
-    /// `<< /Image n 0 R >>` 字典数组写出；不得嵌套、不得是图像蒙版。
-    pub alternates: Vec<ImageData>,
+    /// `<< /Image n 0 R … >>` 字典数组写出；不得嵌套、不得是图像蒙版。
+    pub alternates: Vec<AlternateImage>,
     /// `/Matte`（PDF 1.6）：本图软蒙版的衬底颜色，按本图颜色空间给出；
     /// 必须与 [`ImageData::smask`] 同时设置，写出到 SMask 图像字典。
     pub matte: Option<Vec<f64>>,
@@ -77,6 +77,11 @@ pub struct ImageData {
     /// `/OPI`（§14.11.7 Table 368，PDF 1.2）：OPI 代理字典，指向
     /// 印刷工作流中的高分辨率原图。
     pub opi: Option<OpiProxy>,
+    /// `/OC`（Table 89，PDF 1.5）：本图的可选内容组句柄。
+    pub oc: Option<usize>,
+    /// `/Metadata`（Table 89，PDF 1.4）：XMP 元数据包的原始 XML 字节，
+    /// 写出为 `<< /Type /Metadata /Subtype /XML >>` 流。
+    pub metadata: Option<Vec<u8>>,
 }
 
 /// 图像 `/Mask` 条目（Table 89，PDF 1.3）。
@@ -99,5 +104,45 @@ impl ImageMask {
     /// 用 `2 × 通道数` 个样本值范围构造颜色键蒙版。
     pub fn color_key(ranges: impl Into<Vec<i64>>) -> Self {
         Self::ColorKey(ranges.into())
+    }
+}
+
+/// `/Alternates` 条目（Table 91）：图像及其打印缺省标记与 `/OC`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlternateImage {
+    /// `/Image`：交替图像本身。
+    pub image: ImageData,
+    /// `/DefaultForPrinting`：是否默认用于打印；同一基图至多一个为 true。
+    pub default_for_printing: bool,
+    /// `/OC`（PDF 1.5）：该交替图像的可选内容组句柄。
+    pub oc: Option<usize>,
+}
+
+impl AlternateImage {
+    /// 用一张图像构造交替图像条目，默认不用于打印、无 `/OC`。
+    pub fn new(image: ImageData) -> Self {
+        Self {
+            image,
+            default_for_printing: false,
+            oc: None,
+        }
+    }
+
+    /// 设置 `/DefaultForPrinting`。
+    pub fn default_for_printing(mut self, flag: bool) -> Self {
+        self.default_for_printing = flag;
+        self
+    }
+
+    /// 设置 `/OC` 的可选内容组句柄。
+    pub fn with_oc(mut self, handle: usize) -> Self {
+        self.oc = Some(handle);
+        self
+    }
+}
+
+impl From<ImageData> for AlternateImage {
+    fn from(image: ImageData) -> Self {
+        Self::new(image)
     }
 }

@@ -112,6 +112,8 @@ fn model(filters: &[&str]) -> ImageModel {
         smask: None,
         smask_in_data: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         opi: None,
         jpx: None,
         jbig2: None,

@@ -312,6 +312,8 @@ fn builder_form_own_resources_roundtrip_through_parser() {
         interpolate: false,
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         smask: None,
         image_mask: false,

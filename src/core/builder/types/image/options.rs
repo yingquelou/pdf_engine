@@ -1,9 +1,10 @@
 //! [`ImageData`] 的链式可选条目设置：`/Decode`、`/Interpolate`、`/Intent`、
-//! `/Alternates`、`/Matte`、`/SMask`、`/ImageMask`、`/Mask` 与 `/OPI`。
+//! `/Alternates`、`/Matte`、`/SMask`、`/ImageMask`、`/Mask`、`/OPI`、
+//! `/OC` 与 `/Metadata`。
 
 use crate::core::builder::types::OpiProxy;
 
-use super::image_data::{ImageData, ImageIntent, ImageMask};
+use super::image_data::{AlternateImage, ImageData, ImageIntent, ImageMask};
 
 impl ImageData {
     /// 设置 `/Decode` 数组。
@@ -24,9 +25,14 @@ impl ImageData {
         self
     }
 
-    /// 追加替代图像（`/Alternates`）。
-    pub fn with_alternates(mut self, alternates: impl Into<Vec<ImageData>>) -> Self {
-        self.alternates = alternates.into();
+    /// 追加替代图像（`/Alternates`）。裸 [`ImageData`] 会自动包装为
+    /// [`AlternateImage`]；需要 `/DefaultForPrinting` 或 `/OC` 时直接传入
+    /// 构造好的 [`AlternateImage`]。
+    pub fn with_alternates(
+        mut self,
+        alternates: impl IntoIterator<Item = impl Into<AlternateImage>>,
+    ) -> Self {
+        self.alternates = alternates.into_iter().map(Into::into).collect();
         self
     }
 
@@ -62,6 +68,18 @@ impl ImageData {
     /// 目标版本低于 1.2 时构建失败（`WriteError::UnsupportedVersion`）。
     pub fn with_opi(mut self, opi: OpiProxy) -> Self {
         self.opi = Some(opi);
+        self
+    }
+
+    /// 设置 `/OC` 的可选内容组句柄（PDF 1.5）。
+    pub fn with_oc(mut self, handle: usize) -> Self {
+        self.oc = Some(handle);
+        self
+    }
+
+    /// 设置 `/Metadata` 的 XMP 原始 XML 字节（PDF 1.4）。
+    pub fn with_metadata(mut self, metadata: impl Into<Vec<u8>>) -> Self {
+        self.metadata = Some(metadata.into());
         self
     }
 }

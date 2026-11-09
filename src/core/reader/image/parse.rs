@@ -10,7 +10,7 @@ use crate::core::types::{Array, Dict, Document, Value};
 
 use super::error::{ImageError, Result, invalid, unsupported};
 use super::jpx::JpxHeader;
-use super::model::ImageModel;
+use super::model::{AlternateImage, ImageMetadata, ImageModel, ImageOptionalContent};
 use super::{jbig2, jpx};
 
 /// 已建模的图像字典键；其余键进入 [`ImageModel::other`]。
@@ -331,6 +331,33 @@ impl Document {
                 Some(flag as u8)
             }
         };
+        // Table 89 的 `/OC`（PDF 1.5）与 `/Metadata`（PDF 1.4）只定义在
+        // 图像 XObject 上；内联图像（Table 93）不含这两个条目。
+        let (oc, metadata) = if source == ImageSource::XObject {
+            let oc = match dict.get("OC") {
+                None => None,
+                Some(value) => Some(parse_optional_content(value)?),
+            };
+            let metadata = match dict.get("Metadata") {
+                None => None,
+                Some(value) => {
+                    let resolved = self.resolve_image_value(value)?;
+                    let Value::Stream(stream_dict, _) = &resolved else {
+                        return Err(invalid("/Metadata must be a stream"));
+                    };
+                    let data = self
+                        .decode_stream_bytes(&resolved)
+                        .map_err(ImageError::Filter)?;
+                    Some(ImageMetadata {
+                        dict: stream_dict.clone(),
+                        data,
+                    })
+                }
+            };
+            (oc, metadata)
+        } else {
+            (None, None)
+        };
 
         let mask = match dict.get("Mask") {
             None => None,
@@ -390,15 +417,49 @@ impl Document {
                 let mut alternates = Vec::with_capacity(array.0.len());
                 for item in &array.0 {
                     let resolved = self.resolve_image_value(item)?;
-                    // Table 90：数组元素是 `<< /Image n 0 R >>` 形式的字典；
-                    // 为兼容早期实现也接受直接给出的图像流/引用。
-                    let image = match &resolved {
-                        Value::Dict(entry) => entry.get("Image").cloned().ok_or_else(|| {
-                            invalid("/Alternates dictionary must contain an /Image entry")
-                        })?,
-                        _ => resolved,
+                    // Table 91：数组元素是 `<< /Image n 0 R … >>` 形式的
+                    // 字典；为兼容早期实现也接受直接给出的图像流/引用。
+                    let (image, default_for_printing, oc) = match &resolved {
+                        Value::Dict(entry) => {
+                            let image = entry.get("Image").cloned().ok_or_else(|| {
+                                invalid("/Alternates dictionary must contain an /Image entry")
+                            })?;
+                            let default_for_printing = match entry.get("DefaultForPrinting") {
+                                None => false,
+                                Some(value) => match self.resolve_image_value(value)? {
+                                    Value::Bool(flag) => flag,
+                                    _ => {
+                                        return Err(invalid(
+                                            "/DefaultForPrinting must be a boolean",
+                                        ));
+                                    }
+                                },
+                            };
+                            let oc = match entry.get("OC") {
+                                None => None,
+                                Some(value) => Some(parse_optional_content(value)?),
+                            };
+                            (image, default_for_printing, oc)
+                        }
+                        _ => (resolved.clone(), false, None),
                     };
-                    alternates.push(self.image_depth(&image, depth + 1)?);
+                    alternates.push(AlternateImage {
+                        image: self.image_depth(&image, depth + 1)?,
+                        default_for_printing,
+                        oc,
+                    });
+                }
+                // Table 91：「At most one alternate for a given base image
+                // shall be so designated.」
+                if alternates
+                    .iter()
+                    .filter(|alternate| alternate.default_for_printing)
+                    .count()
+                    > 1
+                {
+                    return Err(invalid(
+                        "/Alternates: at most one alternate image may set /DefaultForPrinting",
+                    ));
                 }
                 alternates
             }
@@ -407,8 +468,13 @@ impl Document {
         // `filters` 已在函数开头计算（JPX 判定需要先行）。
         let opi = parse_opi_entry(self, dict).map_err(|error| invalid(format!("/OPI: {error}")))?;
         let mut other = BTreeMap::new();
+        let inline = source == ImageSource::Inline;
         for (key, value) in &dict.0 {
-            if !IMAGE_ENTRIES.contains(&key.as_str()) {
+            // 内联图像不含 `/OC`/`/Metadata`（Table 93）；保留在 `other`
+            // 以免再次静默丢弃。
+            if !IMAGE_ENTRIES.contains(&key.as_str())
+                || (inline && matches!(key.as_str(), "OC" | "Metadata"))
+            {
                 other.insert(key.clone(), value.clone());
             }
         }
@@ -427,6 +493,8 @@ impl Document {
             smask,
             smask_in_data,
             alternates,
+            oc,
+            metadata,
             opi,
             jpx,
             jbig2,
@@ -434,6 +502,21 @@ impl Document {
             other,
             data,
         })
+    }
+}
+
+/// 解析 `/OC`（Table 89/91）：只接受间接引用或内联 OCMD 字典。
+fn parse_optional_content(value: &Value) -> Result<ImageOptionalContent> {
+    match value {
+        Value::Ref(object, generation) => Ok(ImageOptionalContent::Reference {
+            object: *object,
+            generation: *generation,
+        }),
+        Value::Dict(dict) => Ok(ImageOptionalContent::Membership(dict.clone())),
+        other => Err(invalid(format!(
+            "/OC must be a reference or an optional content membership dictionary, got {}",
+            other.type_name()
+        ))),
     }
 }
 
@@ -449,12 +532,11 @@ fn inline_key(key: &str) -> String {
         "IM" => "ImageMask".into(),
         "I" => "Interpolate".into(),
         "W" => "Width".into(),
-        "L" => "Length".into(),
         other => other.to_string(),
     }
 }
 
-/// Table 95 的内联图像颜色空间名缩写（值或颜色空间数组元素）。
+/// Table 94 的内联图像颜色空间名缩写（值或颜色空间数组元素）。
 fn inline_color_space_value(value: &Value) -> Value {
     match value {
         Value::Name(name) => Value::Name(inline_color_space_name(name).into()),

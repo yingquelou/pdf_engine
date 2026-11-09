@@ -1,0 +1,48 @@
+{
+    "schema":  1,
+    "source":  "docs/PDF32000_2008.pdf",
+    "source_sha256":  "59eec9d8bb207ebf1bf668066148e333a90480a8053337062b3b502ed81a9389",
+    "source_bytes":  22221818,
+    "text":  "docs/spec-index/iso32000-1.txt",
+    "text_sha256":  "b747fd921124684813f33cc68cc2eb417e197c0f1c77828e406e41e2a9192a6c",
+    "text_bytes":  3485155,
+    "generator":  "scripts/spec_index.ps1",
+    "backend":  "ghostscript txtwrite",
+    "backend_version":  "10.08.0",
+    "flags":  "-q -dNOPAUSE -dBATCH -sDEVICE=txtwrite",
+    "sections_7_14":  623,
+    "tables":  370,
+    "annexes":  12,
+    "sentinels":  [
+                      {
+                          "kind":  "anchor",
+                          "anchor":  "8.9.5",
+                          "key":  "Matrix",
+                          "present":  false
+                      },
+                      {
+                          "kind":  "anchor",
+                          "anchor":  "8.9.5",
+                          "key":  "Width",
+                          "present":  true
+                      },
+                      {
+                          "kind":  "anchor",
+                          "anchor":  "8.10.2",
+                          "key":  "Matrix",
+                          "present":  true
+                      },
+                      {
+                          "kind":  "table",
+                          "table":  89,
+                          "key":  "Matrix",
+                          "present":  false
+                      },
+                      {
+                          "kind":  "table",
+                          "table":  95,
+                          "key":  "Matrix",
+                          "present":  true
+                      }
+                  ]
+}

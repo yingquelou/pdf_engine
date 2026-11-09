@@ -8,6 +8,8 @@ fn cmyk_image_data_length_mismatch_is_invalid_object() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 2,
@@ -43,6 +45,8 @@ fn image_with_unsupported_bits_is_invalid_object() {
     let img = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -77,6 +81,8 @@ fn invalid_image_decode_fails_the_build() {
     let base = || ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 1,
         height: 1,
@@ -106,6 +112,8 @@ fn invalid_smask_parameters_fail_the_build() {
         ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             width,
             height,
@@ -124,6 +132,8 @@ fn invalid_smask_parameters_fail_the_build() {
         ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             width: 2,
             height: 2,
@@ -147,6 +157,8 @@ fn invalid_smask_parameters_fail_the_build() {
         base_with(ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             width: 2,
             height: 2,
@@ -177,6 +189,8 @@ fn invalid_image_mask_parameters_fail_the_build() {
     let base = || ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 8,
         height: 1,
@@ -194,6 +208,8 @@ fn invalid_image_mask_parameters_fail_the_build() {
         ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             bits: 8,
             data: vec![0; 8],
@@ -205,6 +221,8 @@ fn invalid_image_mask_parameters_fail_the_build() {
         ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             color_space: ColorSpace::DeviceRGB,
             ..base()
@@ -218,6 +236,8 @@ fn invalid_image_mask_parameters_fail_the_build() {
     let smask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 8,
         height: 1,
@@ -235,6 +255,8 @@ fn invalid_image_mask_parameters_fail_the_build() {
         ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             smask: Some(Box::new(smask)),
             ..base()
@@ -245,6 +267,8 @@ fn invalid_image_mask_parameters_fail_the_build() {
         ImageData {
             intent: None,
             alternates: Vec::new(),
+            oc: None,
+            metadata: None,
             matte: None,
             mask: Some(ImageMask::color_key(vec![0, 1])),
             ..base()
@@ -258,6 +282,8 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
     let base = || ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -274,6 +300,8 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
     let plain_gray = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,
@@ -294,6 +322,8 @@ fn invalid_explicit_and_colour_key_masks_fail_the_build() {
     let broken_mask = ImageData {
         intent: None,
         alternates: Vec::new(),
+        oc: None,
+        metadata: None,
         matte: None,
         width: 2,
         height: 1,

@@ -201,7 +201,8 @@ fn invalid_state_parameters_return_typed_errors() {
         (b"0.5 M", "M"),
         (b"[3 -1] 0 d", "d"),
         (b"/Bogus ri", "ri"),
-        (b"4 Tr", "Tr"),
+        (b"8 Tr", "Tr"),
+        (b"-1 Tr", "Tr"),
         (b"101 i", "i"),
         (b"/F1 0 Tf", "Tf"),
     ];
@@ -214,6 +215,28 @@ fn invalid_state_parameters_return_typed_errors() {
             other => panic!("expected InvalidValue for {input:?}, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn text_rendering_modes_0_to_7_are_tracked() {
+    let trace = trace_ops(b"0 Tr 1 Tr 2 Tr 3 Tr 4 Tr 5 Tr 6 Tr 7 Tr").unwrap();
+    assert_eq!(trace.len(), 8);
+    for (mode, state) in trace.iter().enumerate() {
+        assert_eq!(state.text_rendering_mode, mode as u8);
+    }
+}
+
+#[test]
+fn non_integer_text_rendering_mode_returns_typed_error() {
+    let err = parse_content_stream(b"4.5 Tr").expect_err("fractional Tr should error");
+    assert!(
+        matches!(
+            &err,
+            ContentStreamError::InvalidOperandValue { operator, operand_index, .. }
+                if operator == "Tr" && *operand_index == 0
+        ),
+        "{err}"
+    );
 }
 
 #[test]

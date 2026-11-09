@@ -24,6 +24,7 @@ docs/
 ├── roadmap/                   # 规划层：接下来做什么、怎样算完成
 │   ├── README.md              # 状态机、三齐口径、更新流程、阶段总览（派生）
 │   ├── principles.md          # 规划原则 1–8、工程约定 1–8
+│   ├── spec-consistency.md    # 规范—规划—实现一致性机制（S1–S8 判定规则）
 │   ├── stages/a-… f-….md      # 阶段文件（只留目标/增量/退出标准/未闭项）
 │   ├── non-goals.md
 │   ├── next-increments.md
@@ -31,7 +32,7 @@ docs/
 │   └── backlog/               # 工程债、fixtures、未决策、积压问题
 ├── changelog/                 # 历史层：按日期一文件，append-only
 ├── third-party/               # 引用层：第三方归属索引（许可证、版权、接入位置）
-└── archive/2026-11-06/        # 迁移前历史快照（不再维护）
+└── archive/                   # 历史归档，按日期建子目录（当前为空）
 ```
 
 ## 单一事实源纪律
@@ -44,10 +45,11 @@ docs/
 | 三齐口径、状态机、更新流程 | `roadmap/README.md` | 链接引用 |
 | 工程约定编号 | `roadmap/principles.md` | 写「工程约定 #N」并链接 |
 | 非目标理由 | `roadmap/non-goals.md` | 矩阵行只写「❌ 非目标（理由见 …）」 |
-| fixture 来源/许可/体积 | `roadmap/backlog/fixtures.md` | 矩阵证据列只写 fixture 名 |
+| fixture 元数据（生成脚本、清单、来源 URL、SHA-256、许可） | `roadmap/backlog/fixtures.md` | 矩阵证据列只写 fixture 名；任何 PDF 文件不入仓 |
 | 测试数、行数、体积数字 | 只进 `changelog/<date>.md` 与 `backlog/fixtures.md`、`backlog/module-debt.md` | 当前状态不写计数 |
 | 第三方许可证、版权、接入位置 | `third-party/README.md` | 写包名并链接本文件，不复制许可证全文 |
 | 依赖分类、判定顺序、门槛阈值 | `roadmap/principles.md` 与 `scripts/deps.allow.toml` | 易变元数据只进 `deps.allow.toml` |
+| 规范锚点判定、三方一致性检查项 | [roadmap/spec-consistency.md](roadmap/spec-consistency.md) | 只写检查项编号（S1–S8），不复制规则原文 |
 
 引用写法：
 
@@ -60,11 +62,13 @@ docs/
 
 - 权威副本：`docs/PDF32000_2008.pdf`。
 - 核对方法：`pdftotext -raw` 抽取纯文本后按条款号 / 表号检索；多列表格**勿用 `-layout`**（会列错位）。
+- 机器索引：`docs/spec-index/iso32000-1.txt` 与 `meta.json` 由 `scripts/spec_index.ps1 -Update` 从权威副本抽取，只供 `scripts/spec_check.ps1` 做锚点/键名溯源；引用规范仍以 PDF 的 §条款号 / 表号为准，不要把索引文本当作引用来源。
+- 三方一致性：锚点判定、索引生成/缓存/失效与 S1–S8 检查项见 [roadmap/spec-consistency.md](roadmap/spec-consistency.md)；日常运行 `powershell -File scripts/spec_check.ps1`（离线、只读），门禁加 `-Strict`，重建比对加 `-RebuildVerify`，`-Json` 含 `nonSpec` 非规范条目清单，`-RunTests` 才执行注入自测。
 - 历史：`docs/PDF32000_2008/`（HTML 导出目录）在本仓库不存在，不作为数据源。
 
 ## 归档
 
-`docs/archive/2026-11-06/` 保存迁移前的 `FEATURE_MATRIX.md` 与 `ROADMAP.md` 原文（**迁移前历史快照，不再维护、不得引用为事实源**）。`scripts/docs_check.ps1` 的检查范围排除该目录。
+`docs/archive/` 是历史归档区，按日期建子目录（当前为空）。归档内容为迁移前旧文档快照（**不再维护、不得引用为事实源**）。`scripts/docs_check.ps1` 的检查范围排除该目录。
 
 ## 迁移记录
 
