@@ -3,11 +3,14 @@
 
 use crate::core::reader::Parser;
 use crate::core::reader::signature::{
-    DigestAlgorithm, DocmdpPermission, RustCryptoSignatureBackend, TransformMethod,
+    CmsDigestAlgorithm, CmsSignerIdentifier, DigestAlgorithm, DocmdpPermission,
+    RustCryptoSignatureBackend, SignatureSubFilter, SignerIntegrity, TransformMethod,
 };
 use crate::core::types::Document;
 use crate::core::types::{Array, Dict, Object, PdfVersion, Trailer, Value};
-use crate::core::writer::signature::SigningSpec;
+use crate::core::writer::signature::{
+    CmsSignBackend, CmsSignerId, CmsSignerMaterial, ContentsPayload, SigningSpec,
+};
 use crate::core::writer::{DocumentWriter, WriteError};
 use std::io::Write as _;
 
@@ -211,7 +214,8 @@ fn signed_incremental_field_roundtrips_and_digest_matches_contents() {
             .unwrap()
             .get("SubFilter")
             .and_then(Value::as_name),
-        Some("adbe.pkcs7.detached")
+        None,
+        "F1.1：裸摘要默认载荷不得声明 CMS 类 /SubFilter"
     );
     // 历史载荷对象沿 /Prev 链仍可读。
     let payload = revised.get_object(2).unwrap().expect("history payload");
@@ -403,4 +407,338 @@ fn signed_output_survives_full_rewrite() {
         }
         _ => panic!("reference entry should be an indirect dict"),
     }
+}
+
+// ===== F1.1：/SubFilter 与 /Contents 载荷自洽 =====
+
+/// 测试用最小 DER 编码器（只覆盖定长 TLV）。
+fn cms_der(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    if content.len() < 0x80 {
+        out.push(content.len() as u8);
+    } else {
+        let bytes = content.len().to_be_bytes();
+        let start = bytes
+            .iter()
+            .position(|b| *b != 0)
+            .unwrap_or(bytes.len() - 1);
+        out.push(0x80 | (bytes.len() - start) as u8);
+        out.extend_from_slice(&bytes[start..]);
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+fn cms_seq(parts: &[Vec<u8>]) -> Vec<u8> {
+    cms_der(0x30, &parts.iter().flatten().copied().collect::<Vec<_>>())
+}
+
+fn cms_set(parts: &[Vec<u8>]) -> Vec<u8> {
+    cms_der(0x31, &parts.iter().flatten().copied().collect::<Vec<_>>())
+}
+
+fn cms_oid(dotted: &str) -> Vec<u8> {
+    let arcs: Vec<u64> = dotted.split('.').map(|s| s.parse().unwrap()).collect();
+    let mut content = Vec::new();
+    let mut arcs = arcs.into_iter();
+    let first = arcs.next().unwrap() * 40 + arcs.next().unwrap();
+    for value in std::iter::once(first).chain(arcs) {
+        let mut buf = [0u8; 10];
+        let mut i = buf.len() - 1;
+        let mut v = value;
+        buf[i] = (v & 0x7F) as u8;
+        v >>= 7;
+        while v > 0 {
+            i -= 1;
+            buf[i] = (v & 0x7F) as u8 | 0x80;
+            v >>= 7;
+        }
+        content.extend_from_slice(&buf[i..]);
+    }
+    cms_der(0x06, &content)
+}
+
+fn cms_integer(n: u8) -> Vec<u8> {
+    cms_der(0x02, &[n])
+}
+
+fn cms_octet(bytes: &[u8]) -> Vec<u8> {
+    cms_der(0x04, bytes)
+}
+
+fn cms_algorithm(oid: &str) -> Vec<u8> {
+    cms_seq(&[cms_oid(oid)])
+}
+
+/// 一个结构合法（无签名值验证）的 detached CMS SignedData。
+fn minimal_cms_detached() -> Vec<u8> {
+    let sid = cms_seq(&[cms_seq(&[]), cms_integer(1)]);
+    let signer = cms_seq(&[
+        cms_integer(1),
+        sid,
+        cms_algorithm("2.16.840.1.101.3.4.2.1"), // sha256
+        cms_algorithm("1.2.840.113549.1.1.1"),   // rsaEncryption
+        cms_octet(&[0x5A; 8]),
+    ]);
+    let signed = cms_seq(&[
+        cms_integer(1),
+        cms_set(&[cms_algorithm("2.16.840.1.101.3.4.2.1")]),
+        cms_seq(&[cms_oid("1.2.840.113549.1.7.1")]), // eContentType = data, 无 eContent
+        cms_set(&[signer]),
+    ]);
+    cms_seq(&[cms_oid("1.2.840.113549.1.7.2"), cms_der(0xA0, &signed)])
+}
+
+#[test]
+fn signing_rejects_cms_subfilter_with_raw_payload() {
+    // 当前默认载荷即 Raw（恒等签名器 = 裸摘要），不得声明 CMS 子过滤器。
+    let doc = parse_bytes(&base_bytes(None), "cms-raw");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, 32).with_sub_filter("adbe.pkcs7.detached");
+    let error = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect_err("CMS SubFilter with bare-digest payload must be rejected");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible with /Contents payload"),
+        "{error}"
+    );
+}
+
+#[test]
+fn signing_rejects_non_cms_subfilter_with_cms_payload() {
+    let doc = parse_bytes(&base_bytes(None), "raw-cms");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, 32)
+        .with_contents_payload(ContentsPayload::CmsDetached)
+        .with_sub_filter("adbe.x509.rsa_sha1");
+    let error = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect_err("non-CMS SubFilter with CMS payload must be rejected");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+}
+
+#[test]
+fn signing_rejects_cms_payload_that_is_not_der() {
+    // 声明 CMS 载荷但签名器返回裸摘要：写出前必须被结构校验拦下。
+    let doc = parse_bytes(&base_bytes(None), "cms-not-der");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, 32).with_cms_payload();
+    let error = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect_err("bare digest must not masquerade as CMS SignedData");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error.to_string().contains("not valid CMS SignedData"),
+        "{error}"
+    );
+}
+
+#[test]
+fn signing_accepts_cms_subfilter_with_valid_cms_payload_and_roundtrips() {
+    let blob = minimal_cms_detached();
+    let len = blob.len();
+    let doc = parse_bytes(&base_bytes(None), "cms-ok");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, len)
+        .with_cms_payload()
+        .with_signer(len, move |_| blob.clone());
+    let signed = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect("valid CMS payload should be accepted");
+    let revised = parse_bytes(&signed.bytes, "cms-ok-read");
+    let sigs = revised.document_signatures().expect("signatures");
+    assert_eq!(sigs.len(), 1);
+    assert_eq!(sigs[0].sub_filter, Some(SignatureSubFilter::Pkcs7Detached));
+    revised
+        .validate_signature_byte_range(&sigs[0])
+        .expect("byte range validates");
+    let cms = revised
+        .signature_cms(&sigs[0])
+        .expect("parse cms")
+        .expect("cms present");
+    assert_eq!(cms.signers.len(), 1, "CMS SignedData 可经读端解析");
+    assert_eq!(cms.signers[0].signature, vec![0x5A; 8]);
+    assert_eq!(cms.content, None, "detached：eContent 缺省");
+}
+
+// ===== F1.2：写端 detached CMS 构造与签名值后端 =====
+
+const FAKE_CERT: &[u8] = &[0x30, 0x03, 0x02, 0x01, 0x07];
+
+/// 结构测试用后端：签名值 = 摘要长度 + 后端收到的 signedAttrs DER，
+/// 以此证明「后端签的字节」与「读端重建供验证的字节」完全一致。
+#[derive(Debug, Clone, Copy)]
+struct FakeCmsSignBackend;
+
+impl CmsSignBackend for FakeCmsSignBackend {
+    fn sign(
+        &self,
+        signed_attrs_der: &[u8],
+        digest_algorithm: DigestAlgorithm,
+    ) -> Result<CmsSignerMaterial, String> {
+        let mut signature = vec![digest_algorithm.output_len() as u8];
+        signature.extend_from_slice(signed_attrs_der);
+        Ok(CmsSignerMaterial {
+            signature_algorithm: "1.2.840.113549.1.1.1".into(),
+            signer_id: CmsSignerId::IssuerAndSerial {
+                issuer_der: vec![0x30, 0x00],
+                serial: vec![0x2A],
+            },
+            signature,
+            certificates: vec![FAKE_CERT.to_vec()],
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FailingCmsSignBackend;
+
+impl CmsSignBackend for FailingCmsSignBackend {
+    fn sign(
+        &self,
+        _signed_attrs_der: &[u8],
+        _digest_algorithm: DigestAlgorithm,
+    ) -> Result<CmsSignerMaterial, String> {
+        Err("no key".into())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SkiCmsSignBackend;
+
+impl CmsSignBackend for SkiCmsSignBackend {
+    fn sign(
+        &self,
+        signed_attrs_der: &[u8],
+        _digest_algorithm: DigestAlgorithm,
+    ) -> Result<CmsSignerMaterial, String> {
+        Ok(CmsSignerMaterial {
+            signature_algorithm: "1.2.840.113549.1.1.1".into(),
+            signer_id: CmsSignerId::SubjectKeyIdentifier(vec![0xDE, 0xAD]),
+            signature: signed_attrs_der.to_vec(),
+            certificates: vec![],
+        })
+    }
+}
+
+#[test]
+fn cms_backend_builds_detached_signed_data_and_roundtrips() {
+    let doc = parse_bytes(&base_bytes(None), "cms-build");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, 512).with_cms_backend(FakeCmsSignBackend);
+    let signed = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect("sign with CMS backend");
+    let revised = parse_bytes(&signed.bytes, "cms-build-read");
+    let sigs = revised.document_signatures().expect("signatures");
+    assert_eq!(sigs.len(), 1);
+    assert_eq!(sigs[0].sub_filter, Some(SignatureSubFilter::Pkcs7Detached));
+    revised
+        .validate_signature_byte_range(&sigs[0])
+        .expect("byte range");
+
+    let digest = revised
+        .signature_digest(
+            &sigs[0],
+            DigestAlgorithm::Sha256,
+            &RustCryptoSignatureBackend,
+        )
+        .expect("digest");
+    let cms = revised
+        .signature_cms(&sigs[0])
+        .expect("parse cms")
+        .expect("cms present");
+    assert_eq!(
+        cms.digest_algorithms,
+        vec![CmsDigestAlgorithm::Known(DigestAlgorithm::Sha256)]
+    );
+    assert_eq!(cms.content, None, "detached：eContent 缺省");
+    assert_eq!(cms.certificates, vec![FAKE_CERT.to_vec()]);
+    assert_eq!(cms.signers.len(), 1);
+    let signer = &cms.signers[0];
+    assert_eq!(signer.message_digest.as_deref(), Some(digest.as_slice()));
+    assert_eq!(signer.signature_algorithm.oid, "1.2.840.113549.1.1.1");
+    match &signer.signer_id {
+        CmsSignerIdentifier::IssuerAndSerialNumber { issuer_der, serial } => {
+            assert_eq!(issuer_der, &vec![0x30, 0x00]);
+            assert_eq!(serial, &vec![0x2A]);
+        }
+        other => panic!("unexpected signer id {other:?}"),
+    }
+    // 后端收到的待签 DER 与读端为验证重建的 signedAttrs 逐字节一致。
+    assert_eq!(signer.signature[0], 32);
+    assert_eq!(
+        &signer.signature[1..],
+        signer
+            .signed_attributes_der
+            .as_deref()
+            .expect("signedAttrs present")
+    );
+    let integrity = revised
+        .verify_signature_integrity(&sigs[0], &RustCryptoSignatureBackend)
+        .expect("integrity");
+    assert_eq!(integrity.signers, vec![SignerIntegrity::Match]);
+
+    // /Contents 槽位尾部补零，读端按 PDF 惯例接受。
+    let Value::HexString(hex) = sigs[0].contents.as_ref().expect("contents") else {
+        panic!("contents shape");
+    };
+    let contents = hex_decode(hex);
+    assert_eq!(contents.len(), 512);
+    assert!(
+        contents[400..].iter().all(|byte| *byte == 0),
+        "未使用的 /Contents 槽位应补零"
+    );
+}
+
+#[test]
+fn cms_backend_rejects_oversized_payload() {
+    let doc = parse_bytes(&base_bytes(None), "cms-oversize");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, 8).with_cms_backend(FakeCmsSignBackend);
+    let error = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect_err("CMS larger than the /Contents slot must be rejected");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("exceeding the 8-byte /Contents slot"),
+        "{error}"
+    );
+}
+
+#[test]
+fn cms_backend_error_is_typed() {
+    let doc = parse_bytes(&base_bytes(None), "cms-err");
+    let spec =
+        SigningSpec::new(DigestAlgorithm::Sha256, 256).with_cms_backend(FailingCmsSignBackend);
+    let error = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect_err("backend error must abort the write");
+    assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("CMS signing backend failed: no key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn cms_backend_subject_key_identifier_uses_version_three() {
+    let doc = parse_bytes(&base_bytes(None), "cms-ski");
+    let spec = SigningSpec::new(DigestAlgorithm::Sha256, 256).with_cms_backend(SkiCmsSignBackend);
+    let signed = DocumentWriter::new()
+        .sign_incremental(&doc, &spec, &RustCryptoSignatureBackend)
+        .expect("sign with SKI backend");
+    let revised = parse_bytes(&signed.bytes, "cms-ski-read");
+    let sigs = revised.document_signatures().expect("signatures");
+    let cms = revised
+        .signature_cms(&sigs[0])
+        .expect("parse cms")
+        .expect("cms present");
+    assert_eq!(cms.version, 3);
+    assert_eq!(cms.signers[0].version, 3);
+    assert_eq!(
+        cms.signers[0].signer_id,
+        CmsSignerIdentifier::SubjectKeyIdentifier(vec![0xDE, 0xAD])
+    );
 }

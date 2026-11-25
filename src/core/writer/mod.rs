@@ -79,7 +79,10 @@ mod version;
 pub use compression::{DeflateBackend, Flate2DeflateBackend, ImagePredictor, StreamCompression};
 pub use document_writer::{DocumentWriter, write_document};
 pub use hybrid::HybridReferencePolicy;
-pub use signature::{SignedIncremental, SigningSpec};
+pub use signature::{
+    CmsBuildError, CmsSignBackend, CmsSignerId, CmsSignerMaterial, ContentsPayload,
+    SignedIncremental, SigningSpec,
+};
 pub use value::{write_object, write_value};
 
 pub(crate) use value::{format_float, validate_ascii85_payloads};

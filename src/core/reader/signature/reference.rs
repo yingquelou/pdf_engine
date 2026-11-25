@@ -132,6 +132,21 @@ pub struct SignatureReference {
     pub dict: Dict,
 }
 
+/// `/Reference` 中的时间戳条目（12.8.3.4）：无 `/TransformMethod` 或
+/// `/TransformMethod /ETSI.RFC3161`。只原样暴露条目内容，不解释令牌、
+/// 不校验证书或权威，验证交由 F1.3 后端。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimestampReference {
+    /// `/Data`：通常为承载 RFC 3161 令牌的流，原样保留。
+    pub data: Option<Value>,
+    /// `/DigestValue` 原始值。
+    pub digest_value: Option<Value>,
+    /// `/DigestLength` 声明的摘要字节数。
+    pub digest_length: Option<i64>,
+    /// 完整引用字典（含未知条目）。
+    pub dict: Dict,
+}
+
 impl SignatureReference {
     /// `/Data` 若为间接引用则返回 `(num, gen)`。
     pub fn data_reference(&self) -> Option<(i64, i64)> {

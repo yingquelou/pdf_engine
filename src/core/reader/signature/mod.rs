@@ -46,6 +46,7 @@ mod entries;
 mod integrity;
 mod perms;
 mod reference;
+mod verify;
 
 pub use cms::{
     CmsAlgorithmIdentifier, CmsDigestAlgorithm, CmsError, CmsLimits, CmsSignedData,
@@ -56,8 +57,12 @@ pub use entries::{DigestAlgorithm, DocumentSignature, SignatureSubFilter};
 pub use integrity::{SignatureIntegrity, SignerIntegrity};
 pub use perms::{PermsEntry, PermsEntryName};
 pub use reference::{
-    DocmdpPermission, FieldMdPermission, SignatureReference, TransformMethod, TransformParams,
-    UrScope,
+    DocmdpPermission, FieldMdPermission, SignatureReference, TimestampReference, TransformMethod,
+    TransformParams, UrScope,
+};
+pub use verify::{
+    ChainCheck, SignatureCheck, SignatureVerification, SignatureVerifyBackend, SignerVerification,
+    TimestampCheck, TimestampVerification, VerifyOptions,
 };
 
 #[cfg(test)]

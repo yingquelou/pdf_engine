@@ -7,19 +7,58 @@
 //!   重算直到布局不动点收敛（数字宽度会移动占位偏移）；
 //! - 收敛后对覆盖字节段计算摘要，交给调用方签名器产出签名数据，
 //!   以等长十六进制原位回填占位——回填不移动任何字节偏移；
-//! - PKCS#7/CMS 语法不在本层：签名器返回什么字节就回填什么
-//!   （裸摘要场景下即覆盖字段的 `/DigestAlgorithm` 摘要）；
+//! - CMS 结构在本层、密码学不在本层（12.8 F1.1/F1.2）：`SigningSpec` 可注入
+//!   [`CmsSignBackend`]，由本层构造 detached CMS SignedData（signedAttrs
+//!   `messageDigest` 取自覆盖字节、签名值与证书集来自后端）；未注入后端时
+//!   签名器返回什么字节就回填什么，但 `/SubFilter` 必须与 `/Contents` 载荷
+//!   自洽，CMS 类子过滤器只接受可被解析为 CMS 的载荷；
+//!   签名值计算、证书链与信任判定一律经后端注入；
 //! - 零字节契约：全过程先缓冲，任一步失败返回 `Err` 且不写出；
 //!   宿主 `Document` 的缓存会被追加签名对象（与 E7 对象手术用法一致）。
 
-use crate::core::reader::signature::{DigestAlgorithm, SignatureBackend};
+use crate::core::reader::signature::{
+    CmsSignedData, DigestAlgorithm, SignatureBackend, SignatureSubFilter,
+};
 use crate::core::types::{Array, Dict, Document, Object, PdfFeature, Value};
 
 use super::DocumentWriter;
 use super::WriteError;
 
+mod cms;
+
+pub use cms::{CmsBuildError, CmsSignBackend, CmsSignerId, CmsSignerMaterial};
+use cms::{build_detached_cms, signed_attrs_der};
+
 /// 定点迭代上限：ByteRange 数字宽度至多把布局偏移推动几轮。
 const MAX_PASSES: usize = 8;
+
+/// `/Contents` 载荷类型（12.8 F1.1 自洽校验）。
+///
+/// `/SubFilter` 是载荷类型的声明，二者必须相符，否则写出的是结构不成立
+/// 的签名字典（例如把裸摘要挂到 `adbe.pkcs7.detached` 上）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentsPayload {
+    /// 签名器原始输出字节：裸摘要或 PKCS#1 签名字节，不是 CMS DER。
+    Raw,
+    /// DER 编码的 detached CMS SignedData；写出前经读端解析器做结构校验。
+    CmsDetached,
+}
+
+/// `/SubFilter` 是否接受给定的 `/Contents` 载荷类型。
+///
+/// `adbe.pkcs7.*` / `ETSI.CAdES.detached` / `ETSI.RFC3161` 都是 CMS 类，
+/// 只接受 CMS 载荷；`adbe.x509.rsa_sha1` 的 `/Contents` 是原始签名字节；
+/// 自定义名称由调用方自行负责，不在此做臆断。
+fn sub_filter_accepts_payload(sub_filter: &SignatureSubFilter, payload: ContentsPayload) -> bool {
+    match sub_filter {
+        SignatureSubFilter::Pkcs7Sha1
+        | SignatureSubFilter::Pkcs7Detached
+        | SignatureSubFilter::CadesDetached
+        | SignatureSubFilter::Rfc3161 => payload == ContentsPayload::CmsDetached,
+        SignatureSubFilter::X509RsaSha1 => payload == ContentsPayload::Raw,
+        SignatureSubFilter::Unknown(_) => true,
+    }
+}
 
 /// 写端签名增量写出的产物。
 #[derive(Debug, Clone)]
@@ -50,7 +89,9 @@ pub struct SigningSpec {
     reason: Option<String>,
     date: Option<Value>,
     filter: String,
-    sub_filter: String,
+    sub_filter: Option<String>,
+    contents_payload: ContentsPayload,
+    cms_backend: Option<Box<dyn CmsSignBackend>>,
     sig_flags: i64,
     docmdp_permission: Option<i64>,
 }
@@ -58,6 +99,11 @@ pub struct SigningSpec {
 impl SigningSpec {
     /// 创建签名参数；`algorithm` 决定覆盖字段摘要，`digest_len` 声明
     /// 签名器输出字节数（裸摘要场景 = 摘要长度：Md5=16、Sha1=20、Sha256=32）。
+    ///
+    /// 默认载荷为 [`ContentsPayload::Raw`]（恒等签名器即裸摘要），且不写
+    /// `/SubFilter`（该条目在 Table 257 中可选），因此不会声明与载荷矛盾
+    /// 的 CMS 子过滤器。真实签名需显式声明 [`Self::with_contents_payload`]
+    /// 与 [`Self::with_sub_filter`]。
     pub fn new(algorithm: DigestAlgorithm, digest_len: usize) -> Self {
         Self {
             signer: Box::new(move |digest| digest.to_vec()),
@@ -69,7 +115,9 @@ impl SigningSpec {
             reason: None,
             date: None,
             filter: "Adobe.PPKLite".to_string(),
-            sub_filter: "adbe.pkcs7.detached".to_string(),
+            sub_filter: None,
+            contents_payload: ContentsPayload::Raw,
+            cms_backend: None,
             sig_flags: 1,
             docmdp_permission: None,
         }
@@ -131,10 +179,49 @@ impl SigningSpec {
         self
     }
 
-    /// `/SubFilter` 子过滤器名。
+    /// `/SubFilter` 子过滤器名（12.8.4.3 Table 258）。
+    ///
+    /// 必须与 [`Self::with_contents_payload`] 声明的载荷类型自洽：CMS 类
+    /// 子过滤器只接受 [`ContentsPayload::CmsDetached`]，反之亦然。不调用
+    /// 本方法则不写 `/SubFilter`（Table 257 中该条目可选）。
     #[must_use]
     pub fn with_sub_filter(mut self, sub_filter: impl Into<String>) -> Self {
-        self.sub_filter = sub_filter.into();
+        self.sub_filter = Some(sub_filter.into());
+        self
+    }
+
+    /// 声明签名器输出的 `/Contents` 载荷类型，用于 `/SubFilter` 自洽校验。
+    #[must_use]
+    pub fn with_contents_payload(mut self, payload: ContentsPayload) -> Self {
+        self.contents_payload = payload;
+        self
+    }
+
+    /// 声明载荷为 detached CMS SignedData 并默认 `/SubFilter` 为
+    /// `adbe.pkcs7.detached`（调用方可再 [`Self::with_sub_filter`] 覆盖）。
+    #[must_use]
+    pub fn with_cms_payload(mut self) -> Self {
+        self.contents_payload = ContentsPayload::CmsDetached;
+        if self.sub_filter.is_none() {
+            self.sub_filter = Some("adbe.pkcs7.detached".to_string());
+        }
+        self
+    }
+
+    /// 注入 CMS 签名值后端（F1.2）：写端据覆盖字节摘要构造 signedAttrs，
+    /// 调后端取签名值与证书集，再编排为 detached CMS SignedData 回填
+    /// `/Contents`。隐式声明 CMS 载荷与 `adbe.pkcs7.detached` 子过滤器。
+    ///
+    /// `digest_len` 此时表示分配给 `/Contents` 的字节数（须 ≥ 构造出的 CMS
+    /// 长度）；多出的尾部字节补零，读端 `CmsSignedData::parse` 按 PDF 惯例
+    /// 接受尾随全零填充，因此占位宽度在定点迭代中保持稳定。
+    #[must_use]
+    pub fn with_cms_backend(mut self, backend: impl CmsSignBackend + 'static) -> Self {
+        self.contents_payload = ContentsPayload::CmsDetached;
+        if self.sub_filter.is_none() {
+            self.sub_filter = Some("adbe.pkcs7.detached".to_string());
+        }
+        self.cms_backend = Some(Box::new(backend));
         self
     }
 
@@ -185,6 +272,16 @@ impl DocumentWriter {
             return Err(WriteError::InvalidObject(
                 "signature digest length must be positive".into(),
             ));
+        }
+        // F1.1：/SubFilter 声明的载荷类型必须与 /Contents 载荷自洽。
+        if let Some(name) = spec.sub_filter.as_deref() {
+            let sub_filter = SignatureSubFilter::from_name(name);
+            if !sub_filter_accepts_payload(&sub_filter, spec.contents_payload) {
+                return Err(WriteError::InvalidObject(format!(
+                    "signature /SubFilter {name} is incompatible with /Contents payload {:?}",
+                    spec.contents_payload
+                )));
+            }
         }
         if spec.field_name.is_empty() || spec.field_name.contains('.') {
             return Err(WriteError::InvalidObject(format!(
@@ -318,13 +415,50 @@ fn fill_contents_placeholder(
             remaining -= take;
         }
     }
-    let blob = (spec.signer)(&sink.finish());
-    if blob.len() != spec.digest_len {
-        return Err(WriteError::InvalidObject(format!(
-            "signer returned {} bytes, expected {} for the /Contents placeholder",
-            blob.len(),
-            spec.digest_len
-        )));
+    let digest = sink.finish();
+    let blob = if let Some(cms_signer) = spec.cms_backend.as_deref() {
+        // F1.2：由本层构造 CMS，签名值与证书集来自后端。
+        let attrs = signed_attrs_der(&digest);
+        let material = cms_signer.sign(&attrs, spec.algorithm).map_err(|error| {
+            WriteError::InvalidObject(format!("CMS signing backend failed: {error}"))
+        })?;
+        let cms = build_detached_cms(spec.algorithm, &digest, &material).map_err(|error| {
+            WriteError::InvalidObject(format!("failed to construct CMS SignedData: {error}"))
+        })?;
+        CmsSignedData::parse(&cms).map_err(|error| {
+            WriteError::InvalidObject(format!(
+                "constructed CMS SignedData is not parseable: {error}"
+            ))
+        })?;
+        if cms.len() > spec.digest_len {
+            return Err(WriteError::InvalidObject(format!(
+                "constructed CMS is {} bytes, exceeding the {}-byte /Contents slot",
+                cms.len(),
+                spec.digest_len
+            )));
+        }
+        let mut padded = cms;
+        padded.resize(spec.digest_len, 0);
+        padded
+    } else {
+        (spec.signer)(&digest)
+    };
+    if spec.cms_backend.is_none() {
+        if blob.len() != spec.digest_len {
+            return Err(WriteError::InvalidObject(format!(
+                "signer returned {} bytes, expected {} for the /Contents placeholder",
+                blob.len(),
+                spec.digest_len
+            )));
+        }
+        // CMS 类载荷必须是可解析的 detached SignedData，杜绝「裸摘要冒充 CMS」。
+        if spec.contents_payload == ContentsPayload::CmsDetached {
+            CmsSignedData::parse(&blob).map_err(|error| {
+                WriteError::InvalidObject(format!(
+                    "signature /Contents payload is not valid CMS SignedData: {error}"
+                ))
+            })?;
+        }
     }
     let encoded = hex_encode(&blob);
     let start = at + 1;
@@ -484,7 +618,6 @@ fn install_signature_objects(
     let mut signature_dict = Dict::new()
         .insert("Type", Value::Name("Sig".into()))
         .insert("Filter", Value::Name(spec.filter.clone()))
-        .insert("SubFilter", Value::Name(spec.sub_filter.clone()))
         .insert(
             "ByteRange",
             Value::Array(range.iter().fold(Array::new(), |array, value| {
@@ -492,6 +625,9 @@ fn install_signature_objects(
             })),
         )
         .insert("Contents", Value::HexString(placeholder_hex.into()));
+    if let Some(name) = &spec.sub_filter {
+        signature_dict = signature_dict.insert("SubFilter", Value::Name(name.clone()));
+    }
     if let Some(name) = &spec.name {
         signature_dict = signature_dict.insert("Name", Value::String(name.clone()));
     }

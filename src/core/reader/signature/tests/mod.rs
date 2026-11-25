@@ -20,6 +20,7 @@ mod integrity;
 mod model;
 mod perms;
 mod references;
+mod verify;
 
 fn temp_path(tag: &str) -> std::path::PathBuf {
     let base = std::env::current_exe()

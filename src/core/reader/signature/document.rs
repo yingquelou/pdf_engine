@@ -8,7 +8,8 @@ use crate::core::types::{Document, Value};
 use super::entries::{DigestAlgorithm, DocumentSignature, parse_byte_range};
 use super::perms::{PermsEntry, PermsEntryName};
 use super::reference::{
-    DocmdpPermission, SignatureReference, TransformMethod, TransformParams, parse_transform_params,
+    DocmdpPermission, SignatureReference, TimestampReference, TransformMethod, TransformParams,
+    parse_transform_params,
 };
 use super::{DIGEST_CHUNK, Result, SignatureBackend, SignatureError, malformed};
 
@@ -226,6 +227,48 @@ impl Document {
             });
         }
         Ok(out)
+    }
+
+    /// `/Reference` 中的时间戳条目（12.8.3.4）：无 `/TransformMethod`
+    /// 或 `/TransformMethod /ETSI.RFC3161` 的字典，原样暴露。
+    pub fn signature_timestamp_references(
+        &self,
+        signature: &DocumentSignature,
+    ) -> Result<Vec<TimestampReference>> {
+        let Some(value) = signature.references.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let resolved = resolve(self, value).map_err(|error| malformed(error.to_string()))?;
+        let items = match &resolved {
+            Value::Array(array) => &array.0,
+            _ => return Err(malformed("/Reference must be an array")),
+        };
+        let mut out = Vec::new();
+        for item in items {
+            let reference = resolve(self, item).map_err(|error| malformed(error.to_string()))?;
+            let dict = reference
+                .as_dict()
+                .ok_or_else(|| malformed("a /Reference entry is not a dictionary"))?;
+            let method = dict.get("TransformMethod").and_then(|v| v.as_name());
+            if method.is_some() && method != Some("ETSI.RFC3161") {
+                continue;
+            }
+            out.push(TimestampReference {
+                data: dict.get("Data").cloned(),
+                digest_value: dict.get("DigestValue").cloned(),
+                digest_length: dict.get("DigestLength").and_then(|v| v.as_integer()),
+                dict: dict.clone(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// 时间戳引用 `/Data` 指向的流字节（先解引用再读流）；非流或读取失败
+    /// 返回 `None`。只做原样暴露，不解释 RFC 3161 令牌。
+    pub fn timestamp_reference_token(&self, reference: &TimestampReference) -> Option<Vec<u8>> {
+        let data = reference.data.as_ref()?;
+        let resolved = resolve(self, data).ok()?;
+        self.stream_bytes(&resolved)
     }
 
     /// DocMDP 权限级别（12.8.4.3）：首个 DocMDP 引用的 `/P`；无则 `None`。
