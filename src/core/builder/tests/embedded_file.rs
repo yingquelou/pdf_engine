@@ -387,3 +387,74 @@ fn embedded_names_tree_merges_with_navigation_entries() {
         "/EmbeddedFiles 不应被覆盖"
     );
 }
+
+#[test]
+fn related_files_are_written_and_read_back() {
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.embed_file(
+        EmbeddedFile::new("main.txt", b"main bytes".to_vec())
+            .with_related_file("F", "alt.txt", b"related bytes".to_vec()),
+    );
+    let doc = b.assemble_document().expect("assemble");
+
+    let (_, _, filespec) = single_embedded_entry(&doc);
+    let rf = filespec.get("RF").and_then(Value::as_dict).expect("/RF");
+    let array = rf.get("F").and_then(Value::as_array).expect("/RF /F");
+    assert_eq!(array.0.len(), 2, "一对 name/stream");
+    assert!(
+        matches!(&array.0[0], Value::HexString(_) | Value::String(_)),
+        "关联文件名应是文本串: {:?}",
+        array.0[0]
+    );
+    let (num, _) = array.0[1].as_ref().expect("关联文件流引用");
+    let stream = doc.get_object(num).expect("lookup").expect("stream");
+    match &stream.value {
+        Value::Stream(dict, StreamData::Owned(bytes)) => {
+            assert_eq!(bytes, b"related bytes");
+            assert_eq!(
+                dict.get("Type").and_then(Value::as_name),
+                Some("EmbeddedFile")
+            );
+        }
+        other => panic!("related file should be an embedded stream: {other:?}"),
+    }
+
+    let files = doc.embedded_files().expect("embedded files");
+    let related = &files["main.txt"].related_files["F"];
+    assert_eq!(related.len(), 1);
+    assert_eq!(related[0].name, "alt.txt");
+    assert_eq!(related[0].file.data, b"related bytes");
+}
+
+#[test]
+fn related_file_carrier_absent_from_ef_is_rejected_without_bytes() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_6);
+    b.page(PageSize::A4);
+    // 1.6 不写 /UF 载体，故 /RF 的 UF 键无处对应。
+    b.embed_file(
+        EmbeddedFile::new("main.txt", b"main".to_vec())
+            .with_related_file("UF", "alt.txt", b"alt".to_vec()),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("载体不在 /EF 中应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error:?}");
+    assert!(error.to_string().contains("absent from /EF"), "{error}");
+    assert_eq!(out.len(), 0, "零字节契约");
+}
+
+#[test]
+fn duplicate_related_file_is_rejected() {
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.embed_file(
+        EmbeddedFile::new("main.txt", b"main".to_vec())
+            .with_related_file("F", "alt.txt", b"a".to_vec())
+            .with_related_file("F", "alt.txt", b"b".to_vec()),
+    );
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("重复关联文件应被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error:?}");
+    assert!(error.to_string().contains("duplicate related file"), "{error}");
+    assert_eq!(out.len(), 0, "零字节契约");
+}

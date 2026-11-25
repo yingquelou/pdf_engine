@@ -24,6 +24,20 @@ pub(super) struct EmbeddedSlot {
     pub(super) filespec_num: i64,
     pub(super) stream_num: i64,
     pub(super) collection_item_num: Option<i64>,
+    /// 每条 `/RF` 关联文件的嵌入流对象号（按声明顺序）。
+    pub(super) related_file_nums: Vec<i64>,
+}
+
+/// 本文件规格实际写出的 `/EF` 载体键；`/RF` 的键必须是其子集。
+fn ef_carriers(file: &EmbeddedFile, version: PdfVersion) -> Vec<&'static str> {
+    let mut carriers = Vec::new();
+    if file.short_name().is_some() {
+        carriers.push("F");
+    }
+    if version >= PdfVersion::V1_7 {
+        carriers.push("UF");
+    }
+    carriers
 }
 
 /// 注册校验：逐项合法性、展示名重复与版本门禁。在分配任何对象号之前
@@ -73,6 +87,16 @@ pub(super) fn validate_registration(
                 PdfVersion::V1_7.as_str(),
                 version.as_str()
             )));
+        }
+        let carriers = ef_carriers(file, version);
+        for related in file.related_files() {
+            if !carriers.contains(&related.carrier()) {
+                return Err(WriteError::InvalidObject(format!(
+                    "related file carrier {:?} is absent from /EF of {:?}",
+                    related.carrier(),
+                    file.name()
+                )));
+            }
         }
     }
     Ok(())
@@ -179,17 +203,29 @@ pub(super) fn allocate(files: &[EmbeddedFile], next: &mut i64) -> Vec<EmbeddedSl
     files
         .iter()
         .map(|file| {
-            let slot = EmbeddedSlot {
-                filespec_num: *next,
-                stream_num: *next + 1,
-                collection_item_num: file.collection_item().is_some().then(|| *next + 2),
-            };
-            *next += if slot.collection_item_num.is_some() {
-                3
-            } else {
-                2
-            };
-            slot
+            let filespec_num = *next;
+            let stream_num = *next + 1;
+            *next += 2;
+            let collection_item_num = file.collection_item().is_some().then(|| {
+                let num = *next;
+                *next += 1;
+                num
+            });
+            let related_file_nums = file
+                .related_files()
+                .iter()
+                .map(|_| {
+                    let num = *next;
+                    *next += 1;
+                    num
+                })
+                .collect();
+            EmbeddedSlot {
+                filespec_num,
+                stream_num,
+                collection_item_num,
+                related_file_nums,
+            }
         })
         .collect()
 }
@@ -238,7 +274,40 @@ pub(super) fn write_objects(
             carriers = carriers.insert("UF", Value::Ref(slot.stream_num, 0));
         }
         filespec = filespec.insert("EF", Value::Dict(carriers));
+        // `/RF`（7.11.4.2）：与 `/EF` 同结构的字典，键为已存在的载体，
+        // 值为 `[文件名 text string, 嵌入流引用]` 成对数组。
+        if !file.related_files().is_empty() {
+            let mut rf = Dict::new();
+            for (related, num) in file.related_files().iter().zip(&slot.related_file_nums) {
+                let array = rf
+                    .get(related.carrier())
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let array = array
+                    .push(text_string_value(related.name()))
+                    .push(Value::Ref(*num, 0));
+                rf = rf.insert(related.carrier(), Value::Array(array));
+            }
+            filespec = filespec.insert("RF", Value::Dict(rf));
+        }
         doc.set_object(Object::new(slot.filespec_num, 0, Value::Dict(filespec)));
+
+        // 关联文件的嵌入流对象（Table 45 同构：`/Type` `/Params`）。
+        for (related, num) in file.related_files().iter().zip(&slot.related_file_nums) {
+            let params = Dict::new()
+                .insert("Size", Value::Integer(related.data().len() as i64))
+                .insert("CheckSum", Value::HexString(hex_encode(&related.checksum())));
+            let dict = Dict::new()
+                .insert("Type", Value::Name("EmbeddedFile".into()))
+                .insert("Params", Value::Dict(params))
+                .insert("Length", Value::Integer(related.data().len() as i64));
+            doc.set_object(Object::new(
+                *num,
+                0,
+                Value::Stream(dict, StreamData::Owned(related.data().to_vec())),
+            ));
+        }
 
         let mut dict = Dict::new().insert("Type", Value::Name("EmbeddedFile".into()));
         if let Some(subtype) = file.subtype() {

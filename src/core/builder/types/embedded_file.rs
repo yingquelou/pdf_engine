@@ -26,6 +26,42 @@ pub struct EmbeddedFile {
     modification_date: Option<String>,
     data: Vec<u8>,
     collection_item: Option<CollectionItem>,
+    /// `/RF` 关联文件（7.11.4.2）：载体名必须同时出现在 `/EF` 中。
+    related_files: Vec<RelatedEmbeddedFile>,
+}
+
+/// 一条 `/RF` 关联文件：载体名（`/EF` 键）、文件名与原始字节。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelatedEmbeddedFile {
+    carrier: String,
+    name: String,
+    data: Vec<u8>,
+}
+
+impl RelatedEmbeddedFile {
+    pub fn new(carrier: impl Into<String>, name: impl Into<String>, data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            carrier: carrier.into(),
+            name: name.into(),
+            data: data.into(),
+        }
+    }
+
+    pub(crate) fn carrier(&self) -> &str {
+        &self.carrier
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub(crate) fn checksum(&self) -> [u8; 16] {
+        md5_without_ascii_whitespace(&self.data)
+    }
 }
 
 impl EmbeddedFile {
@@ -41,6 +77,7 @@ impl EmbeddedFile {
             modification_date: None,
             data: data.into(),
             collection_item: None,
+            related_files: Vec::new(),
         }
     }
 
@@ -79,6 +116,24 @@ impl EmbeddedFile {
     pub fn with_collection_item(mut self, item: CollectionItem) -> Self {
         self.collection_item = Some(item);
         self
+    }
+
+    /// 添加一条 `/RF` 关联文件（7.11.4.2，PDF 1.3）。`carrier` 必须是本
+    /// 文件规格 `/EF` 中实际写出的载体键（`F` 需短名存在，`UF` 需 PDF 1.7），
+    /// 否则构建期报 `InvalidObject`；`name` 为关联文件文本串名。
+    pub fn with_related_file(
+        mut self,
+        carrier: impl Into<String>,
+        name: impl Into<String>,
+        data: impl Into<Vec<u8>>,
+    ) -> Self {
+        self.related_files
+            .push(RelatedEmbeddedFile::new(carrier, name, data));
+        self
+    }
+
+    pub(crate) fn related_files(&self) -> &[RelatedEmbeddedFile] {
+        &self.related_files
     }
 
     /// 展示名（名称树键与 `/UF`）。
@@ -125,13 +180,7 @@ impl EmbeddedFile {
     /// 7.11.4.3：`/CheckSum` 为去掉数据中 ASCII 空白字符（NUL、TAB、LF、
     /// FF、CR、SPACE）后的 MD5 摘要。
     pub(crate) fn checksum(&self) -> [u8; 16] {
-        let filtered: Vec<u8> = self
-            .data
-            .iter()
-            .copied()
-            .filter(|byte| !matches!(byte, 0 | 0o11 | 0o12 | 0o14 | 0o15 | b' '))
-            .collect();
-        RustCryptoBackend.md5(&filtered)
+        md5_without_ascii_whitespace(&self.data)
     }
 
     /// 校验名称与配置；错误串直接用于
@@ -176,8 +225,39 @@ impl EmbeddedFile {
         if let Some(item) = &self.collection_item {
             item.validate()?;
         }
+        let mut pairs = std::collections::BTreeSet::new();
+        for related in &self.related_files {
+            if related.carrier.is_empty() {
+                return Err("related file carrier must not be empty".into());
+            }
+            if related.name.is_empty() {
+                return Err("related file name must not be empty".into());
+            }
+            if related.name.contains('/') || related.name.contains('\\') {
+                return Err(format!(
+                    "related file name must not contain path separators, got {:?}",
+                    related.name
+                ));
+            }
+            if !pairs.insert((related.carrier.clone(), related.name.clone())) {
+                return Err(format!(
+                    "duplicate related file {:?} on carrier {:?}",
+                    related.name, related.carrier
+                ));
+            }
+        }
         Ok(())
     }
+}
+
+/// 7.11.4.3 `/CheckSum`：剔除 ASCII 空白（NUL/TAB/LF/FF/CR/SPACE）后的 MD5。
+fn md5_without_ascii_whitespace(data: &[u8]) -> [u8; 16] {
+    let filtered: Vec<u8> = data
+        .iter()
+        .copied()
+        .filter(|byte| !matches!(byte, 0 | 0o11 | 0o12 | 0o14 | 0o15 | b' '))
+        .collect();
+    RustCryptoBackend.md5(&filtered)
 }
 
 /// 集合项字典（7.11.6 Table 48）：集合字段键 → 数据值。
