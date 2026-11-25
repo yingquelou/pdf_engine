@@ -108,7 +108,7 @@ impl PdfBuilder {
         let groups = self.allocate_group_objects(&forms, &mut num)?;
         let annot_plan = self.allocate_annotation_objects(&preflight, &mut num)?;
         // 标记内容属性表（14.6）：注册句柄取号 + 把页面内容里的未定型占位
-        // 替换成 `<号> 0 R`，必须早于 `assemble_page_tree` 序列化内容字节。
+        // 替换成 `/Properties` 资源名，必须早于 `assemble_page_tree` 序列化内容字节。
         let marked_properties = self.allocate_marked_property_objects(&mut num)?;
 
         // —— 构造 Document 并按主题写出各对象 ——
@@ -131,6 +131,7 @@ impl PdfBuilder {
             &forms,
             &groups,
             &annot_plan,
+            &marked_properties,
             pages_num,
         )?;
         self.assemble_indirect_objects(&mut doc, &pools, &forms, &groups, &annot_plan)?;

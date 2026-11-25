@@ -126,11 +126,16 @@ pub(super) struct AnnotPlan<'a> {
 /// 标记内容属性表（14.6）的对象号分配结果。
 ///
 /// 只包含**被页面内容实际引用**的注册句柄：`entries` 按句柄首次出现顺序
-/// 记录「句柄 → 分配到的对象号」，装配期据此替换页面内容里的未定型占位并
-/// 把字典写成间接对象。注册但从未使用的句柄不出现在这里（不分配、不写出，
-/// 与可选内容组/渐变/图案的「只为实际引用取号」一致）。
+/// 记录「句柄 → 分配到的对象号 + `/Properties` 资源名」，装配期据此把页面
+/// 内容里的未定型占位替换成资源名（ISO 32000-1 Table 320 授权的形态，
+/// 14.6.2 要求含间接引用的属性表做成 `/Properties` 命名资源）并把字典写成
+/// 间接对象。注册但从未使用的句柄不出现在这里（不分配、不写出，与可选内容
+/// 组/渐变/图案的「只为实际引用取号」一致）。
 #[derive(Debug, Default)]
 pub(super) struct MarkedPropertiesPlan {
-    /// 句柄 → 实际对象号（首次出现顺序）。
-    pub(super) entries: Vec<(usize, i64)>,
+    /// 句柄 → (实际对象号, `/Properties` 资源名)（首次出现顺序）。
+    pub(super) entries: Vec<(usize, i64, String)>,
+    /// 每页需登记进 `/Resources /Properties` 的 (资源名, 对象号)，
+    /// 按页内首次出现顺序；与 `entries` 中的名字/对象号一一对应。
+    pub(super) page_properties: Vec<Vec<(String, i64)>>,
 }

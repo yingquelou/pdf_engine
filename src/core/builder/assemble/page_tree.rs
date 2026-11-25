@@ -7,7 +7,7 @@ use crate::core::types::{Array, Dict, Document, Object, PdfFeature, StreamData, 
 use crate::core::writer::WriteError;
 
 use super::colorspace::color_space_value;
-use super::plan::{AnnotPlan, FormPlan, GroupPlan, PoolPlan, Preflight};
+use super::plan::{AnnotPlan, FormPlan, GroupPlan, MarkedPropertiesPlan, PoolPlan, Preflight};
 use super::separation;
 use super::utils::group_dict;
 
@@ -23,6 +23,7 @@ impl PdfBuilder {
         forms: &FormPlan,
         groups: &GroupPlan,
         annot_plan: &AnnotPlan<'_>,
+        marked_properties: &MarkedPropertiesPlan,
         pages_num: i64,
     ) -> Result<(), WriteError> {
         // 每页 Page 字典 + 内容流
@@ -71,12 +72,18 @@ impl PdfBuilder {
                 gs_dict = gs_dict.insert(format!("GS{}", k + 1), Value::Ref(*gnum, 0));
             }
             // 可选内容属性名：/OC1 -> OCG 引用，供 `/OC /OC1 BDC` 使用。
+            // 标记内容属性表（14.6.2）：/MC1 -> 属性表对象引用，供
+            // `/Tag /MC1 BDC` 按 Table 320 授权形态引用。
             let mut properties_dict = Dict::new();
             for (k, handle) in p.optional_content.iter().enumerate() {
                 properties_dict = properties_dict.insert(
                     format!("OC{}", k + 1),
                     Value::Ref(groups.ocg_nums[*handle], 0),
                 );
+            }
+            for (name, object) in &marked_properties.page_properties[i] {
+                properties_dict =
+                    properties_dict.insert(name.clone(), Value::Ref(*object, 0));
             }
             // 渐变与着色图案资源名：/Sh1、/P1 按页内首次使用顺序分配。
             let mut shading_dict_res = Dict::new();

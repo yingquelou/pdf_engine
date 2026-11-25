@@ -1,14 +1,15 @@
 //! 标记内容属性表句柄通路（ISO 32000-1 14.6）的单元测试。
 //!
-//! 覆盖：注册 → 句柄 → 装配期取号 → 页面内容写成真实间接引用 → 用本库解析器
-//! 回读；共享句柄只产出一个对象；未注册句柄在任何字节写出之前被
-//! `WriteError::InvalidObject` 拒绝；注册但未使用的句柄不产生对象；手写裸号
-//! 通路与句柄通路互不污染；手写引用指向池内对象号但代号非 0 时在装配期被
-//! 拒绝；占位形态绕过装配直达序列化时被类型化拒绝（不 panic、绝不输出
-//! `<句柄> -1 R`）。
+//! 覆盖：注册 → 句柄 → 装配期取号 → 页面内容写成 `/Properties` 命名资源名
+//! → 用本库解析器回读；共享句柄只产出一个对象；未注册句柄在任何字节写出
+//! 之前被 `WriteError::InvalidObject` 拒绝；注册但未使用的句柄不产生对象；
+//! 手写裸号通路与句柄通路互不污染；手写引用指向池内对象号但代号非 0 时在
+//! 装配期被拒绝；占位形态绕过装配直达序列化时被类型化拒绝（不 panic、绝不
+//! 输出 `<句柄> -1 R`）。
 //!
-//! 写出形态 `/Tag <号> 0 R BDC` 是互操作容错/本库自有写法，不是 ISO 授权的
-//! 操作数形态（14.6.2 要求含间接引用的属性表做成 `/Properties` 命名资源）。
+//! 句柄通路写出形态为 `/Tag /MC<n> BDC`（Table 320 授权的 `/Properties`
+//! 命名资源，14.6.2 shall），名字在页面 `/Resources /Properties` 登记为指向
+//! 属性表对象的引用；调用方手写的裸号通路仍按原样透传。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -46,17 +47,34 @@ fn properties(text: &str) -> Dict {
     Dict::new().insert("ActualText", Value::String(text.to_string()))
 }
 
-/// 页面内容里所有 `BDC` 的间接引用操作数：`(标签, 对象号, 代号)`，按出现
-/// 顺序。读端保留操作数原形，因此这是「内容流里到底写了哪个号」的直接证据。
+/// 页面内容里所有带属性表的 `BDC`/`DP` 操作数解析出的
+/// `(标签, 对象号, 代号)`，按出现顺序。命名操作数经页面 `/Properties`
+/// 资源解析到其登记的间接引用；手写裸号操作数直接取原值。
 fn marked_references(doc: &Document, page: usize) -> Vec<(String, i64, i64)> {
     doc.page_content_ops(page)
         .expect("page content ops")
         .iter()
-        .filter_map(|op| match op {
-            ReadOp::BeginMarkedContentWithProperties(tag, Value::Ref(object, generation)) => {
-                Some((tag.clone(), *object, *generation))
-            }
-            _ => None,
+        .filter_map(|op| {
+            let (tag, value) = match op {
+                ReadOp::BeginMarkedContentWithProperties(tag, value)
+                | ReadOp::MarkedContentPointWithProperties(tag, value) => (tag, value),
+                _ => return None,
+            };
+            let reference = match value {
+                Value::Ref(object, generation) => (*object, *generation),
+                Value::Name(name) => {
+                    match doc
+                        .page_resource(page, "Properties", name)
+                        .expect("page resource lookup")
+                        .expect("named property resource")
+                    {
+                        Value::Ref(object, generation) => (object, generation),
+                        other => panic!("named property must be an indirect ref: {other:?}"),
+                    }
+                }
+                other => panic!("unexpected property operand: {other:?}"),
+            };
+            Some((tag.clone(), reference.0, reference.1))
         })
         .collect()
 }
@@ -149,8 +167,8 @@ fn registered_property_handle_writes_an_allocated_indirect_reference() {
         "最小文档里句柄对象号应为装配游标的 5（句柄 {handle} 不得被写成 {handle} 0 R）"
     );
     assert!(
-        text.contains(&format!("/P {object} 0 R BDC")),
-        "内容流要写成前缀序 `tag properties BDC`：{text}"
+        text.contains("/P /MC1 BDC"),
+        "内容流要写成 Table 320 授权的 `/Properties` 命名资源形态：{text}"
     );
     assert!(!text.contains("-1 R"), "未定型占位绝不能写出：{text}");
 
@@ -321,7 +339,7 @@ fn hand_written_reference_and_handle_channels_do_not_collide() {
         "句柄通路的对象号应来自装配期游标，而不是被 99 带偏：{object}"
     );
     assert_eq!(references[0].1, 99, "手写裸号原样写出");
-    assert!(text.contains(&format!("/P {object} 0 R BDC")));
+    assert!(text.contains("/P /MC1 BDC"));
     assert!(text.contains("/Raw 99 0 R BDC"), "手写通路原样保留：{text}");
     assert_eq!(holders_of(&doc, &properties("via handle")), vec![object]);
 
@@ -425,7 +443,7 @@ fn marked_property_objects_do_not_collide_with_annotation_object_numbers() {
         panic!("注解对象应是字典");
     };
     assert_eq!(annot_dict.get("Subtype"), Some(&Value::Name("Text".into())));
-    assert!(text.contains(&format!("/P {object} 0 R BDC")));
+    assert!(text.contains("/P /MC1 BDC"));
     assert_eq!(
         doc.page_marked_content(page).expect("page_marked_content")[0].properties,
         Some(properties("no collision"))
@@ -491,5 +509,34 @@ fn unresolved_placeholder_reaching_serialization_is_refused_without_panic() {
     assert!(
         object > 2 && object != handle as i64,
         "句柄 {handle} 不该被当成对象号：{object}"
+    );
+}
+
+/// 14.6.2 shall / Table 320：句柄通路把属性表登记成页面 `/Properties`
+/// 命名资源（`/MC1`），内容操作数用资源名而非非标准裸号引用。
+#[test]
+fn property_handle_is_registered_as_named_properties_resource() {
+    let mut b = PdfBuilder::new();
+    let page = b.page(PageSize::A4);
+    let handle = b.add_marked_content_properties(properties("named resource"));
+    b.begin_marked_properties(page, "P", handle)
+        .end_marked_properties(page);
+
+    let (out, doc) = build_and_parse(&mut b);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("/P /MC1 BDC"), "{text}");
+
+    let object = reference_of(&doc, page, "P").0;
+    let registered = doc
+        .page_resource(page, "Properties", "MC1")
+        .expect("page resource lookup")
+        .expect("MC1 must be registered");
+    assert_eq!(registered, Value::Ref(object, 0));
+    assert_eq!(
+        doc.get_object(object)
+            .expect("object lookup")
+            .expect("property object exists")
+            .value,
+        Value::Dict(properties("named resource"))
     );
 }

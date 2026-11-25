@@ -23,9 +23,10 @@
 //!
 //! 写端注册句柄通路（`PdfBuilder::add_marked_content_properties` +
 //! `begin_marked_properties`/`marked_point_properties`）的整档往返也在本文件
-//! 收尾：装配期从共享游标取号、把内容流占位替换成 `<号> 0 R`、属性表字典
-//! 写成真正的间接对象；重新解析后声明式读 API 解回同一张字典、文本抽取按
-//! `/ActualText` 替换照常工作，共享句柄跨页跨形态只保留一个对象。
+//! 收尾：装配期从共享游标取号、把内容流占位替换成 `/Properties` 命名资源名
+//! （Table 320 授权形态）、把名字登记进页面资源并写出真正的间接对象；重新
+//! 解析后声明式读 API 解回同一张字典、文本抽取按 `/ActualText` 替换照常工作，
+//! 共享句柄跨页跨形态只保留一个对象。
 
 use super::*;
 use pdf_engine::core::builder::{Font, PageSize, PdfBuilder};
@@ -280,17 +281,34 @@ fn unusable_reference_operands_degrade_without_losing_page_sections() {
     );
 }
 
-/// 页面内容里 `BDC`/`DP` 的间接引用操作数 `(标签, 对象号, 代号)`，按出现顺序。
+/// 页面内容里 `BDC`/`DP` 的属性表操作数解析出的 `(标签, 对象号, 代号)`，
+/// 按出现顺序。命名操作数经页面 `/Properties` 资源解析到登记的间接引用；
+/// 手写裸号操作数直接取原值。
 fn reference_operands(doc: &Document, page: usize) -> Vec<(String, i64, i64)> {
     doc.page_content_ops(page)
         .expect("page content ops")
         .iter()
-        .filter_map(|op| match op {
-            ReadOp::BeginMarkedContentWithProperties(tag, Value::Ref(object, generation))
-            | ReadOp::MarkedContentPointWithProperties(tag, Value::Ref(object, generation)) => {
-                Some((tag.clone(), *object, *generation))
-            }
-            _ => None,
+        .filter_map(|op| {
+            let (tag, value) = match op {
+                ReadOp::BeginMarkedContentWithProperties(tag, value)
+                | ReadOp::MarkedContentPointWithProperties(tag, value) => (tag, value),
+                _ => return None,
+            };
+            let reference = match value {
+                Value::Ref(object, generation) => (*object, *generation),
+                Value::Name(name) => {
+                    match doc
+                        .page_resource(page, "Properties", name)
+                        .expect("page resource lookup")
+                        .expect("named property resource")
+                    {
+                        Value::Ref(object, generation) => (object, generation),
+                        other => panic!("named property must be an indirect ref: {other:?}"),
+                    }
+                }
+                other => panic!("unexpected property operand: {other:?}"),
+            };
+            Some((tag.clone(), reference.0, reference.1))
         })
         .collect()
 }
@@ -320,8 +338,8 @@ fn builder_registered_property_handle_roundtrip_resolves_reference_and_text() {
     assert_eq!(tag, "Span");
     assert_eq!(*generation, 0, "回填引用的代号与被写出的对象一致");
     assert!(
-        raw.contains(&format!("/Span {object} 0 R BDC")),
-        "内容流应写成装配期分配的对象号引用：{raw}"
+        raw.contains("/Span /MC1 BDC"),
+        "内容流应写成 Table 320 授权的 `/Properties` 命名资源形态：{raw}"
     );
 
     // 属性表作为间接对象真实存在，且逐字等于注册时那张字典。

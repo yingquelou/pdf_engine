@@ -30,11 +30,14 @@
 //!    负责对象是否存在」（见 `begin_marked_content_reference` 文档），
 //!    猜疑它反而破坏其用途。
 //!
-//! 写出形态 `/Tag <号> 0 R BDC` 是互操作容错/本库自有写法，**不是** ISO
-//! 32000-1 授权的操作数形态（Table 320 只授权内联字典与 `/Properties` 命名
-//! 资源两种，L29061–29078；14.6.2 L29087–29091 要求值含间接引用的属性表
-//! **shall** 做成 `/Properties` 命名资源并按名称引用）；读端两种形态都能
-//! 解析（`reader/content/marked.rs` 的 `Value::Ref` 解引用分支）。
+//! 写出形态：句柄通路产出 `/Tag /MC<n> BDC`（`/Properties` 命名资源，
+//! ISO 32000-1 授权的操作数形态，Table 320 只授权内联字典与 `/Properties`
+//! 命名资源两种，L29061–29078；14.6.2 L29087–29091 要求值含间接引用的属性
+//! 表 **shall** 做成 `/Properties` 命名资源并按名称引用）。资源名 `MC<n>` 在
+//! 页面 `/Resources /Properties` 登记为指向属性表对象的引用；同一句柄跨页
+//! 复用时各页登记同名同对象。读端 `reader/content/marked.rs` 把名称经
+//! `/Properties` 解引用为属性表字典。调用方手写的裸号通路
+//! （`begin_marked_content_reference`）仍按原样透传，不受本通路影响。
 
 use std::collections::BTreeSet;
 
@@ -105,11 +108,13 @@ impl PdfBuilder {
         Ok(())
     }
 
-    /// 为被引用的属性表句柄分配对象号，并把页面内容里的占位原地替换成
-    /// `<分配号> 0 R`；返回分配计划供写出阶段使用。
+    /// 为被引用的属性表句柄分配对象号与 `/Properties` 资源名，把页面内容里
+    /// 的占位原地替换成资源名操作数（Table 320 授权形态）；返回分配计划供
+    /// 写出阶段使用。
     ///
     /// 只为实际被引用的句柄取号（规则 2），取号使用文档共享游标（规则 4），
-    /// 同一句柄只取一个号（规则 3）；替换前先做代数一致性校验（规则 5）。
+    /// 同一句柄只取一个号/一个资源名（规则 3）；替换前先做代数一致性校验
+    /// （规则 5，针对调用方手写的裸号通路）。
     pub(super) fn allocate_marked_property_objects(
         &mut self,
         num: &mut i64,
@@ -131,17 +136,37 @@ impl PdfBuilder {
         }
 
         let mut plan = MarkedPropertiesPlan::default();
-        let mut assigned: Vec<Option<i64>> = vec![None; registered];
-        for &handle in &used {
+        plan.page_properties = vec![Vec::new(); self.pages.len()];
+        let mut object_of: Vec<Option<i64>> = vec![None; registered];
+        let mut name_of: Vec<Option<String>> = vec![None; registered];
+        for (k, &handle) in used.iter().enumerate() {
             let object = *num;
             *num += 1;
-            assigned[handle] = Some(object);
-            plan.entries.push((handle, object));
+            let name = format!("MC{}", k + 1);
+            object_of[handle] = Some(object);
+            name_of[handle] = Some(name.clone());
+            plan.entries.push((handle, object, name));
+        }
+
+        // 每页登记本页实际引用的属性表（句柄在本页首次出现顺序去重）；
+        // 同一句柄跨页复用时各页登记同名同对象。
+        for (page, entry) in self.pages.iter().enumerate() {
+            let mut page_seen: BTreeSet<usize> = BTreeSet::new();
+            for handle in pending_handles(entry.content.ops()) {
+                if !page_seen.insert(handle) {
+                    continue;
+                }
+                let (Some(object), Some(name)) = (object_of[handle], name_of[handle].clone())
+                else {
+                    continue;
+                };
+                plan.page_properties[page].push((name, object));
+            }
         }
 
         // 代数一致性（规则 5）：手写裸号引用若指向本池刚分到的对象号，
         // 代号必须是 0——属性表字典永远以代号 0 写出，其余代号引用不到它。
-        let allocated: BTreeSet<i64> = plan.entries.iter().map(|&(_, object)| object).collect();
+        let allocated: BTreeSet<i64> = plan.entries.iter().map(|&(_, object, _)| object).collect();
         for (page, entry) in self.pages.iter().enumerate() {
             for (object, generation) in resolved_references(entry.content.ops()) {
                 if allocated.contains(&object) && generation != 0 {
@@ -152,8 +177,9 @@ impl PdfBuilder {
             }
         }
 
-        // 占位 → 真实引用：写进页面内容操作数模型本身，随后 `page_tree`
-        // 阶段照常把操作数序列化成内容流字节。
+        // 占位 → `/Properties` 资源名：写进页面内容操作数模型本身，随后
+        // `page_tree` 阶段照常把操作数序列化成内容流字节，并把名字登记进
+        // 页面的 `/Resources /Properties`。
         for entry in self.pages.iter_mut() {
             for op in entry.content.ops_mut() {
                 let properties = match op {
@@ -164,28 +190,25 @@ impl PdfBuilder {
                 let Some(handle) = properties.as_pending_handle() else {
                     continue;
                 };
-                // 未取号（理论上不会发生：句柄都来自已扫描的页面内容）时
-                // 保留占位，让序列化阶段的类型化拒绝兜住，绝不输出假引用。
-                let Some(object) = assigned[handle] else {
+                // 未命名（理论上不会发生：句柄都来自已扫描的页面内容）时
+                // 保留占位，让序列化阶段的类型化拒绝兜住，绝不输出假名字。
+                let Some(name) = name_of[handle].clone() else {
                     continue;
                 };
-                *properties = MarkedContentProperties::Reference {
-                    object,
-                    generation: 0,
-                };
+                *properties = MarkedContentProperties::Name(name);
             }
         }
         Ok(plan)
     }
 
     /// 按计划把注册时的字典**原样**写成间接对象（代号为 0），使其成为页面
-    /// 内容里 `<号> 0 R` 真正指向的对象。
+    /// `/Resources /Properties` 里 `MC<n>` 名字真正指向的对象。
     pub(super) fn write_marked_property_objects(
         &self,
         doc: &mut Document,
         plan: &MarkedPropertiesPlan,
     ) {
-        for &(handle, object) in &plan.entries {
+        for &(handle, object, _) in &plan.entries {
             doc.set_object(Object::new(
                 object,
                 0,
