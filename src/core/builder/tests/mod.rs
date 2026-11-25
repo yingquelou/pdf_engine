@@ -154,6 +154,7 @@ mod page_box;
 mod page_group;
 mod page_presentation;
 mod pattern;
+mod piece_info;
 mod render;
 mod rendition;
 mod requirements;
@@ -183,6 +184,7 @@ mod type3;
 mod version;
 mod viewer_preferences;
 mod viewport;
+mod web_capture;
 mod widths;
 
 use super::*;

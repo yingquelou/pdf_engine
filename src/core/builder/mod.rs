@@ -52,9 +52,8 @@ pub use types::requirements::{
     DocumentRequirement, DocumentRequirementType, RequirementHandler, RequirementHandlerType,
 };
 pub use types::{
-    AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination,
-    AlternateImage, AnnotationBorderStyle, AnnotationDestination, AnnotationKind,
-    AppearanceCharacteristics,
+    AcroForm, Action, ActionFileSpec, ActionNamedAction, ActionRemoteDestination, AlternateImage,
+    AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,
     ArtifactAttachment, ArtifactProperties, ArtifactSubtype, ArtifactType, AxialShading,
     BlockAlign, BorderArray, BorderColor, BorderEffect, BorderEffectStyle, BorderStyle,
     BorderStyles, BorderThickness, CalGray, CalRGB, CalculatorFunction, CalloutLine,
@@ -70,32 +69,34 @@ pub use types::{
     HalftoneDictionary, HideAction, HideTarget, ICCBased, IconFit, IconScaleWhen, IconScaling,
     ImageData, ImageIntent, ImageMask, Indexed, InlineAlign, Lab, LatticeMeshShading,
     LayoutAttributes, LineEndStyle, LineHeight, LineIntent, LinkHighlightMode, ListAttributes,
-    ListNumbering, Markup3D, Measure, MediaClip, MediaClipData, MediaClipSection, MediaClipSource,
-    MediaDuration, MediaFit, MediaFloatingWindow, MediaPermissions, MediaPlayParameters,
-    MediaPlaySettings, MediaPlayerInfo, MediaPlayers, MediaRendition, MediaScreenParameters,
-    MediaScreenSettings, MediaTimespan, MediaWindow, MeshFunction, MeshVertex, Movie, MovieAction,
-    MovieActionTarget, MovieActivation, MoviePlayback, NumberFormat, NumberFraction,
-    NumberLabelOrder, NumberOrAuto, NumberOrFour, NumberOrNumbers, OcgStateOperation,
-    OcgStateSequence, Opi13Dictionary, Opi20Dictionary, OpiColor, OpiColorType, OpiInks, OpiProxy,
-    OpiTagText, OpiVersion, OptionalContentGroup, OutputIntent, OutputIntentProfile,
-    PageBoundaries, PageSize, PaintType, PdfAnnotation, Placement, PolygonIntent,
-    PrintFieldAttributes, PrintFieldChecked, PrintFieldRole, RadialShading, Rendition,
-    RenditionAction, RenditionOperation, ReplyType, RubyAlign, RubyPosition, SampledFunction,
-    SelectorRendition, Separation, SeparationInfo, SetOcgStateAction, Shading, ShadingOptions,
-    ShadingPattern, SoftMask, SoftMaskSubtype, SoftwareIdentifier, Sound, SoundAction,
-    SoundEncoding, SpanProperties, StampIcon, StitchingFunction, StructureAttribute,
-    StructureElement, StructureKid, StructureMarkInfo, StructureObjectReference, StructureTree,
-    TableAttributes, TableScope, TemporaryFilePermission, TensorProductPatch,
-    TensorProductPatchShading, TextAlign, TextDecorationType, ThreadAction, ThreeDActivation,
-    ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType, ThreeDArtwork,
-    ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping, ThreeDColor,
-    ThreeDCrossSection, ThreeDDeactivationPolicy, ThreeDFaceColor, ThreeDLightingScheme,
-    ThreeDLightingSchemeType, ThreeDMatrixSource, ThreeDNode, ThreeDProjection,
-    ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType, ThreeDRenderMode,
-    ThreeDRenderModeType, ThreeDStreamFormat, ThreeDView, ThreeDViewSelection, TilingPattern,
-    TilingType, Transition, TransitionDimension, TransitionDirection, TransitionMotion,
-    TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph, UserProperty, Viewport,
-    WritingMode, XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue,
+    ListNumbering, Markup3D, Measure, MediaClip, MediaClipData, MediaClipSection,
+    MediaClipSectionHandler, MediaClipSource, MediaDuration, MediaFit, MediaFloatingWindow,
+    MediaPermissions, MediaPlayParameters, MediaPlaySettings, MediaPlayerInfo, MediaPlayers,
+    MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan, MediaWindow,
+    MeshFunction, MeshVertex, Movie, MovieAction, MovieActionTarget, MovieActivation,
+    MoviePlayback, NumberFormat, NumberFraction, NumberLabelOrder, NumberOrAuto, NumberOrFour,
+    NumberOrNumbers, OcgStateOperation, OcgStateSequence, Opi13Dictionary, Opi20Dictionary,
+    OpiColor, OpiColorType, OpiInks, OpiProxy, OpiTagText, OpiVersion, OptionalContentGroup,
+    OutputIntent, OutputIntentProfile, PageBoundaries, PageSize, PaintType, PdfAnnotation,
+    PieceInfo, PieceInfoData, Placement, PolygonIntent, PrintFieldAttributes, PrintFieldChecked,
+    PrintFieldRole, RadialShading, Rendition, RenditionAction, RenditionOperation, ReplyType,
+    RubyAlign, RubyPosition, SampledFunction, SelectorRendition, Separation, SeparationInfo,
+    SetOcgStateAction, Shading, ShadingOptions, ShadingPattern, SoftMask, SoftMaskSubtype,
+    SoftwareIdentifier, Sound, SoundAction, SoundEncoding, SpanProperties, StampIcon,
+    StitchingFunction, StructureAttribute, StructureElement, StructureKid, StructureMarkInfo,
+    StructureObjectReference, StructureTree, TableAttributes, TableScope, TemporaryFilePermission,
+    TensorProductPatch, TensorProductPatchShading, TextAlign, TextDecorationType, ThreadAction,
+    ThreeDActivation, ThreeDActivationPolicy, ThreeDAnimationStyle, ThreeDAnimationStyleType,
+    ThreeDArtwork, ThreeDArtworkState, ThreeDBackground, ThreeDBackgroundType, ThreeDClipping,
+    ThreeDColor, ThreeDCrossSection, ThreeDDeactivationPolicy, ThreeDFaceColor,
+    ThreeDLightingScheme, ThreeDLightingSchemeType, ThreeDMatrixSource, ThreeDNode,
+    ThreeDProjection, ThreeDProjectionBinding, ThreeDProjectionScale, ThreeDProjectionType,
+    ThreeDRenderMode, ThreeDRenderModeType, ThreeDStreamFormat, ThreeDView, ThreeDViewSelection,
+    TilingPattern, TilingType, Transition, TransitionDimension, TransitionDirection,
+    TransitionMotion, TransitionStyle, Type1Halftone, Type2Halftone, Type3Font, Type3Glyph,
+    UserProperty, Viewport, WebCaptureCommand, WebCaptureCommandSettings, WebCaptureImageSet,
+    WebCapturePageSet, WebCaptureSource, WritingMode, XmpListItem, XmpListKind, XmpPacket,
+    XmpPacketError, XmpValue,
 };
 pub use types::{
     Duplex, NonFullScreenPageMode, PageBoundaryName, PrintScaling, ReadingDirection,
@@ -144,6 +145,12 @@ struct PageBuild {
     /// 页面边界（14.11.2 Table 30）：`/MediaBox` 及可选 Crop/Bleed/Trim/Art
     /// 框与 `/BoxColorInfo`；`None` 时按 `size` 写 MediaBox。
     boundaries: Option<PageBoundaries>,
+    /// 页面件字典（14.5 `/PieceInfo`，PDF 1.3）。
+    piece_info: Option<PieceInfo>,
+    /// 页面首选缩放（Table 30 `/PZ`，14.10.6，PDF 1.3）。
+    preferred_zoom: Option<f64>,
+    /// 页面 Web Capture 数字标识符（Table 30 `/ID`，14.10.6，PDF 1.3）。
+    web_capture_id: Option<Vec<u8>>,
     /// `text_code_bytes*` 首次遇到的非法字符码长度；`build` 时据此报错。
     invalid_code_length: Option<usize>,
 }
@@ -269,6 +276,8 @@ pub struct PdfBuilder {
     xmp_metadata: Option<Vec<u8>>,
     /// 类型化 XMP 包（14.3.2）；与 `xmp_metadata` 互斥。
     xmp_packet: Option<XmpPacket>,
+    /// 目录 `/PieceInfo` 页面件字典（14.5，PDF 1.4）；`None` 不写出。
+    catalog_piece_info: Option<PieceInfo>,
     /// 目录 `/ViewerPreferences` 查看器首选项（12.2，Table 150）；
     /// `None`（默认）时不写出。
     viewer_preferences: Option<ViewerPreferences>,
@@ -317,6 +326,7 @@ impl PdfBuilder {
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
+            catalog_piece_info: None,
             viewer_preferences: None,
         }
     }
@@ -357,6 +367,7 @@ impl PdfBuilder {
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
+            catalog_piece_info: None,
             viewer_preferences: None,
         }
     }

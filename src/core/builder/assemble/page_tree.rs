@@ -197,6 +197,42 @@ impl PdfBuilder {
             if let Some(thumbnail_num) = pools.page_thumbnail_nums[i] {
                 page_dict = page_dict.insert("Thumb", Value::Ref(thumbnail_num, 0));
             }
+            // 页面首选缩放与 Web Capture 标识符（Table 30，14.10.6，PDF 1.3）。
+            if p.preferred_zoom.is_some() || p.web_capture_id.is_some() {
+                if self.version < crate::core::types::PdfVersion::V1_3 {
+                    return Err(WriteError::UnsupportedVersion(format!(
+                        "page /PZ and /ID require PDF 1.3, got {}",
+                        self.version
+                    )));
+                }
+            }
+            if let Some(zoom) = p.preferred_zoom {
+                if !zoom.is_finite() || zoom <= 0.0 {
+                    return Err(WriteError::InvalidObject(
+                        "page /PZ must be a positive finite number".into(),
+                    ));
+                }
+                page_dict = page_dict.insert("PZ", Value::Float(zoom));
+            }
+            if let Some(id) = &p.web_capture_id {
+                if id.is_empty() {
+                    return Err(WriteError::InvalidObject(
+                        "page /ID must not be empty".into(),
+                    ));
+                }
+                page_dict = page_dict.insert("ID", Value::HexString(hex_encode(id)));
+            }
+            // 页面件字典（14.5 Table 30/318，PDF 1.3）。
+            if let Some(piece_info) = &p.piece_info {
+                if self.version < crate::core::types::PdfVersion::V1_3 {
+                    return Err(WriteError::UnsupportedVersion(format!(
+                        "page /PieceInfo requires PDF 1.3, got {}",
+                        self.version
+                    )));
+                }
+                piece_info.validate()?;
+                page_dict = page_dict.insert("PieceInfo", Value::Dict(piece_info.to_dict()));
+            }
             if !annot_plan.page_annotation_handles[i].is_empty()
                 || !annot_plan.page_widget_nums[i].is_empty()
             {
@@ -240,4 +276,15 @@ impl PdfBuilder {
         }
         Ok(())
     }
+}
+
+/// 十六进制大写编码（页面 `/ID` 等字节串条目）。
+fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0F) as usize] as char);
+    }
+    out
 }

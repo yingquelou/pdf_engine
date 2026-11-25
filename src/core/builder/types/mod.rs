@@ -34,6 +34,7 @@
 //! - `xmp`：类型化 XMP 包（14.3.2）的构造与 RDF/XML 序列化。
 
 mod action;
+mod alternate_text;
 mod annotation;
 pub(crate) mod artifact;
 mod cid;
@@ -54,6 +55,7 @@ mod optional_content;
 mod output_intent;
 mod page_box;
 mod pattern;
+mod piece_info;
 mod program;
 mod rendition;
 pub(crate) mod requirements;
@@ -68,6 +70,7 @@ mod transition;
 mod type3;
 pub(crate) mod viewer_preferences;
 mod viewport;
+mod web_capture;
 mod xmp;
 
 pub(crate) use action::ActionRefs;
@@ -78,6 +81,7 @@ pub use action::{
     OcgStateSequence, RenditionAction, RenditionOperation, SetOcgStateAction, SoundAction,
     ThreadAction,
 };
+pub use alternate_text::AlternateText;
 pub(crate) use annotation::validate_name_value;
 pub use annotation::{
     AnnotationBorderStyle, AnnotationDestination, AnnotationKind, AppearanceCharacteristics,
@@ -121,14 +125,16 @@ pub use output_intent::{OutputIntent, OutputIntentProfile};
 pub use page_box::PageBoundaries;
 pub(crate) use pattern::Pattern;
 pub use pattern::{PaintType, TilingPattern, TilingType};
+pub use piece_info::{PieceInfo, PieceInfoData};
 pub use program::FontProgram;
 pub(crate) use program::OpenTypeFlavor;
 pub(crate) use rendition::ClipRefs;
 pub use rendition::{
-    MediaClip, MediaClipData, MediaClipSection, MediaClipSource, MediaDuration, MediaFit,
-    MediaFloatingWindow, MediaPermissions, MediaPlayParameters, MediaPlaySettings, MediaPlayerInfo,
-    MediaPlayers, MediaRendition, MediaScreenParameters, MediaScreenSettings, MediaTimespan,
-    MediaWindow, Rendition, SelectorRendition, SoftwareIdentifier, TemporaryFilePermission,
+    MediaClip, MediaClipData, MediaClipSection, MediaClipSectionHandler, MediaClipSource,
+    MediaDuration, MediaFit, MediaFloatingWindow, MediaPermissions, MediaPlayParameters,
+    MediaPlaySettings, MediaPlayerInfo, MediaPlayers, MediaRendition, MediaScreenParameters,
+    MediaScreenSettings, MediaTimespan, MediaWindow, Rendition, SelectorRendition,
+    SoftwareIdentifier, TemporaryFilePermission,
 };
 pub(crate) use separation::SeparationGroup;
 pub use separation::{DeviceColorant, SeparationInfo};
@@ -166,6 +172,10 @@ pub use viewer_preferences::{
     ViewerPreferences,
 };
 pub use viewport::Viewport;
+pub use web_capture::{
+    WebCaptureCommand, WebCaptureCommandSettings, WebCaptureImageSet, WebCapturePageSet,
+    WebCaptureSource,
+};
 pub use xmp::{XmpListItem, XmpListKind, XmpPacket, XmpPacketError, XmpValue};
 
 /// 页面尺寸预设。

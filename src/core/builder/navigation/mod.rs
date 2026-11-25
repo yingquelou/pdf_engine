@@ -65,6 +65,8 @@ pub use outline::OutlineEntry;
 use names::{LegacyDestinationEntry, legacy_dests_dict};
 pub(super) use names::{destination_value, name_tree};
 
+mod web_capture;
+
 /// 构建器持有的文档级导航配置；空配置时不改写目录。
 #[derive(Debug, Default)]
 pub(crate) struct NavigationState {
@@ -94,6 +96,8 @@ pub(crate) struct NavigationState {
     /// 结构标记内容 MCID 登记：自动编号分配与自动/显式撞号检测
     /// （14.7.4.4），`build` 在对象号分配之前消费撞号信息。
     structure_mcids: structure_content::McidRegistry,
+    /// Web Capture 页面集与 `/SpiderInfo`（14.10）。
+    web_capture: web_capture::WebCaptureState,
 }
 
 impl NavigationState {
@@ -230,6 +234,13 @@ pub(super) fn apply(
             !navigation.alternate_presentations.is_empty(),
             PdfVersion::V1_4,
             "alternate presentations",
+        ),
+        (
+            !navigation.web_capture.page_sets.is_empty()
+                || !navigation.web_capture.image_sets.is_empty()
+                || !navigation.web_capture.commands.is_empty(),
+            PdfVersion::V1_3,
+            "web capture",
         ),
         (!navigation.outline.is_empty(), PdfVersion::V1_1, "outlines"),
         (has_actions, PdfVersion::V1_2, "outline actions (/A)"),
@@ -467,6 +478,14 @@ pub(super) fn apply(
         catalog = catalog.insert("MarkInfo", info);
     }
 
+    catalog = web_capture::write(
+        doc,
+        &catalog,
+        &navigation.web_capture,
+        version,
+        &page_refs,
+        structure_targets.image_nums,
+    )?;
     doc.set_object(Object::new(
         catalog_num,
         catalog_generation,

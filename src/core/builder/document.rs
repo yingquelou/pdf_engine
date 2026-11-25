@@ -1,6 +1,6 @@
 use super::{
     AcroForm, DocumentInfo, FileIdentifier, LanguageIdentifier, OutputIntent, PdfBuilder,
-    SeparationGroup, SeparationInfo, XmpPacket,
+    PieceInfo, SeparationGroup, SeparationInfo, XmpPacket,
 };
 use crate::core::writer::StreamCompression;
 
@@ -33,6 +33,16 @@ impl PdfBuilder {
     /// 返回 [`WriteError::UnsupportedVersion`] 且零字节输出。
     pub fn set_document_language(&mut self, language: LanguageIdentifier) -> &mut Self {
         self.document_language = Some(language);
+        self
+    }
+
+    /// 设置目录页面件字典（`/PieceInfo`，14.5 Table 28/318，PDF 1.4）。
+    ///
+    /// 产品名须非空且唯一，违反者在校验阶段返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.4 返回
+    /// [`WriteError::UnsupportedVersion`]。
+    pub fn set_catalog_piece_info(&mut self, piece_info: PieceInfo) -> &mut Self {
+        self.catalog_piece_info = Some(piece_info);
         self
     }
 

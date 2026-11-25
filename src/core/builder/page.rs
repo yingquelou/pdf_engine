@@ -1,6 +1,6 @@
 use super::{
     Font, FormXObject, GroupXObject, ImageData, PageBoundaries, PageBuild, PageSize, PdfBuilder,
-    Transition, Viewport,
+    PieceInfo, Transition, Viewport,
 };
 use crate::core::content::ContentStream;
 
@@ -26,6 +26,9 @@ impl PdfBuilder {
             duration: None,
             thumbnail: None,
             boundaries: None,
+            piece_info: None,
+            preferred_zoom: None,
+            web_capture_id: None,
             invalid_code_length: None,
         });
         idx
@@ -220,6 +223,40 @@ impl PdfBuilder {
     pub fn set_page_thumbnail(&mut self, page: usize, thumbnail: &ImageData) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.thumbnail = Some(thumbnail.clone());
+        }
+        self
+    }
+
+    /// 为指定页设置页面件字典（页面 `/PieceInfo`，14.5 Table 30/318，PDF 1.3）。
+    ///
+    /// 产品名须非空且唯一，违反者在校验阶段返回
+    /// [`WriteError::InvalidObject`]；目标版本低于 1.3 返回
+    /// [`WriteError::UnsupportedVersion`]。未知页索引被忽略；重复设置以后一次为准。
+    pub fn set_page_piece_info(&mut self, page: usize, piece_info: PieceInfo) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.piece_info = Some(piece_info);
+        }
+        self
+    }
+
+    /// 设置页面首选缩放（`/PZ`，Table 30，14.10.6，PDF 1.3）。
+    ///
+    /// 取值须为正有限数；目标版本低于 1.3 返回
+    /// [`WriteError::UnsupportedVersion`]。未知页索引被忽略。
+    pub fn set_page_preferred_zoom(&mut self, page: usize, zoom: f64) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.preferred_zoom = Some(zoom);
+        }
+        self
+    }
+
+    /// 设置页面 Web Capture 数字标识符（`/ID` 字节串，14.10.6，PDF 1.3）。
+    ///
+    /// 标识符须非空；目标版本低于 1.3 返回 [`WriteError::UnsupportedVersion`]。
+    /// 未知页索引被忽略。
+    pub fn set_page_web_capture_id(&mut self, page: usize, id: impl Into<Vec<u8>>) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.web_capture_id = Some(id.into());
         }
         self
     }

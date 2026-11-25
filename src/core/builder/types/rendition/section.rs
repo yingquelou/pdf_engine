@@ -13,7 +13,7 @@
 
 use std::cell::Cell;
 
-use super::super::text_string_value;
+use super::super::{AlternateText, text_string_value};
 use super::{MAX_DEPTH, MediaClipData};
 use crate::core::types::{Dict, Value};
 use crate::core::writer::WriteError;
@@ -91,10 +91,66 @@ impl MediaClip {
     }
 }
 
+/// media clip section 的 `/MH`/`/BE` 字典（Table 278）。
+///
+/// `/B` 与 `/E` 是 media offset 字典（13.2.6.2），本层按原值搬运，
+/// 只校验其为字典；语义（时间/帧/标记）属播放端。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MediaClipSectionHandler {
+    begin: Option<Value>,
+    end: Option<Value>,
+}
+
+impl MediaClipSectionHandler {
+    /// 空处理器字典。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `/B` 起始偏移字典（media offset dictionary）。
+    pub fn with_begin(mut self, begin: Value) -> Self {
+        self.begin = Some(begin);
+        self
+    }
+
+    /// `/E` 结束偏移字典（media offset dictionary）。
+    pub fn with_end(mut self, end: Value) -> Self {
+        self.end = Some(end);
+        self
+    }
+
+    fn validate(&self) -> Result<(), WriteError> {
+        for (key, value) in [("/B", &self.begin), ("/E", &self.end)] {
+            if let Some(value) = value
+                && !matches!(value, Value::Dict(_))
+            {
+                return Err(WriteError::InvalidObject(format!(
+                    "media clip section handler {key} must be a media offset dictionary"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn to_dict(&self) -> Dict {
+        let mut dict = Dict::new();
+        if let Some(begin) = &self.begin {
+            dict = dict.insert("B", begin.clone());
+        }
+        if let Some(end) = &self.end {
+            dict = dict.insert("E", end.clone());
+        }
+        dict
+    }
+}
+
 /// media clip section（Table 277）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaClipSection {
     name: Option<String>,
+    alt: Option<AlternateText>,
+    must_honour: Option<MediaClipSectionHandler>,
+    best_effort: Option<MediaClipSectionHandler>,
     next: Box<MediaClip>,
 }
 
@@ -103,6 +159,9 @@ impl MediaClipSection {
     pub fn new(next: impl Into<MediaClip>) -> Self {
         Self {
             name: None,
+            alt: None,
+            must_honour: None,
+            best_effort: None,
             next: Box::new(next.into()),
         }
     }
@@ -110,6 +169,24 @@ impl MediaClipSection {
     /// `/N` 名称。
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// `/Alt` 替代描述（Table 277）：文本串或多语言文本数组。
+    pub fn with_alt(mut self, alt: impl Into<AlternateText>) -> Self {
+        self.alt = Some(alt.into());
+        self
+    }
+
+    /// `/MH` 必须满足的偏移条目（Table 278）。
+    pub fn with_must_honour(mut self, handler: MediaClipSectionHandler) -> Self {
+        self.must_honour = Some(handler);
+        self
+    }
+
+    /// `/BE` 尽力满足的偏移条目（Table 278）。
+    pub fn with_best_effort(mut self, handler: MediaClipSectionHandler) -> Self {
+        self.best_effort = Some(handler);
         self
     }
 
@@ -130,6 +207,15 @@ impl MediaClipSection {
                 "media clip section /N must not be empty".into(),
             ));
         }
+        if let Some(alt) = &self.alt {
+            alt.validate()?;
+        }
+        if let Some(handler) = &self.must_honour {
+            handler.validate()?;
+        }
+        if let Some(handler) = &self.best_effort {
+            handler.validate()?;
+        }
         self.next
             .validate_at_depth(depth + 1, form_count, embedded_count)
     }
@@ -145,6 +231,15 @@ impl MediaClipSection {
             .insert("D", next_ref);
         if let Some(name) = &self.name {
             dict = dict.insert("N", text_string_value(name));
+        }
+        if let Some(alt) = &self.alt {
+            dict = dict.insert("Alt", alt.to_value());
+        }
+        if let Some(handler) = &self.must_honour {
+            dict = dict.insert("MH", Value::Dict(handler.to_dict()));
+        }
+        if let Some(handler) = &self.best_effort {
+            dict = dict.insert("BE", Value::Dict(handler.to_dict()));
         }
         dict
     }

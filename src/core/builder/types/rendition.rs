@@ -15,7 +15,7 @@
 //! [`ClipRefs`] 解析；句柄上界与嵌套深度在 `action_requirements` 于任何
 //! 对象写出前拒绝。
 
-use super::text_string_value;
+use super::{AlternateText, text_string_value};
 use crate::core::types::{Array, Dict, Value};
 use crate::core::writer::WriteError;
 
@@ -33,7 +33,7 @@ pub use play::{MediaDuration, MediaFit, MediaPlayParameters, MediaPlaySettings, 
 pub use players::{MediaPlayerInfo, MediaPlayers, SoftwareIdentifier};
 pub use screen::{MediaFloatingWindow, MediaScreenParameters, MediaScreenSettings, MediaWindow};
 pub(crate) use section::ClipRefs;
-pub use section::{MediaClip, MediaClipSection};
+pub use section::{MediaClip, MediaClipSection, MediaClipSectionHandler};
 
 /// media clip data 的 `/D` 媒体数据来源（Table 274）。
 #[derive(Debug, Clone, PartialEq)]
@@ -98,11 +98,13 @@ impl MediaPermissions {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaClipData {
     name: Option<String>,
+    alt: Option<AlternateText>,
     source: MediaClipSource,
     content_type: Option<String>,
     permissions: Option<MediaPermissions>,
     players: Option<MediaPlayers>,
     base_url: Option<String>,
+    best_effort_base_url: Option<String>,
 }
 
 impl MediaClipData {
@@ -110,17 +112,26 @@ impl MediaClipData {
     pub fn new(source: MediaClipSource) -> Self {
         Self {
             name: None,
+            alt: None,
             source,
             content_type: None,
             permissions: None,
             players: None,
             base_url: None,
+            best_effort_base_url: None,
         }
     }
 
     /// `/N` 名称。
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// `/Alt` 替代描述（Table 274）：文本串或多语言文本数组
+    /// （14.9.2.4，PDF 1.5）。
+    pub fn with_alt(mut self, alt: impl Into<AlternateText>) -> Self {
+        self.alt = Some(alt.into());
         self
     }
 
@@ -145,6 +156,12 @@ impl MediaClipData {
     /// `/MH` 的 `/BU` 基准 URL（Table 276）。
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// `/BE`（best effort）的 `/BU` 基准 URL（Table 276）。
+    pub fn with_best_effort_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.best_effort_base_url = Some(base_url.into());
         self
     }
 
@@ -187,6 +204,9 @@ impl MediaClipData {
                 "media clip data /N must not be empty".into(),
             ));
         }
+        if let Some(alt) = &self.alt {
+            alt.validate()?;
+        }
         if let Some(content_type) = &self.content_type
             && (content_type.is_empty() || !content_type.is_ascii())
         {
@@ -194,12 +214,17 @@ impl MediaClipData {
                 "media clip data /CT must be non-empty ASCII".into(),
             ));
         }
-        if let Some(base_url) = &self.base_url
-            && !is_printable_ascii(base_url)
-        {
-            return Err(WriteError::InvalidObject(
-                "media clip data /MH /BU must be non-empty printable ASCII".into(),
-            ));
+        for (key, url) in [
+            ("/MH", self.base_url.as_deref()),
+            ("/BE", self.best_effort_base_url.as_deref()),
+        ] {
+            if let Some(url) = url
+                && !is_printable_ascii(url)
+            {
+                return Err(WriteError::InvalidObject(format!(
+                    "media clip data {key} /BU must be non-empty printable ASCII"
+                )));
+            }
         }
         if let Some(players) = &self.players {
             players.validate()?;
@@ -249,6 +274,9 @@ impl MediaClipData {
         if let Some(name) = &self.name {
             dict = dict.insert("N", text_string_value(name));
         }
+        if let Some(alt) = &self.alt {
+            dict = dict.insert("Alt", alt.to_value());
+        }
         if let Some(content_type) = &self.content_type {
             dict = dict.insert("CT", text_string_value(content_type));
         }
@@ -261,6 +289,10 @@ impl MediaClipData {
         if let Some(base_url) = &self.base_url {
             let handler = Dict::new().insert("BU", text_string_value(base_url));
             dict = dict.insert("MH", Value::Dict(handler));
+        }
+        if let Some(base_url) = &self.best_effort_base_url {
+            let handler = Dict::new().insert("BU", text_string_value(base_url));
+            dict = dict.insert("BE", Value::Dict(handler));
         }
         Ok(dict)
     }

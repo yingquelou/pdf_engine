@@ -94,6 +94,7 @@ pub mod page_box;
 pub mod page_content;
 pub mod page_presentation;
 mod parser;
+pub mod piece_info;
 pub mod rendition;
 pub mod security;
 pub mod separation;
@@ -108,6 +109,7 @@ pub mod three_d;
 pub mod thumbnail;
 pub mod transition;
 pub mod viewport;
+pub mod web_capture;
 pub mod xmp;
 mod xref;
 

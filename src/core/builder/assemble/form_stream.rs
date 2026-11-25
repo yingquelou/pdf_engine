@@ -58,6 +58,18 @@ impl PdfBuilder {
             if let Some(matrix) = form.matrix {
                 dict = dict.insert("Matrix", real_array(&matrix));
             }
+            // 表单级页面件字典（14.5 Table 95/318，PDF 1.3）。
+            if let Some(piece_info) = &form.piece_info {
+                if self.version < PdfVersion::V1_3 {
+                    return Err(WriteError::UnsupportedVersion(format!(
+                        "form XObject /PieceInfo requires PDF {}, got {}",
+                        PdfVersion::V1_3.as_str(),
+                        self.version.as_str()
+                    )));
+                }
+                piece_info.validate()?;
+                dict = dict.insert("PieceInfo", Value::Dict(piece_info.to_dict()));
+            }
             if let Some(group) = &form.group {
                 dict = dict.insert("Group", Value::Dict(group_dict(group, doc, num)?));
                 doc.features.borrow_mut().insert(PdfFeature::Transparency);

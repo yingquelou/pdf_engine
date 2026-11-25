@@ -43,6 +43,17 @@ impl PdfBuilder {
                 .borrow_mut()
                 .insert(PdfFeature::DocumentLanguage);
         }
+        // 目录页面件字典（14.5 Table 28/318，PDF 1.4）。
+        if let Some(piece_info) = &self.catalog_piece_info {
+            if self.version < PdfVersion::V1_4 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "catalog /PieceInfo requires PDF 1.4, got {}",
+                    self.version
+                )));
+            }
+            piece_info.validate()?;
+            catalog_dict = catalog_dict.insert("PieceInfo", Value::Dict(piece_info.to_dict()));
+        }
         if !output_intent_values.is_empty() {
             catalog_dict =
                 catalog_dict.insert("OutputIntents", Value::Array(Array(output_intent_values)));

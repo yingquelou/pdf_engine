@@ -1,7 +1,7 @@
 //! Form XObject：可复用的自包含内容流。
 
 use super::opi::OpiProxy;
-use super::{ColorSpace, Font, ImageData};
+use super::{ColorSpace, Font, ImageData, PieceInfo};
 use crate::core::content::ContentStream;
 use crate::core::reader::annotation::ProcessColorModel;
 use crate::core::types::Dict;
@@ -146,6 +146,8 @@ pub struct FormXObject {
     pub font_fauxing: Vec<Dict>,
     /// `/OPI`（§14.11.7 Table 368，PDF 1.2）：OPI 代理字典。
     pub opi: Option<OpiProxy>,
+    /// 表单级页面件字典（14.5 `/PieceInfo`，PDF 1.3）。
+    pub piece_info: Option<PieceInfo>,
     /// 表单内容流。
     pub content: ContentStream,
 }
@@ -167,8 +169,17 @@ impl FormXObject {
             trap_styles: None,
             font_fauxing: Vec::new(),
             opi: None,
+            piece_info: None,
             content,
         }
+    }
+
+    /// 设置表单级页面件字典（`/PieceInfo`，14.5 Table 95/318，PDF 1.3）。
+    /// 产品名非空唯一与版本门禁在构建阶段校验。
+    #[must_use]
+    pub fn with_piece_info(mut self, piece_info: PieceInfo) -> Self {
+        self.piece_info = Some(piece_info);
+        self
     }
 
     /// 设置可选的表单矩阵。

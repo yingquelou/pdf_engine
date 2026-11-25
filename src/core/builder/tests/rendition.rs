@@ -6,6 +6,8 @@ use super::support::{annot_object, assert_text_entry};
 use super::*;
 use crate::core::types::PdfFeature;
 
+mod alt;
+mod handlers;
 mod params;
 mod players;
 mod section;
