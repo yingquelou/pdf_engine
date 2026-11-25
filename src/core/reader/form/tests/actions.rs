@@ -80,17 +80,49 @@ fn calculation_order_resolves_field_references_to_qualified_names() {
         Value::Dict(
             Dict::new()
                 .insert("T", text("group"))
+                .insert(
+                    "AA",
+                    Value::Dict(
+                        Dict::new().insert("C", javascript("groupCalc()")),
+                    ),
+                )
                 .insert("Kids", arr(vec![Value::Ref(23, 0)])),
         ),
     );
     insert(
         &doc,
         23,
-        Value::Dict(Dict::new().insert("T", text("total"))),
+        Value::Dict(
+            Dict::new()
+                .insert("T", text("total"))
+                .insert(
+                    "AA",
+                    Value::Dict(Dict::new().insert("C", javascript("totalCalc()"))),
+                ),
+        ),
     );
 
     let form = doc.acro_form().expect("parse").expect("present");
     assert_eq!(form.calculation_order, ["group.total", "group"]);
+}
+
+#[test]
+fn calculation_order_entry_without_calculate_action_is_rejected() {
+    let doc = doc_with_acro_form(Value::Ref(20, 0));
+    insert(
+        &doc,
+        20,
+        Value::Dict(
+            Dict::new()
+                .insert("Fields", arr(vec![Value::Ref(21, 0)]))
+                .insert("CO", arr(vec![Value::Ref(21, 0)])),
+        ),
+    );
+    insert(&doc, 21, Value::Dict(Dict::new().insert("T", text("plain"))));
+    assert!(matches!(
+        doc.acro_form().expect_err("无 /C 的 /CO 条目应被拒绝"),
+        FormError::Malformed(message) if message.contains("/C calculation action")
+    ));
 }
 
 #[test]

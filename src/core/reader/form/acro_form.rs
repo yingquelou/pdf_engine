@@ -194,6 +194,10 @@ fn parse_calculation_order(
         .ok_or_else(|| malformed("/AcroForm /CO is not an array"))?;
     let mut names = HashMap::new();
     collect_field_names(fields, &mut names);
+    // Table 218：`/CO` 只列带计算动作（`/AA /C`）的字段，按引用解析其
+    // 全限定名；不含 `/C` 的条目属于不一致，给出类型化错误而非静默接受。
+    let mut calculators = std::collections::HashSet::new();
+    collect_calculators(fields, &mut calculators);
     let mut out = Vec::with_capacity(array.0.len());
     for entry in &array.0 {
         let key = entry
@@ -202,6 +206,11 @@ fn parse_calculation_order(
         let name = names.get(&key).ok_or_else(|| {
             malformed("/AcroForm /CO references an object that is not in the field tree")
         })?;
+        if !calculators.contains(&key) {
+            return Err(malformed(
+                "/AcroForm /CO references a field without a /C calculation action",
+            ));
+        }
         out.push(name.clone());
     }
     Ok(out)
@@ -213,5 +222,20 @@ fn collect_field_names(fields: &[Field], out: &mut HashMap<(i64, i64), String>) 
             out.insert(key, field.fully_qualified_name.clone());
         }
         collect_field_names(&field.kids, out);
+    }
+}
+
+fn collect_calculators(fields: &[Field], out: &mut std::collections::HashSet<(i64, i64)>) {
+    for field in fields {
+        let has_calculate = field
+            .actions
+            .as_ref()
+            .is_some_and(|actions| actions.calculate.is_some());
+        if has_calculate
+            && let Some(key) = field.reference
+        {
+            out.insert(key);
+        }
+        collect_calculators(&field.kids, out);
     }
 }
