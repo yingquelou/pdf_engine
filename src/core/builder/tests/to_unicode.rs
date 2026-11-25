@@ -277,3 +277,37 @@ fn cid_font_to_unicode_usecmap_rejects_unknown_base() {
     );
     assert!(out.is_empty());
 }
+
+#[test]
+fn simple_font_writes_to_unicode_cmap() {
+    let font = Font::helvetica(12.0)
+        .with_to_unicode(0x41, "Ω")
+        .with_to_unicode(0x42, "Beta");
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "AB");
+    let s = render(&mut b);
+
+    assert!(s.contains("/ToUnicode"), "简单字体应引用 /ToUnicode: {s}");
+    assert!(s.contains("<41> <03A9>"), "单字节码 0x41 → Ω: {s}");
+    assert!(
+        s.contains("<42> <0042006500740061>"),
+        "单字节码 0x42 → Beta: {s}"
+    );
+}
+
+#[test]
+fn simple_font_to_unicode_requires_pdf_1_2() {
+    let font = Font::helvetica(12.0).with_to_unicode(0x41, "A");
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_1);
+    let p = b.page(PageSize::A4);
+    b.text(p, &font, 10.0, 10.0, "A");
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("低于 1.2 应拒绝 /ToUnicode");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("ToUnicode"), "{error}");
+    assert_eq!(out.len(), 0, "零字节契约");
+}

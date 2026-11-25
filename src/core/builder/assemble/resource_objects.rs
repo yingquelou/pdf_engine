@@ -2,7 +2,7 @@
 //! 以及可选内容组、渐变与图案对象。
 
 use crate::core::builder::{Pattern, PdfBuilder};
-use crate::core::types::{Document, Object, Value};
+use crate::core::types::{Document, Object, PdfVersion, Value};
 use crate::core::writer::WriteError;
 
 use super::images::write_image;
@@ -24,7 +24,17 @@ impl PdfBuilder {
             // Type 3 字体自成一路：字符过程代替字体程序，没有 BaseFont。
             let font_dict = match &f.type3 {
                 Some(type3) => type3::type3_font_dict(doc, f, type3, num)?,
-                None => fonts::font_dict(doc, f, num)?,
+                None => {
+                    // `/ToUnicode` 自 PDF 1.2 起（9.10.3）。
+                    if !f.to_unicode.is_empty() && self.version < PdfVersion::V1_2 {
+                        return Err(WriteError::UnsupportedVersion(format!(
+                            "simple font /ToUnicode requires PDF {}, got {}",
+                            PdfVersion::V1_2.as_str(),
+                            self.version.as_str()
+                        )));
+                    }
+                    fonts::font_dict(doc, f, num)?
+                }
             };
             doc.set_object(Object::new(*fnum, 0, Value::Dict(font_dict)));
         }

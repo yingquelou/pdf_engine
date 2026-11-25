@@ -358,6 +358,31 @@ pub(super) fn font_dict(
         }
         doc.set_object(Object::new(descriptor_ref, 0, Value::Dict(descriptor_dict)));
     }
+    // `/ToUnicode`（9.10.3）：简单字体的单字节码映射经共享 CMap 生成器
+    // 写成独立流对象；Type 3 走 `assemble/type3.rs` 的同一生成器。
+    if !f.to_unicode.is_empty() {
+        let byte_keys: std::collections::BTreeMap<Vec<u8>, String> = f
+            .to_unicode
+            .iter()
+            .map(|(code, text)| (vec![*code], text.clone()))
+            .collect();
+        let cmap = super::cmap::to_unicode_cmap(
+            &std::collections::BTreeMap::new(),
+            &byte_keys,
+            None,
+        );
+        let cmap_ref = num;
+        num += 1;
+        doc.set_object(Object::new(
+            cmap_ref,
+            0,
+            Value::Stream(
+                Dict::new().insert("Length", Value::Integer(cmap.len() as i64)),
+                StreamData::Owned(cmap),
+            ),
+        ));
+        font_dict = font_dict.insert("ToUnicode", Value::Ref(cmap_ref, 0));
+    }
     *num_out = num;
     Ok(font_dict)
 }

@@ -45,6 +45,9 @@ pub struct Font {
     pub descriptor: Option<FontDescriptor>,
     /// 可选的嵌入字体程序。
     pub font_program: Option<FontProgram>,
+    /// 单字节字符码 → Unicode 文本（`/ToUnicode` CMap，9.10.3）；
+    /// 空时不写出 `/ToUnicode`。
+    pub to_unicode: std::collections::BTreeMap<u8, String>,
     /// 是否按子集字体写出（BaseFont 加六字母标签前缀）。
     pub subset: bool,
     /// 可选的 TrueType 子集字形 ID 列表（原程序中的 gid，含 0）。
@@ -154,6 +157,7 @@ impl Font {
             encoding: FontEncoding::default(),
             descriptor: None,
             font_program: None,
+            to_unicode: std::collections::BTreeMap::new(),
             subset: false,
             subset_glyphs: None,
             subset_type1_glyphs: None,
@@ -192,6 +196,7 @@ impl Font {
             encoding: FontEncoding::default(),
             descriptor: None,
             font_program: None,
+            to_unicode: std::collections::BTreeMap::new(),
             subset: false,
             subset_glyphs: None,
             subset_type1_glyphs: None,
@@ -224,6 +229,7 @@ impl Font {
             encoding: FontEncoding::with_differences(None, differences),
             descriptor: None,
             font_program: None,
+            to_unicode: std::collections::BTreeMap::new(),
             subset: false,
             subset_glyphs: None,
             subset_type1_glyphs: None,
@@ -267,6 +273,17 @@ impl Font {
     /// 写 `/FontFile3` `/Subtype /OpenType` 且字体子类型保持 Type1；
     /// TrueType 轮廓（`0x00010000`/`true`）按 ISO 32000-1 §9.9 写
     /// `/FontFile2` 并把字体子类型切为 TrueType。
+    /// 添加一条单字节字符码到 Unicode 文本的映射，构建时经共享 CMap
+    /// 生成器写出 `/ToUnicode`（9.10.3）。同名覆盖先设。
+    pub fn with_to_unicode(
+        mut self,
+        code: u8,
+        text: impl Into<String>,
+    ) -> Self {
+        self.to_unicode.insert(code, text.into());
+        self
+    }
+
     pub fn with_font_program(mut self, program: FontProgram) -> Self {
         self.font_program = Some(program);
         self
