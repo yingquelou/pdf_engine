@@ -3,7 +3,7 @@
 
 use crate::core::builder::PdfBuilder;
 use crate::core::builder::types::AnnotationKind;
-use crate::core::types::{Array, Dict, Document, Object, PdfFeature, StreamData, Value};
+use crate::core::types::{Array, Dict, Document, Object, PdfFeature, PdfVersion, StreamData, Value};
 use crate::core::writer::WriteError;
 
 use super::colorspace::color_space_value;
@@ -147,6 +147,19 @@ impl PdfBuilder {
             }
             if !pattern_dict_res.0.is_empty() {
                 resources = resources.insert("Pattern", Value::Dict(pattern_dict_res));
+            }
+            // 默认颜色空间（8.6.3，Table 107，PDF 1.3）：复用颜色空间值
+            // 序列化（ICCBased 等分配独立流对象），版本门禁先于写出。
+            if !p.default_color_spaces.is_empty() && self.version < PdfVersion::V1_3 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "page default color spaces require PDF {}, got {}",
+                    PdfVersion::V1_3.as_str(),
+                    self.version.as_str()
+                )));
+            }
+            for (kind, space) in &p.default_color_spaces {
+                let value = color_space_value(space, doc, num)?;
+                resources = resources.insert(kind.resource_key(), value);
             }
 
             // 7.7.3.3：`/Contents` 可为单流或流数组（按序连接）。

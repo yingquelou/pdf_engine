@@ -17,5 +17,7 @@ mod image_data;
 mod image_validate;
 mod options;
 
-pub use color_space::{CalGray, CalRGB, ColorSpace, DeviceN, ICCBased, Indexed, Lab, Separation};
+pub use color_space::{
+    CalGray, CalRGB, ColorSpace, DefaultColorSpace, DeviceN, ICCBased, Indexed, Lab, Separation,
+};
 pub use image_data::{AlternateImage, ImageData, ImageIntent, ImageMask};

@@ -111,7 +111,8 @@ pub use graphics_state::{
 };
 pub use halftone::{Halftone, HalftoneDictionary, Type1Halftone, Type2Halftone};
 pub use image::{
-    AlternateImage, CalGray, CalRGB, ColorSpace, DeviceN, ICCBased, ImageData, ImageIntent,
+    AlternateImage, CalGray, CalRGB, ColorSpace, DefaultColorSpace, DeviceN, ICCBased, ImageData,
+    ImageIntent,
     ImageMask, Indexed, Lab, Separation,
 };
 pub use movie::{Movie, MovieActivation, MoviePlayback};

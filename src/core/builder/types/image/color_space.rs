@@ -3,6 +3,26 @@
 
 use crate::core::builder::types::Function;
 
+/// 页面资源中的默认颜色空间种类（ISO 32000-1 §8.6.3，资源字典
+/// `/DefaultGray` `/DefaultRGB` `/DefaultCMYK`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultColorSpace {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+impl DefaultColorSpace {
+    /// 资源字典键。
+    pub fn resource_key(self) -> &'static str {
+        match self {
+            Self::Gray => "DefaultGray",
+            Self::Rgb => "DefaultRGB",
+            Self::Cmyk => "DefaultCMYK",
+        }
+    }
+}
+
 /// 图片色彩空间。
 ///
 /// 设备空间（DeviceGray/DeviceRGB/DeviceCMYK）以名字引用；CIE-Based

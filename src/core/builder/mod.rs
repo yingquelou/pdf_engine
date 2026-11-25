@@ -59,7 +59,8 @@ pub use types::{
     BorderStyles, BorderThickness, CalGray, CalRGB, CalculatorFunction, CalloutLine,
     CaptionPosition, CidEncoding, CidFont, CidFontSubtype, CidSystemInfo, CidVerticalMetrics,
     CidWidth, CollectionItem, CollectionItemValue, CollectionSubitem, CollectionSubitemValue,
-    ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DeviceColorant, DeviceN, EmbeddedFile,
+    ColorSpace, CoonsPatch, CoonsPatchShading, DashPattern, DefaultColorSpace, DeviceColorant,
+    DeviceN, EmbeddedFile,
     ExponentialFunction, FieldActionEvent, FieldValue, FixedPrint, Font, FontDescriptor,
     FontEncoding, FontProgram, FontWidths, FormField, FormFieldType, FormOption, FormResources,
     FormXObject, FormatSpecificAttributes, FormatSpecificOwner, FreeFormMeshShading,
@@ -135,6 +136,8 @@ struct PageBuild {
     patterns: Vec<usize>,
     /// 该页使用的命名颜色空间句柄（按首次引用顺序，资源名 `/CS<n>`）。
     color_spaces: Vec<usize>,
+    /// 页面资源 `/DefaultGray` `/DefaultRGB` `/DefaultCMYK`（§8.6.3，PDF 1.3）。
+    default_color_spaces: Vec<(DefaultColorSpace, ColorSpace)>,
     /// 页组属性字典（`/Group`）；提供时整页作为透明组合成。
     group: Option<GroupXObject>,
     /// 页面视口字典（`/VP` 数组，12.9.2）；按绘制顺序写出。

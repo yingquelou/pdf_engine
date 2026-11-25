@@ -1,6 +1,6 @@
 use super::{
-    Font, FormXObject, GroupXObject, ImageData, PageBoundaries, PageBuild, PageSize, PdfBuilder,
-    PieceInfo, Transition, Viewport,
+    ColorSpace, DefaultColorSpace, Font, FormXObject, GroupXObject, ImageData, PageBoundaries,
+    PageBuild, PageSize, PdfBuilder, PieceInfo, Transition, Viewport,
 };
 use crate::core::content::ContentStream;
 
@@ -21,6 +21,7 @@ impl PdfBuilder {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            default_color_spaces: Vec::new(),
             group: None,
             viewports: Vec::new(),
             transition: None,
@@ -41,6 +42,23 @@ impl PdfBuilder {
     pub fn append_content_stream(&mut self, page: usize, content: ContentStream) -> &mut Self {
         if let Some(p) = self.pages.get_mut(page) {
             p.extra_contents.push(content);
+        }
+        self
+    }
+
+    /// 设置页面资源中的默认颜色空间（ISO 32000-1 §8.6.3，
+    /// `/DefaultGray` `/DefaultRGB` `/DefaultCMYK`，PDF 1.3）；同名后设覆盖
+    /// 先设。目标版本低于 1.3 时构建返回 `UnsupportedVersion`，不写出字节。
+    pub fn set_page_default_color_space(
+        &mut self,
+        page: usize,
+        kind: DefaultColorSpace,
+        color_space: ColorSpace,
+    ) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.default_color_spaces
+                .retain(|(existing, _)| *existing != kind);
+            p.default_color_spaces.push((kind, color_space));
         }
         self
     }

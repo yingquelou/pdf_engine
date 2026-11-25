@@ -106,3 +106,52 @@ fn named_separation_writes_tint_function_object() {
     assert!(s.contains("/CS1 cs\n"), "{s}");
     assert!(s.contains("0.5 sc\n"), "{s}");
 }
+
+#[test]
+fn page_default_color_spaces_write_resources_and_read_back() {
+    let mut b = PdfBuilder::new();
+    let p = b.page(PageSize::A4);
+    b.set_page_default_color_space(p, DefaultColorSpace::Gray, ColorSpace::DeviceGray);
+    // 同名后设覆盖先设：最终 /DefaultGray 仍是 DeviceRGB。
+    b.set_page_default_color_space(p, DefaultColorSpace::Gray, ColorSpace::DeviceRGB);
+    b.set_page_default_color_space(p, DefaultColorSpace::Cmyk, ColorSpace::DeviceCMYK);
+    let doc = b.assemble_document().expect("assemble");
+
+    use crate::core::reader::color_space::{ColorSpaceModel, DefaultColorSpace as ReaderKind};
+    assert_eq!(
+        doc.page_default_color_space(0, ReaderKind::Gray)
+            .expect("parse")
+            .expect("present"),
+        ColorSpaceModel::DeviceRGB
+    );
+    assert_eq!(
+        doc.page_default_color_space(0, ReaderKind::Cmyk)
+            .expect("parse")
+            .expect("present"),
+        ColorSpaceModel::DeviceCMYK
+    );
+    assert!(
+        doc.page_default_color_space(0, ReaderKind::Rgb)
+            .expect("parse")
+            .is_none()
+    );
+
+    let s = render(&mut b);
+    assert!(s.contains("/DefaultGray /DeviceRGB"), "{s}");
+    assert!(s.contains("/DefaultCMYK /DeviceCMYK"), "{s}");
+}
+
+#[test]
+fn page_default_color_space_requires_pdf_1_3() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_2);
+    let p = b.page(PageSize::A4);
+    b.set_page_default_color_space(p, DefaultColorSpace::Gray, ColorSpace::DeviceGray);
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("低于 1.3 应拒绝");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("default color space"), "{error}");
+    assert_eq!(out.len(), 0, "零字节契约");
+}
