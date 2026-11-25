@@ -271,3 +271,33 @@ fn raw_and_typed_xmp_are_mutually_exclusive() {
     assert!(matches!(error, WriteError::InvalidObject(_)), "{error}");
     assert_eq!(out.len(), 0);
 }
+
+#[test]
+fn typed_xmp_written_to_metadata_stream_has_xpacket_wrapper() {
+    use crate::core::builder::{XmpPacket, XmpValue};
+
+    let mut packet = XmpPacket::new();
+    packet.set("{urn:example}title", XmpValue::Text("wrapped".into()));
+    let mut b = PdfBuilder::new();
+    b.page(PageSize::A4);
+    b.set_xmp_packet(packet);
+    let doc = build_and_parse(&mut b);
+
+    let xmp = doc.xmp().expect("parse XMP").expect("metadata stream");
+    assert!(
+        xmp.packet
+            .starts_with("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"),
+        "{}",
+        xmp.packet
+    );
+    assert!(
+        xmp.packet.ends_with("<?xpacket end=\"w\"?>"),
+        "{}",
+        xmp.packet
+    );
+    assert_eq!(
+        xmp.text("{urn:example}title"),
+        Some("wrapped"),
+        "包装不影响读端属性解析"
+    );
+}

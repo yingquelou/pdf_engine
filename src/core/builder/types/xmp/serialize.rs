@@ -67,6 +67,27 @@ impl XmpPacket {
         }
         Ok(out)
     }
+
+    /// 序列化为带 `xpacket` 处理指令包装的完整 XMP 包（14.3.2）。
+    ///
+    /// ISO 32000-1 将「XMP packet」定义为序列化 XML 元数据的结构化包装
+    /// （术语表 4.48）；`<?xpacket …?>` 头尾是把 XML 嵌入非 XML 文件、供简单
+    /// 扫描定位的标准包装。包装后的字节仍是合法 XML 文档（处理指令被读端
+    /// 的 `reader/xmp` 忽略），可写进文档目录 `/Metadata` 流。
+    ///
+    /// `to_xml()` 保持纯 RDF/XML 形态不变，本方法只在其两侧加包装；大小上限
+    /// 与错误口径与 `to_xml()` 一致。
+    pub fn to_packet(&self) -> Result<String, XmpPacketError> {
+        let xml = self.to_xml()?;
+        let mut out = String::with_capacity(xml.len() + 96);
+        out.push_str("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>");
+        out.push_str(&xml);
+        out.push_str("<?xpacket end=\"w\"?>");
+        if out.len() > MAX_PACKET_BYTES {
+            return Err(XmpPacketError::PacketTooLarge(out.len()));
+        }
+        Ok(out)
+    }
 }
 
 /// 验证 Clark 键并拆出 `(命名空间, 本地名)`。

@@ -184,7 +184,9 @@ fn builder_typed_xmp_packet_roundtrips_through_reader() {
 
     let doc = parse_buf(&buf);
     let xmp = doc.xmp().expect("parse XMP").expect("/Metadata stream");
-    assert!(xmp.packet.starts_with("<x:xmpmeta"));
+    assert!(xmp.packet.starts_with("<?xpacket begin="));
+    assert!(xmp.packet.contains("<x:xmpmeta"));
+    assert!(xmp.packet.ends_with("<?xpacket end=\"w\"?>"));
     assert_eq!(xmp.text(&clark(DC, "title")), Some("Roundtrip"));
     assert_eq!(
         xmp.properties.get(&clark(DC, "description")),

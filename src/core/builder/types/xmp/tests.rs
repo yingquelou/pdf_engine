@@ -240,6 +240,24 @@ fn empty_packet_serializes_minimal_description() {
 }
 
 #[test]
+fn to_packet_wraps_xml_with_xpacket_processing_instructions() {
+    let packet = sample_packet();
+    let xml = packet.to_xml().expect("xml");
+    let wrapped = packet.to_packet().expect("packet");
+    assert!(wrapped.starts_with("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"));
+    assert!(wrapped.ends_with("<?xpacket end=\"w\"?>"));
+    assert!(wrapped.contains(&xml), "包装内部应逐字保留 to_xml 输出");
+    // 读端把处理指令当作可跳过节点，包装后仍能解析出同样的属性集。
+    let parsed = XmpMetadata::parse(&wrapped).expect("parse wrapped packet");
+    let expected: BTreeMap<String, ReaderValue> = packet
+        .properties()
+        .iter()
+        .map(|(key, value)| (key.clone(), reader_value(value)))
+        .collect();
+    assert_eq!(parsed.properties, expected);
+}
+
+#[test]
 fn markup_is_escaped_in_text_and_attributes() {
     let snippet = "a & b < c > d \"e\" 'f'";
     let language = "en&<>\"'";

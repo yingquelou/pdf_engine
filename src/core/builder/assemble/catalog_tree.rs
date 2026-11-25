@@ -97,7 +97,7 @@ impl PdfBuilder {
             let xml = match (&self.xmp_metadata, &self.xmp_packet) {
                 (Some(raw), None) => raw.clone(),
                 (None, Some(packet)) => packet
-                    .to_xml()
+                    .to_packet()
                     .map_err(|error| {
                         WriteError::InvalidObject(format!("typed XMP packet: {error}"))
                     })?
