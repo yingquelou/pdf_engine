@@ -235,3 +235,88 @@ fn empty_structure_tree_is_allowed() {
     assert!(features.contains(&PdfFeature::LogicalStructure));
     assert!(!features.contains(&PdfFeature::StructureLanguageText));
 }
+
+/// 取结构树根元素（目录 `/StructTreeRoot /K` 指向的 `StructElem`）的 `/K` 原值。
+fn root_struct_element_k(doc: &Document) -> Value {
+    let catalog_num = doc
+        .trailer
+        .dict
+        .get("Root")
+        .and_then(Value::as_ref)
+        .expect("catalog ref")
+        .0;
+    let catalog = object_dict(doc, catalog_num);
+    let root_num = catalog
+        .get("StructTreeRoot")
+        .and_then(Value::as_ref)
+        .expect("struct tree root ref")
+        .0;
+    let root = object_dict(doc, root_num);
+    let element_num = match root.get("K").expect("struct root /K") {
+        Value::Array(array) => array
+            .0
+            .first()
+            .and_then(Value::as_ref)
+            .expect("root element ref")
+            .0,
+        other => panic!("unexpected struct root /K: {other:?}"),
+    };
+    object_dict(doc, element_num)
+        .get("K")
+        .expect("element /K")
+        .clone()
+}
+
+#[test]
+fn single_kid_is_written_as_scalar_not_wrapped_array() {
+    let mut b = one_page(PdfVersion::V1_7);
+    // 根元素恰有一个子元素：其 `/K` 应是标量间接引用，而非单元素数组。
+    b.set_structure_tree(StructureTree::new().with_element(
+        StructureElement::new("Document")
+            .with_element(StructureElement::new("P").with_page(0).with_inline_marked_content(0, 0)),
+    ));
+    let doc = build_and_parse(&mut b);
+    let k = root_struct_element_k(&doc);
+    assert!(matches!(k, Value::Ref(_, _)), "单一子项应写标量 /K: {k:?}");
+}
+
+#[test]
+fn multiple_kids_are_still_written_as_array() {
+    let mut b = one_page(PdfVersion::V1_7);
+    b.set_structure_tree(StructureTree::new().with_element(
+        StructureElement::new("Document")
+            .with_element(StructureElement::new("P").with_page(0).with_inline_marked_content(0, 0))
+            .with_element(StructureElement::new("P").with_page(0).with_inline_marked_content(0, 1)),
+    ));
+    let doc = build_and_parse(&mut b);
+    let k = root_struct_element_k(&doc);
+    match k {
+        Value::Array(array) => assert_eq!(array.len(), 2),
+        other => panic!("多于一项应写 /K 数组: {other:?}"),
+    }
+}
+
+#[test]
+fn single_kid_scalar_roundtrips_through_parser() {
+    let mut b = one_page(PdfVersion::V1_7);
+    b.set_structure_tree(StructureTree::new().with_element(
+        StructureElement::new("Document")
+            .with_element(StructureElement::new("P").with_page(0).with_inline_marked_content(0, 0)),
+    ));
+    let doc = build_and_parse(&mut b);
+    let tree = doc
+        .structure_tree()
+        .expect("structure tree")
+        .expect("tree present");
+    assert!(matches!(
+        tree.root().kids[..],
+        [ReaderKid::Element(0)]
+    ), "{:?}", tree.root().kids);
+    let root_element = &tree.elements()[0];
+    assert!(matches!(
+        root_element.kids[..],
+        [ReaderKid::Element(1)]
+    ), "{:?}", root_element.kids);
+    let child = &tree.elements()[1];
+    assert!(matches!(child.kids[..], [ReaderKid::Mcid(0)]), "{:?}", child.kids);
+}

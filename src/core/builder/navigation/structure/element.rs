@@ -185,7 +185,14 @@ pub(super) fn write_elements(
                 }
             });
         }
-        dict = dict.insert("K", Value::Array(kids));
+        // 14.7.4.3：`/K` 可为单个内容项或数组。仅一个子项时写标量，
+        // 避免多余的包裹数组；读端 `parse_kids` 对非数组值按单项处理。
+        let k_value = if kids.len() == 1 {
+            kids.0.pop().expect("one kid")
+        } else {
+            Value::Array(kids)
+        };
+        dict = dict.insert("K", k_value);
         doc.set_object(Object::new(element_nums[index], 0, Value::Dict(dict)));
     }
 }
