@@ -11,6 +11,7 @@ impl PdfBuilder {
         self.pages.push(PageBuild {
             size,
             content: ContentStream::new(),
+            extra_contents: Vec::new(),
             fonts: Vec::new(),
             cid_fonts: Vec::new(),
             images: Vec::new(),
@@ -32,6 +33,16 @@ impl PdfBuilder {
             invalid_code_length: None,
         });
         idx
+    }
+
+    /// 在指定页追加一条独立内容流（ISO 32000-1 7.7.3.3：`/Contents` 可为
+    /// 单流或流数组）。写出时主内容流在前，追加流按调用顺序跟随，效果与
+    /// 单个流依次连接一致；未知页索引被忽略。
+    pub fn append_content_stream(&mut self, page: usize, content: ContentStream) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.extra_contents.push(content);
+        }
+        self
     }
 
     /// 在指定页上写一段文字。

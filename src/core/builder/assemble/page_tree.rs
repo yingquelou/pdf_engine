@@ -85,6 +85,14 @@ impl PdfBuilder {
                 properties_dict =
                     properties_dict.insert(name.clone(), Value::Ref(*object, 0));
             }
+            // 表单若未自带 `/Resources`，其内容流里的 `MC<n>` 经本页资源解析；
+            // 名字按句柄全局唯一，与页面自身/其它表单的属性表都不会撞名。
+            for &form_handle in p.forms.iter() {
+                for (name, object) in &marked_properties.form_properties[form_handle] {
+                    properties_dict =
+                        properties_dict.insert(name.clone(), Value::Ref(*object, 0));
+                }
+            }
             // 渐变与着色图案资源名：/Sh1、/P1 按页内首次使用顺序分配。
             let mut shading_dict_res = Dict::new();
             for (k, handle) in p.shadings.iter().enumerate() {
@@ -141,11 +149,21 @@ impl PdfBuilder {
                 resources = resources.insert("Pattern", Value::Dict(pattern_dict_res));
             }
 
+            // 7.7.3.3：`/Contents` 可为单流或流数组（按序连接）。
+            let contents_value = if pools.page_extra_content_nums[i].is_empty() {
+                Value::Ref(content_num, 0)
+            } else {
+                let mut array = Array::new().push(Value::Ref(content_num, 0));
+                for &extra_num in &pools.page_extra_content_nums[i] {
+                    array = array.push(Value::Ref(extra_num, 0));
+                }
+                Value::Array(array)
+            };
             let mut page_dict = Dict::new()
                 .insert("Type", Value::Name("Page".into()))
                 .insert("Parent", Value::Ref(pages_num, 0))
                 .insert("MediaBox", Value::Array(mediabox))
-                .insert("Contents", Value::Ref(content_num, 0))
+                .insert("Contents", contents_value)
                 .insert("Resources", Value::Dict(resources));
             if let Some(boundaries) = &p.boundaries {
                 page_dict = boundaries.extend_page_dict(page_dict);
@@ -280,6 +298,22 @@ impl PdfBuilder {
                     StreamData::Owned(content_bytes),
                 ),
             ));
+            // 追加内容流（7.7.3.3）：各自独立成流对象，页面 `/Contents`
+            // 数组按「主内容流 → 追加顺序」引用，效果等于依次连接。
+            for (k, extra) in p.extra_contents.iter_mut().enumerate() {
+                let bytes = extra.try_to_bytes().map_err(|error| {
+                    WriteError::InvalidObject(format!("page {i} extra content {k}: {error}"))
+                })?;
+                let extra_num = pools.page_extra_content_nums[i][k];
+                doc.set_object(Object::new(
+                    extra_num,
+                    0,
+                    Value::Stream(
+                        Dict::new().insert("Length", Value::Integer(bytes.len() as i64)),
+                        StreamData::Owned(bytes),
+                    ),
+                ));
+            }
         }
         Ok(())
     }

@@ -48,6 +48,8 @@ pub(super) struct Preflight {
 pub(super) struct PoolPlan {
     /// 每页的 (Page 字典号, 内容流号)。
     pub(super) page_slots: Vec<(i64, i64)>,
+    /// 每页追加内容流的对象号（7.7.3.3 `/Contents` 数组）；默认空。
+    pub(super) page_extra_content_nums: Vec<Vec<i64>>,
     /// 字体去重池（含表单自有资源并入的字体）。
     pub(super) font_pool: Vec<(Font, i64)>,
     /// 每页字体句柄 → 全局字体对象号。

@@ -114,6 +114,9 @@ struct PageBuild {
     size: PageSize,
     /// 累积的内容流操作符序列（类型化引擎）。`text`/`image` 调用追加于此。
     content: ContentStream,
+    /// 追加的内容流（7.7.3.3 `/Contents` 可为流数组）。按追加顺序写出，
+    /// 与主内容流共同组成页面的内容序列；默认空，写出形态与单流一致。
+    extra_contents: Vec<ContentStream>,
     /// 该页用到的简单字体（按首次出现顺序）。
     fonts: Vec<Font>,
     /// 该页用到的 CIDFont（按首次出现顺序）。

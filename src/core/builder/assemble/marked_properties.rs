@@ -100,11 +100,15 @@ impl PdfBuilder {
     pub(super) fn validate_marked_property_handles(&self) -> Result<(), WriteError> {
         let registered = self.marked_properties.len();
         for (page, entry) in self.pages.iter().enumerate() {
-            for handle in pending_handles(entry.content.ops()) {
-                if handle >= registered {
-                    return Err(WriteError::InvalidObject(format!(
-                        "marked content property list: handle {handle} was never registered (page {page}, registered count {registered})"
-                    )));
+            for ops in std::iter::once(entry.content.ops()).chain(
+                entry.extra_contents.iter().map(|stream| stream.ops()),
+            ) {
+                for handle in pending_handles(ops) {
+                    if handle >= registered {
+                        return Err(WriteError::InvalidObject(format!(
+                            "marked content property list: handle {handle} was never registered (page {page}, registered count {registered})"
+                        )));
+                    }
                 }
             }
         }
@@ -143,10 +147,14 @@ impl PdfBuilder {
         let mut seen = vec![false; registered];
         let mut used: Vec<usize> = Vec::new();
         for entry in self.pages.iter() {
-            for handle in pending_handles(entry.content.ops()) {
-                if !seen[handle] {
-                    seen[handle] = true;
-                    used.push(handle);
+            for ops in std::iter::once(entry.content.ops())
+                .chain(entry.extra_contents.iter().map(|stream| stream.ops()))
+            {
+                for handle in pending_handles(ops) {
+                    if !seen[handle] {
+                        seen[handle] = true;
+                        used.push(handle);
+                    }
                 }
             }
         }
@@ -177,15 +185,19 @@ impl PdfBuilder {
         // 同一句柄跨页/跨表单复用时各处登记同名同对象。
         for (page, entry) in self.pages.iter().enumerate() {
             let mut container_seen: BTreeSet<usize> = BTreeSet::new();
-            for handle in pending_handles(entry.content.ops()) {
-                if !container_seen.insert(handle) {
-                    continue;
+            for ops in std::iter::once(entry.content.ops())
+                .chain(entry.extra_contents.iter().map(|stream| stream.ops()))
+            {
+                for handle in pending_handles(ops) {
+                    if !container_seen.insert(handle) {
+                        continue;
+                    }
+                    let (Some(object), Some(name)) = (object_of[handle], name_of[handle].clone())
+                    else {
+                        continue;
+                    };
+                    plan.page_properties[page].push((name, object));
                 }
-                let (Some(object), Some(name)) = (object_of[handle], name_of[handle].clone())
-                else {
-                    continue;
-                };
-                plan.page_properties[page].push((name, object));
             }
         }
         for &form in &forms.used_forms {
@@ -214,8 +226,12 @@ impl PdfBuilder {
             Ok(())
         };
         for (page, entry) in self.pages.iter().enumerate() {
-            for (object, generation) in resolved_references(entry.content.ops()) {
-                check_refs(object, generation, format!("page {page}"))?;
+            for ops in std::iter::once(entry.content.ops())
+                .chain(entry.extra_contents.iter().map(|stream| stream.ops()))
+            {
+                for (object, generation) in resolved_references(ops) {
+                    check_refs(object, generation, format!("page {page}"))?;
+                }
             }
         }
         for &form in &forms.used_forms {
@@ -230,6 +246,11 @@ impl PdfBuilder {
         for entry in self.pages.iter_mut() {
             for op in entry.content.ops_mut() {
                 Self::replace_pending_property_handle(op, &name_of);
+            }
+            for extra in entry.extra_contents.iter_mut() {
+                for op in extra.ops_mut() {
+                    Self::replace_pending_property_handle(op, &name_of);
+                }
             }
         }
         for &form in &forms.used_forms {

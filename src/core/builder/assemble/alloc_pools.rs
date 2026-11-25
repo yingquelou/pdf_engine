@@ -159,8 +159,19 @@ impl PdfBuilder {
                 ));
             }
         }
+        // 追加内容流（7.7.3.3 `/Contents` 数组）在全部标准对象分配完之后
+        // 从共享游标取号：无追加流时对象号布局与既有逐字节一致。
+        let mut page_extra_content_nums = vec![Vec::new(); self.pages.len()];
+        for (page, p) in self.pages.iter().enumerate() {
+            for _ in &p.extra_contents {
+                page_extra_content_nums[page].push(*num);
+                *num += 1;
+            }
+        }
+
         Ok(PoolPlan {
             page_slots,
+            page_extra_content_nums,
             font_pool,
             page_font_nums,
             image_pool,
