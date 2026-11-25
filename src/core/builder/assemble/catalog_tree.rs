@@ -36,6 +36,20 @@ impl PdfBuilder {
         let mut catalog_dict = Dict::new()
             .insert("Type", Value::Name("Catalog".into()))
             .insert("Pages", Value::Ref(pages_num, 0));
+        // 目录 `/Version`（7.7.2 Table 28，PDF 1.4）：覆盖文件头版本。
+        if let Some(version) = self.catalog_version {
+            if self.version < PdfVersion::V1_4 {
+                return Err(WriteError::UnsupportedVersion(format!(
+                    "catalog /Version requires PDF {}, got {}",
+                    PdfVersion::V1_4.as_str(),
+                    self.version.as_str()
+                )));
+            }
+            catalog_dict = catalog_dict.insert(
+                "Version",
+                Value::Name(version.as_str().to_string()),
+            );
+        }
         // 文档默认语言（14.9.2.1）：目录 `/Lang` 为文本串，空标识符写空串。
         if let Some(language) = &self.document_language {
             catalog_dict = catalog_dict.insert("Lang", text_string_value(language.as_str()));

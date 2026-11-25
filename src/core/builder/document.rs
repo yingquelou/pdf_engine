@@ -2,6 +2,7 @@ use super::{
     AcroForm, DocumentInfo, FileIdentifier, LanguageIdentifier, OutputIntent, PdfBuilder,
     PieceInfo, SeparationGroup, SeparationInfo, XmpPacket,
 };
+use crate::core::types::PdfVersion;
 use crate::core::writer::StreamCompression;
 
 impl PdfBuilder {
@@ -33,6 +34,14 @@ impl PdfBuilder {
     /// 返回 [`WriteError::UnsupportedVersion`] 且零字节输出。
     pub fn set_document_language(&mut self, language: LanguageIdentifier) -> &mut Self {
         self.document_language = Some(language);
+        self
+    }
+
+    /// 设置目录 `/Version`（7.7.2 Table 28，PDF 1.4），覆盖文件头声明
+    /// 的版本（增量更新升版时由调用方显式给出）。目标版本低于 1.4 时
+    /// 构建返回 `UnsupportedVersion` 且不写出任何字节。
+    pub fn set_catalog_version(&mut self, version: PdfVersion) -> &mut Self {
+        self.catalog_version = Some(version);
         self
     }
 

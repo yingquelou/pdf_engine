@@ -19,7 +19,7 @@
 - [ ] **E6 嵌入文件**（7.11）：Filespec、`/EmbeddedFiles` 名称树、嵌入文件流；名称树复用 E1 的 `/Names` 语义封装；与 FileAttachment 注解联动。
   - 剩余缺口：`/RF` 关联文件只读（相对路径不解析、不写）；`/DOS`/`/Mac`/`/Unix` 规范声明弃用、写端有意不写，`/FS`/`/ID`/`/V` 面向外部引用仅读；Sound/Screen/Movie 注解与 Launch/GoToR 的 Filespec 参数未联动；写端 `/EF` 仅载体字典单流（嵌套/数组载体不写）；无真实附件 fixture。
 - [ ] **E7 增量更新写出**（7.5.6 Writer；`/ID` 见 7.5.5 Table 15）：`/Prev` 链、新/自由 xref 条目、trailer 合并、`/ID` 更新；复用 E5 的 `/ID` API，不另造生成/校验逻辑；为 F1 数字签名提供基础。
-  - 剩余缺口：增量段全部顶层写出，不做对象流重打包/历史垃圾回收（垃圾字节随版本累积）；文件头版本不可改（升级需目录 `/Version`，未实现）；无源字节（内存构造的 `Document`）无法增量；`/ID` 缺失时保持缺失；`/XRefStm` 混合引用文件写出已落地（见下一条进度行）；Linearize 属后续（签名 ByteRange 已随 F1 切片三落地）。
+  - 剩余缺口：增量段全部顶层写出，不做对象流重打包/历史垃圾回收（垃圾字节随版本累积）；文件头版本不可改，但目录 `/Version` 升版通道已于 2026-11-25 补齐（`PdfBuilder::set_catalog_version`，读端在高于文件头时据此升版）；无源字节（内存构造的 `Document`）无法增量；`/ID` 缺失时保持缺失；`/XRefStm` 混合引用文件写出已落地（见下一条进度行）；Linearize 属后续（签名 ByteRange 已随 F1 切片三落地）。
 
 **依赖**：E1/E3/E5 只依赖 A；E2 依赖 D0 的 Form XObject 写端；E4 依赖 E1/E3 与 D0；E6 依赖 E1（`/Names`）；E7 依赖 E5（`/ID`）与 A（xref 读写），可与 E2/E4 并行。F1 依赖 E7。
 

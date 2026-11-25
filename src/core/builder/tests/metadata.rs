@@ -301,3 +301,42 @@ fn typed_xmp_written_to_metadata_stream_has_xpacket_wrapper() {
         "包装不影响读端属性解析"
     );
 }
+
+#[test]
+fn catalog_version_writes_override_parsed_by_reader() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    b.page(PageSize::A4);
+    // 目录 /Version 高于文件头时，读端据此升版（1.4 → 1.6）。
+    b.set_catalog_version(PdfVersion::V1_6);
+    let doc = build_and_parse(&mut b);
+
+    let catalog = doc
+        .get_object(1)
+        .expect("lookup")
+        .expect("catalog")
+        .value
+        .as_dict()
+        .expect("catalog dict")
+        .clone();
+    assert_eq!(
+        catalog.get("Version").and_then(Value::as_name),
+        Some("1.6")
+    );
+    // 读端按目录 /Version 覆盖文件头版本（`source_version()` 方法）。
+    assert_eq!(doc.source_version(), PdfVersion::V1_6);
+}
+
+#[test]
+fn catalog_version_requires_pdf_1_4() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_3);
+    b.page(PageSize::A4);
+    b.set_catalog_version(PdfVersion::V1_4);
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("低于 1.4 应拒绝目录 /Version");
+    assert!(
+        matches!(&error, WriteError::UnsupportedVersion(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("/Version"), "{error}");
+    assert_eq!(out.len(), 0, "零字节契约");
+}

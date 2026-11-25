@@ -276,6 +276,9 @@ pub struct PdfBuilder {
     document_info: DocumentInfo,
     /// 目录 `/Lang` 文档默认语言（14.9.2.1）；`None`（默认）时不写出。
     document_language: Option<LanguageIdentifier>,
+    /// 目录 `/Version`（7.7.2 Table 28，PDF 1.4）：覆盖文件头声明的版本；
+    /// `None`（默认）时不写出。
+    catalog_version: Option<PdfVersion>,
     /// trailer `/ID` 文件标识符（14.4）；`None`（默认）时不写出。
     file_identifier: Option<FileIdentifier>,
     /// XMP 元数据流原文（14.3.2）；`None`（默认）时不写出。
@@ -329,6 +332,7 @@ impl PdfBuilder {
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
             document_language: None,
+            catalog_version: None,
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
@@ -370,6 +374,7 @@ impl PdfBuilder {
             navigation: navigation::NavigationState::default(),
             document_info: DocumentInfo::default(),
             document_language: None,
+            catalog_version: None,
             file_identifier: None,
             xmp_metadata: None,
             xmp_packet: None,
