@@ -300,6 +300,14 @@ pub(crate) fn parse_three_d_entries(
     }))
 }
 
+/// 目标注解 `/3DD` artwork 的 `/VA` 视图数；无法确定时返回 `None`
+/// （供 Go-To-3D-View 动作的 `/V` 下标越界校验复用，见 12.6.4.15）。
+pub(crate) fn view_count(document: &Document, dict: &Dict) -> Option<usize> {
+    parse_artwork(document, dict.get("3DD")?)
+        .ok()
+        .and_then(|(_, count)| count)
+}
+
 /// `/3DD`：直接 3D 流或 3D 引用字典。
 ///
 /// 返回 artwork 与 `/VA` 是否存在（`Some(视图数)` 表示存在，供 `/3DV`

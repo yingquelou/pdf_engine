@@ -5,8 +5,9 @@
 //! 名字形态比注解 `/3DV`（Table 298）多 `N` `P` `D`：后三者允许在目标
 //! artwork 无 `/VA` 时退回默认视图。
 //!
-//! 动作字典自身拿不到目标 artwork 的 `/VA`，因此本模块不做下标或名称的
-//! 范围校验（读端保持宽容），只校验条目类型与目标注解子类型。
+//! 目标 artwork 的 `/VA` 视图数可从目标注解 `/3DD` 解析，故整数 `/V`
+//! 下标在可确定视图数时做越界校验；名称形态（含 `N`/`P`/`D`）仍由调用方
+//! 结合当前视图处理，目标缺 `/3DD` 或 artwork 不可解析时保持读端宽容。
 
 use crate::core::reader::navigation::resolve;
 use crate::core::reader::three_d::{ThreeDView, parse_view_value};
@@ -51,6 +52,8 @@ pub(super) fn parse_go_to_3d_view_action(
     document: &Document,
     dict: &Dict,
 ) -> Result<GoTo3DViewAction, ActionError> {
+    // 目标 artwork 的 `/VA` 视图数（无法解析时保持宽容，不据此拒绝）。
+    let target_view_count: Option<usize>;
     let target = match dict.get("TA") {
         Some(Value::Ref(number, generation)) => {
             let reference = Value::Ref(*number, *generation);
@@ -69,6 +72,7 @@ pub(super) fn parse_go_to_3d_view_action(
                     )));
                 }
             }
+            target_view_count = crate::core::reader::three_d::view_count(document, target_dict);
             (*number, *generation)
         }
         Some(_) => {
@@ -108,6 +112,17 @@ pub(super) fn parse_go_to_3d_view_action(
             ));
         }
     };
+
+    // `/V` 整数形态是目标 `/VA` 的 0 基下标；能确定视图数时越界即拒绝，
+    // 无法确定（目标缺 /3DD 或 artwork 不可解析）时保持读端宽容。
+    if let (GoTo3DViewSelection::Index(index), Some(count)) = (&view, target_view_count)
+        && *index >= count
+    {
+        return Err(malformed(format!(
+            "GoTo3DView action /V index {index} is out of range for {} views",
+            count
+        )));
+    }
 
     Ok(GoTo3DViewAction { target, view })
 }

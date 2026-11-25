@@ -1,6 +1,7 @@
 //! Go-To-3D-View 动作读端测试（12.6.4.15 Table 216）。
 
 use crate::core::reader::three_d::{ThreeDMatrixSource, ThreeDView};
+use crate::core::types::StreamData;
 
 use super::*;
 
@@ -141,5 +142,47 @@ fn malformed_go_to_3d_view_actions_are_typed_errors() {
             matches!(error, ActionError::Malformed(_)),
             "{case:?}: {error:?}"
         );
+    }
+}
+
+#[test]
+fn go_to_3d_view_index_out_of_range_is_rejected() {
+    let doc = document_with_pages(1);
+    let view = |label: &str| {
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("3DView"))
+                .insert("XN", Value::String(label.into())),
+        )
+    };
+    let stream = Value::Stream(
+        Dict::new()
+            .insert("Type", name("3D"))
+            .insert("Subtype", name("U3D"))
+            .insert("VA", arr(vec![view("a"), view("b")])),
+        StreamData::Owned(Vec::new()),
+    );
+    insert(&doc, 50, stream);
+    let mut annot = match three_d_annotation() {
+        Value::Dict(dict) => dict,
+        other => panic!("annotation should be a dict: {other:?}"),
+    };
+    annot = annot.insert("3DD", Value::Ref(50, 0));
+    insert(&doc, THREE_D_ANNOTATION, Value::Dict(annot));
+
+    // 目标 /VA 有两个视图，下标 2 越界。
+    let action = go_to_3d_view(THREE_D_ANNOTATION, Value::Integer(2));
+    let error = doc.action(&action).expect_err("越界下标应被拒绝");
+    assert!(
+        error.to_string().contains("out of range"),
+        "{error}"
+    );
+    // 下标 1 合法。
+    let action = go_to_3d_view(THREE_D_ANNOTATION, Value::Integer(1));
+    match doc.action(&action).expect("合法下标") {
+        Action::GoTo3DView(parsed) => {
+            assert_eq!(parsed.view, GoTo3DViewSelection::Index(1));
+        }
+        other => panic!("unexpected action: {other:?}"),
     }
 }
