@@ -138,4 +138,7 @@ pub(super) struct MarkedPropertiesPlan {
     /// 每页需登记进 `/Resources /Properties` 的 (资源名, 对象号)，
     /// 按页内首次出现顺序；与 `entries` 中的名字/对象号一一对应。
     pub(super) page_properties: Vec<Vec<(String, i64)>>,
+    /// 各 Form XObject 需登记进自有 `/Resources /Properties` 的
+    /// (资源名, 对象号)，按表单句柄索引、表单内首次出现顺序。
+    pub(super) form_properties: Vec<Vec<(String, i64)>>,
 }

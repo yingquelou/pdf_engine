@@ -36,8 +36,11 @@
 //! 表 **shall** 做成 `/Properties` 命名资源并按名称引用）。资源名 `MC<n>` 在
 //! 页面 `/Resources /Properties` 登记为指向属性表对象的引用；同一句柄跨页
 //! 复用时各页登记同名同对象。读端 `reader/content/marked.rs` 把名称经
-//! `/Properties` 解引用为属性表字典。调用方手写的裸号通路
-//! （`begin_marked_content_reference`）仍按原样透传，不受本通路影响。
+//! `/Properties` 解引用为属性表字典。页面与 Form XObject 内容流同等处理：
+//! 表单内容里的句柄同样取号并登记，名字写入表单自有 `/Resources /Properties`
+//! （若表单自带资源）以及绘制该表单的页面 `/Properties`（表单继承页面资源时
+//! 供解析）。调用方手写的裸号通路（`begin_marked_content_reference`）仍按原样
+//! 透传，不受本通路影响。
 
 use std::collections::BTreeSet;
 
@@ -46,7 +49,7 @@ use crate::core::content::{MarkedContentProperties, Op};
 use crate::core::types::{Document, Object, Value};
 use crate::core::writer::WriteError;
 
-use super::plan::MarkedPropertiesPlan;
+use super::plan::{FormPlan, MarkedPropertiesPlan};
 
 /// 内容操作数序列里出现的未定型属性表句柄（按出现顺序，可能重复）。
 ///
@@ -108,9 +111,9 @@ impl PdfBuilder {
         Ok(())
     }
 
-    /// 为被引用的属性表句柄分配对象号与 `/Properties` 资源名，把页面内容里
-    /// 的占位原地替换成资源名操作数（Table 320 授权形态）；返回分配计划供
-    /// 写出阶段使用。
+    /// 为被引用的属性表句柄分配对象号与 `/Properties` 资源名，把页面与
+    /// Form XObject 内容里的占位原地替换成资源名操作数（Table 320 授权
+    /// 形态）；返回分配计划供写出阶段使用。
     ///
     /// 只为实际被引用的句柄取号（规则 2），取号使用文档共享游标（规则 4），
     /// 同一句柄只取一个号/一个资源名（规则 3）；替换前先做代数一致性校验
@@ -118,12 +121,25 @@ impl PdfBuilder {
     pub(super) fn allocate_marked_property_objects(
         &mut self,
         num: &mut i64,
+        forms: &FormPlan,
     ) -> Result<MarkedPropertiesPlan, WriteError> {
-        // 句柄上界在此再校一次：写出顺序若变动，越界仍是拒绝而非 panic。
+        // 页面句柄上界在此再校一次：写出顺序若变动，越界仍是拒绝而非 panic。
         self.validate_marked_property_handles()?;
         let registered = self.marked_properties.len();
+        // 表单句柄在 preflight 阶段尚未分配，故在此按同样口径校验（仍在任何
+        // 字节写出之前，零字节契约不变）。
+        for &form in &forms.used_forms {
+            for handle in pending_handles(self.forms[form].content.ops()) {
+                if handle >= registered {
+                    return Err(WriteError::InvalidObject(format!(
+                        "marked content property list: handle {handle} was never registered (form {form}, registered count {registered})"
+                    )));
+                }
+            }
+        }
 
-        // 首次出现顺序去重（BTreeSet 会改变取号顺序，句柄顺序即用户标记顺序）。
+        // 首次出现顺序去重（BTreeSet 会改变取号顺序，句柄顺序即用户标记顺序）：
+        // 先页面、后实际用到的表单（按句柄序）。
         let mut seen = vec![false; registered];
         let mut used: Vec<usize> = Vec::new();
         for entry in self.pages.iter() {
@@ -134,9 +150,18 @@ impl PdfBuilder {
                 }
             }
         }
+        for &form in &forms.used_forms {
+            for handle in pending_handles(self.forms[form].content.ops()) {
+                if !seen[handle] {
+                    seen[handle] = true;
+                    used.push(handle);
+                }
+            }
+        }
 
         let mut plan = MarkedPropertiesPlan::default();
         plan.page_properties = vec![Vec::new(); self.pages.len()];
+        plan.form_properties = vec![Vec::new(); self.forms.len()];
         let mut object_of: Vec<Option<i64>> = vec![None; registered];
         let mut name_of: Vec<Option<String>> = vec![None; registered];
         for (k, &handle) in used.iter().enumerate() {
@@ -148,12 +173,12 @@ impl PdfBuilder {
             plan.entries.push((handle, object, name));
         }
 
-        // 每页登记本页实际引用的属性表（句柄在本页首次出现顺序去重）；
-        // 同一句柄跨页复用时各页登记同名同对象。
+        // 各容器登记自身实际引用的属性表（容器内首次出现顺序去重）；
+        // 同一句柄跨页/跨表单复用时各处登记同名同对象。
         for (page, entry) in self.pages.iter().enumerate() {
-            let mut page_seen: BTreeSet<usize> = BTreeSet::new();
+            let mut container_seen: BTreeSet<usize> = BTreeSet::new();
             for handle in pending_handles(entry.content.ops()) {
-                if !page_seen.insert(handle) {
+                if !container_seen.insert(handle) {
                     continue;
                 }
                 let (Some(object), Some(name)) = (object_of[handle], name_of[handle].clone())
@@ -163,42 +188,72 @@ impl PdfBuilder {
                 plan.page_properties[page].push((name, object));
             }
         }
+        for &form in &forms.used_forms {
+            let mut container_seen: BTreeSet<usize> = BTreeSet::new();
+            for handle in pending_handles(self.forms[form].content.ops()) {
+                if !container_seen.insert(handle) {
+                    continue;
+                }
+                let (Some(object), Some(name)) = (object_of[handle], name_of[handle].clone())
+                else {
+                    continue;
+                };
+                plan.form_properties[form].push((name, object));
+            }
+        }
 
         // 代数一致性（规则 5）：手写裸号引用若指向本池刚分到的对象号，
         // 代号必须是 0——属性表字典永远以代号 0 写出，其余代号引用不到它。
         let allocated: BTreeSet<i64> = plan.entries.iter().map(|&(_, object, _)| object).collect();
+        let check_refs = |object: i64, generation: i64, where_: String| -> Result<(), WriteError> {
+            if allocated.contains(&object) && generation != 0 {
+                return Err(WriteError::InvalidObject(format!(
+                    "marked content property list: {where_} references object {object} with generation {generation}, but property lists are written with generation 0"
+                )));
+            }
+            Ok(())
+        };
         for (page, entry) in self.pages.iter().enumerate() {
             for (object, generation) in resolved_references(entry.content.ops()) {
-                if allocated.contains(&object) && generation != 0 {
-                    return Err(WriteError::InvalidObject(format!(
-                        "marked content property list: page {page} references object {object} with generation {generation}, but property lists are written with generation 0"
-                    )));
-                }
+                check_refs(object, generation, format!("page {page}"))?;
+            }
+        }
+        for &form in &forms.used_forms {
+            for (object, generation) in resolved_references(self.forms[form].content.ops()) {
+                check_refs(object, generation, format!("form {form}"))?;
             }
         }
 
-        // 占位 → `/Properties` 资源名：写进页面内容操作数模型本身，随后
-        // `page_tree` 阶段照常把操作数序列化成内容流字节，并把名字登记进
-        // 页面的 `/Resources /Properties`。
+        // 占位 → `/Properties` 资源名：写进内容操作数模型本身，随后 `page_tree`
+        // 与 `form_stream` 阶段照常把操作数序列化成内容流字节，并把名字登记
+        // 进各自的 `/Resources /Properties`。
         for entry in self.pages.iter_mut() {
             for op in entry.content.ops_mut() {
-                let properties = match op {
-                    Op::BeginMarkedContentProperties { properties, .. }
-                    | Op::MarkedContentPointProperties { properties, .. } => properties,
-                    _ => continue,
-                };
-                let Some(handle) = properties.as_pending_handle() else {
-                    continue;
-                };
-                // 未命名（理论上不会发生：句柄都来自已扫描的页面内容）时
-                // 保留占位，让序列化阶段的类型化拒绝兜住，绝不输出假名字。
-                let Some(name) = name_of[handle].clone() else {
-                    continue;
-                };
-                *properties = MarkedContentProperties::Name(name);
+                Self::replace_pending_property_handle(op, &name_of);
+            }
+        }
+        for &form in &forms.used_forms {
+            for op in self.forms[form].content.ops_mut() {
+                Self::replace_pending_property_handle(op, &name_of);
             }
         }
         Ok(plan)
+    }
+
+    /// 把一个未定型属性表占位替换为对应的 `/Properties` 资源名；未命名时
+    /// 保留占位，让序列化阶段的类型化拒绝兜住，绝不输出假名字。
+    fn replace_pending_property_handle(op: &mut Op, name_of: &[Option<String>]) {
+        let properties = match op {
+            Op::BeginMarkedContentProperties { properties, .. }
+            | Op::MarkedContentPointProperties { properties, .. } => properties,
+            _ => return,
+        };
+        let Some(handle) = properties.as_pending_handle() else {
+            return;
+        };
+        if let Some(name) = name_of[handle].clone() {
+            *properties = MarkedContentProperties::Name(name);
+        }
     }
 
     /// 按计划把注册时的字典**原样**写成间接对象（代号为 0），使其成为页面

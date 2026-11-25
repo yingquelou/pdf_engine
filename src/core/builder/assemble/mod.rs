@@ -107,9 +107,9 @@ impl PdfBuilder {
         let forms = self.allocate_form_objects(&preflight, &mut pools, &mut num)?;
         let groups = self.allocate_group_objects(&forms, &mut num)?;
         let annot_plan = self.allocate_annotation_objects(&preflight, &mut num)?;
-        // 标记内容属性表（14.6）：注册句柄取号 + 把页面内容里的未定型占位
-        // 替换成 `/Properties` 资源名，必须早于 `assemble_page_tree` 序列化内容字节。
-        let marked_properties = self.allocate_marked_property_objects(&mut num)?;
+        // 标记内容属性表（14.6）：注册句柄取号 + 把页面/表单内容里的未定型占位
+        // 替换成 `/Properties` 资源名，必须早于内容流的序列化。
+        let marked_properties = self.allocate_marked_property_objects(&mut num, &forms)?;
 
         // —— 构造 Document 并按主题写出各对象 ——
         let mut doc = self.assemble_feature_profile(&preflight, &groups);
@@ -138,7 +138,7 @@ impl PdfBuilder {
         // 属性表字典作为间接对象落进对象表，与页面内容里回填的引用闭合。
         self.write_marked_property_objects(&mut doc, &marked_properties);
         self.assemble_font_and_image_objects(&mut doc, &mut num, &pools, &groups)?;
-        self.assemble_form_streams(&mut doc, &mut num, &forms, &groups)?;
+        self.assemble_form_streams(&mut doc, &mut num, &forms, &groups, &marked_properties)?;
         self.assemble_document_group_objects(&mut doc, &mut num, &groups)?;
         self.assemble_graphics_objects(&mut doc, &mut num, &pools, &forms)?;
 

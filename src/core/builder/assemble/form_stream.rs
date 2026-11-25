@@ -11,7 +11,7 @@ use crate::core::writer::WriteError;
 
 use super::colorspace::color_space_value;
 use super::opi;
-use super::plan::{FormPlan, GroupPlan};
+use super::plan::{FormPlan, GroupPlan, MarkedPropertiesPlan};
 use super::utils::{group_dict, real_array};
 
 impl PdfBuilder {
@@ -23,6 +23,7 @@ impl PdfBuilder {
         num: &mut i64,
         forms: &FormPlan,
         groups: &GroupPlan,
+        marked_properties: &MarkedPropertiesPlan,
     ) -> Result<(), WriteError> {
         // Form XObject 流对象：BBox 必填，Matrix 仅在提供时写出。
         for &handle in &forms.used_forms {
@@ -92,14 +93,19 @@ impl PdfBuilder {
                     }
                     form_resources = form_resources.insert("XObject", Value::Dict(xobj_dict));
                 }
-                if !resources.optional_content.is_empty() {
-                    let mut properties = Dict::new();
-                    for (k, group) in resources.optional_content.iter().enumerate() {
-                        properties = properties.insert(
-                            format!("OC{}", k + 1),
-                            Value::Ref(groups.ocg_nums[*group], 0),
-                        );
-                    }
+                let mut properties = Dict::new();
+                for (k, group) in resources.optional_content.iter().enumerate() {
+                    properties = properties.insert(
+                        format!("OC{}", k + 1),
+                        Value::Ref(groups.ocg_nums[*group], 0),
+                    );
+                }
+                // 表单内容里的标记内容属性表（14.6.2）：把本表单用到的
+                // `MC<n>` 登记进自有 `/Properties`。
+                for (name, object) in &marked_properties.form_properties[handle] {
+                    properties = properties.insert(name.clone(), Value::Ref(*object, 0));
+                }
+                if !properties.0.is_empty() {
                     form_resources = form_resources.insert("Properties", Value::Dict(properties));
                 }
                 dict = dict.insert("Resources", Value::Dict(form_resources));

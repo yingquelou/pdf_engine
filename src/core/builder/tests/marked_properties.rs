@@ -14,7 +14,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
-use crate::core::content::{ContentWriteError, MarkedContentProperties};
+use crate::core::content::{ContentStream, ContentWriteError, MarkedContentProperties};
 use crate::core::reader::content::Op as ReadOp;
 
 /// 写出并重新解析；返回原始字节供文本串形态断言。
@@ -539,4 +539,135 @@ fn property_handle_is_registered_as_named_properties_resource() {
             .value,
         Value::Dict(properties("named resource"))
     );
+}
+
+/// Form XObject 内容流里的句柄同样取号并登记：表单继承页面资源时，`MC1`
+/// 落在绘制表单的页面 `/Properties`，表单内容写成 `/P /MC1 BDC`。
+#[test]
+fn form_content_property_handle_uses_named_resource() {
+    let mut b = PdfBuilder::new();
+    let page = b.page(PageSize::A4);
+    let handle = b.add_marked_content_properties(properties("form text"));
+    let mut content = ContentStream::new();
+    content
+        .begin_marked_content_properties("P", MarkedContentProperties::pending_handle(handle))
+        .end_marked_content();
+    let form = b.form_xobject(&FormXObject::new([0.0, 0.0, 10.0, 10.0], content));
+    b.draw_form(page, form, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    let (out, doc) = build_and_parse(&mut b);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("/P /MC1 BDC"), "{text}");
+
+    let registered = doc
+        .page_resource(page, "Properties", "MC1")
+        .expect("page resource lookup")
+        .expect("MC1 must be registered on the drawing page");
+    let Value::Ref(object, 0) = registered else {
+        panic!("named property must be a generation-0 ref: {registered:?}");
+    };
+    assert_eq!(
+        doc.get_object(object)
+            .expect("object lookup")
+            .expect("property object exists")
+            .value,
+        Value::Dict(properties("form text"))
+    );
+}
+
+/// 表单自带 `/Resources` 时，`MC1` 登记进表单自己的 `/Properties`。
+#[test]
+fn form_own_resources_register_the_named_property() {
+    let mut b = PdfBuilder::new();
+    let page = b.page(PageSize::A4);
+    let handle = b.add_marked_content_properties(properties("own resources"));
+    let mut content = ContentStream::new();
+    content
+        .begin_marked_content_properties("P", MarkedContentProperties::pending_handle(handle))
+        .end_marked_content();
+    let form = b.form_xobject(
+        &FormXObject::new([0.0, 0.0, 10.0, 10.0], content)
+            .with_resources(FormResources::new()),
+    );
+    b.draw_form(page, form, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    let (_, doc) = build_and_parse(&mut b);
+    // 页面 `/Resources /XObject /Fm1` 指向表单流对象。
+    let page_num = (1..64)
+        .find(|&num| {
+            doc.get_object(num)
+                .ok()
+                .flatten()
+                .is_some_and(|object| {
+                    object
+                        .value
+                        .as_dict()
+                        .and_then(|dict| dict.get("Type"))
+                        == Some(&Value::Name("Page".into()))
+                })
+        })
+        .expect("page object");
+    let page_dict = object_dict_for(&doc, page_num);
+    let xobj = page_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|res| res.get("XObject"))
+        .and_then(Value::as_dict)
+        .expect("page /XObject");
+    let form_num = xobj
+        .get("Fm1")
+        .and_then(Value::as_ref)
+        .expect("Fm1 ref")
+        .0;
+    let form_dict = match &doc
+        .get_object(form_num)
+        .expect("form lookup")
+        .expect("form object")
+        .value
+    {
+        Value::Stream(dict, _) => dict.clone(),
+        other => panic!("form must be a stream: {other:?}"),
+    };
+    let properties = form_dict
+        .get("Resources")
+        .and_then(Value::as_dict)
+        .and_then(|res| res.get("Properties"))
+        .and_then(Value::as_dict)
+        .expect("form /Properties");
+    assert!(
+        matches!(properties.get("MC1"), Some(Value::Ref(_, 0))),
+        "表单自有 /Properties 应登记 MC1: {properties:?}"
+    );
+}
+
+fn object_dict_for(doc: &Document, num: i64) -> Dict {
+    doc.get_object(num)
+        .expect("object lookup")
+        .expect("object exists")
+        .value
+        .as_dict()
+        .expect("dictionary")
+        .clone()
+}
+
+/// 表单内容里引用未注册句柄同样在任何字节写出前被拒绝。
+#[test]
+fn unknown_property_handle_in_form_is_rejected_without_bytes() {
+    let mut b = PdfBuilder::new();
+    let page = b.page(PageSize::A4);
+    let mut content = ContentStream::new();
+    content
+        .begin_marked_content_properties("P", MarkedContentProperties::pending_handle(7))
+        .end_marked_content();
+    let form = b.form_xobject(&FormXObject::new([0.0, 0.0, 10.0, 10.0], content));
+    b.draw_form(page, form, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    let mut out = Vec::new();
+    let error = b.build(&mut out).expect_err("表单未注册句柄必须被拒绝");
+    assert!(matches!(&error, WriteError::InvalidObject(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("never registered"),
+        "错误应说明句柄未注册：{error}"
+    );
+    assert_eq!(out.len(), 0, "零字节契约");
 }
