@@ -61,7 +61,7 @@ fn flate_compression_requires_pdf_1_2() {
     assert!(
         error
             .to_string()
-            .contains("flate stream compression requires PDF 1.2"),
+            .contains("FlateDecode stream encoding requires PDF 1.2"),
         "错误信息应说明版本要求: {error}"
     );
     assert!(out.is_empty(), "构建失败时不应写出任何字节");

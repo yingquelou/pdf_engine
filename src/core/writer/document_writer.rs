@@ -76,11 +76,14 @@ impl DocumentWriter {
         let version = self.version.unwrap_or_default();
         validate_output_version(version)?;
         validate_content_version(version, doc)?;
-        // D4 版本门控：FlateDecode 为 PDF 1.2 引入，PNG 预测器为 1.3 引入。
+        // 版本门控：按流过滤器引入版本（Flate 1.2，其余 1.0），
+        // PNG 预测器为 1.3 引入。
         if let Some(comp) = &self.compression {
-            if version < PdfVersion::V1_2 {
+            if version < comp.min_version() {
                 return Err(WriteError::UnsupportedVersion(format!(
-                    "flate stream compression requires PDF 1.2, got {version}"
+                    "{} stream encoding requires PDF {}, got {version}",
+                    comp.filter().name(),
+                    comp.min_version()
                 )));
             }
             if comp.uses_image_predictor() && version < PdfVersion::V1_3 {

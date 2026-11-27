@@ -76,7 +76,10 @@ mod tests;
 mod value;
 mod version;
 
-pub use compression::{DeflateBackend, Flate2DeflateBackend, ImagePredictor, StreamCompression};
+pub use compression::{
+    DeflateBackend, Flate2DeflateBackend, ImagePredictor, PngFilter, StreamCompression,
+    StreamFilter,
+};
 pub use document_writer::{DocumentWriter, write_document};
 pub use hybrid::HybridReferencePolicy;
 pub use signature::{

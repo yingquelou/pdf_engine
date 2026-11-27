@@ -410,7 +410,7 @@ pub(crate) fn write_object_maybe_compressed(
             // D4 压缩：仅 Owned 流；apply 内部再排除已有 Filter/空流。
             if matches!(data, StreamData::Owned(_))
                 && let Some(comp) = compression
-                && let Some((d2, b2)) = comp.apply(&prepared_dict, &bytes)?
+                && let Some((d2, b2)) = comp.apply(obj.num, &prepared_dict, &bytes)?
             {
                 prepared_dict = d2;
                 bytes = b2;
