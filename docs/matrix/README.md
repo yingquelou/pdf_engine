@@ -19,7 +19,7 @@
 - **Reader / Writer 列**：✅ 🟡 ⬜ ❌ 同上；`—` = 不适用（该特性无读/写之分）
   - **总状态由 Reader/Writer 合并得出，不独立评级**：所有适用侧（`—` 不计）均为 ✅ 时总状态才是 ✅；均为 ❌（设计决策整体不支持）时总状态为 ❌；其余任一适用侧为 🟡/⬜/❌ 的混合情形总状态至多为 🟡。读端完全缺失（Reader ⬜）的条目不得标 ✅。
   - 约定：读端已有通用内容流读端模型（`reader/content`：分词 + `Op` AST + 图形状态机 `ContentStateRunner`，入口 `Document::page_content_ops` / `page_content_state_trace`，资源解析 `page_resource`，标记内容配对与属性表 `collect_marked_sections`/`Document::page_marked_content`，见 14.6）。第 8/9 章内容流操作符条目的 Reader 列按该模型评价：操作符进入 Op AST 且被状态机跟踪为 ✅；仅被 Op AST 建模、语义不进入状态模型（当前路径、裁剪路径、内嵌图像与 Form 字典等）为 🟡；`reader/text` 为文本提取所做的解释仍单独见 9.10。
-  - 约定：除 **Flate** 外，写端**不编码过滤器**，已解码流剥离过滤器、引用流原样透传（`prepare_stream_dict_for_write`），故过滤器类条目的 Writer 列以 🟡 表示「透传/剥离，不主动编码」。D4 起 `FlateDecode` 有写端主动编码路径（`writer/compression.rs`，文档级 opt-in，见 7.4.4，该条 Writer 列已更新为 ✅）。
+  - 约定：写端过滤器**主动编码为文档级 opt-in**（`writer/compression.rs::StreamCompression`，在序列化咽喉点作用于 Owned 明文流，内存不变量不受影响）。已覆盖 Flate（1.2）、ASCIIHex、ASCII85、RunLength、LZW（均 1.0）；其余过滤器（CCITT/JBIG2/JPX/DCT 等）仍需第三方编码器，写端对已声明 `/Filter` 的流透传、不二次编码，其 Writer 列保持 🟡。
   - 约定（C5 未建模操作符透传策略）：读写内容模型经 `reader::content::{to_content_op, from_content_op, serialize_ops}` 桥接。写端 `content::Op` 无法表达的操作符——`TD` 双操作数、`d0`/`d1`、`BX`/`EX`、内嵌图像 `BI…EI`、一切 `Op::Unmodeled`、越界的 `J`/`j`（非 0–2）与 `Tr`（非 0–255）、非 UTF-8 的 `'`/`"`/`TJ` 字符串、非 Name/Dict 的 BDC/DP 属性表——在 `to_content_op` 返回类型化 `OpMappingError`（`NotRepresentableByWriter`/`OperandOutOfRange`），`serialize_ops` 对其走原始回退直接输出合法 PDF 语法，保证 `parse → serialize → parse` 模型级无损；`Tj` 串按字节是否为合法 UTF-8 在 `(字面量)` 与 `<十六进制>` 两种形式间自动选择。已知限制：内嵌图像 `Op::InlineImage` 自 D2 起可读写往返（`BI … ID <data> EI`）；写端 `MoveNextLineSetLeading` 单操作数 `TD` 不合规范，`from_content_op` 以 `tx=0` 有损映射且未改动该公共枚举；未建模操作数/属性字典内 `Value::String` 含 ≥0x80 字节时经 `write_value` 按 UTF-8 编码写出、重解析按字节逐 char，模型级不严格相等（ASCII 串往返无损）。
 - **优先级**：P0 核心语法补全（真实世界 PDF 读入正确性）/ P1 高价值内容能力（字体文本、图像、色彩）/ P2 结构增强（Pattern、Form XObject、透明度完整、导航注解表单、元数据）/ P3 专门领域（多媒体、Tagged PDF、预印、Web Capture、签名、PDF 2.0）
 
@@ -31,7 +31,7 @@
 
 | 章 | ✅ | 🟡 | ⬜ | ❌ | —（说明性） | 合计 |
 |---|---|---|---|---|---|---|
-| 第 7 章 语法 | 25 | 19 | 0 | 3 | 5 | 52 |
+| 第 7 章 语法 | 30 | 14 | 0 | 3 | 5 | 52 |
 | 第 8 章 图形 | 6 | 16 | 1 | 1 | 5 | 29 |
 | 第 9 章 文本 | 5 | 13 | 0 | 1 | 3 | 22 |
 | 第 10 章 渲染 | 0 | 2 | 3 | 0 | 1 | 6 |
@@ -39,7 +39,7 @@
 | 第 12 章 交互特性 | 3 | 35 | 2 | 1 | 1 | 42 |
 | 第 13 章 多媒体 | 1 | 4 | 0 | 0 | 1 | 6 |
 | 第 14 章 文档交换 | 5 | 6 | 0 | 0 | 1 | 12 |
-| **总计** | **45** | **100** | **8** | **8** | **20** | **181** |
+| **总计** | **50** | **95** | **8** | **8** | **20** | **181** |
 
 > 口径变更记录见 [changelog/2026-11-02.md](../changelog/2026-11-02.md)。
 
