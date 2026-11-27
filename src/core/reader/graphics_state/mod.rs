@@ -45,7 +45,7 @@ pub use error::GraphicsStateError;
 use helpers::invalid;
 pub use model::{
     BlendMode, DashPattern, ExtGState, ExtGStateFont, GraphicsStateIssue, HybridColorSpace,
-    HybridColorSpaceElement, HybridColorSpaceStyle, SoftMask, SoftMaskSubtype,
+    HybridColorSpaceElement, HybridColorSpaceStyle, SoftMask, SoftMaskSubtype, StandardBlendMode,
 };
 
 type Result<T> = std::result::Result<T, GraphicsStateError>;

@@ -28,6 +28,7 @@ impl PdfBuilder {
             duration: None,
             thumbnail: None,
             boundaries: None,
+            rotate: None,
             piece_info: None,
             preferred_zoom: None,
             web_capture_id: None,
@@ -59,6 +60,17 @@ impl PdfBuilder {
             p.default_color_spaces
                 .retain(|(existing, _)| *existing != kind);
             p.default_color_spaces.push((kind, color_space));
+        }
+        self
+    }
+
+    /// 设置页面旋转角（ISO 32000-1 §7.7.3 Table 30 `/Rotate`）：顺时针
+    /// 度数，须为 90 的倍数；非法的度数在构建写出前以 `InvalidObject`
+    /// 零字节拒绝。未知页索引忽略；不设置时页面字典不写 `/Rotate`，
+    /// 阅读端按缺省 0 处理。
+    pub fn set_page_rotation(&mut self, page: usize, degrees: i32) -> &mut Self {
+        if let Some(p) = self.pages.get_mut(page) {
+            p.rotate = Some(degrees);
         }
         self
     }

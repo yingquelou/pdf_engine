@@ -211,9 +211,86 @@ pub struct Annotation {
     pub dict: Dict,
 }
 
+/// 标准注解状态模型（12.5.6.3 Table 171）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandardStateModel {
+    /// `Marked`：状态为 `Marked` / `Unmarked`。
+    Marked,
+    /// `Review`：状态为 `Accepted` / `Rejected` / `Cancelled` / `Completed` / `None`。
+    Review,
+}
+
+impl StandardStateModel {
+    /// 由 `/StateModel` 文本分类；标准两模型之外的自定义模型返回 `None`。
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Marked" => Some(Self::Marked),
+            "Review" => Some(Self::Review),
+            _ => None,
+        }
+    }
+
+    /// 该模型的缺省状态（Table 171）。
+    pub fn default_state(self) -> StandardAnnotationState {
+        match self {
+            Self::Marked => StandardAnnotationState::Unmarked,
+            Self::Review => StandardAnnotationState::None,
+        }
+    }
+}
+
+/// 标准注解状态（12.5.6.3 Table 171），按状态模型分组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandardAnnotationState {
+    Marked,
+    Unmarked,
+    Accepted,
+    Rejected,
+    Cancelled,
+    Completed,
+    None,
+}
+
+impl StandardAnnotationState {
+    /// 由 `/State` 文本分类（不校验其是否属于给定模型）。
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Marked" => Self::Marked,
+            "Unmarked" => Self::Unmarked,
+            "Accepted" => Self::Accepted,
+            "Rejected" => Self::Rejected,
+            "Cancelled" => Self::Cancelled,
+            "Completed" => Self::Completed,
+            "None" => Self::None,
+            _ => return None,
+        })
+    }
+
+    /// 该状态是否属于给定标准模型（Table 171 的「模型 × 状态」组合）。
+    pub fn belongs_to(self, model: StandardStateModel) -> bool {
+        match model {
+            StandardStateModel::Marked => matches!(self, Self::Marked | Self::Unmarked),
+            StandardStateModel::Review => matches!(
+                self,
+                Self::Accepted | Self::Rejected | Self::Cancelled | Self::Completed | Self::None
+            ),
+        }
+    }
+}
+
 impl Annotation {
     /// 是否应在正常查看时呈现：`/F` 的 Invisible/Hidden/NoView 均未置位。
     pub fn visible(&self) -> bool {
         !(self.flags.invisible() || self.flags.hidden() || self.flags.no_view())
+    }
+
+    /// 按 Table 171 分类 `/State` 与 `/StateModel`：两者均为标准名且组合
+    /// 合法时返回 `(模型, 状态)`；否则返回 `None`，原始字符串仍保留在
+    /// [`Self::state`] / [`Self::state_model`] 中。`/StateModel` 缺省视为
+    /// `Marked`（Table 172）。
+    pub fn standard_state(&self) -> Option<(StandardStateModel, StandardAnnotationState)> {
+        let model = StandardStateModel::from_name(self.state_model.as_deref().unwrap_or("Marked"))?;
+        let state = StandardAnnotationState::from_name(self.state.as_ref()?)?;
+        state.belongs_to(model).then_some((model, state))
     }
 }

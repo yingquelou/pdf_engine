@@ -106,3 +106,84 @@ fn invalid_page_label_entries_are_typed_errors() {
         "{error}"
     );
 }
+
+/// 把数值树节点挂到目录 `/PageLabels`，返回解析结果。
+fn page_labels_with_node(node: Value) -> std::result::Result<Option<PageLabels>, NavigationError> {
+    let doc = document_with_pages(4, Dict::new());
+    insert(&doc, 55, node);
+    doc.set_object(Object::new(
+        1,
+        0,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Catalog"))
+                .insert("Pages", Value::Ref(PAGES_OBJECT, 0))
+                .insert("PageLabels", Value::Ref(55, 0)),
+        ),
+    ));
+    doc.page_labels()
+}
+
+#[test]
+fn page_labels_accept_valid_number_tree_limits() {
+    let labels = page_labels_with_node(Value::Dict(
+        Dict::new()
+            .insert(
+                "Nums",
+                arr(vec![
+                    Value::Integer(0),
+                    Value::Dict(Dict::new().insert("S", name("D"))),
+                    Value::Integer(2),
+                    Value::Dict(Dict::new().insert("S", name("r"))),
+                ]),
+            )
+            .insert("Limits", arr(vec![Value::Integer(0), Value::Integer(2)])),
+    ))
+    .unwrap()
+    .expect("page labels");
+    assert_eq!(labels.label_for(0).as_deref(), Some("1"));
+    assert_eq!(labels.label_for(2).as_deref(), Some("i"));
+}
+
+#[test]
+fn page_labels_reject_malformed_number_tree_limits() {
+    for limits in [
+        Value::String("0".into()),
+        arr(vec![Value::Integer(0)]),
+        arr(vec![Value::Integer(0), Value::String("2".into())]),
+        arr(vec![Value::Integer(2), Value::Integer(0)]),
+    ] {
+        let error = page_labels_with_node(Value::Dict(
+            Dict::new()
+                .insert("Nums", arr(vec![]))
+                .insert("Limits", limits),
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(error, NavigationError::Malformed(_)) && error.to_string().contains("/Limits"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn page_labels_reject_number_tree_limits_not_covering_keys() {
+    let error = page_labels_with_node(Value::Dict(
+        Dict::new()
+            .insert(
+                "Nums",
+                arr(vec![
+                    Value::Integer(0),
+                    Value::Dict(Dict::new().insert("S", name("D"))),
+                    Value::Integer(3),
+                    Value::Dict(Dict::new().insert("S", name("D"))),
+                ]),
+            )
+            .insert("Limits", arr(vec![Value::Integer(1), Value::Integer(2)])),
+    ))
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("does not cover the node keys"),
+        "{error}"
+    );
+}

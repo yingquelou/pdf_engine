@@ -22,6 +22,9 @@ pub struct PageBounds {
     pub art: Option<Rectangle>,
     /// `/BoxColorInfo`：框颜色信息（PDF 1.4）。
     pub box_color_info: Option<BoxColorInfo>,
+    /// `/Rotate`（可继承）：页面显示/打印时顺时针旋转的度数，0/90/180/270；
+    /// 整条 `/Parent` 链未声明时为缺省 0。
+    pub rotate: i32,
     /// 原始页面字典（保留未建模条目）。
     pub dict: Dict,
 }

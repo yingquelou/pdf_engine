@@ -51,6 +51,7 @@ fn xobject_stream(subtype: Option<&str>) -> Value {
     Value::Stream(dict, StreamData::Owned(Vec::new()))
 }
 
+mod blend_mode;
 mod hybrid_color_space;
 mod parsing;
 mod resources;

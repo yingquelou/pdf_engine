@@ -151,6 +151,8 @@ struct PageBuild {
     /// 页面边界（14.11.2 Table 30）：`/MediaBox` 及可选 Crop/Bleed/Trim/Art
     /// 框与 `/BoxColorInfo`；`None` 时按 `size` 写 MediaBox。
     boundaries: Option<PageBoundaries>,
+    /// 页面旋转角（Table 30 `/Rotate`，可继承，90 的倍数；缺省 0 不写出）。
+    rotate: Option<i32>,
     /// 页面件字典（14.5 `/PieceInfo`，PDF 1.3）。
     piece_info: Option<PieceInfo>,
     /// 页面首选缩放（Table 30 `/PZ`，14.10.6，PDF 1.3）。

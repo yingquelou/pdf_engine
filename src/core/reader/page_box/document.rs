@@ -41,6 +41,7 @@ impl Document {
             trim,
             art,
             box_color_info,
+            rotate: inherited_rotate(self, page)?,
             dict: page.clone(),
         })
     }
@@ -71,6 +72,47 @@ fn inherited_box(
             return Err(malformed(format!(
                 "page /Parent chain contains a cycle while resolving /{key}"
             )));
+        }
+        let parent = resolve(document, parent)
+            .map_err(|error| malformed(format!("page /Parent: {error}")))?;
+        current = parent
+            .as_dict()
+            .cloned()
+            .ok_or_else(|| malformed("page /Parent is not a dictionary"))?;
+        depth += 1;
+    }
+}
+
+/// 沿 `/Parent` 链取可继承的 `/Rotate`（Table 30）：整数且为 90 的倍数，
+/// 整条链缺失时为缺省 0；与 [`inherited_box`] 同款深度/环防护。
+fn inherited_rotate(document: &Document, page: &Dict) -> Result<i32, PageBoxError> {
+    let mut current = page.clone();
+    let mut visited: HashSet<(i64, i64)> = HashSet::new();
+    let mut depth = 0usize;
+    loop {
+        if let Some(value) = current.get("Rotate") {
+            let value = resolve(document, value)
+                .map_err(|error| malformed(format!("page /Rotate: {error}")))?;
+            let degrees = value
+                .as_integer()
+                .ok_or_else(|| malformed("page /Rotate is not an integer"))?;
+            if degrees % 90 != 0 {
+                return Err(malformed("page /Rotate must be a multiple of 90"));
+            }
+            return i32::try_from(degrees).map_err(|_| malformed("page /Rotate is out of range"));
+        }
+        if depth > MAX_TREE_DEPTH {
+            return Err(PageBoxError::LimitExceeded("page boundary inheritance"));
+        }
+        let Some(parent) = current.get("Parent") else {
+            return Ok(0);
+        };
+        if let Some(reference) = parent.as_ref()
+            && !visited.insert(reference)
+        {
+            return Err(malformed(
+                "page /Parent chain contains a cycle while resolving /Rotate",
+            ));
         }
         let parent = resolve(document, parent)
             .map_err(|error| malformed(format!("page /Parent: {error}")))?;

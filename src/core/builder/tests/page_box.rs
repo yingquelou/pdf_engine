@@ -271,3 +271,41 @@ fn invalid_page_boundaries_are_rejected_without_output() {
     );
     assert!(error.to_string().contains("name delimiters"), "{error}");
 }
+
+#[test]
+fn page_rotation_writes_and_roundtrips_through_reader() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    let p0 = b.page(PageSize::A4);
+    b.set_page_rotation(p0, 90);
+    let doc = b.assemble_document().expect("assemble");
+    assert_eq!(page_dict(&doc, 3).get("Rotate"), Some(&Value::Integer(90)));
+    assert_eq!(doc.page_bounds(0).expect("bounds").rotate, 90);
+
+    let mut bytes = Vec::new();
+    b.build(&mut bytes).expect("build");
+    assert!(
+        bytes
+            .windows(b"/Rotate 90".len())
+            .any(|w| w == b"/Rotate 90"),
+        "built bytes should carry /Rotate 90"
+    );
+
+    // 未设置时不物化 /Rotate，读端按缺省 0 处理。
+    let mut plain = PdfBuilder::with_version(PdfVersion::V1_4);
+    plain.page(PageSize::A4);
+    let plain_doc = plain.assemble_document().expect("assemble");
+    assert_eq!(page_dict(&plain_doc, 3).get("Rotate"), None);
+}
+
+#[test]
+fn page_rotation_rejects_non_multiple_of_90_with_zero_bytes() {
+    let mut b = PdfBuilder::with_version(PdfVersion::V1_4);
+    let p0 = b.page(PageSize::A4);
+    b.set_page_rotation(p0, 45);
+    let mut out = Vec::new();
+    let error = b
+        .build(&mut out)
+        .expect_err("invalid /Rotate must be rejected");
+    assert!(out.is_empty(), "校验失败必须零字节输出");
+    assert!(error.to_string().contains("multiple of 90"), "{error}");
+}

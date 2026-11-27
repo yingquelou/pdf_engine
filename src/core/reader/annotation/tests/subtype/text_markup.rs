@@ -134,3 +134,61 @@ fn malformed_subtype_entries_are_typed_errors() {
         );
     }
 }
+
+#[test]
+fn text_annotation_standard_state_classifies_table_171_combinations() {
+    let doc = doc(vec![catalog_object()]);
+    let state = |model: Option<&str>, value: Option<&str>| {
+        let mut dict = base_annotation("Text");
+        if let Some(model) = model {
+            dict = dict.insert("StateModel", Value::String(model.into()));
+        }
+        if let Some(value) = value {
+            dict = dict.insert("State", Value::String(value.into()));
+        }
+        parse_annotation(&doc, 0, None, &dict)
+            .expect("annotation")
+            .standard_state()
+    };
+
+    assert_eq!(
+        state(Some("Review"), Some("Accepted")),
+        Some((
+            StandardStateModel::Review,
+            StandardAnnotationState::Accepted
+        ))
+    );
+    assert_eq!(
+        state(Some("Marked"), Some("Unmarked")),
+        Some((
+            StandardStateModel::Marked,
+            StandardAnnotationState::Unmarked
+        ))
+    );
+    // 缺省模型为 Marked；缺省状态由 Table 171 给出。
+    assert_eq!(
+        StandardStateModel::Marked.default_state(),
+        StandardAnnotationState::Unmarked
+    );
+    assert_eq!(
+        StandardStateModel::Review.default_state(),
+        StandardAnnotationState::None
+    );
+    // 跨模型组合、自定义模型、自定义状态与缺 /State 均不分类，原始串保留。
+    assert_eq!(state(Some("Marked"), Some("Accepted")), None);
+    assert_eq!(state(Some("Custom"), Some("Accepted")), None);
+    assert_eq!(state(Some("Review"), Some("CustomState")), None);
+    assert_eq!(state(Some("Review"), None), None);
+
+    let cross = parse_annotation(
+        &doc,
+        0,
+        None,
+        &base_annotation("Text")
+            .insert("State", Value::String("Accepted".into()))
+            .insert("StateModel", Value::String("Marked".into())),
+    )
+    .expect("annotation");
+    assert_eq!(cross.state.as_deref(), Some("Accepted"));
+    assert_eq!(cross.state_model.as_deref(), Some("Marked"));
+}

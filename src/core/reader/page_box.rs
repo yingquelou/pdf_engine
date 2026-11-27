@@ -6,7 +6,8 @@
 //! （PDF 1.3，可选，**不可继承**，缺省等于 CropBox）。本模块只报告页面
 //! 实际声明的值，不物化缺省值；缺省链与 14.11.2.1 的「有效框 = 声明框
 //! 与 MediaBox 的交集」由 [`PageBounds::effective_crop`] 等有效值方法
-//! 给出。
+//! 给出。页面旋转角 `/Rotate`（Table 30，可继承、90 的倍数、缺省 0）
+//! 由 [`PageBounds::rotate`] 给出，沿 `/Parent` 链解析。
 //!
 //! `/BoxColorInfo`（PDF 1.4，Table 360）为每个框声明显示样式（Table 361
 //! 框样式字典）。按 Table 360 注，页面对象未定义对应框时该条目被忽略；

@@ -519,3 +519,53 @@ fn page_bounds_require_inheritable_media_box() {
         other => panic!("expected page error on empty document, got {other:?}"),
     }
 }
+
+#[test]
+fn page_bounds_reads_inherited_rotate_with_default_zero() {
+    let plain = document_with_page(Dict::new().insert("MediaBox", int_rect([0, 0, 100, 100])));
+    assert_eq!(plain.page_bounds(0).unwrap().rotate, 0);
+
+    let own = document_with_page(
+        Dict::new()
+            .insert("MediaBox", int_rect([0, 0, 100, 100]))
+            .insert("Rotate", Value::Integer(90)),
+    );
+    assert_eq!(own.page_bounds(0).unwrap().rotate, 90);
+
+    // 页面未声明 /Rotate 时沿 /Parent 链继承页面树上的值。
+    let doc = document_with_page(Dict::new().insert("MediaBox", int_rect([0, 0, 100, 100])));
+    insert(
+        &doc,
+        PAGES_OBJECT,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Pages"))
+                .insert("Kids", arr(vec![Value::Ref(PAGE_OBJECT, 0)]))
+                .insert("Count", Value::Integer(1))
+                .insert("Rotate", Value::Integer(270)),
+        ),
+    );
+    assert_eq!(doc.page_bounds(0).unwrap().rotate, 270);
+}
+
+#[test]
+fn page_bounds_rejects_malformed_rotate() {
+    assert_malformed(
+        Dict::new()
+            .insert("MediaBox", int_rect([0, 0, 100, 100]))
+            .insert("Rotate", Value::Integer(45)),
+        "multiple of 90",
+    );
+    assert_malformed(
+        Dict::new()
+            .insert("MediaBox", int_rect([0, 0, 100, 100]))
+            .insert("Rotate", name("90")),
+        "not an integer",
+    );
+    assert_malformed(
+        Dict::new()
+            .insert("MediaBox", int_rect([0, 0, 100, 100]))
+            .insert("Rotate", Value::Integer(2_700_000_000)),
+        "out of range",
+    );
+}

@@ -5,7 +5,7 @@
 //! 0 基索引。`/F` 缺省表示线程在当前文件。
 
 use crate::core::reader::content::text_value;
-use crate::core::reader::navigation::resolve;
+use crate::core::reader::navigation::{catalog, resolve};
 use crate::core::types::{Dict, Document, Value};
 
 use super::{ActionError, FileSpec, malformed, parse_file_spec};
@@ -85,7 +85,18 @@ fn parse_thread_target(document: &Document, value: &Value) -> Result<ThreadTarge
                 generation: *generation,
             })
         }
-        Value::Integer(index) if *index >= 0 => Ok(ThreadTarget::Index(*index)),
+        Value::Integer(index) if *index >= 0 => {
+            // 目录有 `/Threads` 时按 Table 205 核对索引落在数组内；缺该数组
+            // 或目录不可读时保持既有宽容，不凭空拒绝索引形态。
+            if let Some(count) = catalog_threads_count(document)
+                && *index >= count as i64
+            {
+                return Err(malformed(
+                    "Thread action /D index is out of range for /Threads",
+                ));
+            }
+            Ok(ThreadTarget::Index(*index))
+        }
         Value::String(_) | Value::HexString(_) => text_value(value)
             .map(ThreadTarget::Title)
             .ok_or_else(|| malformed("Thread action /D title is malformed")),
@@ -93,6 +104,14 @@ fn parse_thread_target(document: &Document, value: &Value) -> Result<ThreadTarge
             "Thread action /D is neither a thread reference, a non-negative index nor a title",
         )),
     }
+}
+
+/// 目录 `/Threads` 数组的条目数；无目录/无该数组/形态异常时返回 `None`。
+fn catalog_threads_count(document: &Document) -> Option<usize> {
+    let catalog = catalog(document).ok()?;
+    let threads = catalog.get("Threads")?;
+    let threads = resolve(document, threads).ok()?;
+    threads.as_array().map(|threads| threads.len())
 }
 
 fn parse_bead_target(document: &Document, value: &Value) -> Result<BeadTarget, ActionError> {

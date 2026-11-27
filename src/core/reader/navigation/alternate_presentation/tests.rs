@@ -92,6 +92,85 @@ fn valid_resources() -> Value {
     ])
 }
 
+#[test]
+fn alternate_presentations_traverse_multileaf_resources_name_tree() {
+    let doc = document(names_catalog("AlternatePresentations", 20));
+    insert(
+        &doc,
+        20,
+        Value::Dict(Dict::new().insert(
+            "Names",
+            arr(vec![Value::String("Show".into()), Value::Ref(21, 0)]),
+        )),
+    );
+    // `/Resources` 为含 `/Kids` 的多叶子名称树；读端应递归遍历而非仅单叶子。
+    let show = slide_show(Value::Ref(32, 0), Value::String("z.svg".into()));
+    insert(&doc, 21, Value::Dict(show));
+    insert(
+        &doc,
+        32,
+        Value::Dict(
+            Dict::new()
+                .insert("Kids", arr(vec![Value::Ref(30, 0), Value::Ref(31, 0)]))
+                .insert(
+                    "Limits",
+                    arr(vec![
+                        Value::String("a.svg".into()),
+                        Value::String("z.svg".into()),
+                    ]),
+                ),
+        ),
+    );
+    insert(
+        &doc,
+        30,
+        Value::Dict(
+            Dict::new()
+                .insert(
+                    "Names",
+                    arr(vec![
+                        Value::String("a.svg".into()),
+                        Value::Dict(Dict::new()),
+                    ]),
+                )
+                .insert(
+                    "Limits",
+                    arr(vec![
+                        Value::String("a.svg".into()),
+                        Value::String("a.svg".into()),
+                    ]),
+                ),
+        ),
+    );
+    insert(
+        &doc,
+        31,
+        Value::Dict(
+            Dict::new()
+                .insert(
+                    "Names",
+                    arr(vec![
+                        Value::String("z.svg".into()),
+                        Value::Dict(Dict::new()),
+                    ]),
+                )
+                .insert(
+                    "Limits",
+                    arr(vec![
+                        Value::String("z.svg".into()),
+                        Value::String("z.svg".into()),
+                    ]),
+                ),
+        ),
+    );
+
+    let shows = doc.alternate_presentations().expect("multileaf resources");
+    let show = &shows["Show"];
+    let keys: Vec<&str> = show.resources.keys().map(String::as_str).collect();
+    assert_eq!(keys, ["a.svg", "z.svg"]);
+    assert_eq!(show.start_resource, "z.svg");
+}
+
 fn rejected(show: Dict, expected: &str) {
     let doc = document_with_show(Value::Dict(show));
     let error = doc.alternate_presentations().unwrap_err();

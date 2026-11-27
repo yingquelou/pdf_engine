@@ -30,6 +30,106 @@ pub enum BlendMode {
     Array(Vec<String>),
 }
 
+impl BlendMode {
+    /// 写出顺序中的混合模式名（单值视为长度 1 的切片）。
+    pub fn names(&self) -> &[String] {
+        match self {
+            Self::Name(name) => std::slice::from_ref(name),
+            Self::Array(names) => names,
+        }
+    }
+
+    /// 按 ISO 32000-1 Table 136/137 分类每个名字；未知/自定义名字为 `None`
+    /// 并原样保留在 [`Self::names`] 中，不拒绝、不改写。
+    pub fn standard_modes(&self) -> Vec<Option<StandardBlendMode>> {
+        self.names()
+            .iter()
+            .map(|name| StandardBlendMode::from_name(name))
+            .collect()
+    }
+}
+
+/// 标准混合模式名（ISO 32000-1 11.3.5 Table 136/137）。
+///
+/// 仅做语法层分类：本库不计算合成，设备相关分支与自定义名字由调用方处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandardBlendMode {
+    Normal,
+    Compatible,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+impl StandardBlendMode {
+    /// 由 PDF 名字对象内容分类；标准 16 名之外的名字返回 `None`。
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Normal" => Self::Normal,
+            "Compatible" => Self::Compatible,
+            "Multiply" => Self::Multiply,
+            "Screen" => Self::Screen,
+            "Overlay" => Self::Overlay,
+            "Darken" => Self::Darken,
+            "Lighten" => Self::Lighten,
+            "ColorDodge" => Self::ColorDodge,
+            "ColorBurn" => Self::ColorBurn,
+            "HardLight" => Self::HardLight,
+            "SoftLight" => Self::SoftLight,
+            "Difference" => Self::Difference,
+            "Exclusion" => Self::Exclusion,
+            "Hue" => Self::Hue,
+            "Saturation" => Self::Saturation,
+            "Color" => Self::Color,
+            "Luminosity" => Self::Luminosity,
+            _ => return None,
+        })
+    }
+
+    /// 名字按写出时的写法（大小写与规范表格一致）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Compatible => "Compatible",
+            Self::Multiply => "Multiply",
+            Self::Screen => "Screen",
+            Self::Overlay => "Overlay",
+            Self::Darken => "Darken",
+            Self::Lighten => "Lighten",
+            Self::ColorDodge => "ColorDodge",
+            Self::ColorBurn => "ColorBurn",
+            Self::HardLight => "HardLight",
+            Self::SoftLight => "SoftLight",
+            Self::Difference => "Difference",
+            Self::Exclusion => "Exclusion",
+            Self::Hue => "Hue",
+            Self::Saturation => "Saturation",
+            Self::Color => "Color",
+            Self::Luminosity => "Luminosity",
+        }
+    }
+
+    /// Table 136 可分离模式为 `true`，Table 137 不可分离模式为 `false`。
+    pub fn is_separable(self) -> bool {
+        !matches!(
+            self,
+            Self::Hue | Self::Saturation | Self::Color | Self::Luminosity
+        )
+    }
+}
+
 /// Hybrid colour space parameter (`/CS`).
 ///
 /// ISO 32000-1:2008 Table 58 (8.4.5) lists no `/CS` or `/CSS` entry; the

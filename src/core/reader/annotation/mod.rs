@@ -103,7 +103,9 @@ pub use link::LinkHighlightMode;
 pub(crate) use measure::parse_measure_value;
 pub use measure::{Measure, NumberFormat, NumberFraction, NumberLabelOrder};
 pub use mk::{AppearanceCharacteristics, IconFit, IconScaleWhen, IconScaling};
-pub use model::{Annotation, AnnotationBorder, AppearanceStreams};
+pub use model::{
+    Annotation, AnnotationBorder, AppearanceStreams, StandardAnnotationState, StandardStateModel,
+};
 pub use printer_mark::{PrinterMark, PrinterMarkForm};
 pub use reply::ReplyType;
 pub use subtype::{

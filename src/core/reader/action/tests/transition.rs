@@ -179,3 +179,82 @@ fn malformed_transition_actions_are_typed_errors() {
         );
     }
 }
+
+#[test]
+fn transition_applicability_issues_follow_table_162() {
+    use crate::core::reader::transition::{
+        TransitionApplicabilityIssue as Issue, TransitionDimension, TransitionDirection,
+        TransitionMotion, TransitionStyle,
+    };
+
+    // Split 的合法组合无诊断。
+    let valid = Transition {
+        style: TransitionStyle::Split,
+        duration: None,
+        dimension: Some(TransitionDimension::Horizontal),
+        motion: Some(TransitionMotion::Inward),
+        direction: None,
+        scale: None,
+        border: None,
+    };
+    assert!(valid.applicability_issues().is_empty());
+
+    // R + Dm/M/Di(None)/SS/B：五条适用性规则全部命中。
+    let invalid = Transition {
+        style: TransitionStyle::R,
+        duration: None,
+        dimension: Some(TransitionDimension::Vertical),
+        motion: Some(TransitionMotion::Outward),
+        direction: Some(TransitionDirection::None),
+        scale: Some(0.5),
+        border: Some(false),
+    };
+    assert_eq!(
+        invalid.applicability_issues(),
+        vec![
+            Issue::Dimension,
+            Issue::Motion,
+            Issue::Direction,
+            Issue::DirectionNone,
+            Issue::Scale,
+            Issue::Border,
+        ]
+    );
+
+    // /Di 90 仅 Wipe、315 仅 Glitter。
+    let wipe_315 = Transition {
+        style: TransitionStyle::Wipe,
+        duration: None,
+        dimension: None,
+        motion: None,
+        direction: Some(TransitionDirection::Degrees(315)),
+        scale: None,
+        border: None,
+    };
+    assert_eq!(wipe_315.applicability_issues(), vec![Issue::Direction315]);
+    let glitter_90 = Transition {
+        style: TransitionStyle::Glitter,
+        duration: None,
+        dimension: None,
+        motion: None,
+        direction: Some(TransitionDirection::Degrees(90)),
+        scale: None,
+        border: None,
+    };
+    assert_eq!(
+        glitter_90.applicability_issues(),
+        vec![Issue::Direction90Or180]
+    );
+
+    // 未知样式不判不适用，避免误报。
+    let custom = Transition {
+        style: TransitionStyle::Other("Vendor".into()),
+        duration: None,
+        dimension: Some(TransitionDimension::Horizontal),
+        motion: Some(TransitionMotion::Inward),
+        direction: Some(TransitionDirection::Degrees(45)),
+        scale: None,
+        border: None,
+    };
+    assert!(custom.applicability_issues().is_empty());
+}

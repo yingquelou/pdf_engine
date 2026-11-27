@@ -58,6 +58,30 @@ impl TransitionStyle {
             other => Self::Other(other.to_owned()),
         }
     }
+
+    /// `/Dm` 仅 Split/Blinds 适用；未知样式不判不适用。
+    fn supports_dimension(&self) -> bool {
+        matches!(self, Self::Split | Self::Blinds | Self::Other(_))
+    }
+
+    /// `/M` 仅 Split/Box/Fly 适用；未知样式不判不适用。
+    fn supports_motion(&self) -> bool {
+        matches!(self, Self::Split | Self::Box | Self::Fly | Self::Other(_))
+    }
+
+    /// `/Di` 仅 Wipe/Glitter/Fly/Cover/Uncover/Push 适用；未知样式不判不适用。
+    fn supports_direction(&self) -> bool {
+        matches!(
+            self,
+            Self::Wipe
+                | Self::Glitter
+                | Self::Fly
+                | Self::Cover
+                | Self::Uncover
+                | Self::Push
+                | Self::Other(_)
+        )
+    }
 }
 
 /// 过渡作用维度（`/Dm`，仅 Split 与 Blinds）。
@@ -104,6 +128,69 @@ pub struct Transition {
     pub scale: Option<f64>,
     /// `/B`（PDF 1.5）：Fly 的飞入区域是否不透明，缺省 `false`。
     pub border: Option<bool>,
+}
+
+/// 过渡字典条目与样式的适用性诊断（Table 162）。
+///
+/// 读端按条目取值解析，不因适用性不符拒绝整份文档；这些诊断供调用方
+/// 判断文件是否规范。规则与写端 `validate` 同源，未知样式（
+/// [`TransitionStyle::Other`]）不判不适用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionApplicabilityIssue {
+    /// `/Dm` 仅 Split/Blinds 适用。
+    Dimension,
+    /// `/M` 仅 Split/Box/Fly 适用。
+    Motion,
+    /// `/Di` 仅 Wipe/Glitter/Fly/Cover/Uncover/Push 适用。
+    Direction,
+    /// `/Di` 90/180 仅 Wipe 适用。
+    Direction90Or180,
+    /// `/Di` 315 仅 Glitter 适用。
+    Direction315,
+    /// `/Di None` 仅 Fly 适用。
+    DirectionNone,
+    /// `/SS` 仅 Fly 适用。
+    Scale,
+    /// `/B` 仅 Fly 适用。
+    Border,
+}
+
+impl Transition {
+    /// 按 Table 162 列出所有「条目存在但样式不适用」的诊断（顺序稳定）。
+    pub fn applicability_issues(&self) -> Vec<TransitionApplicabilityIssue> {
+        use TransitionApplicabilityIssue as Issue;
+        let mut issues = Vec::new();
+        if self.dimension.is_some() && !self.style.supports_dimension() {
+            issues.push(Issue::Dimension);
+        }
+        if self.motion.is_some() && !self.style.supports_motion() {
+            issues.push(Issue::Motion);
+        }
+        if self.direction.is_some() && !self.style.supports_direction() {
+            issues.push(Issue::Direction);
+        }
+        if let Some(direction) = self.direction {
+            match direction {
+                TransitionDirection::Degrees(90 | 180) if self.style != TransitionStyle::Wipe => {
+                    issues.push(Issue::Direction90Or180);
+                }
+                TransitionDirection::Degrees(315) if self.style != TransitionStyle::Glitter => {
+                    issues.push(Issue::Direction315);
+                }
+                TransitionDirection::None if self.style != TransitionStyle::Fly => {
+                    issues.push(Issue::DirectionNone);
+                }
+                _ => {}
+            }
+        }
+        if self.scale.is_some() && self.style != TransitionStyle::Fly {
+            issues.push(Issue::Scale);
+        }
+        if self.border.is_some() && self.style != TransitionStyle::Fly {
+            issues.push(Issue::Border);
+        }
+        issues
+    }
 }
 
 /// 过渡字典解析错误。

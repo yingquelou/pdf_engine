@@ -73,6 +73,57 @@ fn parses_thread_action_target_forms() {
 }
 
 #[test]
+fn thread_action_d_index_is_bounded_by_catalog_threads() {
+    let doc = document_with_pages(1);
+    insert(
+        &doc,
+        1,
+        Value::Dict(
+            Dict::new()
+                .insert("Type", name("Catalog"))
+                .insert("Pages", Value::Ref(2, 0))
+                .insert("Threads", arr(vec![Value::Ref(20, 0), Value::Ref(21, 0)])),
+        ),
+    );
+    insert(&doc, 20, thread_dict());
+    insert(&doc, 21, thread_dict());
+
+    for index in [0, 1] {
+        let action = Value::Dict(action_dict("Thread").insert("D", Value::Integer(index)));
+        assert_eq!(
+            doc.action(&action).unwrap(),
+            Action::Thread(ThreadAction {
+                file: None,
+                thread: ThreadTarget::Index(index),
+                bead: None,
+            })
+        );
+    }
+    for index in [2, 9] {
+        let action = Value::Dict(action_dict("Thread").insert("D", Value::Integer(index)));
+        let error = doc.action(&action).unwrap_err();
+        assert!(
+            error.to_string().contains("out of range for /Threads"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn thread_action_d_index_without_catalog_threads_stays_lenient() {
+    let doc = document_with_pages(1);
+    let action = Value::Dict(action_dict("Thread").insert("D", Value::Integer(5)));
+    assert_eq!(
+        doc.action(&action).unwrap(),
+        Action::Thread(ThreadAction {
+            file: None,
+            thread: ThreadTarget::Index(5),
+            bead: None,
+        })
+    );
+}
+
+#[test]
 fn malformed_thread_actions_are_typed_errors() {
     let doc = document_with_pages(1);
     insert(&doc, 20, thread_dict());

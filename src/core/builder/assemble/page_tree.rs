@@ -185,6 +185,14 @@ impl PdfBuilder {
                     features.insert(feature);
                 }
             }
+            if let Some(degrees) = p.rotate {
+                if degrees % 90 != 0 {
+                    return Err(WriteError::InvalidObject(format!(
+                        "page {i} /Rotate {degrees} is not a multiple of 90"
+                    )));
+                }
+                page_dict = page_dict.insert("Rotate", Value::Integer(degrees as i64));
+            }
             // 分色字典（14.11.4 Table 364）：同组各页写出相同的 `/Pages`；
             // 组的颜色空间只序列化一次，多页共享同一批流对象引用。
             if let Some(group_index) = preflight.separation_page_map[i] {
